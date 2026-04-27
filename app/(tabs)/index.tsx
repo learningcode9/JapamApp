@@ -1,98 +1,314 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Haptics from 'expo-haptics';
+import React, { useEffect, useState } from 'react';
+import {
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+export default function Home() {
+  const [count, setCount] = useState(0);
+  const [mala, setMala] = useState(0);
+  const [seconds, setSeconds] = useState(0);
+  const [isRunning, setIsRunning] = useState(false);
+  const [minutesInput, setMinutesInput] = useState('1');
+  const [targetSeconds, setTargetSeconds] = useState(60);
+  const [history, setHistory] = useState<any[]>([]);
 
-export default function HomeScreen() {
+  // ================= LOAD DATA =================
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+    const saved = await AsyncStorage.getItem('history');
+    if (saved) {
+      setHistory(JSON.parse(saved));
+    }
+  };
+
+  const saveData = async (data: any) => {
+    await AsyncStorage.setItem('history', JSON.stringify(data));
+  };
+
+  // ================= TIMER =================
+  useEffect(() => {
+    let interval: any;
+
+    if (isRunning) {
+      interval = setInterval(() => {
+        setSeconds(prev => {
+          const next = prev + 1;
+
+          // ✅ TIMER COMPLETE
+          if (next >= targetSeconds) {
+            clearInterval(interval);
+            setIsRunning(false);
+
+            const newSession = {
+              time: targetSeconds,
+              count,
+              mala,
+              date: new Date().toLocaleString(),
+            };
+
+            const updatedHistory = [newSession, ...history];
+            setHistory(updatedHistory);
+            saveData(updatedHistory);
+
+            // vibration
+            if (Platform.OS !== 'web') {
+              Haptics.notificationAsync(
+                Haptics.NotificationFeedbackType.Success
+              );
+            }
+
+            // reset
+            setTimeout(() => {
+              setSeconds(0);
+              setCount(0);
+              setMala(0);
+            }, 100);
+
+            return 0;
+          }
+
+          return next;
+        });
+      }, 1000);
+    }
+
+    return () => clearInterval(interval);
+  }, [isRunning]);
+
+  // ================= TAP =================
+  const onTap = () => {
+    setCount(prev => {
+      if (prev === 107) {
+        setMala(m => m + 1);
+
+        if (Platform.OS !== 'web') {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        }
+
+        return 0;
+      }
+
+      return prev + 1;
+    });
+
+    if (Platform.OS !== 'web') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+  };
+
+  // ================= SET TIME =================
+  const applyTime = () => {
+    const mins = parseInt(minutesInput) || 1;
+    setTargetSeconds(mins * 60);
+
+    setSeconds(0);
+    setCount(0);
+    setMala(0);
+    setIsRunning(false);
+  };
+
+  // ================= FORMAT TIME =================
+  const formatTime = (sec: number) => {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  };
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+    <ScrollView style={styles.container}>
+      <Text style={styles.title}>🧘 Japam</Text>
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+      {/* STATS */}
+      <View style={styles.center}>
+        <Text style={styles.big}>{count}</Text>
+        <Text style={styles.label}>Count</Text>
+
+        <View style={styles.row}>
+          <Text style={styles.small}>📿 {mala}</Text>
+          <Text style={styles.small}>⏱ {formatTime(seconds)}</Text>
+        </View>
+      </View>
+
+      {/* TAP BUTTON */}
+      <Pressable
+        style={({ pressed }) => [
+          styles.circle,
+          pressed && { transform: [{ scale: 0.9 }] },
+        ]}
+        onPress={onTap}
+      />
+
+      {/* TIME INPUT */}
+      <View style={styles.row}>
+        <TextInput
+          style={styles.input}
+          value={minutesInput}
+          onChangeText={setMinutesInput}
+          keyboardType="numeric"
+        />
+        <Pressable style={styles.btn} onPress={applyTime}>
+          <Text style={styles.btnText}>Set</Text>
+        </Pressable>
+      </View>
+
+      {/* CONTROLS */}
+      <View style={styles.controls}>
+        <Pressable style={styles.start} onPress={() => setIsRunning(true)}>
+          <Text style={styles.btnText}>Start</Text>
+        </Pressable>
+
+        <Pressable style={styles.pause} onPress={() => setIsRunning(false)}>
+          <Text style={styles.btnText}>Pause</Text>
+        </Pressable>
+
+        <Pressable
+          style={styles.reset}
+          onPress={() => {
+            setIsRunning(false);
+            setSeconds(0);
+            setCount(0);
+            setMala(0);
+          }}
+        >
+          <Text style={styles.btnText}>Reset</Text>
+        </Pressable>
+      </View>
+
+      {/* TODAY */}
+      <Text style={styles.today}>
+        Today: {history.reduce((sum, h) => sum + h.count, 0)}
+      </Text>
+
+      {/* HISTORY */}
+      {history.map((item, i) => (
+        <View key={i} style={styles.card}>
+          <Text style={styles.historyText}>
+            ⏱ {formatTime(item.time)} • 🔢 {item.count} • 📿 {item.mala}
+          </Text>
+        </View>
+      ))}
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
+  container: {
+    flex: 1,
+    backgroundColor: '#0f172a',
+    padding: 20,
+  },
+
+  title: {
+    color: 'white',
+    textAlign: 'center',
+    fontSize: 24,
+    marginBottom: 20,
+  },
+
+  center: {
     alignItems: 'center',
-    gap: 8,
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+
+  big: {
+    color: 'white',
+    fontSize: 42,
+    fontWeight: 'bold',
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+
+  label: {
+    color: '#94a3b8',
+  },
+
+  small: {
+    color: 'white',
+    fontSize: 16,
+  },
+
+  circle: {
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    backgroundColor: '#6366f1',
+    alignSelf: 'center',
+    marginVertical: 20,
+  },
+
+  row: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 10,
+    marginTop: 10,
+  },
+
+  input: {
+    backgroundColor: '#1e293b',
+    color: 'white',
+    padding: 10,
+    width: 80,
+    borderRadius: 8,
+    textAlign: 'center',
+  },
+
+  btn: {
+    backgroundColor: '#6366f1',
+    padding: 10,
+    borderRadius: 8,
+  },
+
+  controls: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 10,
+    marginTop: 15,
+  },
+
+  start: {
+    backgroundColor: '#6366f1',
+    padding: 10,
+    borderRadius: 8,
+  },
+
+  pause: {
+    backgroundColor: '#475569',
+    padding: 10,
+    borderRadius: 8,
+  },
+
+  reset: {
+    backgroundColor: '#ef4444',
+    padding: 10,
+    borderRadius: 8,
+  },
+
+  btnText: {
+    color: 'white',
+  },
+
+  today: {
+    color: '#94a3b8',
+    textAlign: 'center',
+    marginTop: 20,
+  },
+
+  card: {
+    backgroundColor: '#1e293b',
+    padding: 10,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+
+  historyText: {
+    color: 'white',
   },
 });
