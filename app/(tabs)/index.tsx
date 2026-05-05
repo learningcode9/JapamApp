@@ -12,13 +12,14 @@ import {
 } from 'react-native';
 
 type DailyHistoryEntry = {
-  dateKey: string; // YYYY-MM-DD
+  dateKey: string;
   dateLabel: string;
   malas: number;
   totalCount: number;
 };
 
 const HISTORY_KEY = 'history';
+const JAPAM_NAME_KEY = 'japam_name';
 
 const sanitizeMinutes = (raw: string) => {
   const parsed = Number.parseInt(raw, 10);
@@ -47,6 +48,8 @@ const normalizeHistory = (raw: unknown): DailyHistoryEntry[] => {
 
   raw.forEach(item => {
     const rawItem = item as {
+      dateKey?: unknown;
+      dateLabel?: unknown;
       date?: unknown;
       mala?: unknown;
       malas?: unknown;
@@ -54,8 +57,22 @@ const normalizeHistory = (raw: unknown): DailyHistoryEntry[] => {
       count?: unknown;
     };
 
-    const dateValue = typeof rawItem.date === 'string' ? new Date(rawItem.date) : new Date();
-    const safeDate = Number.isNaN(dateValue.getTime()) ? new Date() : dateValue;
+    let safeDate: Date | null = null;
+    if (
+      typeof rawItem.dateKey === 'string' &&
+      /^\d{4}-\d{2}-\d{2}$/.test(rawItem.dateKey)
+    ) {
+      safeDate = new Date(`${rawItem.dateKey}T00:00:00`);
+    } else if (typeof rawItem.date === 'string') {
+      const parsed = new Date(rawItem.date);
+      if (!Number.isNaN(parsed.getTime())) safeDate = parsed;
+    } else if (typeof rawItem.dateLabel === 'string') {
+      const parsed = new Date(rawItem.dateLabel);
+      if (!Number.isNaN(parsed.getTime())) safeDate = parsed;
+    }
+
+    if (!safeDate) return;
+
     const dateKey = toDateKey(safeDate);
 
     const malas = toFiniteNumber(rawItem.malas ?? rawItem.mala) ?? 1;
@@ -89,9 +106,12 @@ export default function Home() {
   const [isRunning, setIsRunning] = useState(false);
 
   const [history, setHistory] = useState<DailyHistoryEntry[]>([]);
+  const [japamName, setJapamName] = useState('Japam');
+  const [pendingJapamName, setPendingJapamName] = useState('Japam');
+
   const [isLoading, setIsLoading] = useState(true);
-  const [showHistory, setShowHistory] = useState(false);
   const [cooldown, setCooldown] = useState<number | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
 
   const completionLockRef = useRef(false);
 
@@ -99,7 +119,7 @@ export default function Home() {
     () => history.reduce((sum, item) => sum + item.malas, 0),
     [history]
   );
-  const currentCount = useMemo(() => ((count % 108) + 108) % 108, [count]);
+  const currentCount = useMemo(() => count, [count]);
 
   const historyWithCumulative = useMemo(() => {
     let running = 0;
@@ -121,9 +141,18 @@ export default function Home() {
   useEffect(() => {
     void (async () => {
       try {
-        const saved = await AsyncStorage.getItem(HISTORY_KEY);
-        const parsed = saved ? (JSON.parse(saved) as unknown) : [];
+        const [savedHistory, savedName] = await Promise.all([
+          AsyncStorage.getItem(HISTORY_KEY),
+          AsyncStorage.getItem(JAPAM_NAME_KEY),
+        ]);
+
+        const parsed = savedHistory ? (JSON.parse(savedHistory) as unknown) : [];
         setHistory(normalizeHistory(parsed));
+
+        if (savedName && savedName.trim().length > 0) {
+          setJapamName(savedName.trim());
+          setPendingJapamName(savedName.trim());
+        }
       } finally {
         setIsLoading(false);
       }
@@ -170,17 +199,16 @@ export default function Home() {
           totalCount: current.totalCount + 108,
         };
 
-        // Keep today's row on top after update.
         const [today] = updated.splice(existingIndex, 1);
         return [today, ...updated];
       });
 
       if (Platform.OS !== 'web') {
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
       }
 
       if (source === 'timer') {
-        // Timer complete -> 1s pause -> auto reset timer only.
         setCooldown(1);
       } else {
         completionLockRef.current = false;
@@ -229,8 +257,14 @@ export default function Home() {
       if (completionLockRef.current) return prev;
 
       const next = prev + 1;
-      if (next % 108 === 0) {
+      if (next >= 108) {
         void completeOneMala('tap');
+
+        if (Platform.OS !== 'web') {
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        }
+
+        return 0;
       }
 
       if (Platform.OS !== 'web') {
@@ -265,11 +299,12 @@ export default function Home() {
     setIsRunning(false);
   };
 
-  const resetSession = () => {
-    setIsRunning(false);
-    setSeconds(0);
-    setCooldown(null);
-    completionLockRef.current = false;
+  const saveJapamName = async () => {
+    const trimmed = pendingJapamName.trim();
+    const safeName = trimmed.length > 0 ? trimmed : 'Japam';
+    setJapamName(safeName);
+    setPendingJapamName(safeName);
+    await AsyncStorage.setItem(JAPAM_NAME_KEY, safeName);
   };
 
   const formatTime = (sec: number) => {
@@ -285,17 +320,38 @@ export default function Home() {
       contentContainerStyle={styles.contentContainer}
       keyboardShouldPersistTaps="handled"
     >
-      <Text style={styles.title}>🧘 Japam</Text>
+      <Text style={styles.title}>🧘 {japamName}</Text>
+
+      {pendingJapamName !== japamName ? (
+        <View style={styles.nameRow}>
+          <TextInput
+            style={styles.nameInput}
+            value={pendingJapamName}
+            onChangeText={setPendingJapamName}
+            placeholder="Japam name"
+            placeholderTextColor="#94a3b8"
+            maxLength={24}
+          />
+          <Pressable style={styles.btn} onPress={() => void saveJapamName()}>
+            <Text style={styles.btnText}>Save</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <Pressable style={styles.editNameBtn} onPress={() => setPendingJapamName('')}>
+          <Text style={styles.editNameText}>Change Japam Name</Text>
+        </Pressable>
+      )}
 
       <View style={styles.center}>
         <Text style={styles.big}>{currentCount}</Text>
-        <Text style={styles.label}>Count</Text>
+        <Text style={styles.label}>Current Count</Text>
 
         <View style={styles.row}>
-          <Text style={styles.small}>📿 {isLoading ? '...' : totalMalas}</Text>
           <Text style={styles.small}>⏱ {formatTime(seconds)}</Text>
+          <Text style={styles.small}>📿 {isLoading ? '...' : totalMalas} malas</Text>
+          <Text style={styles.small}>🔢 {isLoading ? '...' : totalMalas * 108} total</Text>
         </View>
-
+        <Text style={styles.helperText}>Tap count resets at 108 (1 mala)</Text>
       </View>
 
       <Pressable
@@ -308,6 +364,7 @@ export default function Home() {
         disabled={cooldown !== null}
       />
 
+      <Text style={styles.inputLabel}>Session duration (minutes)</Text>
       <View style={styles.row}>
         <TextInput
           style={styles.input}
@@ -317,7 +374,7 @@ export default function Home() {
           maxLength={3}
         />
         <Pressable style={styles.btn} onPress={applyTime}>
-          <Text style={styles.btnText}>Set</Text>
+          <Text style={styles.btnText}>Apply</Text>
         </Pressable>
       </View>
 
@@ -333,40 +390,39 @@ export default function Home() {
         <Pressable style={styles.pause} onPress={pauseSession}>
           <Text style={styles.btnText}>Pause</Text>
         </Pressable>
-
-        <Pressable style={styles.reset} onPress={resetSession}>
-          <Text style={styles.btnText}>Reset</Text>
-        </Pressable>
       </View>
 
-      <Text style={styles.today}>Today Malas: {history[0]?.malas ?? 0}</Text>
-
-      <Pressable
-        style={styles.historyToggle}
-        onPress={() => setShowHistory(prev => !prev)}
-      >
-        <Text style={styles.btnText}>{showHistory ? 'Hide History' : 'History'}</Text>
+      <Pressable style={styles.historyToggle} onPress={() => setShowHistory(prev => !prev)}>
+        <Text style={styles.btnText}>{showHistory ? 'Hide History' : 'Show History'}</Text>
       </Pressable>
 
       {showHistory && (
-        <View style={styles.historyList}>
-          <View style={styles.tableHeaderRow}>
-            <Text style={[styles.tableHeaderText, styles.colDate]}>Date</Text>
-            <Text style={[styles.tableHeaderText, styles.colCenter]}>Malas</Text>
-            <Text style={[styles.tableHeaderText, styles.colCenter]}>Count</Text>
-            <Text style={[styles.tableHeaderText, styles.colCenter]}>Cumulative</Text>
-          </View>
-
-          {historyWithCumulative.map((item, i) => (
-            <View key={`${item.dateKey}-${i}`} style={styles.tableRow}>
-              <Text style={[styles.tableCell, styles.colDate]}>{item.dateLabel}</Text>
-              <Text style={[styles.tableCell, styles.colCenter]}>{item.malas}</Text>
-              <Text style={[styles.tableCell, styles.colCenter]}>{item.totalCount}</Text>
-              <Text style={[styles.tableCell, styles.colCenter]}>
-                {item.cumulativeCount}
-              </Text>
+        <View style={styles.historyWrap}>
+          <View style={styles.historyList}>
+            <View style={styles.tableHeaderRow}>
+              <Text style={[styles.tableHeaderText, styles.colDate]}>Date</Text>
+              <Text style={[styles.tableHeaderText, styles.colCenter]}>Malas</Text>
+              <Text style={[styles.tableHeaderText, styles.colCenter]}>Count</Text>
+              <Text style={[styles.tableHeaderText, styles.colCenter]}>Cumulative</Text>
             </View>
-          ))}
+
+            {historyWithCumulative.length === 0 ? (
+              <View style={styles.emptyRow}>
+                <Text style={styles.emptyText}>No history yet.</Text>
+              </View>
+            ) : (
+              historyWithCumulative.map((item, i) => (
+                <View key={`${item.dateKey}-${i}`} style={styles.tableRow}>
+                  <Text style={[styles.tableCell, styles.colDate]}>{item.dateLabel}</Text>
+                  <Text style={[styles.tableCell, styles.colCenter]}>{item.malas}</Text>
+                  <Text style={[styles.tableCell, styles.colCenter]}>{item.totalCount}</Text>
+                  <Text style={[styles.tableCell, styles.colCenter]}>
+                    {item.cumulativeCount}
+                  </Text>
+                </View>
+              ))
+            )}
+          </View>
         </View>
       )}
     </ScrollView>
@@ -377,20 +433,38 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#0f172a',
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
   },
 
   contentContainer: {
-    paddingTop: 60,
-    paddingBottom: 120,
+    paddingTop: 56,
+    paddingBottom: 80,
     alignItems: 'center',
     width: '100%',
   },
 
   title: {
     color: 'white',
-    fontSize: 24,
+    fontSize: 28,
+    marginBottom: 14,
+    fontWeight: '700',
+  },
+
+  nameRow: {
+    width: '100%',
+    maxWidth: 420,
+    flexDirection: 'row',
+    gap: 10,
     marginBottom: 20,
+  },
+
+  nameInput: {
+    flex: 1,
+    backgroundColor: '#1e293b',
+    color: 'white',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
 
   center: {
@@ -399,18 +473,24 @@ const styles = StyleSheet.create({
 
   big: {
     color: 'white',
-    fontSize: 52,
-    fontWeight: 'bold',
+    fontSize: 56,
+    fontWeight: '800',
   },
 
   label: {
     color: '#94a3b8',
-    fontSize: 22,
+    fontSize: 18,
   },
 
   small: {
     color: 'white',
-    fontSize: 18,
+    fontSize: 16,
+  },
+
+  helperText: {
+    color: '#94a3b8',
+    marginTop: 8,
+    fontSize: 13,
   },
 
   circle: {
@@ -433,14 +513,21 @@ const styles = StyleSheet.create({
     backgroundColor: '#1e293b',
     color: 'white',
     padding: 10,
-    width: 80,
+    width: 90,
     borderRadius: 8,
     textAlign: 'center',
   },
 
+  inputLabel: {
+    color: '#94a3b8',
+    marginTop: 4,
+    fontSize: 13,
+  },
+
   btn: {
     backgroundColor: '#6366f1',
-    padding: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
     borderRadius: 8,
   },
 
@@ -449,13 +536,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 10,
     marginTop: 15,
+    marginBottom: 8,
   },
 
   start: {
     backgroundColor: '#6366f1',
     padding: 12,
     borderRadius: 10,
-    minWidth: 84,
+    minWidth: 100,
     alignItems: 'center',
   },
 
@@ -463,15 +551,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#475569',
     padding: 12,
     borderRadius: 10,
-    minWidth: 84,
-    alignItems: 'center',
-  },
-
-  reset: {
-    backgroundColor: '#ef4444',
-    padding: 12,
-    borderRadius: 10,
-    minWidth: 84,
+    minWidth: 100,
     alignItems: 'center',
   },
 
@@ -484,22 +564,37 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  today: {
-    color: '#94a3b8',
-    marginTop: 20,
-    fontSize: 18,
+  editNameBtn: {
+    marginBottom: 20,
+    backgroundColor: '#1e293b',
+    borderWidth: 1,
+    borderColor: '#334155',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+  },
+
+  editNameText: {
+    color: '#cbd5e1',
+    fontWeight: '600',
+  },
+
+  historyWrap: {
+    marginTop: 16,
+    width: '100%',
+    alignItems: 'center',
   },
 
   historyToggle: {
-    marginTop: 14,
+    marginTop: 16,
     backgroundColor: '#334155',
     paddingVertical: 10,
-    paddingHorizontal: 20,
+    paddingHorizontal: 18,
     borderRadius: 10,
   },
 
   historyList: {
-    marginTop: 12,
+    marginTop: 8,
     width: '100%',
     maxWidth: 500,
     borderRadius: 12,
@@ -518,7 +613,7 @@ const styles = StyleSheet.create({
   tableHeaderText: {
     color: 'white',
     fontWeight: '700',
-    fontSize: 14,
+    fontSize: 13,
   },
 
   tableRow: {
@@ -528,6 +623,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     borderTopWidth: 1,
     borderTopColor: '#334155',
+  },
+
+  emptyRow: {
+    backgroundColor: '#1e293b',
+    paddingVertical: 18,
+    alignItems: 'center',
+  },
+
+  emptyText: {
+    color: '#94a3b8',
   },
 
   tableCell: {
