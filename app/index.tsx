@@ -23,10 +23,7 @@ export default function Landing() {
           <Text style={styles.buttonText}>Start Japam</Text>
         </Pressable>
 
-        <Pressable
-          style={[styles.button, styles.secondary]}
-          onPress={() => router.push('/(tabs)/manual')}
-        >
+        <Pressable style={[styles.button, styles.secondary]} onPress={() => router.push('/(tabs)/manual')}>
           <Text style={styles.buttonText}>Manual Entry</Text>
         </Pressable>
       </View>
@@ -39,22 +36,10 @@ const styles = StyleSheet.create({
   card: { width: '100%', maxWidth: 420, alignItems: 'center', gap: 14 },
   title: { color: 'white', fontSize: 34, fontWeight: '800', textAlign: 'center' },
   subtitle: { color: '#cbd5e1', fontSize: 16, textAlign: 'center' },
-  quoteBox: {
-    backgroundColor: '#1e293b',
-    borderColor: '#334155',
-    borderWidth: 1,
-    borderRadius: 16,
-    padding: 16,
-  },
+  quoteBox: { backgroundColor: '#1e293b', borderColor: '#334155', borderWidth: 1, borderRadius: 16, padding: 16 },
   quoteTitle: { color: '#a5b4fc', fontWeight: '700', marginBottom: 8 },
   quoteText: { color: '#e2e8f0', textAlign: 'center', lineHeight: 24 },
-  button: {
-    width: '100%',
-    backgroundColor: '#6366f1',
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
+  button: { width: '100%', backgroundColor: '#6366f1', borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
   secondary: { backgroundColor: '#334155' },
   buttonText: { color: 'white', fontWeight: '700', fontSize: 16 },
 });
