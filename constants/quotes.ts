@@ -60,9 +60,7 @@ export const quotes = [
   'One bead at a time, one breath at a time.',
 ];
 
-export const getDailyQuote = () => {
-  const dayNumber = Math.floor(new Date().getTime() / 86_400_000);
-  const step = 37;
-  const index = (dayNumber * step) % quotes.length;
+export const getRandomQuote = () => {
+  const index = Math.floor(Math.random() * quotes.length);
   return quotes[index];
 };
