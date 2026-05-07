@@ -244,7 +244,7 @@ export default function JapamMain() {
         ]}
       />
 
-      <Text style={styles.inputLabel}>Session duration</Text>
+      <Text style={styles.inputLabel}>Set time and start japam</Text>
 
       <TextInput
         style={styles.input}

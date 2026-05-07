@@ -14,7 +14,16 @@ type Session = {
 const HISTORY_KEY = 'history';
 
 export default function ManualEntry() {
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+    const getLocalDate = () => {
+        const d = new Date();
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+      
+        return `${year}-${month}-${day}`;
+      };
+      
+      const [date, setDate] = useState(getLocalDate());
   const [malas, setMalas] = useState('');
   const [total, setTotal] = useState('');
 
@@ -40,7 +49,8 @@ export default function ManualEntry() {
     const history: Session[] = raw ? JSON.parse(raw) : [];
 
     const payload: Session = {
-      date: new Date(`${date}T00:00:00`).toISOString(),
+      // Important: use midday local time to avoid timezone date shifting
+      date: `${date}T12:00:00`,
       malas: malaNum,
       totalCount: totalNum,
       duration: 0,
@@ -103,12 +113,14 @@ const styles = StyleSheet.create({
     padding: 20,
     alignItems: 'center',
   },
+
   title: {
     color: 'white',
     fontSize: 28,
     fontWeight: '800',
     marginVertical: 24,
   },
+
   input: {
     width: '100%',
     maxWidth: 360,
@@ -118,10 +130,12 @@ const styles = StyleSheet.create({
     padding: 12,
     marginTop: 10,
   },
+
   or: {
     color: '#94a3b8',
     marginTop: 12,
   },
+
   btn: {
     marginTop: 16,
     backgroundColor: '#6366f1',
@@ -129,6 +143,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 22,
   },
+
   btnText: {
     color: 'white',
     fontWeight: '700',
