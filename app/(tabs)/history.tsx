@@ -1,7 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system/legacy';
 import { useFocusEffect } from 'expo-router';
+import * as Sharing from 'expo-sharing';
 import React, { useCallback, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 type Session = {
   date: string;
@@ -113,21 +115,90 @@ export default function HistoryScreen() {
     [dailyRows]
   );
 
+  const exportHistory = async () => {
+    try {
+      if (dailyRows.length === 0) {
+        Alert.alert('No history', 'There is no history to export yet.');
+        return;
+      }
+  
+      const lines = ['Date,Malas,Count,Accumulated,Type'];
+  
+      dailyRows.forEach((row) => {
+        const type =
+          row.manualCount > 0 && row.autoCount > 0
+            ? 'Mixed'
+            : row.manualCount > 0
+            ? 'Saved'
+            : 'Completed';
+  
+        lines.push(
+          `${row.dateKey},${row.malas},${row.totalCount},${row.totalCount},${type}`
+        );
+      });
+  
+      const csvContent = lines.join('\n');
+  
+      if (Platform.OS === 'web') {
+        const blob = new Blob([csvContent], {
+          type: 'text/csv;charset=utf-8;',
+        });
+  
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+  
+        link.href = url;
+        link.download = 'japam-history.csv';
+        document.body.appendChild(link);
+        link.click();
+  
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+  
+        return;
+      }
+  
+      const fileUri = FileSystem.documentDirectory + 'japam-history.csv';
+  
+      await FileSystem.writeAsStringAsync(fileUri, csvContent, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+  
+      const available = await Sharing.isAvailableAsync();
+  
+      if (!available) {
+        Alert.alert('Sharing unavailable', 'Sharing is not available on this device.');
+        return;
+      }
+  
+      await Sharing.shareAsync(fileUri, {
+        mimeType: 'text/csv',
+        dialogTitle: 'Export Japam History',
+        UTI: 'public.comma-separated-values-text',
+      });
+    } catch (error) {
+      console.log('Export error:', error);
+      Alert.alert('Export failed', 'Something went wrong while exporting history.');
+    }
+  };
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      
-
       <View style={styles.simpleSummary}>
         <Text style={styles.summaryText}>📿 Total Malas: {totalMalas}</Text>
         <Text style={styles.summaryText}>🔢 Total Count: {totalCount}</Text>
       </View>
+
+      <Pressable style={styles.exportBtn} onPress={exportHistory}>
+        <Text style={styles.exportBtnText}>Export History</Text>
+      </Pressable>
 
       <View style={styles.tableCard}>
         <View style={[styles.tableRow, styles.tableHeader]}>
           <Text style={[styles.tableCell, styles.dateCell]}>Date</Text>
           <Text style={styles.tableCell}>Malas</Text>
           <Text style={styles.tableCell}>Count</Text>
-          <Text style={styles.tableCell}>Duration</Text>
+          <Text style={styles.tableCell}>Accumulated</Text>
           <Text style={styles.tableCell}>Type</Text>
         </View>
 
@@ -157,9 +228,7 @@ export default function HistoryScreen() {
                 </Text>
                 <Text style={styles.tableCell}>{row.malas}</Text>
                 <Text style={styles.tableCell}>{row.totalCount}</Text>
-                <Text style={styles.tableCell}>
-                  {formatDuration(row.duration)}
-                </Text>
+                <Text style={styles.tableCell}>{row.totalCount}</Text>
                 <Text style={styles.tableCell}>{type}</Text>
               </View>
             );
@@ -186,12 +255,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 18,
-    marginBottom: 18,
+    marginBottom: 16,
   },
 
   summaryText: {
     color: '#cbd5e1',
     fontSize: 16,
+    fontWeight: '700',
+  },
+
+  exportBtn: {
+    backgroundColor: '#6366f1',
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 10,
+    alignSelf: 'flex-start',
+    marginBottom: 14,
+  },
+
+  exportBtnText: {
+    color: 'white',
+    fontSize: 15,
     fontWeight: '700',
   },
 
