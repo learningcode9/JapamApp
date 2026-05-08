@@ -19,7 +19,6 @@ type DailyRow = {
   duration: number;
   manualCount: number;
   autoCount: number;
-  accumulatedTotal?: number;
 };
 
 const toDayKey = (rawDate: string) => {
@@ -37,7 +36,11 @@ const toDayLabel = (dayKey: string) => {
   if (dayKey === 'unknown') return 'Unknown Date';
 
   const d = new Date(`${dayKey}T00:00:00`);
-  return d.toLocaleDateString();
+  return d.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
 };
 
 const formatDuration = (sec: number) => {
@@ -95,21 +98,7 @@ export default function HistoryScreen() {
           return b.dateKey.localeCompare(a.dateKey);
         });
 
-        // Accumulated total should be calculated from oldest to newest
-        let runningTotal = 0;
-
-        const rowsWithAccumulated = [...latestFirstRows]
-          .reverse()
-          .map((row) => {
-            runningTotal += row.totalCount;
-            return {
-              ...row,
-              accumulatedTotal: runningTotal,
-            };
-          })
-          .reverse();
-
-        setDailyRows(rowsWithAccumulated);
+        setDailyRows(latestFirstRows);
       })();
     }, [])
   );
@@ -125,59 +114,59 @@ export default function HistoryScreen() {
   );
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>History</Text>
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      
 
-      <Text style={styles.summary}>
-        📿 Total malas: {totalMalas}   Total count: {totalCount}
-      </Text>
+      <View style={styles.simpleSummary}>
+        <Text style={styles.summaryText}>📿 Total Malas: {totalMalas}</Text>
+        <Text style={styles.summaryText}>🔢 Total Count: {totalCount}</Text>
+      </View>
 
-      <ScrollView horizontal style={styles.tableWrapper} showsHorizontalScrollIndicator={false}>
-        <View>
-          <View style={[styles.row, styles.headerRow]}>
-            <Text style={[styles.cell, styles.headerText, styles.dateCol]}>Date</Text>
-            <Text style={[styles.cell, styles.headerText, styles.durationCol]}>Duration</Text>
-            <Text style={[styles.cell, styles.headerText, styles.smallCol]}>Malas</Text>
-            <Text style={[styles.cell, styles.headerText, styles.countCol]}>Count</Text>
-            <Text style={[styles.cell, styles.headerText, styles.accumCol]}>Accumulated</Text>
-            <Text style={[styles.cell, styles.headerText, styles.typeCol]}>Type</Text>
-          </View>
-
-          {dailyRows.length === 0 ? (
-            <View style={[styles.row, styles.emptyRow]}>
-              <Text style={styles.emptyText}>No history available</Text>
-            </View>
-          ) : (
-            dailyRows.map((row, i) => {
-              const type =
-                row.manualCount > 0 && row.autoCount > 0
-                  ? 'Mixed'
-                  : row.manualCount > 0
-                  ? 'Manual'
-                  : 'Auto';
-
-              return (
-                <View
-                  key={`${row.dateKey}-${i}`}
-                  style={[styles.row, i % 2 ? styles.altRow : null]}
-                >
-                  <Text style={[styles.cell, styles.dateCol]}>{row.dateLabel}</Text>
-                  <Text style={[styles.cell, styles.durationCol]}>
-                    {formatDuration(row.duration)}
-                  </Text>
-                  <Text style={[styles.cell, styles.smallCol]}>{row.malas}</Text>
-                  <Text style={[styles.cell, styles.countCol]}>{row.totalCount}</Text>
-                  <Text style={[styles.cell, styles.accumCol]}>
-                    {row.accumulatedTotal}
-                  </Text>
-                  <Text style={[styles.cell, styles.typeCol]}>{type}</Text>
-                </View>
-              );
-            })
-          )}
+      <View style={styles.tableCard}>
+        <View style={[styles.tableRow, styles.tableHeader]}>
+          <Text style={[styles.tableCell, styles.dateCell]}>Date</Text>
+          <Text style={styles.tableCell}>Malas</Text>
+          <Text style={styles.tableCell}>Count</Text>
+          <Text style={styles.tableCell}>Duration</Text>
+          <Text style={styles.tableCell}>Type</Text>
         </View>
-      </ScrollView>
-    </View>
+
+        {dailyRows.length === 0 ? (
+          <View style={styles.emptyRow}>
+            <Text style={styles.emptyText}>No history available</Text>
+          </View>
+        ) : (
+          dailyRows.map((row, index) => {
+            const type =
+              row.manualCount > 0 && row.autoCount > 0
+                ? 'Mixed'
+                : row.manualCount > 0
+                ? 'Saved'
+                : 'Completed';
+
+            return (
+              <View
+                key={`${row.dateKey}-${index}`}
+                style={[
+                  styles.tableRow,
+                  index % 2 === 1 && styles.altTableRow,
+                ]}
+              >
+                <Text style={[styles.tableCell, styles.dateCell]}>
+                  {row.dateLabel}
+                </Text>
+                <Text style={styles.tableCell}>{row.malas}</Text>
+                <Text style={styles.tableCell}>{row.totalCount}</Text>
+                <Text style={styles.tableCell}>
+                  {formatDuration(row.duration)}
+                </Text>
+                <Text style={styles.tableCell}>{type}</Text>
+              </View>
+            );
+          })
+        )}
+      </View>
+    </ScrollView>
   );
 }
 
@@ -185,89 +174,71 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#0f172a',
-    padding: 16,
   },
 
-  title: {
-    color: 'white',
-    fontSize: 34,
-    fontWeight: '800',
-    marginVertical: 10,
+  content: {
+    paddingHorizontal: 18,
+    paddingTop: 24,
+    paddingBottom: 120,
   },
 
-  summary: {
+  simpleSummary: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 18,
+    marginBottom: 18,
+  },
+
+  summaryText: {
     color: '#cbd5e1',
-    marginBottom: 12,
-    fontSize: 17,
+    fontSize: 16,
+    fontWeight: '700',
   },
 
-  tableWrapper: {
+  tableCard: {
+    backgroundColor: '#1e293b',
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: '#334155',
-    borderRadius: 12,
-    backgroundColor: '#1e293b',
+    overflow: 'hidden',
   },
 
-  row: {
+  tableRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    minHeight: 48,
     borderTopWidth: 1,
     borderTopColor: '#334155',
-    minHeight: 52,
   },
 
-  headerRow: {
-    borderTopWidth: 0,
+  tableHeader: {
     backgroundColor: '#334155',
+    borderTopWidth: 0,
   },
 
-  altRow: {
+  altTableRow: {
     backgroundColor: '#23314a',
   },
 
-  cell: {
+  tableCell: {
+    flex: 1,
     color: 'white',
-    fontSize: 15,
-    paddingHorizontal: 10,
+    fontSize: 14,
     paddingVertical: 12,
+    paddingHorizontal: 8,
+    fontWeight: '600',
   },
 
-  headerText: {
-    fontWeight: '800',
-    color: '#e2e8f0',
-    fontSize: 18,
-  },
-
-  dateCol: {
-    width: 180,
-  },
-
-  durationCol: {
-    width: 110,
-  },
-
-  smallCol: {
-    width: 80,
-  },
-
-  countCol: {
-    width: 100,
-  },
-
-  accumCol: {
-    width: 150,
-  },
-
-  typeCol: {
-    width: 110,
+  dateCell: {
+    flex: 1.4,
   },
 
   emptyRow: {
-    justifyContent: 'center',
+    padding: 18,
   },
 
   emptyText: {
     color: '#94a3b8',
-    padding: 16,
+    fontSize: 15,
   },
 });

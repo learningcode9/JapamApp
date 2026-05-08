@@ -1,15 +1,19 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
-import React, { useEffect, useRef, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
-  TextInput, Vibration, View
+  TextInput,
+  Vibration,
+  View,
 } from 'react-native';
 
 import { getRandomQuote } from '@/constants/quotes';
@@ -29,6 +33,9 @@ const HISTORY_KEY = 'history';
 const JAPAM_NAME_KEY = 'japamName';
 const LAST_OPEN_DATE_KEY = 'lastOpenDate';
 
+const SOUND_ENABLED_KEY = 'soundEnabled';
+const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
+
 export default function JapamMain() {
   const [count, setCount] = useState(0);
   const [malas, setMalas] = useState(0);
@@ -37,16 +44,34 @@ export default function JapamMain() {
   const [minutesInput, setMinutesInput] = useState('1');
   const [targetSeconds, setTargetSeconds] = useState(60);
   const [isRunning, setIsRunning] = useState(false);
+  const [loopTimer, setLoopTimer] = useState(false);
 
   const [japamName, setJapamName] = useState('Japam');
   const [nameInput, setNameInput] = useState('');
   const [showNameEditor, setShowNameEditor] = useState(false);
 
   const [quote, setQuote] = useState('');
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [vibrationEnabled, setVibrationEnabled] = useState(true);
 
   const fade = useRef(new Animated.Value(0)).current;
+  const glowAnim = useRef(new Animated.Value(0)).current;
 
   const total = malas * 108 + count;
+
+  useFocusEffect(
+    useCallback(() => {
+      const loadSettings = async () => {
+        const savedSound = await AsyncStorage.getItem(SOUND_ENABLED_KEY);
+        const savedVibration = await AsyncStorage.getItem(VIBRATION_ENABLED_KEY);
+
+        setSoundEnabled(savedSound !== 'false');
+        setVibrationEnabled(savedVibration !== 'false');
+      };
+
+      loadSettings();
+    }, [])
+  );
 
   useEffect(() => {
     setQuote(getRandomQuote());
@@ -61,35 +86,89 @@ export default function JapamMain() {
   useEffect(() => {
     const loadData = async () => {
       const today = new Date().toISOString().split('T')[0];
-  
+
+      const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
+      const history: Session[] = rawHistory ? JSON.parse(rawHistory) : [];
+
+      const todayHistoryTotal = history
+        .filter((item) => {
+          const itemDate = new Date(item.date).toISOString().split('T')[0];
+          return itemDate === today;
+        })
+        .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
+
+      const todayHistoryMalas = Math.floor(todayHistoryTotal / 108);
+
       const lastOpenDate =
         (await AsyncStorage.getItem(LAST_OPEN_DATE_KEY)) || '';
-  
-      const savedCount = await AsyncStorage.getItem(COUNT_KEY);
-      const savedMalas = await AsyncStorage.getItem(MALAS_KEY);
+
+      const savedCount = Number(
+        (await AsyncStorage.getItem(COUNT_KEY)) || '0'
+      );
+
+      const savedMalas = Number(
+        (await AsyncStorage.getItem(MALAS_KEY)) || '0'
+      );
+
       const savedName = await AsyncStorage.getItem(JAPAM_NAME_KEY);
-  
-      if (lastOpenDate !== today) {
-        // new day → reset live counters only
+
+      if (lastOpenDate && lastOpenDate !== today) {
+        const previousTotal = savedMalas * 108 + savedCount;
+
+        if (previousTotal > 0) {
+          const existingForLastDate = history
+            .filter((item) => {
+              const itemDate = new Date(item.date).toISOString().split('T')[0];
+              return itemDate === lastOpenDate;
+            })
+            .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
+
+          const missingTotal = Math.max(0, previousTotal - existingForLastDate);
+
+          if (missingTotal > 0) {
+            const extraSession: Session = {
+              date: `${lastOpenDate}T12:00:00.000Z`,
+              malas: Math.floor(missingTotal / 108),
+              totalCount: missingTotal,
+              duration: 0,
+              manual: true,
+            };
+
+            await AsyncStorage.setItem(
+              HISTORY_KEY,
+              JSON.stringify([extraSession, ...history])
+            );
+          }
+        }
+
         setCount(0);
         setMalas(0);
-  
+
         await AsyncStorage.setItem(COUNT_KEY, '0');
         await AsyncStorage.setItem(MALAS_KEY, '0');
         await AsyncStorage.setItem(TOTAL_KEY, '0');
-  
         await AsyncStorage.setItem(LAST_OPEN_DATE_KEY, today);
       } else {
-        setCount(Number(savedCount ?? 0));
-        setMalas(Number(savedMalas ?? 0));
+        const restoredMalas = Math.max(savedMalas, todayHistoryMalas);
+
+        setCount(savedCount);
+        setMalas(restoredMalas);
+
+        await AsyncStorage.setItem(LAST_OPEN_DATE_KEY, today);
+        await AsyncStorage.setItem(COUNT_KEY, String(savedCount));
+        await AsyncStorage.setItem(MALAS_KEY, String(restoredMalas));
+        await AsyncStorage.setItem(
+          TOTAL_KEY,
+          String(restoredMalas * 108 + savedCount)
+        );
       }
-  
+
       if (savedName) {
         setJapamName(savedName);
         setNameInput(savedName);
       }
     };
-  
+
     loadData();
   }, []);
 
@@ -119,14 +198,13 @@ export default function JapamMain() {
   const playCompleteSound = async () => {
     try {
       const { sound } = await Audio.Sound.createAsync(
-        require('../../assets/images/notification.mp3')
+        require('../../assets/notification.wav'),
+        { shouldPlay: true, volume: 1.0 }
       );
 
-      await sound.playAsync();
-
-      setTimeout(() => {
-        sound.unloadAsync();
-      }, 4000);
+      setTimeout(async () => {
+        await sound.unloadAsync();
+      }, 3000);
     } catch (error) {
       console.log('Sound error:', error);
     }
@@ -148,34 +226,73 @@ export default function JapamMain() {
       manual: false,
     };
 
-    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([session, ...history]));
+    await AsyncStorage.setItem(
+      HISTORY_KEY,
+      JSON.stringify([session, ...history])
+    );
+  };
+
+  const playCompletionAnimation = () => {
+    glowAnim.setValue(0);
+
+    Animated.sequence([
+      Animated.timing(glowAnim, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: false,
+      }),
+      Animated.timing(glowAnim, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: false,
+      }),
+      Animated.timing(glowAnim, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: false,
+      }),
+      Animated.timing(glowAnim, {
+        toValue: 0,
+        duration: 500,
+        useNativeDriver: false,
+      }),
+    ]).start();
   };
 
   const tapFeedback = () => {
-    if (Platform.OS !== 'web') {
+    if (Platform.OS !== 'web' && vibrationEnabled) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
   };
 
   const completeFeedback = async () => {
-    if (Platform.OS !== 'web') {
+    playCompletionAnimation();
+
+    if (Platform.OS !== 'web' && vibrationEnabled) {
       await Haptics.notificationAsync(
         Haptics.NotificationFeedbackType.Success
       );
-  
-      // long vibration pattern
-      Vibration.vibrate([
-        0,
-        400,
-        150,
-        400,
-        150,
-        700,
-      ]);
+
+      Vibration.vibrate([0, 400, 150, 400, 150, 700]);
     }
-  
-    void playCompleteSound();
+
+    if (soundEnabled) {
+      void playCompleteSound();
+    }
   };
+
+  const handleUndo = () => {
+    if (count > 0) {
+      setCount((prev) => prev - 1);
+      return;
+    }
+
+    if (count === 0 && malas > 0) {
+      setMalas((prev) => prev - 1);
+      setCount(107);
+    }
+  };
+
   const handleTap = () => {
     tapFeedback();
 
@@ -184,11 +301,8 @@ export default function JapamMain() {
 
       if (next >= 108) {
         setMalas((m) => m + 1);
-
         saveSession(0, 1, 108);
-
         completeFeedback();
-
         return 0;
       }
 
@@ -201,7 +315,7 @@ export default function JapamMain() {
 
     setMinutesInput(String(mins));
     setTargetSeconds(mins * 60);
-
+    setSeconds(0);
     setIsRunning(true);
   };
 
@@ -209,17 +323,25 @@ export default function JapamMain() {
     setIsRunning(false);
   };
 
-  const completeTimerSession = () => {
+  const handleStop = () => {
     setIsRunning(false);
     setSeconds(0);
+  };
 
+  const completeTimerSession = () => {
     setCount(0);
-
     setMalas((m) => m + 1);
 
     saveSession(targetSeconds, 1, 108);
-
     completeFeedback();
+
+    if (loopTimer) {
+      setSeconds(0);
+      setIsRunning(true);
+    } else {
+      setSeconds(0);
+      setIsRunning(false);
+    }
   };
 
   const saveJapamName = async () => {
@@ -228,7 +350,6 @@ export default function JapamMain() {
     if (!name) return;
 
     setJapamName(name);
-
     setShowNameEditor(false);
 
     await AsyncStorage.setItem(JAPAM_NAME_KEY, name);
@@ -287,6 +408,19 @@ export default function JapamMain() {
 
       <Text style={styles.big}>{count}</Text>
 
+      <View style={styles.progressBarBackground}>
+        <View
+          style={[
+            styles.progressBarFill,
+            {
+              width: `${(count / 108) * 100}%`,
+            },
+          ]}
+        />
+      </View>
+
+      <Text style={styles.progressText}>{count} / 108</Text>
+
       <View style={styles.metricsRow}>
         <Text style={styles.metricText}>📿 {malas} malas</Text>
 
@@ -297,13 +431,37 @@ export default function JapamMain() {
         <Text style={styles.metricText}>Total {total}</Text>
       </View>
 
-      <Pressable
-        onPress={handleTap}
-        style={({ pressed }) => [
-          styles.circle,
-          pressed && styles.circlePressed,
+      <Animated.View
+        style={[
+          styles.circleGlow,
+          {
+            shadowOpacity: glowAnim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0.25, 0.9],
+            }),
+            transform: [
+              {
+                scale: glowAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [1, 1.08],
+                }),
+              },
+            ],
+          },
         ]}
-      />
+      >
+        <Pressable
+          onPress={handleTap}
+          style={({ pressed }) => [
+            styles.circle,
+            pressed && styles.circlePressed,
+          ]}
+        />
+      </Animated.View>
+
+      <Pressable style={styles.undoBtn} onPress={handleUndo}>
+        <Text style={styles.undoText}>Undo last tap</Text>
+      </Pressable>
 
       <Text style={styles.inputLabel}>Set time and start japam</Text>
 
@@ -312,13 +470,16 @@ export default function JapamMain() {
         value={minutesInput}
         onChangeText={(value) => {
           setMinutesInput(value);
-
           setIsRunning(false);
-
           setSeconds(0);
         }}
         keyboardType="numeric"
       />
+
+      <View style={styles.autoRepeatRow}>
+        <Text style={styles.autoRepeatText}>Auto Repeat Timer</Text>
+        <Switch value={loopTimer} onValueChange={setLoopTimer} />
+      </View>
 
       <View style={styles.row}>
         <Pressable style={styles.btn} onPress={handleStart}>
@@ -327,6 +488,10 @@ export default function JapamMain() {
 
         <Pressable style={[styles.btn, styles.gray]} onPress={handlePause}>
           <Text style={styles.btnText}>Pause</Text>
+        </Pressable>
+
+        <Pressable style={[styles.btn, styles.red]} onPress={handleStop}>
+          <Text style={styles.btnText}>Stop</Text>
         </Pressable>
       </View>
     </ScrollView>
@@ -342,7 +507,7 @@ const styles = StyleSheet.create({
   content: {
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingTop: 44,
+    paddingTop: 34,
     paddingBottom: 120,
   },
 
@@ -350,7 +515,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     width: '100%',
-    marginBottom: 12,
+    marginBottom: 8,
   },
 
   title: {
@@ -389,21 +554,43 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 4,
     marginBottom: 8,
-    fontSize: 20,
+    fontSize: 16,
     maxWidth: 560,
   },
 
   dateText: {
     color: '#94a3b8',
-    fontSize: 15,
-    marginBottom: 8,
+    fontSize: 14,
+    marginBottom: 4,
   },
 
   big: {
     color: 'white',
-    fontSize: 76,
+    fontSize: 68,
     fontWeight: '900',
-    marginTop: 2,
+    marginTop: 0,
+  },
+
+  progressBarBackground: {
+    width: 220,
+    height: 6,
+    backgroundColor: '#1e293b',
+    borderRadius: 999,
+    overflow: 'hidden',
+    marginBottom: 8,
+    alignSelf: 'center',
+  },
+
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: '#6366f1',
+    borderRadius: 999,
+  },
+
+  progressText: {
+    color: '#94a3b8',
+    fontSize: 13,
+    marginBottom: 8,
   },
 
   metricsRow: {
@@ -412,8 +599,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-evenly',
     alignItems: 'center',
-    marginTop: 8,
-    marginBottom: 4,
+    marginTop: 6,
+    marginBottom: 2,
   },
 
   metricText: {
@@ -424,19 +611,26 @@ const styles = StyleSheet.create({
   },
 
   timerRunningText: {
-    fontSize: 28,
+    fontSize: 24,
     color: 'white',
     fontWeight: '900',
   },
 
+  circleGlow: {
+    borderRadius: 100,
+    shadowColor: '#818cf8',
+    shadowRadius: 18,
+    elevation: 10,
+  },
+
   circle: {
-    width: 220,
-    height: 220,
-    borderRadius: 110,
+    width: 190,
+    height: 190,
+    borderRadius: 95,
     backgroundColor: '#6366f1',
     alignSelf: 'center',
-    marginTop: 22,
-    marginBottom: 14,
+    marginTop: 14,
+    marginBottom: 12,
     shadowColor: '#000',
     shadowOpacity: 0.25,
     shadowRadius: 12,
@@ -445,6 +639,20 @@ const styles = StyleSheet.create({
 
   circlePressed: {
     transform: [{ scale: 0.96 }],
+  },
+
+  undoBtn: {
+    backgroundColor: '#334155',
+    paddingVertical: 9,
+    paddingHorizontal: 17,
+    borderRadius: 999,
+    marginBottom: 10,
+  },
+
+  undoText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '700',
   },
 
   inputLabel: {
@@ -463,6 +671,21 @@ const styles = StyleSheet.create({
     fontSize: 18,
   },
 
+  autoRepeatRow: {
+    width: 220,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginTop: 10,
+  },
+
+  autoRepeatText: {
+    color: '#cbd5e1',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+
   row: {
     flexDirection: 'row',
     gap: 10,
@@ -472,14 +695,18 @@ const styles = StyleSheet.create({
   btn: {
     backgroundColor: '#6366f1',
     paddingVertical: 12,
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     borderRadius: 10,
-    minWidth: 100,
+    minWidth: 86,
     alignItems: 'center',
   },
 
   gray: {
     backgroundColor: '#475569',
+  },
+
+  red: {
+    backgroundColor: '#991b1b',
   },
 
   smallBtn: {
@@ -505,6 +732,6 @@ const styles = StyleSheet.create({
   btnText: {
     color: 'white',
     fontWeight: '700',
-    fontSize: 18,
+    fontSize: 16,
   },
 });

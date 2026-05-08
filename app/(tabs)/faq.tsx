@@ -23,6 +23,10 @@ const faqs = [
     a: 'Enter minutes, tap Apply, then tap Start. When the timer ends, the session is saved automatically.',
   },
   {
+    q: 'What is Auto Repeat Timer?',
+    a:'Auto Repeat Timer is useful when you chant by time. After the timer finishes, the app saves one mala, plays completion sound, and automatically starts the next timer. It continues until you press Stop.',
+  },
+  {
     q: 'Does the app save data?',
     a: 'Yes. Your data is stored locally on your device using AsyncStorage and works offline.',
   },
@@ -37,7 +41,7 @@ export default function FAQ() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>FAQ</Text>
+      
       <Text style={styles.subtitle}>Frequently asked questions</Text>
 
       {faqs.map((item, i) => {
