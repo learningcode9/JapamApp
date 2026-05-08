@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -8,8 +9,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
-  View,
+  TextInput, Vibration, View
 } from 'react-native';
 
 import { getRandomQuote } from '@/constants/quotes';
@@ -27,10 +27,12 @@ const MALAS_KEY = 'malas';
 const TOTAL_KEY = 'totalCount';
 const HISTORY_KEY = 'history';
 const JAPAM_NAME_KEY = 'japamName';
+const LAST_OPEN_DATE_KEY = 'lastOpenDate';
 
 export default function JapamMain() {
   const [count, setCount] = useState(0);
   const [malas, setMalas] = useState(0);
+
   const [seconds, setSeconds] = useState(0);
   const [minutesInput, setMinutesInput] = useState('1');
   const [targetSeconds, setTargetSeconds] = useState(60);
@@ -58,19 +60,36 @@ export default function JapamMain() {
 
   useEffect(() => {
     const loadData = async () => {
+      const today = new Date().toISOString().split('T')[0];
+  
+      const lastOpenDate =
+        (await AsyncStorage.getItem(LAST_OPEN_DATE_KEY)) || '';
+  
       const savedCount = await AsyncStorage.getItem(COUNT_KEY);
       const savedMalas = await AsyncStorage.getItem(MALAS_KEY);
       const savedName = await AsyncStorage.getItem(JAPAM_NAME_KEY);
-
-      setCount(Number(savedCount ?? 0));
-      setMalas(Number(savedMalas ?? 0));
-
+  
+      if (lastOpenDate !== today) {
+        // new day → reset live counters only
+        setCount(0);
+        setMalas(0);
+  
+        await AsyncStorage.setItem(COUNT_KEY, '0');
+        await AsyncStorage.setItem(MALAS_KEY, '0');
+        await AsyncStorage.setItem(TOTAL_KEY, '0');
+  
+        await AsyncStorage.setItem(LAST_OPEN_DATE_KEY, today);
+      } else {
+        setCount(Number(savedCount ?? 0));
+        setMalas(Number(savedMalas ?? 0));
+      }
+  
       if (savedName) {
         setJapamName(savedName);
         setNameInput(savedName);
       }
     };
-
+  
     loadData();
   }, []);
 
@@ -97,7 +116,27 @@ export default function JapamMain() {
     completeTimerSession();
   }, [seconds, isRunning, targetSeconds]);
 
-  const saveSession = async (duration: number, sessionMalas: number, sessionTotal: number) => {
+  const playCompleteSound = async () => {
+    try {
+      const { sound } = await Audio.Sound.createAsync(
+        require('../../assets/images/notification.mp3')
+      );
+
+      await sound.playAsync();
+
+      setTimeout(() => {
+        sound.unloadAsync();
+      }, 4000);
+    } catch (error) {
+      console.log('Sound error:', error);
+    }
+  };
+
+  const saveSession = async (
+    duration: number,
+    sessionMalas: number,
+    sessionTotal: number
+  ) => {
     const raw = await AsyncStorage.getItem(HISTORY_KEY);
     const history: Session[] = raw ? JSON.parse(raw) : [];
 
@@ -118,12 +157,25 @@ export default function JapamMain() {
     }
   };
 
-  const completeFeedback = () => {
+  const completeFeedback = async () => {
     if (Platform.OS !== 'web') {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await Haptics.notificationAsync(
+        Haptics.NotificationFeedbackType.Success
+      );
+  
+      // long vibration pattern
+      Vibration.vibrate([
+        0,
+        400,
+        150,
+        400,
+        150,
+        700,
+      ]);
     }
+  
+    void playCompleteSound();
   };
-
   const handleTap = () => {
     tapFeedback();
 
@@ -132,8 +184,11 @@ export default function JapamMain() {
 
       if (next >= 108) {
         setMalas((m) => m + 1);
+
         saveSession(0, 1, 108);
+
         completeFeedback();
+
         return 0;
       }
 
@@ -143,10 +198,10 @@ export default function JapamMain() {
 
   const handleStart = () => {
     const mins = Math.max(1, Math.floor(Number(minutesInput) || 1));
+
     setMinutesInput(String(mins));
     setTargetSeconds(mins * 60);
 
-    // pause tarvata start cheste seconds reset avvakudadhu
     setIsRunning(true);
   };
 
@@ -159,18 +214,23 @@ export default function JapamMain() {
     setSeconds(0);
 
     setCount(0);
+
     setMalas((m) => m + 1);
 
     saveSession(targetSeconds, 1, 108);
+
     completeFeedback();
   };
 
   const saveJapamName = async () => {
     const name = nameInput.trim();
+
     if (!name) return;
 
     setJapamName(name);
+
     setShowNameEditor(false);
+
     await AsyncStorage.setItem(JAPAM_NAME_KEY, name);
   };
 
@@ -195,6 +255,7 @@ export default function JapamMain() {
         <Pressable onPress={openRename}>
           <Text style={styles.title}>🧘 {japamName}</Text>
         </Pressable>
+
         <Text style={styles.renameHint}>Tap name to rename</Text>
       </View>
 
@@ -251,7 +312,9 @@ export default function JapamMain() {
         value={minutesInput}
         onChangeText={(value) => {
           setMinutesInput(value);
+
           setIsRunning(false);
+
           setSeconds(0);
         }}
         keyboardType="numeric"
@@ -387,7 +450,7 @@ const styles = StyleSheet.create({
   inputLabel: {
     color: '#94a3b8',
     fontSize: 13,
-    marginBottom: 2,
+    marginBottom: 6,
   },
 
   input: {
