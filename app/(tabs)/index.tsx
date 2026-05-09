@@ -5,6 +5,7 @@ import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -35,6 +36,7 @@ const LAST_OPEN_DATE_KEY = 'lastOpenDate';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
+const USER_NAME_KEY = 'userName';
 
 export default function JapamMain() {
   const [count, setCount] = useState(0);
@@ -50,6 +52,10 @@ export default function JapamMain() {
   const [japamName, setJapamName] = useState('Japam');
   const [nameInput, setNameInput] = useState('');
   const [showNameEditor, setShowNameEditor] = useState(false);
+
+  const [userName, setUserName] = useState('');
+  const [userNameInput, setUserNameInput] = useState('');
+  const [showUserModal, setShowUserModal] = useState(false);
 
   const [quote, setQuote] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(true);
@@ -112,6 +118,7 @@ export default function JapamMain() {
       );
 
       const savedName = await AsyncStorage.getItem(JAPAM_NAME_KEY);
+      const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
 
       if (lastOpenDate && lastOpenDate !== today) {
         const previousTotal = savedTotal || savedMalas * 108 + savedCount;
@@ -173,6 +180,13 @@ export default function JapamMain() {
       if (savedName) {
         setJapamName(savedName);
         setNameInput(savedName);
+      }
+
+      if (savedUserName) {
+        setUserName(savedUserName);
+        setUserNameInput(savedUserName);
+      } else {
+        setShowUserModal(true);
       }
     };
 
@@ -370,6 +384,17 @@ export default function JapamMain() {
     await AsyncStorage.setItem(JAPAM_NAME_KEY, name);
   };
 
+  const saveUserName = async () => {
+    const name = userNameInput.trim();
+
+    if (!name) return;
+
+    setUserName(name);
+    setShowUserModal(false);
+
+    await AsyncStorage.setItem(USER_NAME_KEY, name);
+  };
+
   const openRename = () => {
     setNameInput(japamName);
     setShowNameEditor(true);
@@ -387,12 +412,20 @@ export default function JapamMain() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <View style={styles.headerCenter}>
-        <Pressable onPress={openRename}>
-          <Text style={styles.title}>🧘 {japamName}</Text>
-        </Pressable>
+      <View style={styles.topBar}>
+        <View style={styles.headerCenter}>
+          <Pressable onPress={openRename}>
+            <Text style={styles.title}>🧘 {japamName}</Text>
+          </Pressable>
 
-        <Text style={styles.renameHint}>Tap name to rename</Text>
+          <Text style={styles.renameHint}>Tap name to rename</Text>
+        </View>
+
+        {!!userName && (
+          <View style={styles.userBadge}>
+            <Text style={styles.userBadgeText}>🙏 {userName}</Text>
+          </View>
+        )}
       </View>
 
       {showNameEditor && (
@@ -509,6 +542,30 @@ export default function JapamMain() {
           <Text style={styles.btnText}>Stop</Text>
         </Pressable>
       </View>
+
+      <Modal visible={showUserModal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Welcome 🙏</Text>
+
+            <Text style={styles.modalSubtitle}>
+              What should we call you?
+            </Text>
+
+            <TextInput
+              style={styles.modalInput}
+              value={userNameInput}
+              onChangeText={setUserNameInput}
+              placeholder="Enter your name"
+              placeholderTextColor="#94a3b8"
+            />
+
+            <Pressable style={styles.modalButton} onPress={saveUserName}>
+              <Text style={styles.modalButtonText}>Continue</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -526,11 +583,40 @@ const styles = StyleSheet.create({
     paddingBottom: 120,
   },
 
+  topBar: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  
   headerCenter: {
     alignItems: 'center',
     justifyContent: 'center',
     width: '100%',
     marginBottom: 8,
+  },
+
+  userBadge: {
+    position: 'absolute',
+    right: 45,
+    top: 12,
+    backgroundColor: '#1e293b',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#334155',
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  
+  userBadgeText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '800',
   },
 
   title: {
@@ -747,6 +833,62 @@ const styles = StyleSheet.create({
   btnText: {
     color: 'white',
     fontWeight: '700',
+    fontSize: 16,
+  },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+
+  modalCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: '#1e293b',
+    borderRadius: 20,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+
+  modalTitle: {
+    color: 'white',
+    fontSize: 24,
+    fontWeight: '800',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+
+  modalSubtitle: {
+    color: '#cbd5e1',
+    fontSize: 15,
+    textAlign: 'center',
+    marginBottom: 18,
+  },
+
+  modalInput: {
+    backgroundColor: '#0f172a',
+    color: 'white',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 18,
+    fontSize: 16,
+  },
+
+  modalButton: {
+    backgroundColor: '#6366f1',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+
+  modalButtonText: {
+    color: 'white',
+    fontWeight: '800',
     fontSize: 16,
   },
 });
