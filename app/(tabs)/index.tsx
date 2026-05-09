@@ -39,6 +39,7 @@ const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
 export default function JapamMain() {
   const [count, setCount] = useState(0);
   const [malas, setMalas] = useState(0);
+  const [total, setTotal] = useState(0);
 
   const [seconds, setSeconds] = useState(0);
   const [minutesInput, setMinutesInput] = useState('1');
@@ -56,8 +57,6 @@ export default function JapamMain() {
 
   const fade = useRef(new Animated.Value(0)).current;
   const glowAnim = useRef(new Animated.Value(0)).current;
-
-  const total = malas * 108 + count;
 
   useFocusEffect(
     useCallback(() => {
@@ -97,8 +96,6 @@ export default function JapamMain() {
         })
         .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
 
-      const todayHistoryMalas = Math.floor(todayHistoryTotal / 108);
-
       const lastOpenDate =
         (await AsyncStorage.getItem(LAST_OPEN_DATE_KEY)) || '';
 
@@ -110,10 +107,14 @@ export default function JapamMain() {
         (await AsyncStorage.getItem(MALAS_KEY)) || '0'
       );
 
+      const savedTotal = Number(
+        (await AsyncStorage.getItem(TOTAL_KEY)) || '0'
+      );
+
       const savedName = await AsyncStorage.getItem(JAPAM_NAME_KEY);
 
       if (lastOpenDate && lastOpenDate !== today) {
-        const previousTotal = savedMalas * 108 + savedCount;
+        const previousTotal = savedTotal || savedMalas * 108 + savedCount;
 
         if (previousTotal > 0) {
           const existingForLastDate = history
@@ -143,24 +144,30 @@ export default function JapamMain() {
 
         setCount(0);
         setMalas(0);
+        setTotal(0);
 
         await AsyncStorage.setItem(COUNT_KEY, '0');
         await AsyncStorage.setItem(MALAS_KEY, '0');
         await AsyncStorage.setItem(TOTAL_KEY, '0');
         await AsyncStorage.setItem(LAST_OPEN_DATE_KEY, today);
       } else {
-        const restoredMalas = Math.max(savedMalas, todayHistoryMalas);
+        const restoredTotal = Math.max(
+          savedTotal,
+          todayHistoryTotal,
+          savedMalas * 108 + savedCount
+        );
 
-        setCount(savedCount);
+        const restoredMalas = Math.floor(restoredTotal / 108);
+        const restoredCount = restoredTotal % 108;
+
+        setCount(restoredCount);
         setMalas(restoredMalas);
+        setTotal(restoredTotal);
 
         await AsyncStorage.setItem(LAST_OPEN_DATE_KEY, today);
-        await AsyncStorage.setItem(COUNT_KEY, String(savedCount));
+        await AsyncStorage.setItem(COUNT_KEY, String(restoredCount));
         await AsyncStorage.setItem(MALAS_KEY, String(restoredMalas));
-        await AsyncStorage.setItem(
-          TOTAL_KEY,
-          String(restoredMalas * 108 + savedCount)
-        );
+        await AsyncStorage.setItem(TOTAL_KEY, String(restoredTotal));
       }
 
       if (savedName) {
@@ -282,31 +289,33 @@ export default function JapamMain() {
   };
 
   const handleUndo = () => {
-    if (count > 0) {
-      setCount((prev) => prev - 1);
-      return;
-    }
+    setTotal((prevTotal) => {
+      const newTotal = Math.max(0, prevTotal - 1);
 
-    if (count === 0 && malas > 0) {
-      setMalas((prev) => prev - 1);
-      setCount(107);
-    }
+      setMalas(Math.floor(newTotal / 108));
+      setCount(newTotal % 108);
+
+      return newTotal;
+    });
   };
 
   const handleTap = () => {
     tapFeedback();
 
-    setCount((prev) => {
-      const next = prev + 1;
+    setTotal((prevTotal) => {
+      const newTotal = prevTotal + 1;
+      const newMalas = Math.floor(newTotal / 108);
+      const newCount = newTotal % 108;
 
-      if (next >= 108) {
-        setMalas((m) => m + 1);
+      setMalas(newMalas);
+      setCount(newCount);
+
+      if (newCount === 0) {
         saveSession(0, 1, 108);
         completeFeedback();
-        return 0;
       }
 
-      return next;
+      return newTotal;
     });
   };
 
@@ -329,8 +338,14 @@ export default function JapamMain() {
   };
 
   const completeTimerSession = () => {
-    setCount(0);
-    setMalas((m) => m + 1);
+    setTotal((prevTotal) => {
+      const newTotal = prevTotal + 108;
+
+      setMalas(Math.floor(newTotal / 108));
+      setCount(newTotal % 108);
+
+      return newTotal;
+    });
 
     saveSession(targetSeconds, 1, 108);
     completeFeedback();

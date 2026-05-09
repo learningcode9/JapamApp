@@ -18,6 +18,7 @@ type DailyRow = {
   dateLabel: string;
   malas: number;
   totalCount: number;
+  accumulatedTotal: number;
   duration: number;
   manualCount: number;
   autoCount: number;
@@ -43,14 +44,6 @@ const toDayLabel = (dayKey: string) => {
     day: 'numeric',
     year: 'numeric',
   });
-};
-
-const formatDuration = (sec: number) => {
-  const safe = Number.isFinite(sec) && sec >= 0 ? sec : 0;
-  const m = Math.floor(safe / 60);
-  const s = safe % 60;
-
-  return `${m}:${String(s).padStart(2, '0')}`;
 };
 
 export default function HistoryScreen() {
@@ -86,6 +79,7 @@ export default function HistoryScreen() {
               dateLabel: toDayLabel(dayKey),
               malas,
               totalCount,
+              accumulatedTotal: 0,
               duration,
               manualCount: isManual ? 1 : 0,
               autoCount: isManual ? 0 : 1,
@@ -93,12 +87,25 @@ export default function HistoryScreen() {
           }
         });
 
-        const latestFirstRows = [...grouped.values()].sort((a, b) => {
+        const oldestFirstRows = [...grouped.values()].sort((a, b) => {
           if (a.dateKey === 'unknown') return 1;
           if (b.dateKey === 'unknown') return -1;
 
-          return b.dateKey.localeCompare(a.dateKey);
+          return a.dateKey.localeCompare(b.dateKey);
         });
+
+        let runningTotal = 0;
+
+        const rowsWithAccumulated = oldestFirstRows.map((row) => {
+          runningTotal += row.totalCount;
+
+          return {
+            ...row,
+            accumulatedTotal: runningTotal,
+          };
+        });
+
+        const latestFirstRows = rowsWithAccumulated.reverse();
 
         setDailyRows(latestFirstRows);
       })();
@@ -226,9 +233,11 @@ export default function HistoryScreen() {
                 <Text style={[styles.tableCell, styles.dateCell]}>
                   {row.dateLabel}
                 </Text>
+
                 <Text style={styles.tableCell}>{row.malas}</Text>
                 <Text style={styles.tableCell}>{row.totalCount}</Text>
-                <Text style={styles.tableCell}>{row.totalCount}</Text>
+
+                <Text style={styles.tableCell}>{row.accumulatedTotal}</Text>
                 <Text style={styles.tableCell}>{type}</Text>
               </View>
             );
