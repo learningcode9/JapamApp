@@ -51,6 +51,7 @@ export default function JapamMain() {
   const [targetSeconds, setTargetSeconds] = useState(60);
   const [isRunning, setIsRunning] = useState(false);
   const [loopTimer, setLoopTimer] = useState(false);
+  const [autoCompletedMalas, setAutoCompletedMalas] = useState(0);
 
   const [japamName, setJapamName] = useState('Japam');
   const [nameInput, setNameInput] = useState('');
@@ -223,13 +224,18 @@ export default function JapamMain() {
   const playCompleteSound = async () => {
     try {
       const { sound } = await Audio.Sound.createAsync(
-        require('../../assets/notification.wav'),
-        { shouldPlay: true, volume: 1.0 }
+        require('../../assets/soft_bell.wav'),
+        {
+          shouldPlay: true,
+          volume: 1.0,
+        }
       );
-
+  
+      await sound.playAsync();
+  
       setTimeout(async () => {
         await sound.unloadAsync();
-      }, 3000);
+      }, 2000);
     } catch (error) {
       console.log('Sound error:', error);
     }
@@ -370,23 +376,34 @@ export default function JapamMain() {
     setIsRunning(false);
     setSeconds(0);
   };
-
   const completeTimerSession = () => {
     setTotal((prevTotal) => {
       const newTotal = prevTotal + 108;
-
+  
       setMalas(Math.floor(newTotal / 108));
       setCount(newTotal % 108);
-
+  
       return newTotal;
     });
-
+  
     saveSession(targetSeconds, 1, 108);
     completeFeedback();
-
+  
     if (loopTimer) {
-      setSeconds(0);
-      setIsRunning(true);
+      setAutoCompletedMalas((prev) => {
+        const next = prev + 1;
+  
+        if (next >= 5) {
+          setSeconds(0);
+          setIsRunning(false);
+          setLoopTimer(false);
+        } else {
+          setSeconds(0);
+          setIsRunning(true);
+        }
+  
+        return next;
+      });
     } else {
       setSeconds(0);
       setIsRunning(false);
@@ -572,10 +589,23 @@ export default function JapamMain() {
         keyboardType="numeric"
       />
 
-      <View style={styles.autoRepeatRow}>
-        <Text style={styles.autoRepeatText}>Auto Repeat Timer</Text>
-        <Switch value={loopTimer} onValueChange={setLoopTimer} />
-      </View>
+<View style={styles.autoRepeatRow}>
+<Text style={styles.autoRepeatText}>
+  Auto Repeat (Max 5 Malas)
+</Text>
+
+  <Switch
+    value={loopTimer}
+    onValueChange={(value) => {
+      setLoopTimer(value);
+
+      if (!value) {
+        setIsRunning(false);
+        setSeconds(0);
+      }
+    }}
+  />
+</View>
 
       <View style={styles.row}>
         <Pressable style={styles.btn} onPress={handleStart}>
@@ -826,7 +856,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
   },
 
-  autoRepeatRow: {
+  Row: {
     width: 220,
     flexDirection: 'row',
     alignItems: 'center',
@@ -954,6 +984,13 @@ const styles = StyleSheet.create({
     marginTop: 78,
     borderWidth: 2,
     borderColor: 'rgba(255,255,255,0.55)',
+  },
+  autoRepeatRow: {
+    width: 260,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
   },
   
 });
