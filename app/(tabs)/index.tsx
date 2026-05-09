@@ -5,6 +5,7 @@ import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
+  Dimensions,
   Modal,
   Platform,
   Pressable,
@@ -37,6 +38,8 @@ const LAST_OPEN_DATE_KEY = 'lastOpenDate';
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
 const USER_NAME_KEY = 'userName';
+const screenWidth = Dimensions.get('window').width;
+const isMobile = screenWidth < 500;
 
 export default function JapamMain() {
   const [count, setCount] = useState(0);
@@ -60,6 +63,7 @@ export default function JapamMain() {
   const [quote, setQuote] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
+  const pressAnim = useRef(new Animated.Value(0)).current;
 
   const fade = useRef(new Animated.Value(0)).current;
   const glowAnim = useRef(new Animated.Value(0)).current;
@@ -312,8 +316,24 @@ export default function JapamMain() {
       return newTotal;
     });
   };
-
+  const playPressAnimation = () => {
+    pressAnim.setValue(0);
+  
+    Animated.sequence([
+      Animated.timing(pressAnim, {
+        toValue: 1,
+        duration: 120,
+        useNativeDriver: true,
+      }),
+      Animated.timing(pressAnim, {
+        toValue: 0,
+        duration: 260,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
   const handleTap = () => {
+    playPressAnimation();
     tapFeedback();
 
     setTotal((prevTotal) => {
@@ -413,19 +433,27 @@ export default function JapamMain() {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.topBar}>
-        <View style={styles.headerCenter}>
-          <Pressable onPress={openRename}>
-            <Text style={styles.title}>🧘 {japamName}</Text>
-          </Pressable>
+      <View style={styles.headerCenter}>
+  <Pressable onPress={openRename}>
+    <Text style={styles.title}>🧘 {japamName}</Text>
+  </Pressable>
 
-          <Text style={styles.renameHint}>Tap name to rename</Text>
-        </View>
+  {!!userName && (
+  <View
+    style={[
+      styles.userBadge,
+      isMobile
+        ? styles.mobileUserBadge
+        : styles.desktopUserBadge,
+    ]}
+  >
+    <Text style={styles.userBadgeText}>🙏 {userName}</Text>
+  </View>
+)}
 
-        {!!userName && (
-          <View style={styles.userBadge}>
-            <Text style={styles.userBadgeText}>🙏 {userName}</Text>
-          </View>
-        )}
+  <Text style={styles.renameHint}>Tap name to rename</Text>
+</View>
+      
       </View>
 
       {showNameEditor && (
@@ -468,6 +496,7 @@ export default function JapamMain() {
       </View>
 
       <Text style={styles.progressText}>{count} / 108</Text>
+      
 
       <View style={styles.metricsRow}>
         <Text style={styles.metricText}>📿 {malas} malas</Text>
@@ -480,36 +509,55 @@ export default function JapamMain() {
       </View>
 
       <Animated.View
-        style={[
-          styles.circleGlow,
-          {
-            shadowOpacity: glowAnim.interpolate({
-              inputRange: [0, 1],
-              outputRange: [0.25, 0.9],
-            }),
-            transform: [
-              {
-                scale: glowAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [1, 1.08],
-                }),
-              },
-            ],
-          },
-        ]}
-      >
-        <Pressable
-          onPress={handleTap}
-          style={({ pressed }) => [
-            styles.circle,
-            pressed && styles.circlePressed,
-          ]}
-        />
-      </Animated.View>
-
-      <Pressable style={styles.undoBtn} onPress={handleUndo}>
-        <Text style={styles.undoText}>Undo last tap</Text>
-      </Pressable>
+  style={[
+    styles.circleGlow,
+    {
+      shadowOpacity: glowAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0.25, 0.9],
+      }),
+      transform: [
+        {
+          scale: glowAnim.interpolate({
+            inputRange: [0, 1],
+            outputRange: [1, 1.08],
+          }),
+        },
+      ],
+    },
+  ]}
+>
+  <Pressable
+    onPress={handleTap}
+    style={({ pressed }) => [
+      styles.circle,
+      pressed && styles.circlePressed,
+    ]}
+  >
+    <Animated.View
+      style={[
+        styles.innerBead,
+        {
+          opacity: pressAnim.interpolate({
+            inputRange: [0, 1],
+            outputRange: [0, 1],
+          }),
+          transform: [
+            {
+              scale: pressAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0.4, 1.25],
+              }),
+            },
+          ],
+        },
+      ]}
+    />
+  </Pressable>
+</Animated.View>
+<Pressable style={styles.undoBtn} onPress={handleUndo}>
+  <Text style={styles.undoText}>Undo last tap</Text>
+</Pressable>
 
       <Text style={styles.inputLabel}>Set time and start japam</Text>
 
@@ -598,9 +646,6 @@ const styles = StyleSheet.create({
   },
 
   userBadge: {
-    position: 'absolute',
-    right: 45,
-    top: 12,
     backgroundColor: '#1e293b',
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -611,6 +656,15 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 6,
     elevation: 4,
+  },
+  desktopUserBadge: {
+    position: 'absolute',
+    right: 45,
+    top: 12,
+  },
+  
+  mobileUserBadge: {
+    marginTop: 10,
   },
   
   userBadgeText: {
@@ -891,4 +945,15 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     fontSize: 16,
   },
+  innerBead: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+    alignSelf: 'center',
+    marginTop: 78,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.55)',
+  },
+  
 });
