@@ -2,8 +2,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useFocusEffect } from 'expo-router';
 import * as Sharing from 'expo-sharing';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+
+
+
 
 type Session = {
   date: string;
@@ -18,7 +21,7 @@ type DailyRow = {
   dateLabel: string;
   malas: number;
   totalCount: number;
-  accumulatedTotal: number;
+  accumulated: number;
   duration: number;
   manualCount: number;
   autoCount: number;
@@ -48,6 +51,44 @@ const toDayLabel = (dayKey: string) => {
 
 export default function HistoryScreen() {
   const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
+  const testSupabase = async () => {
+    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+  
+    if (!url || !key) {
+      console.log('SUPABASE ENV MISSING');
+      return;
+    }
+  
+    try {
+      const response = await fetch(`${url}/rest/v1/japam_history`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          Prefer: 'return=representation',
+        },
+        body: JSON.stringify({
+          user_name: 'Sravani',
+          malas: 5,
+          count: 540,
+          accumulated: 540,
+          type: 'Mixed',
+        }),
+      });
+  
+      const data = await response.json();
+  
+      console.log('INSERT RESULT:', data);
+    } catch (error) {
+      console.log('INSERT ERROR:', error);
+    }
+  };
+
+  useEffect(() => {
+    testSupabase();
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -79,7 +120,7 @@ export default function HistoryScreen() {
               dateLabel: toDayLabel(dayKey),
               malas,
               totalCount,
-              accumulatedTotal: 0,
+              accumulated: 0,
               duration,
               manualCount: isManual ? 1 : 0,
               autoCount: isManual ? 0 : 1,
@@ -101,7 +142,7 @@ export default function HistoryScreen() {
 
           return {
             ...row,
-            accumulatedTotal: runningTotal,
+            accumulated: runningTotal,
           };
         });
 
@@ -140,7 +181,7 @@ export default function HistoryScreen() {
             : 'Completed';
   
         lines.push(
-          `${row.dateKey},${row.malas},${row.totalCount},${row.totalCount},${type}`
+          `${row.dateKey},${row.malas},${row.totalCount},${row.accumulated},${type}`
         );
       });
   
@@ -237,7 +278,7 @@ export default function HistoryScreen() {
                 <Text style={styles.tableCell}>{row.malas}</Text>
                 <Text style={styles.tableCell}>{row.totalCount}</Text>
 
-                <Text style={styles.tableCell}>{row.accumulatedTotal}</Text>
+                <Text style={styles.tableCell}>{row.accumulated}</Text>
                 <Text style={styles.tableCell}>{type}</Text>
               </View>
             );
