@@ -49,6 +49,7 @@ const AUTH_PENDING_MAX_MS = 2 * 60 * 1000;
 
 const screenWidth = Dimensions.get('window').width;
 const isMobile = screenWidth < 500;
+const isSavingSessionRef = useRef(false);
 
 const getLocalDateKey = (date = new Date()) => {
   const y = date.getFullYear();
@@ -589,36 +590,42 @@ const [request, response, promptAsync] = Google.useAuthRequest({
     sessionTotal: number,
     accumulatedTotal: number
   ) => {
-    const raw = await AsyncStorage.getItem(HISTORY_KEY);
-    const history: Session[] = raw ? JSON.parse(raw) : [];
-    const userId = await AsyncStorage.getItem(USER_ID_KEY);
-    const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
-
-    const session: Session = {
-      date: new Date().toISOString(),
-      malas: sessionMalas,
-      totalCount: sessionTotal,
-      duration,
-      manual: false,
-      userId: userId || undefined,
-    };
-
-    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([session, ...history]));
-
-    if (!userId) return;
-
+    if (isSavingSessionRef.current) return;
+  
+    isSavingSessionRef.current = true;
+  
     try {
+      const raw = await AsyncStorage.getItem(HISTORY_KEY);
+      const history: Session[] = raw ? JSON.parse(raw) : [];
+      const userId = await AsyncStorage.getItem(USER_ID_KEY);
+      const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+  
+      const session: Session = {
+        date: new Date().toISOString(),
+        malas: sessionMalas,
+        totalCount: sessionTotal,
+        duration,
+        manual: false,
+        userId: userId || undefined,
+      };
+  
+      await AsyncStorage.setItem(
+        HISTORY_KEY,
+        JSON.stringify([session, ...history])
+      );
+  
+      if (!userId) return;
+  
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-
+  
       if (url && key) {
         const baseBody = {
           user_name: savedUserName || userName,
           malas: sessionMalas,
           count: sessionTotal,
-          accumulated: accumulatedTotal,
         };
-
+  
         const postHistory = async (body: Record<string, unknown>) => {
           const response = await fetch(`${url}/rest/v1/japam_history`, {
             method: 'POST',
@@ -630,26 +637,28 @@ const [request, response, promptAsync] = Google.useAuthRequest({
             },
             body: JSON.stringify(body),
           });
-
+  
           if (!response.ok) {
             console.log('Supabase save error:', await response.text());
             return false;
           }
-
+  
           return true;
         };
-
+  
         const savedWithUserId = await postHistory({
           user_id: userId,
           ...baseBody,
         });
-
+  
         if (!savedWithUserId) {
           await postHistory(baseBody);
         }
       }
     } catch (error) {
       console.log('Supabase save error:', error);
+    } finally {
+      isSavingSessionRef.current = false;
     }
   };
 
