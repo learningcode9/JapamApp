@@ -384,20 +384,17 @@ const [request, response, promptAsync] = Google.useAuthRequest({
       console.log('Profile fetch error:', error);
     }
   };
-  const restoreHistoryFromSupabase = async (
-    googleUserId: string
-  ) => {
+  const restoreHistoryFromSupabase = async (googleUserId: string) => {
     try {
       const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
   
       if (!supabaseUrl || !supabaseKey) return;
   
-      const encodedUserId =
-        encodeURIComponent(googleUserId);
+      const encodedUserId = encodeURIComponent(googleUserId);
   
       const response = await fetch(
-        `${supabaseUrl}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=*`,
+        `${supabaseUrl}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=*&order=created_at.asc`,
         {
           headers: {
             apikey: supabaseKey,
@@ -416,20 +413,17 @@ const [request, response, promptAsync] = Google.useAuthRequest({
         totalCount: item.count || 0,
         duration: 0,
         manual: false,
+        userId: googleUserId,
       }));
   
-      await AsyncStorage.setItem(
-        HISTORY_KEY,
-        JSON.stringify(convertedHistory)
-      );
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(convertedHistory));
   
       const totalAccumulated = convertedHistory.reduce(
-        (sum: number, item: any) =>
-          sum + (item.totalCount || 0),
+        (sum: number, item: any) => sum + (Number(item.totalCount) || 0),
         0
       );
   
-      await restoreTotal(totalAccumulated);
+      await restoreTotal(totalAccumulated, { userId: googleUserId });
     } catch (error) {
       console.log('History restore error:', error);
     }
