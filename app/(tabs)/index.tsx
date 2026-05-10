@@ -1081,7 +1081,7 @@ await saveJapamNameToSupabase(
         <Text style={styles.undoText}>Undo last tap</Text>
       </Pressable>
 
-      <Text style={styles.inputLabel}>Set time and start japam</Text>
+      <Text style={styles.inputLabel}>Timer (minutes)</Text>
 
       <TextInput
         style={styles.input}
@@ -1091,9 +1091,12 @@ await saveJapamNameToSupabase(
           setIsRunning(false);
           setSeconds(0);
         }}
+        editable={!isRunning}
         keyboardType="numeric"
       />
-
+       <Text style={styles.timerHint}>
+  Each completion counts as 1 mala
+</Text>
       <View style={styles.autoRepeatRow}>
         <Text style={styles.autoRepeatText}>Auto Repeat (Max 5 Malas)</Text>
 
@@ -1497,5 +1500,11 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     fontSize: 14,
   
+  },
+  timerHint: {
+    color: '#94a3b8',
+    fontSize: 12,
+    marginTop: 6,
+    textAlign: 'center',
   },
 });
