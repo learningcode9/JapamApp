@@ -488,10 +488,11 @@ const [request, response, promptAsync] = Google.useAuthRequest({
 
         const googleName =
           userInfo?.given_name || userInfo?.name || userInfo?.email || 'User';
-        const googleUserId = String(userInfo?.email || userInfo?.id || '')
-          .trim()
-          .toLowerCase();
+          const googleUserId = String(userInfo?.id || '').trim();
 
+          const googleEmail = String(userInfo?.email || '')
+            .trim()
+            .toLowerCase();
         if (!googleUserId) {
           setShowUserModal(true);
           return;
@@ -1084,17 +1085,23 @@ await saveJapamNameToSupabase(
       <Text style={styles.inputLabel}>Timer (minutes)</Text>
 
       <TextInput
-        style={styles.input}
-        value={minutesInput}
-        onChangeText={(value) => {
-          setMinutesInput(value);
-          setIsRunning(false);
-          setSeconds(0);
-        }}
-        editable={!isRunning}
-        keyboardType="numeric"
-      />
-       <Text style={styles.timerHint}>
+  style={[
+    styles.input,
+    isRunning && styles.disabledInput,
+  ]}
+  value={minutesInput}
+  onChangeText={(value) => {
+    if (isRunning) return;
+
+    setMinutesInput(value);
+    setSeconds(0);
+  }}
+  editable={!isRunning}
+  selectTextOnFocus={!isRunning}
+  keyboardType="numeric"
+/>
+
+<Text style={styles.timerHint}>
   Each completion counts as 1 mala
 </Text>
       <View style={styles.autoRepeatRow}>
@@ -1506,5 +1513,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 6,
     textAlign: 'center',
+  },
+  disabledInput: {
+    opacity: 0.55,
   },
 });

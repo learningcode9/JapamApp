@@ -106,7 +106,6 @@ if (!userId) {
             user_name: userName || 'User',
             malas: malaNum,
             count: totalNum,
-            accumulated: totalNum,
           }),
         });
 
