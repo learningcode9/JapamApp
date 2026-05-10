@@ -9,9 +9,12 @@ type Session = {
   totalCount: number;
   duration: number;
   manual?: boolean;
+  userId?: string;
 };
 
 const HISTORY_KEY = 'history';
+const USER_ID_KEY = 'userId';
+const USER_NAME_KEY = 'userName';
 
 export default function ManualEntry() {
     const getLocalDate = () => {
@@ -47,6 +50,8 @@ export default function ManualEntry() {
 
     const raw = await AsyncStorage.getItem(HISTORY_KEY);
     const history: Session[] = raw ? JSON.parse(raw) : [];
+    const userId = await AsyncStorage.getItem(USER_ID_KEY);
+    const userName = await AsyncStorage.getItem(USER_NAME_KEY);
 
     const payload: Session = {
       // Important: use midday local time to avoid timezone date shifting
@@ -55,9 +60,57 @@ export default function ManualEntry() {
       totalCount: totalNum,
       duration: 0,
       manual: true,
+      userId: userId || undefined,
     };
 
     await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([payload, ...history]));
+
+    if (userId) {
+      try {
+        const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+        const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+        if (url && key) {
+          const baseBody = {
+            user_name: userName || 'User',
+            malas: malaNum,
+            count: totalNum,
+            accumulated: totalNum,
+          };
+
+          const postHistory = async (body: Record<string, unknown>) => {
+            const response = await fetch(`${url}/rest/v1/japam_history`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                apikey: key,
+                Authorization: `Bearer ${key}`,
+                Prefer: 'return=minimal',
+              },
+              body: JSON.stringify(body),
+            });
+
+            if (!response.ok) {
+              console.log('Supabase manual save error:', await response.text());
+              return false;
+            }
+
+            return true;
+          };
+
+          const savedWithUserId = await postHistory({
+            user_id: userId,
+            ...baseBody,
+          });
+
+          if (!savedWithUserId) {
+            await postHistory(baseBody);
+          }
+        }
+      } catch (error) {
+        console.log('Supabase manual save error:', error);
+      }
+    }
 
     Alert.alert('Saved', 'Manual entry added to history');
 

@@ -1,9 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Google from 'expo-auth-session/providers/google';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import { useFocusEffect } from 'expo-router';
+import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
   Dimensions,
   Modal,
@@ -20,12 +23,15 @@ import {
 
 import { getRandomQuote } from '@/constants/quotes';
 
+WebBrowser.maybeCompleteAuthSession();
+
 type Session = {
   date: string;
   malas: number;
   totalCount: number;
   duration: number;
   manual?: boolean;
+  userId?: string;
 };
 
 const COUNT_KEY = 'count';
@@ -34,14 +40,61 @@ const TOTAL_KEY = 'totalCount';
 const HISTORY_KEY = 'history';
 const JAPAM_NAME_KEY = 'japamName';
 const LAST_OPEN_DATE_KEY = 'lastOpenDate';
-
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
 const USER_NAME_KEY = 'userName';
+const USER_ID_KEY = 'userId';
+const AUTH_PENDING_KEY = 'authPending';
+const AUTH_PENDING_MAX_MS = 2 * 60 * 1000;
+
 const screenWidth = Dimensions.get('window').width;
 const isMobile = screenWidth < 500;
 
+const getLocalDateKey = (date = new Date()) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+const isSameLocalDay = (dateValue: string, dayKey = getLocalDateKey()) => {
+  const d = new Date(dateValue);
+  if (Number.isNaN(d.getTime())) return false;
+  return getLocalDateKey(d) === dayKey;
+};
+
+const getTodayRange = () => {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+
+  return {
+    start: start.toISOString(),
+    end: end.toISOString(),
+  };
+};
+
+const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
+
+const isAuthPending = async () => {
+  const raw = await AsyncStorage.getItem(AUTH_PENDING_KEY);
+  const startedAt = Number(raw || 0);
+
+  if (!startedAt) return false;
+
+  if (Date.now() - startedAt > AUTH_PENDING_MAX_MS) {
+    await AsyncStorage.removeItem(AUTH_PENDING_KEY);
+    return false;
+  }
+
+  return true;
+};
+
 export default function JapamMain() {
+  const [showUserMenu, setShowUserMenu] = useState(false);
+
   const [count, setCount] = useState(0);
   const [malas, setMalas] = useState(0);
   const [total, setTotal] = useState(0);
@@ -51,36 +104,196 @@ export default function JapamMain() {
   const [targetSeconds, setTargetSeconds] = useState(60);
   const [isRunning, setIsRunning] = useState(false);
   const [loopTimer, setLoopTimer] = useState(false);
-  const [autoCompletedMalas, setAutoCompletedMalas] = useState(0);
+  const [, setAutoCompletedMalas] = useState(0);
 
   const [japamName, setJapamName] = useState('Japam');
   const [nameInput, setNameInput] = useState('');
   const [showNameEditor, setShowNameEditor] = useState(false);
 
   const [userName, setUserName] = useState('');
-  const [userNameInput, setUserNameInput] = useState('');
   const [showUserModal, setShowUserModal] = useState(false);
+  const [isSigningIn, setIsSigningIn] = useState(false);
+
+  const [request, response, promptAsync] = Google.useAuthRequest({
+    clientId:
+      '475929514423-sujd0s7bb3jd46s5a0ck493f3p8phdji.apps.googleusercontent.com',
+    scopes: ['profile', 'email'],
+  });
 
   const [quote, setQuote] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
-  const pressAnim = useRef(new Animated.Value(0)).current;
 
+  const totalRef = useRef(0);
+  const pressAnim = useRef(new Animated.Value(0)).current;
   const fade = useRef(new Animated.Value(0)).current;
   const glowAnim = useRef(new Animated.Value(0)).current;
 
+  const restoreTotal = useCallback(
+    async (
+      nextTotal: number,
+      options?: {
+        userId?: string | null;
+      }
+    ) => {
+    const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
+    const nextMalas = Math.floor(safeTotal / 108);
+    const nextCount = safeTotal % 108;
+    const activeUserId =
+      options?.userId === undefined
+        ? await AsyncStorage.getItem(USER_ID_KEY)
+        : options.userId;
+
+    totalRef.current = safeTotal;
+    setTotal(safeTotal);
+    setMalas(nextMalas);
+    setCount(nextCount);
+
+    await AsyncStorage.setItem(TOTAL_KEY, String(safeTotal));
+    await AsyncStorage.setItem(MALAS_KEY, String(nextMalas));
+    await AsyncStorage.setItem(COUNT_KEY, String(nextCount));
+
+    if (activeUserId) {
+      await AsyncStorage.setItem(
+        getUserStorageKey(TOTAL_KEY, activeUserId),
+        String(safeTotal)
+      );
+      await AsyncStorage.setItem(
+        getUserStorageKey(MALAS_KEY, activeUserId),
+        String(nextMalas)
+      );
+      await AsyncStorage.setItem(
+        getUserStorageKey(COUNT_KEY, activeUserId),
+        String(nextCount)
+      );
+    }
+  },
+    []
+  );
+
+  const getLocalTodayTotal = useCallback(async (userIdOverride?: string | null) => {
+    const today = getLocalDateKey();
+    const savedUserId =
+      userIdOverride === undefined
+        ? await AsyncStorage.getItem(USER_ID_KEY)
+        : userIdOverride;
+
+    if (!savedUserId) return 0;
+
+    const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
+    const history: Session[] = rawHistory ? JSON.parse(rawHistory) : [];
+
+    const todayHistoryTotal = history
+      .filter((item) => {
+        if (!savedUserId || item.userId !== savedUserId) return false;
+        return isSameLocalDay(item.date, today);
+      })
+      .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
+
+    const savedCount = Number(
+      (await AsyncStorage.getItem(getUserStorageKey(COUNT_KEY, savedUserId))) ||
+        '0'
+    );
+    const savedMalas = Number(
+      (await AsyncStorage.getItem(getUserStorageKey(MALAS_KEY, savedUserId))) ||
+        '0'
+    );
+    const savedTotal = Number(
+      (await AsyncStorage.getItem(getUserStorageKey(TOTAL_KEY, savedUserId))) ||
+        '0'
+    );
+
+    return Math.max(savedTotal, todayHistoryTotal, savedMalas * 108 + savedCount);
+  }, []);
+
+  const fetchTodayTotalFromSupabase = useCallback(
+    async (userId: string, userNameForFallback?: string | null) => {
+    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!url || !key || !userId) return null;
+
+    try {
+      const { start, end } = getTodayRange();
+
+      const fetchBy = async (field: 'user_id' | 'user_name', value: string) => {
+        const query = new URLSearchParams({
+          select: 'count',
+          [field]: `eq.${value}`,
+          created_at: `gte.${start}`,
+        });
+
+        query.append('created_at', `lt.${end}`);
+
+        const result = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
+          headers: {
+            apikey: key,
+            Authorization: `Bearer ${key}`,
+          },
+        });
+
+        if (!result.ok) {
+          console.log('Supabase fetch error:', await result.text());
+          return null;
+        }
+
+        const rows: { count?: number | string }[] = await result.json();
+        return rows.reduce((sum, row) => sum + (Number(row.count) || 0), 0);
+      };
+
+      const byUserId = await fetchBy('user_id', userId);
+      const byUserName = userNameForFallback
+        ? await fetchBy('user_name', userNameForFallback)
+        : null;
+
+      if (byUserId === null) return byUserName;
+      if (byUserName === null) return byUserId;
+
+      return Math.max(byUserId, byUserName);
+    } catch (error) {
+      console.log('Supabase today total error:', error);
+      return null;
+    }
+  },
+    []
+  );
+
+  const restoreTodayTotal = useCallback(async () => {
+    const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+    const localTodayTotal = await getLocalTodayTotal(savedUserId);
+
+    if (savedUserId) {
+      const remoteTodayTotal = await fetchTodayTotalFromSupabase(
+        savedUserId,
+        savedUserName
+      );
+
+      if (remoteTodayTotal !== null) {
+        await restoreTotal(Math.max(localTodayTotal, remoteTodayTotal), {
+          userId: savedUserId,
+        });
+        return;
+      }
+    }
+
+    await restoreTotal(localTodayTotal, { userId: savedUserId });
+  }, [fetchTodayTotalFromSupabase, getLocalTodayTotal, restoreTotal]);
+
   useFocusEffect(
     useCallback(() => {
-      const loadSettings = async () => {
+      const loadSettingsAndRestoreToday = async () => {
         const savedSound = await AsyncStorage.getItem(SOUND_ENABLED_KEY);
         const savedVibration = await AsyncStorage.getItem(VIBRATION_ENABLED_KEY);
 
         setSoundEnabled(savedSound !== 'false');
         setVibrationEnabled(savedVibration !== 'false');
+
+        await restoreTodayTotal();
       };
 
-      loadSettings();
-    }, [])
+      void loadSettingsAndRestoreToday();
+    }, [restoreTodayTotal])
   );
 
   useEffect(() => {
@@ -91,117 +304,149 @@ export default function JapamMain() {
       duration: 800,
       useNativeDriver: true,
     }).start();
-  }, []);
+  }, [fade]);
 
   useEffect(() => {
     const loadData = async () => {
-      const today = new Date().toISOString().split('T')[0];
-
-      const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
-      const history: Session[] = rawHistory ? JSON.parse(rawHistory) : [];
-
-      const todayHistoryTotal = history
-        .filter((item) => {
-          const itemDate = new Date(item.date).toISOString().split('T')[0];
-          return itemDate === today;
-        })
-        .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
-
-      const lastOpenDate =
-        (await AsyncStorage.getItem(LAST_OPEN_DATE_KEY)) || '';
-
-      const savedCount = Number(
-        (await AsyncStorage.getItem(COUNT_KEY)) || '0'
-      );
-
-      const savedMalas = Number(
-        (await AsyncStorage.getItem(MALAS_KEY)) || '0'
-      );
-
-      const savedTotal = Number(
-        (await AsyncStorage.getItem(TOTAL_KEY)) || '0'
-      );
-
+      const today = getLocalDateKey();
       const savedName = await AsyncStorage.getItem(JAPAM_NAME_KEY);
       const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
-
-      if (lastOpenDate && lastOpenDate !== today) {
-        const previousTotal = savedTotal || savedMalas * 108 + savedCount;
-
-        if (previousTotal > 0) {
-          const existingForLastDate = history
-            .filter((item) => {
-              const itemDate = new Date(item.date).toISOString().split('T')[0];
-              return itemDate === lastOpenDate;
-            })
-            .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
-
-          const missingTotal = Math.max(0, previousTotal - existingForLastDate);
-
-          if (missingTotal > 0) {
-            const extraSession: Session = {
-              date: `${lastOpenDate}T12:00:00.000Z`,
-              malas: Math.floor(missingTotal / 108),
-              totalCount: missingTotal,
-              duration: 0,
-              manual: true,
-            };
-
-            await AsyncStorage.setItem(
-              HISTORY_KEY,
-              JSON.stringify([extraSession, ...history])
-            );
-          }
-        }
-
-        setCount(0);
-        setMalas(0);
-        setTotal(0);
-
-        await AsyncStorage.setItem(COUNT_KEY, '0');
-        await AsyncStorage.setItem(MALAS_KEY, '0');
-        await AsyncStorage.setItem(TOTAL_KEY, '0');
-        await AsyncStorage.setItem(LAST_OPEN_DATE_KEY, today);
-      } else {
-        const restoredTotal = Math.max(
-          savedTotal,
-          todayHistoryTotal,
-          savedMalas * 108 + savedCount
-        );
-
-        const restoredMalas = Math.floor(restoredTotal / 108);
-        const restoredCount = restoredTotal % 108;
-
-        setCount(restoredCount);
-        setMalas(restoredMalas);
-        setTotal(restoredTotal);
-
-        await AsyncStorage.setItem(LAST_OPEN_DATE_KEY, today);
-        await AsyncStorage.setItem(COUNT_KEY, String(restoredCount));
-        await AsyncStorage.setItem(MALAS_KEY, String(restoredMalas));
-        await AsyncStorage.setItem(TOTAL_KEY, String(restoredTotal));
-      }
+      const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      const authPending = await isAuthPending();
 
       if (savedName) {
         setJapamName(savedName);
         setNameInput(savedName);
       }
 
-      if (savedUserName) {
+      if (savedUserName && savedUserId) {
         setUserName(savedUserName);
-        setUserNameInput(savedUserName);
+        setShowUserModal(false);
+        await restoreTodayTotal();
       } else {
+        setUserName('');
+        setIsSigningIn(authPending);
+        setShowUserModal(!authPending);
+        await restoreTotal(0);
+      }
+
+      await AsyncStorage.setItem(LAST_OPEN_DATE_KEY, today);
+    };
+
+    void loadData();
+  }, [restoreTodayTotal, restoreTotal]);
+
+  useEffect(() => {
+    const handleGoogleLogin = async () => {
+      if (!response) return;
+
+      if (response.type !== 'success') {
+        setIsSigningIn(false);
+        await AsyncStorage.removeItem(AUTH_PENDING_KEY);
+        const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+
+        if (!savedUserId) {
+          setShowUserModal(true);
+        }
+
+        return;
+      }
+
+      setIsSigningIn(true);
+      setShowUserModal(false);
+
+      const { authentication } = response;
+      const accessToken =
+        authentication?.accessToken ||
+        ('params' in response ? response.params?.access_token : undefined);
+
+      if (!accessToken) {
+        await AsyncStorage.removeItem(AUTH_PENDING_KEY);
+        setIsSigningIn(false);
         setShowUserModal(true);
+        return;
+      }
+
+      try {
+        const userInfoResponse = await fetch(
+          'https://www.googleapis.com/userinfo/v2/me',
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+            },
+          }
+        );
+
+        const userInfo = await userInfoResponse.json();
+
+        const googleName =
+          userInfo?.given_name || userInfo?.name || userInfo?.email || 'User';
+        const googleUserId = String(userInfo?.email || userInfo?.id || '')
+          .trim()
+          .toLowerCase();
+
+        if (!googleUserId) {
+          setShowUserModal(true);
+          return;
+        }
+
+        setUserName(googleName);
+        setShowUserModal(false);
+        setShowUserMenu(false);
+
+        await AsyncStorage.setItem(USER_NAME_KEY, googleName);
+        await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
+        
+
+        const localTodayTotal = await getLocalTodayTotal(googleUserId);
+        const remoteTodayTotal = await fetchTodayTotalFromSupabase(
+          googleUserId,
+          googleName
+        );
+
+        await restoreTotal(
+          remoteTodayTotal === null
+            ? localTodayTotal
+            : Math.max(localTodayTotal, remoteTodayTotal),
+          { userId: googleUserId }
+        );
+      } catch (error) {
+        console.log('Google login error:', error);
+        setShowUserModal(true);
+      } finally {
+        await AsyncStorage.removeItem(AUTH_PENDING_KEY);
+        setIsSigningIn(false);
       }
     };
 
-    loadData();
-  }, []);
+    void handleGoogleLogin();
+  }, [fetchTodayTotalFromSupabase, getLocalTodayTotal, response, restoreTotal]);
 
   useEffect(() => {
-    AsyncStorage.setItem(COUNT_KEY, String(count));
-    AsyncStorage.setItem(MALAS_KEY, String(malas));
-    AsyncStorage.setItem(TOTAL_KEY, String(total));
+    totalRef.current = total;
+
+    void (async () => {
+      await AsyncStorage.setItem(COUNT_KEY, String(count));
+      await AsyncStorage.setItem(MALAS_KEY, String(malas));
+      await AsyncStorage.setItem(TOTAL_KEY, String(total));
+
+      const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+
+      if (savedUserId) {
+        await AsyncStorage.setItem(
+          getUserStorageKey(COUNT_KEY, savedUserId),
+          String(count)
+        );
+        await AsyncStorage.setItem(
+          getUserStorageKey(MALAS_KEY, savedUserId),
+          String(malas)
+        );
+        await AsyncStorage.setItem(
+          getUserStorageKey(TOTAL_KEY, savedUserId),
+          String(total)
+        );
+      }
+    })();
   }, [count, malas, total]);
 
   useEffect(() => {
@@ -230,9 +475,9 @@ export default function JapamMain() {
           volume: 1.0,
         }
       );
-  
+
       await sound.playAsync();
-  
+
       setTimeout(async () => {
         await sound.unloadAsync();
       }, 2000);
@@ -244,10 +489,13 @@ export default function JapamMain() {
   const saveSession = async (
     duration: number,
     sessionMalas: number,
-    sessionTotal: number
+    sessionTotal: number,
+    accumulatedTotal: number
   ) => {
     const raw = await AsyncStorage.getItem(HISTORY_KEY);
     const history: Session[] = raw ? JSON.parse(raw) : [];
+    const userId = await AsyncStorage.getItem(USER_ID_KEY);
+    const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
 
     const session: Session = {
       date: new Date().toISOString(),
@@ -255,12 +503,57 @@ export default function JapamMain() {
       totalCount: sessionTotal,
       duration,
       manual: false,
+      userId: userId || undefined,
     };
 
-    await AsyncStorage.setItem(
-      HISTORY_KEY,
-      JSON.stringify([session, ...history])
-    );
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([session, ...history]));
+
+    if (!userId) return;
+
+    try {
+      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+      if (url && key) {
+        const baseBody = {
+          user_name: savedUserName || userName,
+          malas: sessionMalas,
+          count: sessionTotal,
+          accumulated: accumulatedTotal,
+        };
+
+        const postHistory = async (body: Record<string, unknown>) => {
+          const response = await fetch(`${url}/rest/v1/japam_history`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: key,
+              Authorization: `Bearer ${key}`,
+              Prefer: 'return=minimal',
+            },
+            body: JSON.stringify(body),
+          });
+
+          if (!response.ok) {
+            console.log('Supabase save error:', await response.text());
+            return false;
+          }
+
+          return true;
+        };
+
+        const savedWithUserId = await postHistory({
+          user_id: userId,
+          ...baseBody,
+        });
+
+        if (!savedWithUserId) {
+          await postHistory(baseBody);
+        }
+      }
+    } catch (error) {
+      console.log('Supabase save error:', error);
+    }
   };
 
   const playCompletionAnimation = () => {
@@ -300,10 +593,7 @@ export default function JapamMain() {
     playCompletionAnimation();
 
     if (Platform.OS !== 'web' && vibrationEnabled) {
-      await Haptics.notificationAsync(
-        Haptics.NotificationFeedbackType.Success
-      );
-
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       Vibration.vibrate([0, 400, 150, 400, 150, 700]);
     }
 
@@ -312,19 +602,24 @@ export default function JapamMain() {
     }
   };
 
-  const handleUndo = () => {
-    setTotal((prevTotal) => {
-      const newTotal = Math.max(0, prevTotal - 1);
+  const setCountersFromTotal = (nextTotal: number) => {
+    const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
 
-      setMalas(Math.floor(newTotal / 108));
-      setCount(newTotal % 108);
+    totalRef.current = safeTotal;
+    setTotal(safeTotal);
+    setMalas(Math.floor(safeTotal / 108));
+    setCount(safeTotal % 108);
 
-      return newTotal;
-    });
+    return safeTotal;
   };
+
+  const handleUndo = () => {
+    setCountersFromTotal(totalRef.current - 1);
+  };
+
   const playPressAnimation = () => {
     pressAnim.setValue(0);
-  
+
     Animated.sequence([
       Animated.timing(pressAnim, {
         toValue: 1,
@@ -338,25 +633,18 @@ export default function JapamMain() {
       }),
     ]).start();
   };
+
   const handleTap = () => {
     playPressAnimation();
     tapFeedback();
 
-    setTotal((prevTotal) => {
-      const newTotal = prevTotal + 1;
-      const newMalas = Math.floor(newTotal / 108);
-      const newCount = newTotal % 108;
+    const newTotal = setCountersFromTotal(totalRef.current + 1);
+    const newCount = newTotal % 108;
 
-      setMalas(newMalas);
-      setCount(newCount);
-
-      if (newCount === 0) {
-        saveSession(0, 1, 108);
-        completeFeedback();
-      }
-
-      return newTotal;
-    });
+    if (newCount === 0) {
+      void saveSession(0, 1, 108, newTotal);
+      void completeFeedback();
+    }
   };
 
   const handleStart = () => {
@@ -365,6 +653,7 @@ export default function JapamMain() {
     setMinutesInput(String(mins));
     setTargetSeconds(mins * 60);
     setSeconds(0);
+    setAutoCompletedMalas(0);
     setIsRunning(true);
   };
 
@@ -375,24 +664,19 @@ export default function JapamMain() {
   const handleStop = () => {
     setIsRunning(false);
     setSeconds(0);
+    setAutoCompletedMalas(0);
   };
+
   const completeTimerSession = () => {
-    setTotal((prevTotal) => {
-      const newTotal = prevTotal + 108;
-  
-      setMalas(Math.floor(newTotal / 108));
-      setCount(newTotal % 108);
-  
-      return newTotal;
-    });
-  
-    saveSession(targetSeconds, 1, 108);
-    completeFeedback();
-  
+    const newTotal = setCountersFromTotal(totalRef.current + 108);
+
+    void saveSession(targetSeconds, 1, 108, newTotal);
+    void completeFeedback();
+
     if (loopTimer) {
       setAutoCompletedMalas((prev) => {
         const next = prev + 1;
-  
+
         if (next >= 5) {
           setSeconds(0);
           setIsRunning(false);
@@ -401,7 +685,7 @@ export default function JapamMain() {
           setSeconds(0);
           setIsRunning(true);
         }
-  
+
         return next;
       });
     } else {
@@ -421,15 +705,36 @@ export default function JapamMain() {
     await AsyncStorage.setItem(JAPAM_NAME_KEY, name);
   };
 
-  const saveUserName = async () => {
-    const name = userNameInput.trim();
+  const performLogout = async () => {
+    setIsRunning(false);
+    setSeconds(0);
+    setLoopTimer(false);
+    setAutoCompletedMalas(0);
+    setShowUserMenu(false);
 
-    if (!name) return;
+    setUserName('');
+    setShowUserModal(true);
 
-    setUserName(name);
-    setShowUserModal(false);
+    await AsyncStorage.removeItem(USER_NAME_KEY);
+    await AsyncStorage.removeItem(USER_ID_KEY);
+    await restoreTotal(0, { userId: null });
+  };
 
-    await AsyncStorage.setItem(USER_NAME_KEY, name);
+  const handleLogout = () => {
+    if (Platform.OS === 'web') {
+      const ok = window.confirm('Do you want to logout?');
+      if (ok) void performLogout();
+      return;
+    }
+
+    Alert.alert('Logout', 'Do you want to logout?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Logout',
+        style: 'destructive',
+        onPress: () => void performLogout(),
+      },
+    ]);
   };
 
   const openRename = () => {
@@ -450,27 +755,37 @@ export default function JapamMain() {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.topBar}>
-      <View style={styles.headerCenter}>
-  <Pressable onPress={openRename}>
-    <Text style={styles.title}>🧘 {japamName}</Text>
-  </Pressable>
+        <View style={styles.headerCenter}>
+          <Pressable onPress={openRename}>
+            <Text style={styles.title}>🧘 {japamName}</Text>
+          </Pressable>
 
-  {!!userName && (
-  <View
-    style={[
-      styles.userBadge,
-      isMobile
-        ? styles.mobileUserBadge
-        : styles.desktopUserBadge,
-    ]}
-  >
-    <Text style={styles.userBadgeText}>🙏 {userName}</Text>
-  </View>
-)}
+          {!!userName && (
+            <View
+              style={[
+                styles.userMenuWrap,
+                isMobile ? styles.mobileUserBadge : styles.desktopUserBadge,
+              ]}
+            >
+              <Pressable
+                style={styles.userBadge}
+                onPress={() => setShowUserMenu((prev) => !prev)}
+              >
+                <Text style={styles.userBadgeText}>🙏 {userName}</Text>
+              </Pressable>
 
-  <Text style={styles.renameHint}>Tap name to rename</Text>
-</View>
-      
+              {showUserMenu && (
+                <View style={styles.userMenu}>
+                  <Pressable style={styles.userMenuItem} onPress={handleLogout}>
+                    <Text style={styles.userMenuText}>Logout</Text>
+                  </Pressable>
+                </View>
+              )}
+            </View>
+          )}
+
+          <Text style={styles.renameHint}>Tap name to rename</Text>
+        </View>
       </View>
 
       {showNameEditor && (
@@ -513,68 +828,63 @@ export default function JapamMain() {
       </View>
 
       <Text style={styles.progressText}>{count} / 108</Text>
-      
 
       <View style={styles.metricsRow}>
         <Text style={styles.metricText}>📿 {malas} malas</Text>
-
         <Text style={[styles.metricText, isRunning && styles.timerRunningText]}>
           ⏱ {formatTime(seconds)}
         </Text>
-
         <Text style={styles.metricText}>Total {total}</Text>
       </View>
 
       <Animated.View
-  style={[
-    styles.circleGlow,
-    {
-      shadowOpacity: glowAnim.interpolate({
-        inputRange: [0, 1],
-        outputRange: [0.25, 0.9],
-      }),
-      transform: [
-        {
-          scale: glowAnim.interpolate({
-            inputRange: [0, 1],
-            outputRange: [1, 1.08],
-          }),
-        },
-      ],
-    },
-  ]}
->
-  <Pressable
-    onPress={handleTap}
-    style={({ pressed }) => [
-      styles.circle,
-      pressed && styles.circlePressed,
-    ]}
-  >
-    <Animated.View
-      style={[
-        styles.innerBead,
-        {
-          opacity: pressAnim.interpolate({
-            inputRange: [0, 1],
-            outputRange: [0, 1],
-          }),
-          transform: [
-            {
-              scale: pressAnim.interpolate({
-                inputRange: [0, 1],
-                outputRange: [0.4, 1.25],
-              }),
-            },
-          ],
-        },
-      ]}
-    />
-  </Pressable>
-</Animated.View>
-<Pressable style={styles.undoBtn} onPress={handleUndo}>
-  <Text style={styles.undoText}>Undo last tap</Text>
-</Pressable>
+        style={[
+          styles.circleGlow,
+          {
+            shadowOpacity: glowAnim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0.25, 0.9],
+            }),
+            transform: [
+              {
+                scale: glowAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [1, 1.08],
+                }),
+              },
+            ],
+          },
+        ]}
+      >
+        <Pressable
+          onPress={handleTap}
+          style={({ pressed }) => [styles.circle, pressed && styles.circlePressed]}
+        >
+          <Animated.View
+            style={[
+              styles.innerBead,
+              {
+                opacity: pressAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 1],
+                }),
+                transform: [
+                  {
+                    scale: pressAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0.4, 1.25],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          />
+        </Pressable>
+      </Animated.View>
+
+      <Pressable style={styles.undoBtn} onPress={handleUndo}>
+        <Text style={styles.undoText}>Undo last tap</Text>
+      </Pressable>
 
       <Text style={styles.inputLabel}>Set time and start japam</Text>
 
@@ -589,23 +899,22 @@ export default function JapamMain() {
         keyboardType="numeric"
       />
 
-<View style={styles.autoRepeatRow}>
-<Text style={styles.autoRepeatText}>
-  Auto Repeat (Max 5 Malas)
-</Text>
+      <View style={styles.autoRepeatRow}>
+        <Text style={styles.autoRepeatText}>Auto Repeat (Max 5 Malas)</Text>
 
-  <Switch
-    value={loopTimer}
-    onValueChange={(value) => {
-      setLoopTimer(value);
+        <Switch
+          value={loopTimer}
+          onValueChange={(value) => {
+            setLoopTimer(value);
+            setAutoCompletedMalas(0);
 
-      if (!value) {
-        setIsRunning(false);
-        setSeconds(0);
-      }
-    }}
-  />
-</View>
+            if (!value) {
+              setIsRunning(false);
+              setSeconds(0);
+            }
+          }}
+        />
+      </View>
 
       <View style={styles.row}>
         <Pressable style={styles.btn} onPress={handleStart}>
@@ -621,26 +930,46 @@ export default function JapamMain() {
         </Pressable>
       </View>
 
-      <Modal visible={showUserModal} transparent animationType="fade">
+      <Modal visible={showUserModal && !isSigningIn} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Welcome 🙏</Text>
+            <View style={styles.modalTopMark}>
+              <Text style={styles.modalTopMarkText}>ॐ</Text>
+            </View>
+
+            <Text style={styles.modalTitle}>Japam</Text>
 
             <Text style={styles.modalSubtitle}>
-              What should we call you?
+              Sign in once and keep your malas synced with your account.
             </Text>
 
-            <TextInput
-              style={styles.modalInput}
-              value={userNameInput}
-              onChangeText={setUserNameInput}
-              placeholder="Enter your name"
-              placeholderTextColor="#94a3b8"
-            />
+            <Pressable
+              disabled={!request}
+              style={[styles.modalButton, !request && styles.disabledButton]}
+              onPress={() => {
+                setIsSigningIn(true);
+                setShowUserModal(false);
+                void (async () => {
+                  await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
+                  const result = await promptAsync();
 
-            <Pressable style={styles.modalButton} onPress={saveUserName}>
-              <Text style={styles.modalButtonText}>Continue</Text>
+                  if (result.type !== 'success') {
+                    await AsyncStorage.removeItem(AUTH_PENDING_KEY);
+                    setIsSigningIn(false);
+                    setShowUserModal(true);
+                  }
+                })();
+              }}
+            >
+              <View style={styles.googleIcon}>
+                <Text style={styles.googleIconText}>G</Text>
+              </View>
+              <Text style={styles.modalButtonText}>Continue with Google</Text>
             </Pressable>
+
+            <Text style={styles.modalFootnote}>
+              Your history stays separate from other users on this device.
+            </Text>
           </View>
         </View>
       </Modal>
@@ -649,36 +978,30 @@ export default function JapamMain() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0f172a',
-  },
-
+  container: { flex: 1, backgroundColor: '#0f172a' },
   content: {
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingTop: 34,
     paddingBottom: 120,
   },
-
   topBar: {
     width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
   },
-  
   headerCenter: {
     alignItems: 'center',
     justifyContent: 'center',
     width: '100%',
     marginBottom: 8,
   },
-
+  userMenuWrap: { alignItems: 'flex-end', zIndex: 20 },
   userBadge: {
     backgroundColor: '#1e293b',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: '#334155',
@@ -687,35 +1010,27 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 4,
   },
-  desktopUserBadge: {
-    position: 'absolute',
-    right: 45,
-    top: 12,
+  desktopUserBadge: { position: 'absolute', right: 45, top: 12 },
+  mobileUserBadge: { marginTop: 10, alignItems: 'center' },
+  userBadgeText: { color: '#ffffff', fontSize: 14, fontWeight: '800' },
+  userMenu: {
+    marginTop: 8,
+    backgroundColor: '#1e293b',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#334155',
+    overflow: 'hidden',
+    minWidth: 110,
   },
-  
-  mobileUserBadge: {
-    marginTop: 10,
-  },
-  
-  userBadgeText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-
+  userMenuItem: { paddingVertical: 10, paddingHorizontal: 14 },
+  userMenuText: { color: 'white', fontSize: 14, fontWeight: '800' },
   title: {
     color: 'white',
     fontSize: 34,
     fontWeight: '800',
     textAlign: 'center',
   },
-
-  renameHint: {
-    color: '#64748b',
-    fontSize: 12,
-    marginTop: 4,
-  },
-
+  renameHint: { color: '#64748b', fontSize: 12, marginTop: 4 },
   nameEditor: {
     width: '100%',
     maxWidth: 520,
@@ -724,7 +1039,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 14,
   },
-
   nameInput: {
     flex: 1,
     backgroundColor: '#1e293b',
@@ -733,7 +1047,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
-
   quote: {
     color: '#cbd5e1',
     textAlign: 'center',
@@ -742,20 +1055,8 @@ const styles = StyleSheet.create({
     fontSize: 16,
     maxWidth: 560,
   },
-
-  dateText: {
-    color: '#94a3b8',
-    fontSize: 14,
-    marginBottom: 4,
-  },
-
-  big: {
-    color: 'white',
-    fontSize: 68,
-    fontWeight: '900',
-    marginTop: 0,
-  },
-
+  dateText: { color: '#94a3b8', fontSize: 14, marginBottom: 4 },
+  big: { color: 'white', fontSize: 68, fontWeight: '900', marginTop: 0 },
   progressBarBackground: {
     width: 220,
     height: 6,
@@ -765,19 +1066,12 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     alignSelf: 'center',
   },
-
   progressBarFill: {
     height: '100%',
     backgroundColor: '#6366f1',
     borderRadius: 999,
   },
-
-  progressText: {
-    color: '#94a3b8',
-    fontSize: 13,
-    marginBottom: 8,
-  },
-
+  progressText: { color: '#94a3b8', fontSize: 13, marginBottom: 8 },
   metricsRow: {
     width: '100%',
     maxWidth: 440,
@@ -787,27 +1081,19 @@ const styles = StyleSheet.create({
     marginTop: 6,
     marginBottom: 2,
   },
-
   metricText: {
     color: '#e2e8f0',
     fontSize: 16,
     fontWeight: '600',
     textAlign: 'center',
   },
-
-  timerRunningText: {
-    fontSize: 24,
-    color: 'white',
-    fontWeight: '900',
-  },
-
+  timerRunningText: { fontSize: 24, color: 'white', fontWeight: '900' },
   circleGlow: {
     borderRadius: 100,
     shadowColor: '#818cf8',
     shadowRadius: 18,
     elevation: 10,
   },
-
   circle: {
     width: 190,
     height: 190,
@@ -821,160 +1107,7 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 6,
   },
-
-  circlePressed: {
-    transform: [{ scale: 0.96 }],
-  },
-
-  undoBtn: {
-    backgroundColor: '#334155',
-    paddingVertical: 9,
-    paddingHorizontal: 17,
-    borderRadius: 999,
-    marginBottom: 10,
-  },
-
-  undoText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-
-  inputLabel: {
-    color: '#94a3b8',
-    fontSize: 13,
-    marginBottom: 6,
-  },
-
-  input: {
-    backgroundColor: '#1e293b',
-    color: 'white',
-    borderRadius: 10,
-    width: 110,
-    textAlign: 'center',
-    padding: 10,
-    fontSize: 18,
-  },
-
-  Row: {
-    width: 220,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    marginTop: 10,
-  },
-
-  autoRepeatText: {
-    color: '#cbd5e1',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-
-  row: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 10,
-  },
-
-  btn: {
-    backgroundColor: '#6366f1',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 10,
-    minWidth: 86,
-    alignItems: 'center',
-  },
-
-  gray: {
-    backgroundColor: '#475569',
-  },
-
-  red: {
-    backgroundColor: '#991b1b',
-  },
-
-  smallBtn: {
-    backgroundColor: '#6366f1',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-  },
-
-  graySmallBtn: {
-    backgroundColor: '#475569',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-  },
-
-  smallBtnText: {
-    color: 'white',
-    fontWeight: '700',
-    fontSize: 14,
-  },
-
-  btnText: {
-    color: 'white',
-    fontWeight: '700',
-    fontSize: 16,
-  },
-
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.65)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-  },
-
-  modalCard: {
-    width: '100%',
-    maxWidth: 360,
-    backgroundColor: '#1e293b',
-    borderRadius: 20,
-    padding: 24,
-    borderWidth: 1,
-    borderColor: '#334155',
-  },
-
-  modalTitle: {
-    color: 'white',
-    fontSize: 24,
-    fontWeight: '800',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-
-  modalSubtitle: {
-    color: '#cbd5e1',
-    fontSize: 15,
-    textAlign: 'center',
-    marginBottom: 18,
-  },
-
-  modalInput: {
-    backgroundColor: '#0f172a',
-    color: 'white',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    marginBottom: 18,
-    fontSize: 16,
-  },
-
-  modalButton: {
-    backgroundColor: '#6366f1',
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-
-  modalButtonText: {
-    color: 'white',
-    fontWeight: '800',
-    fontSize: 16,
-  },
+  circlePressed: { transform: [{ scale: 0.96 }] },
   innerBead: {
     width: 34,
     height: 34,
@@ -985,6 +1118,24 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: 'rgba(255,255,255,0.55)',
   },
+  undoBtn: {
+    backgroundColor: '#334155',
+    paddingVertical: 9,
+    paddingHorizontal: 17,
+    borderRadius: 999,
+    marginBottom: 10,
+  },
+  undoText: { color: 'white', fontSize: 14, fontWeight: '700' },
+  inputLabel: { color: '#94a3b8', fontSize: 13, marginBottom: 6 },
+  input: {
+    backgroundColor: '#1e293b',
+    color: 'white',
+    borderRadius: 10,
+    width: 110,
+    textAlign: 'center',
+    padding: 10,
+    fontSize: 18,
+  },
   autoRepeatRow: {
     width: 260,
     flexDirection: 'row',
@@ -992,5 +1143,120 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginTop: 10,
   },
-  
+  autoRepeatText: { color: '#cbd5e1', fontSize: 15, fontWeight: '700' },
+  row: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  btn: {
+    backgroundColor: '#6366f1',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    minWidth: 86,
+    alignItems: 'center',
+  },
+  gray: { backgroundColor: '#475569' },
+  red: { backgroundColor: '#991b1b' },
+  smallBtn: {
+    backgroundColor: '#6366f1',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+  },
+  graySmallBtn: {
+    backgroundColor: '#475569',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+  },
+  smallBtnText: { color: 'white', fontWeight: '700', fontSize: 14 },
+  btnText: { color: 'white', fontWeight: '700', fontSize: 16 },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(2,6,23,0.78)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: '#111827',
+    borderRadius: 18,
+    paddingHorizontal: 24,
+    paddingTop: 26,
+    paddingBottom: 22,
+    borderWidth: 1,
+    borderColor: '#374151',
+    shadowColor: '#000',
+    shadowOpacity: 0.35,
+    shadowRadius: 18,
+    elevation: 12,
+  },
+  modalTopMark: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: '#1f2937',
+    borderWidth: 1,
+    borderColor: '#4f46e5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    marginBottom: 14,
+  },
+  modalTopMarkText: {
+    color: '#e0e7ff',
+    fontSize: 28,
+    fontWeight: '800',
+  },
+  modalTitle: {
+    color: 'white',
+    fontSize: 30,
+    fontWeight: '900',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  modalSubtitle: {
+    color: '#cbd5e1',
+    fontSize: 15,
+    lineHeight: 22,
+    textAlign: 'center',
+    marginBottom: 22,
+  },
+  modalButton: {
+    backgroundColor: '#f8fafc',
+    minHeight: 52,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  disabledButton: { opacity: 0.5 },
+  googleIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'white',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  googleIconText: {
+    color: '#2563eb',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  modalButtonText: { color: '#0f172a', fontWeight: '900', fontSize: 16 },
+  modalFootnote: {
+    color: '#94a3b8',
+    fontSize: 12,
+    lineHeight: 17,
+    textAlign: 'center',
+    marginTop: 14,
+  },
 });

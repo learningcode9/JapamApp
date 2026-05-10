@@ -2,11 +2,16 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useFocusEffect } from 'expo-router';
 import * as Sharing from 'expo-sharing';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-
-
-
+import React, { useCallback, useMemo, useState } from 'react';
+import {
+    Alert,
+    Platform,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    View,
+} from 'react-native';
 
 type Session = {
   date: string;
@@ -14,6 +19,7 @@ type Session = {
   totalCount: number;
   duration: number;
   manual?: boolean;
+  userId?: string;
 };
 
 type DailyRow = {
@@ -27,21 +33,42 @@ type DailyRow = {
   autoCount: number;
 };
 
+type RemoteHistoryRow = {
+  created_at?: string;
+  malas?: number | string;
+  count?: number | string;
+};
+
+const USER_ID_KEY = 'userId';
+const USER_NAME_KEY = 'userName';
+
+const getLocalDateKey = (date = new Date()) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+
+  return `${y}-${m}-${d}`;
+};
+
 const toDayKey = (rawDate: string) => {
+  if (!rawDate) return 'unknown';
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+    return rawDate;
+  }
+
   const d = new Date(rawDate);
   if (Number.isNaN(d.getTime())) return 'unknown';
 
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-
-  return `${y}-${m}-${day}`;
+  return getLocalDateKey(d);
 };
 
 const toDayLabel = (dayKey: string) => {
   if (dayKey === 'unknown') return 'Unknown Date';
 
-  const d = new Date(`${dayKey}T00:00:00`);
+  const [year, month, day] = dayKey.split('-').map(Number);
+  const d = new Date(year, month - 1, day);
+
   return d.toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
@@ -49,117 +76,202 @@ const toDayLabel = (dayKey: string) => {
   });
 };
 
-export default function HistoryScreen() {
-  const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
-  const testSupabase = async () => {
-    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-  
-    if (!url || !key) {
-      console.log('SUPABASE ENV MISSING');
-      return;
-    }
-  
-    try {
-      const response = await fetch(`${url}/rest/v1/japam_history`, {
-        method: 'POST',
+const parseHistory = (raw: string | null): Session[] => {
+  if (!raw) return [];
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const fetchRemoteSessions = async (
+  userId: string,
+  userNameForFallback?: string | null
+): Promise<Session[] | null> => {
+  const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+  const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!url || !key || !userId) return null;
+
+  try {
+    const fetchBy = async (field: 'user_id' | 'user_name', value: string) => {
+      const query = new URLSearchParams({
+        select: 'created_at,malas,count',
+        [field]: `eq.${value}`,
+        order: 'created_at.asc',
+      });
+
+      const response = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
         headers: {
-          'Content-Type': 'application/json',
           apikey: key,
           Authorization: `Bearer ${key}`,
-          Prefer: 'return=representation',
         },
-        body: JSON.stringify({
-          user_name: 'Sravani',
-          malas: 5,
-          count: 540,
-          accumulated: 540,
-          type: 'Mixed',
-        }),
       });
-  
-      const data = await response.json();
-  
-      console.log('INSERT RESULT:', data);
-    } catch (error) {
-      console.log('INSERT ERROR:', error);
-    }
-  };
 
-  useEffect(() => {
-    testSupabase();
+      if (!response.ok) {
+        console.log('Supabase history fetch error:', await response.text());
+        return null;
+      }
+
+      const rows: RemoteHistoryRow[] = await response.json();
+
+      return rows.map((row) => {
+      const malas = Number(row.malas) || 0;
+      const totalCount = Number(row.count) || malas * 108;
+
+      return {
+        date: row.created_at || new Date().toISOString(),
+        malas: malas || Math.floor(totalCount / 108),
+        totalCount,
+        duration: 0,
+        manual: false,
+        userId,
+      };
+    });
+    };
+
+    const byUserId = await fetchBy('user_id', userId);
+    const byUserName = userNameForFallback
+      ? await fetchBy('user_name', userNameForFallback)
+      : null;
+
+    if (byUserId === null) return byUserName;
+    if (byUserName === null) return byUserId;
+
+    const userIdTotal = byUserId.reduce(
+      (sum, item) => sum + (Number(item.totalCount) || 0),
+      0
+    );
+    const userNameTotal = byUserName.reduce(
+      (sum, item) => sum + (Number(item.totalCount) || 0),
+      0
+    );
+
+    return userNameTotal > userIdTotal ? byUserName : byUserId;
+  } catch (error) {
+    console.log('Supabase history fetch error:', error);
+    return null;
+  }
+};
+
+export default function HistoryScreen() {
+  const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
+
+  const loadHistory = useCallback(async () => {
+    const todayKey = getLocalDateKey();
+    const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    const currentUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+    const raw = await AsyncStorage.getItem('history');
+    const allSessions = parseHistory(raw);
+
+    if (!currentUserId) {
+      setDailyRows([]);
+      return;
+    }
+
+    const cleanedSessions = allSessions.filter((item) => {
+      const dayKey = toDayKey(item.date);
+      return dayKey === 'unknown' || dayKey <= todayKey;
+    });
+
+    if (cleanedSessions.length !== allSessions.length) {
+      await AsyncStorage.setItem('history', JSON.stringify(cleanedSessions));
+    }
+
+    let sessions = cleanedSessions.filter((item) => item.userId === currentUserId);
+    const remoteSessions = await fetchRemoteSessions(currentUserId, currentUserName);
+
+    if (remoteSessions !== null && remoteSessions.length > 0) {
+      const filteredRemoteSessions = remoteSessions.filter((item) => {
+        const dayKey = toDayKey(item.date);
+        return dayKey === 'unknown' || dayKey <= todayKey;
+      });
+
+      const localTotal = sessions.reduce(
+        (sum, item) => sum + (Number(item.totalCount) || 0),
+        0
+      );
+      const remoteTotal = filteredRemoteSessions.reduce(
+        (sum, item) => sum + (Number(item.totalCount) || 0),
+        0
+      );
+
+      if (remoteTotal >= localTotal) {
+        sessions = filteredRemoteSessions;
+      }
+    }
+
+    const grouped = new Map<string, DailyRow>();
+
+    sessions.forEach((item) => {
+      const dayKey = toDayKey(item.date);
+      const existing = grouped.get(dayKey);
+
+      const itemMalas = Number(item.malas) || 0;
+      const itemTotalCount = Number(item.totalCount) || itemMalas * 108;
+      const malas = itemMalas || Math.floor(itemTotalCount / 108);
+      const totalCount = itemTotalCount;
+      const duration = Number(item.duration) || 0;
+      const isManual = !!item.manual;
+
+      if (existing) {
+        existing.malas += malas;
+        existing.totalCount += totalCount;
+        existing.duration += duration;
+
+        if (isManual) existing.manualCount += 1;
+        else existing.autoCount += 1;
+      } else {
+        grouped.set(dayKey, {
+          dateKey: dayKey,
+          dateLabel: toDayLabel(dayKey),
+          malas,
+          totalCount,
+          accumulated: 0,
+          duration,
+          manualCount: isManual ? 1 : 0,
+          autoCount: isManual ? 0 : 1,
+        });
+      }
+    });
+
+    const oldestFirstRows = [...grouped.values()].sort((a, b) => {
+      if (a.dateKey === 'unknown') return 1;
+      if (b.dateKey === 'unknown') return -1;
+
+      return a.dateKey.localeCompare(b.dateKey);
+    });
+
+    let runningTotal = 0;
+
+    const rowsWithAccumulated = oldestFirstRows.map((row) => {
+      runningTotal += row.totalCount;
+
+      return {
+        ...row,
+        accumulated: runningTotal,
+      };
+    });
+
+    setDailyRows(rowsWithAccumulated.reverse());
   }, []);
 
   useFocusEffect(
     useCallback(() => {
-      void (async () => {
-        const raw = await AsyncStorage.getItem('history');
-        const sessions: Session[] = raw ? JSON.parse(raw) : [];
-
-        const grouped = new Map<string, DailyRow>();
-
-        sessions.forEach((item) => {
-          const dayKey = toDayKey(item.date);
-          const existing = grouped.get(dayKey);
-
-          const malas = Number(item.malas) || 0;
-          const totalCount = Number(item.totalCount) || malas * 108;
-          const duration = Number(item.duration) || 0;
-          const isManual = !!item.manual;
-
-          if (existing) {
-            existing.malas += malas;
-            existing.totalCount += totalCount;
-            existing.duration += duration;
-
-            if (isManual) existing.manualCount += 1;
-            else existing.autoCount += 1;
-          } else {
-            grouped.set(dayKey, {
-              dateKey: dayKey,
-              dateLabel: toDayLabel(dayKey),
-              malas,
-              totalCount,
-              accumulated: 0,
-              duration,
-              manualCount: isManual ? 1 : 0,
-              autoCount: isManual ? 0 : 1,
-            });
-          }
-        });
-
-        const oldestFirstRows = [...grouped.values()].sort((a, b) => {
-          if (a.dateKey === 'unknown') return 1;
-          if (b.dateKey === 'unknown') return -1;
-
-          return a.dateKey.localeCompare(b.dateKey);
-        });
-
-        let runningTotal = 0;
-
-        const rowsWithAccumulated = oldestFirstRows.map((row) => {
-          runningTotal += row.totalCount;
-
-          return {
-            ...row,
-            accumulated: runningTotal,
-          };
-        });
-
-        const latestFirstRows = rowsWithAccumulated.reverse();
-
-        setDailyRows(latestFirstRows);
-      })();
-    }, [])
+      void loadHistory();
+    }, [loadHistory])
   );
 
   const totalMalas = useMemo(
-    () => dailyRows.reduce((sum, r) => sum + r.malas, 0),
+    () => dailyRows.reduce((sum, row) => sum + row.malas, 0),
     [dailyRows]
   );
 
   const totalCount = useMemo(
-    () => dailyRows.reduce((sum, r) => sum + r.totalCount, 0),
+    () => dailyRows.reduce((sum, row) => sum + row.totalCount, 0),
     [dailyRows]
   );
 
@@ -169,56 +281,49 @@ export default function HistoryScreen() {
         Alert.alert('No history', 'There is no history to export yet.');
         return;
       }
-  
-      const lines = ['Date,Malas,Count,Accumulated,Type'];
-  
+
+      const lines = ['Date,Malas,Count,Accumulated'];
+
       dailyRows.forEach((row) => {
-        const type =
-          row.manualCount > 0 && row.autoCount > 0
-            ? 'Mixed'
-            : row.manualCount > 0
-            ? 'Saved'
-            : 'Completed';
-  
         lines.push(
-          `${row.dateKey},${row.malas},${row.totalCount},${row.accumulated},${type}`
+          `${row.dateKey},${row.malas},${row.totalCount},${row.accumulated}`
         );
       });
-  
+
       const csvContent = lines.join('\n');
-  
+
       if (Platform.OS === 'web') {
         const blob = new Blob([csvContent], {
           type: 'text/csv;charset=utf-8;',
         });
-  
+
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
-  
+
         link.href = url;
         link.download = 'japam-history.csv';
         document.body.appendChild(link);
         link.click();
-  
+
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
-  
+
         return;
       }
-  
+
       const fileUri = FileSystem.documentDirectory + 'japam-history.csv';
-  
+
       await FileSystem.writeAsStringAsync(fileUri, csvContent, {
         encoding: FileSystem.EncodingType.UTF8,
       });
-  
+
       const available = await Sharing.isAvailableAsync();
-  
+
       if (!available) {
         Alert.alert('Sharing unavailable', 'Sharing is not available on this device.');
         return;
       }
-  
+
       await Sharing.shareAsync(fileUri, {
         mimeType: 'text/csv',
         dialogTitle: 'Export Japam History',
@@ -247,7 +352,6 @@ export default function HistoryScreen() {
           <Text style={styles.tableCell}>Malas</Text>
           <Text style={styles.tableCell}>Count</Text>
           <Text style={styles.tableCell}>Accumulated</Text>
-          <Text style={styles.tableCell}>Type</Text>
         </View>
 
         {dailyRows.length === 0 ? (
@@ -255,34 +359,20 @@ export default function HistoryScreen() {
             <Text style={styles.emptyText}>No history available</Text>
           </View>
         ) : (
-          dailyRows.map((row, index) => {
-            const type =
-              row.manualCount > 0 && row.autoCount > 0
-                ? 'Mixed'
-                : row.manualCount > 0
-                ? 'Saved'
-                : 'Completed';
+          dailyRows.map((row, index) => (
+            <View
+              key={`${row.dateKey}-${index}`}
+              style={[styles.tableRow, index % 2 === 1 && styles.altTableRow]}
+            >
+              <Text style={[styles.tableCell, styles.dateCell]}>
+                {row.dateLabel}
+              </Text>
 
-            return (
-              <View
-                key={`${row.dateKey}-${index}`}
-                style={[
-                  styles.tableRow,
-                  index % 2 === 1 && styles.altTableRow,
-                ]}
-              >
-                <Text style={[styles.tableCell, styles.dateCell]}>
-                  {row.dateLabel}
-                </Text>
-
-                <Text style={styles.tableCell}>{row.malas}</Text>
-                <Text style={styles.tableCell}>{row.totalCount}</Text>
-
-                <Text style={styles.tableCell}>{row.accumulated}</Text>
-                <Text style={styles.tableCell}>{type}</Text>
-              </View>
-            );
-          })
+              <Text style={styles.tableCell}>{row.malas}</Text>
+              <Text style={styles.tableCell}>{row.totalCount}</Text>
+              <Text style={styles.tableCell}>{row.accumulated}</Text>
+            </View>
+          ))
         )}
       </View>
     </ScrollView>
