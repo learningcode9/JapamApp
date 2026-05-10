@@ -549,7 +549,7 @@ const [request, response, promptAsync] = Google.useAuthRequest({
   const playCompleteSound = async () => {
     try {
       const { sound } = await Audio.Sound.createAsync(
-        require('../../assets/soft_bell.wav'),
+        require('../../assets/om_complete.mp3'),
         {
           shouldPlay: true,
           volume: 1.0,
@@ -560,7 +560,7 @@ const [request, response, promptAsync] = Google.useAuthRequest({
 
       setTimeout(async () => {
         await sound.unloadAsync();
-      }, 2000);
+      }, 5000);
     } catch (error) {
       console.log('Sound error:', error);
     }
@@ -1104,7 +1104,9 @@ await saveJapamNameToSupabase(
                 setShowUserModal(false);
                 void (async () => {
                   await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
-                  const result = await promptAsync();
+                  const result = await promptAsync({
+                    showInRecents: true,
+                  });
 
                   if (result.type !== 'success') {
                     await AsyncStorage.removeItem(AUTH_PENDING_KEY);
