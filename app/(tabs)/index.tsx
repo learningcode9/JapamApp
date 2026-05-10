@@ -49,7 +49,7 @@ const AUTH_PENDING_MAX_MS = 2 * 60 * 1000;
 
 const screenWidth = Dimensions.get('window').width;
 const isMobile = screenWidth < 500;
-const isSavingSessionRef = useRef(false);
+
 
 const getLocalDateKey = (date = new Date()) => {
   const y = date.getFullYear();
@@ -131,6 +131,7 @@ const [request, response, promptAsync] = Google.useAuthRequest({
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
 
   const totalRef = useRef(0);
+  const isSavingSessionRef = useRef(false);
   const pressAnim = useRef(new Animated.Value(0)).current;
   const fade = useRef(new Animated.Value(0)).current;
   const glowAnim = useRef(new Animated.Value(0)).current;
@@ -573,16 +574,24 @@ const [request, response, promptAsync] = Google.useAuthRequest({
           volume: 1.0,
         }
       );
-
+  
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded && status.didJustFinish) {
+          sound.setOnPlaybackStatusUpdate(null);
+          sound.unloadAsync().catch(console.log);
+        }
+      });
+  
       await sound.playAsync();
-
-      setTimeout(async () => {
-        await sound.unloadAsync();
+      setTimeout(() => {
+        sound.stopAsync().catch(console.log);
+        sound.unloadAsync().catch(console.log);
       }, 5000);
     } catch (error) {
       console.log('Sound error:', error);
     }
   };
+
 
   const saveSession = async (
     duration: number,
