@@ -341,7 +341,7 @@ const [request, response, promptAsync] = Google.useAuthRequest({
       } else {
         setUserName('');
         setIsSigningIn(authPending);
-        setShowUserModal(!authPending);
+        setShowUserModal(false);
         await restoreTotal(0);
       }
 
@@ -418,12 +418,7 @@ const [request, response, promptAsync] = Google.useAuthRequest({
   
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(convertedHistory));
   
-      const totalAccumulated = convertedHistory.reduce(
-        (sum: number, item: any) => sum + (Number(item.totalCount) || 0),
-        0
-      );
-  
-      await restoreTotal(totalAccumulated, { userId: googleUserId });
+      await restoreTodayTotal();
     } catch (error) {
       console.log('History restore error:', error);
     }
@@ -713,23 +708,40 @@ const [request, response, promptAsync] = Google.useAuthRequest({
       }),
     ]).start();
   };
-
-  const handleTap = () => {
+  const requireLogin = async () => {
+    const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+  
+    if (!savedUserId) {
+      setShowUserModal(true);
+      return false;
+    }
+  
+    return true;
+  };
+  const handleTap = async () => {
+    const canContinue = await requireLogin();
+  
+    if (!canContinue) return;
+  
     playPressAnimation();
     tapFeedback();
-
+  
     const newTotal = setCountersFromTotal(totalRef.current + 1);
     const newCount = newTotal % 108;
-
+  
     if (newCount === 0) {
       void saveSession(0, 1, 108, newTotal);
       void completeFeedback();
     }
   };
 
-  const handleStart = () => {
+  const handleStart = async () => {
+    const canContinue = await requireLogin();
+  
+    if (!canContinue) return;
+  
     const mins = Math.max(1, Math.floor(Number(minutesInput) || 1));
-
+  
     setMinutesInput(String(mins));
     setTargetSeconds(mins * 60);
     setSeconds(0);
@@ -1084,16 +1096,26 @@ await saveJapamNameToSupabase(
       </View>
 
       <Modal visible={showUserModal && !isSigningIn} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalTopMark}>
-              <Text style={styles.modalTopMarkText}>ॐ</Text>
-            </View>
+  <View style={styles.modalOverlay}>
+    <View style={styles.modalCard}>
 
-            <Text style={styles.modalTitle}>Japam</Text>
+      <Pressable
+        style={styles.modalClose}
+        onPress={() => setShowUserModal(false)}
+      >
+        <Text style={styles.modalCloseText}>×</Text>
+      </Pressable>
+
+      <View style={styles.modalTopMark}>
+        <Text style={styles.modalTopMarkText}>ॐ</Text>
+      </View>
+
+            <Text style={styles.modalTitle}>
+              Sign in to save history
+            </Text>
 
             <Text style={styles.modalSubtitle}>
-              Sign in once and keep your malas synced with your account.
+              Sign in with Google to save your Japam history and sync it across devices.
             </Text>
 
             <Pressable
@@ -1413,5 +1435,17 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     textAlign: 'center',
     marginTop: 14,
+  },
+  modalClose: {
+    position: 'absolute',
+    right: 14,
+    top: 10,
+    zIndex: 10,
+  },
+  
+  modalCloseText: {
+    color: '#94a3b8',
+    fontSize: 28,
+    fontWeight: '800',
   },
 });

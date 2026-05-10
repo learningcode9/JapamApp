@@ -1,7 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import React, { useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+
 
 type Session = {
   date: string;
@@ -17,20 +18,44 @@ const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
 
 export default function ManualEntry() {
-    const getLocalDate = () => {
-        const d = new Date();
-        const year = d.getFullYear();
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        const day = String(d.getDate()).padStart(2, '0');
-      
-        return `${year}-${month}-${day}`;
-      };
-      
-      const [date, setDate] = useState(getLocalDate());
+  const getLocalDate = () => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
+  };
+
+  const [date, setDate] = useState(getLocalDate());
   const [malas, setMalas] = useState('');
   const [total, setTotal] = useState('');
+  const [userId, setUserId] = useState<string | null>(null);
+  useFocusEffect(
+    React.useCallback(() => {
+      AsyncStorage.getItem(USER_ID_KEY).then(setUserId);
+    }, [])
+  );
 
   const onSave = async () => {
+    const userId = await AsyncStorage.getItem(USER_ID_KEY);
+
+    // onSave లో — alert బదులు:
+if (!userId) {
+    Alert.alert(
+      'Login Required',
+      'Please sign in with Google to save your japam history.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Go to Sign In', 
+          onPress: () => router.push('/') // main tab కి
+        }
+      ]
+    );
+    return;
+  }
+
     const malaInput = Number(malas || 0);
     const totalInput = Number(total || 0);
 
@@ -50,66 +75,55 @@ export default function ManualEntry() {
 
     const raw = await AsyncStorage.getItem(HISTORY_KEY);
     const history: Session[] = raw ? JSON.parse(raw) : [];
-    const userId = await AsyncStorage.getItem(USER_ID_KEY);
     const userName = await AsyncStorage.getItem(USER_NAME_KEY);
 
     const payload: Session = {
-      // Important: use midday local time to avoid timezone date shifting
       date: `${date}T12:00:00`,
       malas: malaNum,
       totalCount: totalNum,
       duration: 0,
       manual: true,
-      userId: userId || undefined,
+      userId,
     };
 
     await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([payload, ...history]));
 
-    if (userId) {
-      try {
-        const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-        const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    try {
+      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
-        if (url && key) {
-          const baseBody = {
+      if (url && key) {
+        const response = await fetch(`${url}/rest/v1/japam_history`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: key,
+            Authorization: `Bearer ${key}`,
+            Prefer: 'return=minimal',
+          },
+          body: JSON.stringify({
+            user_id: userId,
             user_name: userName || 'User',
             malas: malaNum,
             count: totalNum,
             accumulated: totalNum,
-          };
+          }),
+        });
 
-          const postHistory = async (body: Record<string, unknown>) => {
-            const response = await fetch(`${url}/rest/v1/japam_history`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                apikey: key,
-                Authorization: `Bearer ${key}`,
-                Prefer: 'return=minimal',
-              },
-              body: JSON.stringify(body),
-            });
-
-            if (!response.ok) {
-              console.log('Supabase manual save error:', await response.text());
-              return false;
-            }
-
-            return true;
-          };
-
-          const savedWithUserId = await postHistory({
-            user_id: userId,
-            ...baseBody,
-          });
-
-          if (!savedWithUserId) {
-            await postHistory(baseBody);
-          }
+        if (!response.ok) {
+          console.log('Supabase manual save error:', await response.text());
+          Alert.alert(
+            'Saved locally',
+            'Your entry was saved on this device, but cloud sync failed.'
+          );
         }
-      } catch (error) {
-        console.log('Supabase manual save error:', error);
       }
+    } catch (error) {
+      console.log('Supabase manual save error:', error);
+      Alert.alert(
+        'Saved locally',
+        'Your entry was saved on this device, but cloud sync failed.'
+      );
     }
 
     Alert.alert('Saved', 'Manual entry added to history');
@@ -123,6 +137,11 @@ export default function ManualEntry() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Manual Entry</Text>
+      {!userId && (
+  <Text style={styles.loginHint}>
+    Sign in with Google from the Japam screen to save entries.
+  </Text>
+)}
 
       <TextInput
         style={styles.input}
@@ -201,4 +220,13 @@ const styles = StyleSheet.create({
     color: 'white',
     fontWeight: '700',
   },
+  loginHint: {
+    color: '#cbd5e1',
+    fontSize: 15,
+    textAlign: 'center',
+    marginBottom: 18,
+    lineHeight: 22,
+    maxWidth: 320,
+  },
+
 });
