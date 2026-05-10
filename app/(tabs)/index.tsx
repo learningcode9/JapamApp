@@ -114,11 +114,17 @@ export default function JapamMain() {
   const [showUserModal, setShowUserModal] = useState(false);
   const [isSigningIn, setIsSigningIn] = useState(false);
 
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    clientId:
-      '475929514423-sujd0s7bb3jd46s5a0ck493f3p8phdji.apps.googleusercontent.com',
-    scopes: ['profile', 'email'],
-  });
+  const googleRedirectUri =
+  Platform.OS === 'web' && typeof window !== 'undefined'
+    ? window.location.origin
+    : undefined;
+
+const [request, response, promptAsync] = Google.useAuthRequest({
+  clientId:
+    '475929514423-sujd0s7bb3jd46s5a0ck493f3p8phdji.apps.googleusercontent.com',
+  scopes: ['profile', 'email'],
+  redirectUri: googleRedirectUri,
+});
 
   const [quote, setQuote] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(true);
