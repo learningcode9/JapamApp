@@ -120,8 +120,7 @@ export default function JapamMain() {
     : undefined;
 
 const [request, response, promptAsync] = Google.useAuthRequest({
-  clientId:
-    '475929514423-sujd0s7bb3jd46s5a0ck493f3p8phdji.apps.googleusercontent.com',
+  clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
   scopes: ['profile', 'email'],
   redirectUri: googleRedirectUri,
 });
@@ -403,20 +402,41 @@ const [request, response, promptAsync] = Google.useAuthRequest({
         }
       );
   
+      if (!response.ok) {
+        console.log('History restore error:', await response.text());
+        return;
+      }
+  
       const rows = await response.json();
   
-      if (!rows?.length) return;
-  
-      const convertedHistory = rows.map((item: any) => ({
+      const remoteHistory: Session[] = rows.map((item: any) => ({
         date: item.created_at,
-        malas: item.malas || 0,
-        totalCount: item.count || 0,
+        malas: Number(item.malas) || 0,
+        totalCount: Number(item.count) || 0,
         duration: 0,
         manual: false,
         userId: googleUserId,
       }));
   
-      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(convertedHistory));
+      const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
+      const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
+  
+      const sameUserLocalHistory = localHistory.filter(
+        (item) => item.userId === googleUserId
+      );
+  
+      const mergedMap = new Map<string, Session>();
+  
+      [...remoteHistory, ...sameUserLocalHistory].forEach((item) => {
+        const key = `${item.date}-${item.totalCount}-${item.malas}-${item.manual ? 'manual' : 'auto'}`;
+        mergedMap.set(key, item);
+      });
+  
+      const mergedHistory = [...mergedMap.values()].sort(
+        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+      );
+  
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
   
       await restoreTodayTotal();
     } catch (error) {
@@ -537,9 +557,10 @@ const [request, response, promptAsync] = Google.useAuthRequest({
   useEffect(() => {
     if (!isRunning) return;
     if (seconds < targetSeconds) return;
-
+  
     completeTimerSession();
-  }, [seconds, isRunning, targetSeconds]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seconds, isRunning, targetSeconds, loopTimer]);
 
   const playCompleteSound = async () => {
     try {
@@ -757,7 +778,7 @@ const [request, response, promptAsync] = Google.useAuthRequest({
     setAutoCompletedMalas(0);
   };
 
-  const completeTimerSession = () => {
+  const completeTimerSession = useCallback(() => {
     const newTotal = setCountersFromTotal(totalRef.current + 108);
 
     void saveSession(targetSeconds, 1, 108, newTotal);
@@ -782,7 +803,7 @@ const [request, response, promptAsync] = Google.useAuthRequest({
       setSeconds(0);
       setIsRunning(false);
     }
-  };
+  }, [loopTimer, targetSeconds]);
   const saveJapamNameToSupabase = async (
     userId: string,
     userNameValue: string,
