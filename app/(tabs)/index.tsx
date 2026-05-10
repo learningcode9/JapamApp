@@ -490,54 +490,7 @@ const [request, response, promptAsync] = Google.useAuthRequest({
         await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
         await loadJapamNameFromSupabase(googleUserId);
         await restoreHistoryFromSupabase(googleUserId);
-        let finalJapamName = 'Japam';
-
-try {
-  const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-  const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (url && key) {
-    const encodedGoogleUserId = encodeURIComponent(googleUserId);
-  
-    const response = await fetch(
-      `${url}/rest/v1/user_profiles?user_id=eq.${encodedGoogleUserId}&select=japam_name`,
-      {
-        headers: {
-          apikey: key,
-          Authorization: `Bearer ${key}`,
-        },
-      }
-    );
-
-    if (response.ok) {
-      const rows = await response.json();
-
-      if (rows?.length > 0 && rows[0]?.japam_name) {
-        finalJapamName = rows[0].japam_name;
-      }
-    }
-  }
-} catch (error) {
-  console.log('Profile fetch error:', error);
-}
-
-setJapamName(finalJapamName);
-setNameInput(finalJapamName);
-        
-
-        const localTodayTotal = await getLocalTodayTotal(googleUserId);
-        const remoteTodayTotal = await fetchTodayTotalFromSupabase(
-          googleUserId,
-          googleName
-        );
-
-        await restoreTotal(
-          remoteTodayTotal === null
-            ? localTodayTotal
-            : Math.max(localTodayTotal, remoteTodayTotal),
-          { userId: googleUserId }
-        );
-      } catch (error) {
+        } catch (error) {
         console.log('Google login error:', error);
         setShowUserModal(true);
       } finally {
@@ -547,7 +500,7 @@ setNameInput(finalJapamName);
     };
 
     void handleGoogleLogin();
-  }, [fetchTodayTotalFromSupabase, getLocalTodayTotal, response, restoreTotal]);
+  }, [response]);
 
   useEffect(() => {
     totalRef.current = total;
