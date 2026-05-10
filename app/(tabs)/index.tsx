@@ -309,14 +309,23 @@ export default function JapamMain() {
   useEffect(() => {
     const loadData = async () => {
       const today = getLocalDateKey();
-      const savedName = await AsyncStorage.getItem(JAPAM_NAME_KEY);
+      
       const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
       const authPending = await isAuthPending();
 
-      if (savedName) {
-        setJapamName(savedName);
-        setNameInput(savedName);
+      if (savedUserId) {
+        const userJapamName = await AsyncStorage.getItem(
+          getUserStorageKey(JAPAM_NAME_KEY, savedUserId)
+        );
+      
+        if (userJapamName) {
+          setJapamName(userJapamName);
+          setNameInput(userJapamName);
+        } else {
+          setJapamName('Japam');
+          setNameInput('Japam');
+        }
       }
 
       if (savedUserName && savedUserId) {
@@ -335,7 +344,40 @@ export default function JapamMain() {
 
     void loadData();
   }, [restoreTodayTotal, restoreTotal]);
-
+  const loadJapamNameFromSupabase = async (googleUserId: string) => {
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+  
+      if (!supabaseUrl || !supabaseKey) return;
+  
+      const encodedUserId = encodeURIComponent(googleUserId);
+  
+      const profileResponse = await fetch(
+        `${supabaseUrl}/rest/v1/user_profiles?user_id=eq.${encodedUserId}&select=japam_name`,
+        {
+          headers: {
+            apikey: supabaseKey,
+            Authorization: `Bearer ${supabaseKey}`,
+          },
+        }
+      );
+  
+      const rows = await profileResponse.json();
+  
+      if (rows?.length > 0 && rows[0]?.japam_name) {
+        setJapamName(rows[0].japam_name);
+        setNameInput(rows[0].japam_name);
+  
+        await AsyncStorage.setItem(
+          getUserStorageKey(JAPAM_NAME_KEY, googleUserId),
+          rows[0].japam_name
+        );
+      }
+    } catch (error) {
+      console.log('Profile fetch error:', error);
+    }
+  };
   useEffect(() => {
     const handleGoogleLogin = async () => {
       if (!response) return;
@@ -396,6 +438,40 @@ export default function JapamMain() {
 
         await AsyncStorage.setItem(USER_NAME_KEY, googleName);
         await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
+        await loadJapamNameFromSupabase(googleUserId);
+        let finalJapamName = 'Japam';
+
+try {
+  const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+  const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (url && key) {
+    const encodedGoogleUserId = encodeURIComponent(googleUserId);
+  
+    const response = await fetch(
+      `${url}/rest/v1/user_profiles?user_id=eq.${encodedGoogleUserId}&select=japam_name`,
+      {
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+        },
+      }
+    );
+
+    if (response.ok) {
+      const rows = await response.json();
+
+      if (rows?.length > 0 && rows[0]?.japam_name) {
+        finalJapamName = rows[0].japam_name;
+      }
+    }
+  }
+} catch (error) {
+  console.log('Profile fetch error:', error);
+}
+
+setJapamName(finalJapamName);
+setNameInput(finalJapamName);
         
 
         const localTodayTotal = await getLocalTodayTotal(googleUserId);
@@ -693,16 +769,89 @@ export default function JapamMain() {
       setIsRunning(false);
     }
   };
+  const saveJapamNameToSupabase = async (
+    userId: string,
+    userNameValue: string,
+    japamNameValue: string
+  ) => {
+    try {
+      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+  
+      if (!url || !key) return;
+  
+      const encodedUserId = encodeURIComponent(userId);
+  
+      const checkResponse = await fetch(
+        `${url}/rest/v1/user_profiles?user_id=eq.${encodedUserId}&select=id`,
+        {
+          headers: {
+            apikey: key,
+            Authorization: `Bearer ${key}`,
+          },
+        }
+      );
+  
+      const rows = await checkResponse.json();
+  
+      if (rows.length > 0) {
+        await fetch(`${url}/rest/v1/user_profiles?user_id=eq.${encodedUserId}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: key,
+            Authorization: `Bearer ${key}`,
+          },
+          body: JSON.stringify({
+            user_name: userNameValue,
+            japam_name: japamNameValue,
+            updated_at: new Date().toISOString(),
+          }),
+        });
+      } else {
+        await fetch(`${url}/rest/v1/user_profiles`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: key,
+            Authorization: `Bearer ${key}`,
+          },
+          body: JSON.stringify({
+            user_id: userId,
+            user_name: userNameValue,
+            japam_name: japamNameValue,
+          }),
+        });
+      }
+    } catch (error) {
+      console.log('Profile save error:', error);
+    }
+  };
 
   const saveJapamName = async () => {
     const name = nameInput.trim();
-
+  
     if (!name) return;
-
+  
     setJapamName(name);
+    setNameInput(name);
     setShowNameEditor(false);
+  
+    const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+  
+    if (savedUserId) {
+      await AsyncStorage.setItem(
+        getUserStorageKey(JAPAM_NAME_KEY, savedUserId),
+        name
+      );
+      const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
 
-    await AsyncStorage.setItem(JAPAM_NAME_KEY, name);
+await saveJapamNameToSupabase(
+  savedUserId,
+  savedUserName || 'User',
+  name
+);
+    }
   };
 
   const performLogout = async () => {
