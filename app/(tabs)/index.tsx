@@ -689,7 +689,7 @@ const [request, response, promptAsync] = Google.useAuthRequest({
   };
 
   const handleUndo = () => {
-    setCountersFromTotal(totalRef.current - 1);
+    setCountersFromTotal(Math.max(0, totalRef.current - 1));
   };
 
   const playPressAnimation = () => {
@@ -708,18 +708,16 @@ const [request, response, promptAsync] = Google.useAuthRequest({
       }),
     ]).start();
   };
-  const requireLogin = async () => {
-    const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-  
-    if (!savedUserId) {
+  const requireLogin = () => {
+    if (!userName) {
       setShowUserModal(true);
       return false;
     }
   
     return true;
   };
-  const handleTap = async () => {
-    const canContinue = await requireLogin();
+  const handleTap = () => {
+    const canContinue = requireLogin();
   
     if (!canContinue) return;
   
@@ -735,8 +733,8 @@ const [request, response, promptAsync] = Google.useAuthRequest({
     }
   };
 
-  const handleStart = async () => {
-    const canContinue = await requireLogin();
+  const handleStart = () => {
+    const canContinue = requireLogin();
   
     if (!canContinue) return;
   
@@ -878,7 +876,7 @@ await saveJapamNameToSupabase(
     setShowUserMenu(false);
 
     setUserName('');
-    setShowUserModal(true);
+    setShowUserModal(false);
 
     await AsyncStorage.removeItem(USER_NAME_KEY);
     await AsyncStorage.removeItem(USER_ID_KEY);
@@ -919,11 +917,22 @@ await saveJapamNameToSupabase(
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <View style={styles.topBar}>
-        <View style={styles.headerCenter}>
-          <Pressable onPress={openRename}>
-            <Text style={styles.title}>🧘 {japamName}</Text>
-          </Pressable>
+  <View style={styles.topBar}>
+    <View style={styles.headerCenter}>
+      <Pressable onPress={openRename}>
+        <Text style={styles.title}>🧘 {japamName}</Text>
+      </Pressable>
+
+      {!userName && (
+        <Pressable
+          style={styles.loginButton}
+          onPress={() => setShowUserModal(true)}
+        >
+          <Text style={styles.loginButtonText}>Sign in</Text>
+        </Pressable>
+      )}
+
+      
 
           {!!userName && (
             <View
@@ -1447,5 +1456,25 @@ const styles = StyleSheet.create({
     color: '#94a3b8',
     fontSize: 28,
     fontWeight: '800',
+  },
+  loginButton: {
+    position: 'absolute',
+    right: 45,
+    top: 12,
+    backgroundColor: '#6366f1',
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 999,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  
+  loginButtonText: {
+    color: '#ffffff',
+    fontWeight: '900',
+    fontSize: 14,
+  
   },
 });
