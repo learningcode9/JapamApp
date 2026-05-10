@@ -378,6 +378,56 @@ export default function JapamMain() {
       console.log('Profile fetch error:', error);
     }
   };
+  const restoreHistoryFromSupabase = async (
+    googleUserId: string
+  ) => {
+    try {
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+  
+      if (!supabaseUrl || !supabaseKey) return;
+  
+      const encodedUserId =
+        encodeURIComponent(googleUserId);
+  
+      const response = await fetch(
+        `${supabaseUrl}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=*`,
+        {
+          headers: {
+            apikey: supabaseKey,
+            Authorization: `Bearer ${supabaseKey}`,
+          },
+        }
+      );
+  
+      const rows = await response.json();
+  
+      if (!rows?.length) return;
+  
+      const convertedHistory = rows.map((item: any) => ({
+        date: item.created_at,
+        malas: item.malas || 0,
+        totalCount: item.count || 0,
+        duration: 0,
+        manual: false,
+      }));
+  
+      await AsyncStorage.setItem(
+        HISTORY_KEY,
+        JSON.stringify(convertedHistory)
+      );
+  
+      const totalAccumulated = convertedHistory.reduce(
+        (sum: number, item: any) =>
+          sum + (item.totalCount || 0),
+        0
+      );
+  
+      await restoreTotal(totalAccumulated);
+    } catch (error) {
+      console.log('History restore error:', error);
+    }
+  };
   useEffect(() => {
     const handleGoogleLogin = async () => {
       if (!response) return;
@@ -439,6 +489,7 @@ export default function JapamMain() {
         await AsyncStorage.setItem(USER_NAME_KEY, googleName);
         await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
         await loadJapamNameFromSupabase(googleUserId);
+        await restoreHistoryFromSupabase(googleUserId);
         let finalJapamName = 'Japam';
 
 try {
