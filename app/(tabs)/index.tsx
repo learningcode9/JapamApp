@@ -130,11 +130,13 @@ const [request, response, promptAsync] = Google.useAuthRequest({
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
 
-  const totalRef = useRef(0);
-  const isSavingSessionRef = useRef(false);
-  const pressAnim = useRef(new Animated.Value(0)).current;
-  const fade = useRef(new Animated.Value(0)).current;
-  const glowAnim = useRef(new Animated.Value(0)).current;
+const totalRef = useRef(0);
+const isSavingSessionRef = useRef(false);
+const lastTapRef = useRef(0);
+
+const pressAnim = useRef(new Animated.Value(0)).current;
+const fade = useRef(new Animated.Value(0)).current;
+const glowAnim = useRef(new Animated.Value(0)).current;
 
   const restoreTotal = useCallback(
     async (
@@ -586,7 +588,7 @@ const [request, response, promptAsync] = Google.useAuthRequest({
       setTimeout(() => {
         sound.stopAsync().catch(console.log);
         sound.unloadAsync().catch(console.log);
-      }, 5000);
+      }, 3000);
     } catch (error) {
       console.log('Sound error:', error);
     }
@@ -760,6 +762,12 @@ const [request, response, promptAsync] = Google.useAuthRequest({
     const canContinue = requireLogin();
   
     if (!canContinue) return;
+  
+    const now = Date.now();
+  
+    if (now - lastTapRef.current < 60) return;
+  
+    lastTapRef.current = now;
   
     playPressAnimation();
     tapFeedback();
