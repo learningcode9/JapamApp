@@ -2,9 +2,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Google from 'expo-auth-session/providers/google';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+
+
 import {
   Alert,
   Animated,
@@ -46,6 +49,8 @@ const USER_NAME_KEY = 'userName';
 const USER_ID_KEY = 'userId';
 const AUTH_PENDING_KEY = 'authPending';
 const AUTH_PENDING_MAX_MS = 2 * 60 * 1000;
+const particleAnim = useRef(new Animated.Value(0)).current;
+const omPulseAnim = useRef(new Animated.Value(1)).current;
 
 const screenWidth = Dimensions.get('window').width;
 const isMobile = screenWidth < 500;
@@ -560,14 +565,14 @@ const glowAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     if (!isRunning) return;
-
+  
     const interval = setInterval(() => {
       setSeconds((prev) => prev + 1);
     }, 1000);
-
+  
     return () => clearInterval(interval);
   }, [isRunning]);
-
+  
   useEffect(() => {
     if (!isRunning) return;
     if (seconds < targetSeconds) return;
@@ -575,7 +580,32 @@ const glowAnim = useRef(new Animated.Value(0)).current;
     completeTimerSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seconds, isRunning, targetSeconds, loopTimer]);
-
+  
+  useEffect(() => {
+    Animated.loop(
+      Animated.timing(particleAnim, {
+        toValue: 1,
+        duration: 6000,
+        useNativeDriver: true,
+      })
+    ).start();
+  }, []);
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(omPulseAnim, {
+          toValue: 1.03,
+          duration: 1800,
+          useNativeDriver: true,
+        }),
+        Animated.timing(omPulseAnim, {
+          toValue: 1,
+          duration: 1800,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  }, [omPulseAnim]);
   const playCompleteSound = async () => {
     try {
       const { sound } = await Audio.Sound.createAsync(
@@ -987,7 +1017,17 @@ const glowAnim = useRef(new Animated.Value(0)).current;
   const todayLabel = new Date().toLocaleDateString();
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <LinearGradient
+      colors={['#0f172a', '#1e1b4b', '#0f172a']}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={{ flex: 1 }}
+    >
+      <ScrollView
+  style={[styles.container, { backgroundColor: '#111136' }]}
+  contentContainerStyle={styles.content}
+  showsVerticalScrollIndicator={false}
+>
   
       {isSigningIn && (
         <View style={styles.signingInBanner}>
@@ -1085,7 +1125,9 @@ const glowAnim = useRef(new Animated.Value(0)).current;
       <Text style={styles.progressText}>{count} / 108</Text>
 
       <View style={styles.metricsRow}>
-        <Text style={styles.metricText}>📿 {malas} malas</Text>
+      <Text style={styles.metricText}>
+  📿 {malas} {malas === 1 ? 'mala' : 'malas'}
+</Text>
         <Text style={[styles.metricText, isRunning && styles.timerRunningText]}>
           ⏱ {formatTime(seconds)}
         </Text>
@@ -1093,55 +1135,55 @@ const glowAnim = useRef(new Animated.Value(0)).current;
       </View>
 
       <Animated.View
+  style={[
+    styles.circleGlow,
+    {
+      shadowOpacity: 0.45,
+      transform: [{ scale: 1 }],
+    },
+  ]}
+>
+  <Pressable
+    onPress={handleTap}
+    style={({ pressed }) => [pressed && styles.circlePressed]}
+  >
+    <LinearGradient
+      colors={['#7c3aed', '#4f46e5', '#312e81']}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={styles.circle}
+    >
+      <Text style={styles.omText}>ॐ</Text>
+
+      <Animated.View
+        pointerEvents="none"
         style={[
-          styles.circleGlow,
+          styles.omPressGlow,
           {
-            shadowOpacity: glowAnim.interpolate({
+            opacity: pressAnim.interpolate({
               inputRange: [0, 1],
-              outputRange: [0.25, 0.9],
+              outputRange: [0, 0.65],
             }),
             transform: [
               {
-                scale: glowAnim.interpolate({
+                scale: pressAnim.interpolate({
                   inputRange: [0, 1],
-                  outputRange: [1, 1.08],
+                  outputRange: [0.8, 1.25],
                 }),
               },
             ],
           },
         ]}
-      >
-        <Pressable
-          onPress={handleTap}
-          style={({ pressed }) => [styles.circle, pressed && styles.circlePressed]}
-        >
-          <Animated.View
-            style={[
-              styles.innerBead,
-              {
-                opacity: pressAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [0, 1],
-                }),
-                transform: [
-                  {
-                    scale: pressAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0.4, 1.25],
-                    }),
-                  },
-                ],
-              },
-            ]}
-          />
-        </Pressable>
-      </Animated.View>
+      />
+    </LinearGradient>
+  </Pressable>
+</Animated.View>
 
-      <Pressable style={styles.undoBtn} onPress={handleUndo}>
-        <Text style={styles.undoText}>Undo last tap</Text>
-      </Pressable>
+<Pressable style={styles.undoBtn} onPress={handleUndo}>
+  <Text style={styles.undoText}>↻ Undo last tap</Text>
+</Pressable>
 
-      <Text style={styles.inputLabel}>Timer (minutes)</Text>
+<Text style={styles.inputLabel}>Timer (minutes)</Text>
 
       <TextInput
   style={[
@@ -1249,14 +1291,17 @@ Timer ending = 1 mala automatically added
           </View>
         </View>
       </Modal>
-    </ScrollView>
+      </ScrollView>
+  </LinearGradient>
+
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0f172a' },
+  container: { flex: 1, backgroundColor: 'transparent' },
   content: {
     alignItems: 'center',
+  
     paddingHorizontal: 20,
     paddingTop: 34,
     paddingBottom: 120,
@@ -1301,10 +1346,40 @@ const styles = StyleSheet.create({
   userMenuItem: { paddingVertical: 10, paddingHorizontal: 14 },
   userMenuText: { color: 'white', fontSize: 14, fontWeight: '800' },
   title: {
-    color: 'white',
-    fontSize: 34,
-    fontWeight: '800',
+    color: '#f8fafc',
+  
+    fontSize: 28,
+    fontWeight: '500',
+  
     textAlign: 'center',
+  
+    letterSpacing: 0.3,
+  
+    textShadowColor: 'rgba(255,255,255,0.06)',
+    textShadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    textShadowRadius: 6,
+  },
+  subtitle: {
+    color: 'rgba(255,255,255,0.55)',
+    fontSize: 13,
+    letterSpacing: 1.8,
+    marginTop: 4,
+    textTransform: 'uppercase',
+  },
+  count: {
+    fontSize: 82,
+    fontWeight: '300',
+    color: '#ffffff',
+  
+    textShadowColor: 'rgba(255,255,255,0.12)',
+    textShadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    textShadowRadius: 12,
   },
   renameHint: { color: '#64748b', fontSize: 12, marginTop: 4 },
   nameEditor: {
@@ -1324,12 +1399,18 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   quote: {
-    color: '#cbd5e1',
+    color: 'rgba(255,255,255,0.82)',
     textAlign: 'center',
-    marginTop: 4,
-    marginBottom: 8,
-    fontSize: 16,
-    maxWidth: 560,
+  
+    marginTop: 10,
+    marginBottom: 12,
+  
+    fontSize: 18,
+    fontStyle: 'italic',
+  
+    lineHeight: 30,
+  
+    maxWidth: 620,
   },
   dateText: { color: '#94a3b8', fontSize: 14, marginBottom: 4 },
   big: { color: 'white', fontSize: 68, fontWeight: '900', marginTop: 0 },
@@ -1354,54 +1435,72 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-evenly',
     alignItems: 'center',
-    marginTop: 6,
-    marginBottom: 2,
+    marginTop: 10,
+    marginBottom: 18,
   },
   metricText: {
     color: '#e2e8f0',
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 18,
+    fontWeight: '700',
     textAlign: 'center',
   },
   timerRunningText: { fontSize: 24, color: 'white', fontWeight: '900' },
   circleGlow: {
-    borderRadius: 100,
-    shadowColor: '#818cf8',
-    shadowRadius: 18,
-    elevation: 10,
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(139, 92, 246, 0.10)',
+    shadowColor: '#8b5cf6',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.45,
+    shadowRadius: 35,
+    elevation: 20,
+    borderWidth: 0,
   },
   circle: {
-    width: 190,
-    height: 190,
-    borderRadius: 95,
-    backgroundColor: '#6366f1',
-    alignSelf: 'center',
-    marginTop: 14,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    elevation: 6,
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+  
+    justifyContent: 'center',
+    alignItems: 'center',
+  
+    shadowColor: '#8b5cf6',
+    shadowOffset: {
+      width: 0,
+      height: 0,
+    },
+    shadowOpacity: 0.95,
+    shadowRadius: 40,
+  
+    elevation: 25,
   },
   circlePressed: { transform: [{ scale: 0.96 }] },
   innerBead: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: 'rgba(255,255,255,0.35)',
-    alignSelf: 'center',
-    marginTop: 78,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.55)',
+    position: 'absolute',
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: 'rgba(255,255,255,0.18)',
   },
   undoBtn: {
-    backgroundColor: '#334155',
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
     paddingVertical: 9,
-    paddingHorizontal: 17,
+    paddingHorizontal: 18,
     borderRadius: 999,
+    marginTop: 10,
     marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
   },
-  undoText: { color: 'white', fontSize: 14, fontWeight: '700' },
+  undoText: {
+    color: '#f8fafc',
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
   inputLabel: { color: '#94a3b8', fontSize: 13, marginBottom: 6 },
   input: {
     backgroundColor: '#1e293b',
@@ -1596,5 +1695,32 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: '600',
+  },
+  
+  omText: {
+    fontSize: 96,
+    color: '#fbbf24',
+    fontWeight: '300',
+  
+    textShadowColor: 'rgba(251,191,36,0.8)',
+    textShadowOffset: {
+      width: 0,
+      height: 0,
+    },
+    textShadowRadius: 22,
+  
+    opacity: 1,
+  },
+  omPressGlow: {
+    position: 'absolute',
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: 'rgba(251,191,36,0.22)',
+    shadowColor: '#fbbf24',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 30,
+    zIndex: 1,
   },
 });
