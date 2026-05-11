@@ -927,6 +927,16 @@ const glowAnim = useRef(new Animated.Value(0)).current;
   };
 
   const performLogout = async () => {
+
+    const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+  
+    if (currentUserId) {
+      await AsyncStorage.setItem(
+        getUserStorageKey(TOTAL_KEY, currentUserId),
+        String(totalRef.current)
+      );
+    }
+  
     setIsRunning(false);
     setSeconds(0);
     setLoopTimer(false);
@@ -940,6 +950,7 @@ const glowAnim = useRef(new Animated.Value(0)).current;
   
     await AsyncStorage.removeItem(USER_NAME_KEY);
     await AsyncStorage.removeItem(USER_ID_KEY);
+  
     await restoreTotal(0, { userId: null });
   };
 
