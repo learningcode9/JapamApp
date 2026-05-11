@@ -7,7 +7,6 @@ import { useFocusEffect } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
-
 import {
   Alert,
   Animated,
@@ -49,12 +48,9 @@ const USER_NAME_KEY = 'userName';
 const USER_ID_KEY = 'userId';
 const AUTH_PENDING_KEY = 'authPending';
 const AUTH_PENDING_MAX_MS = 2 * 60 * 1000;
-const particleAnim = useRef(new Animated.Value(0)).current;
-const omPulseAnim = useRef(new Animated.Value(1)).current;
 
 const screenWidth = Dimensions.get('window').width;
 const isMobile = screenWidth < 500;
-
 
 const getLocalDateKey = (date = new Date()) => {
   const y = date.getFullYear();
@@ -72,14 +68,9 @@ const isSameLocalDay = (dateValue: string, dayKey = getLocalDateKey()) => {
 const getTodayRange = () => {
   const start = new Date();
   start.setHours(0, 0, 0, 0);
-
   const end = new Date(start);
   end.setDate(end.getDate() + 1);
-
-  return {
-    start: start.toISOString(),
-    end: end.toISOString(),
-  };
+  return { start: start.toISOString(), end: end.toISOString() };
 };
 
 const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
@@ -87,101 +78,84 @@ const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
 const isAuthPending = async () => {
   const raw = await AsyncStorage.getItem(AUTH_PENDING_KEY);
   const startedAt = Number(raw || 0);
-
   if (!startedAt) return false;
-
   if (Date.now() - startedAt > AUTH_PENDING_MAX_MS) {
     await AsyncStorage.removeItem(AUTH_PENDING_KEY);
     return false;
   }
-
   return true;
 };
 
 export default function JapamMain() {
   const [showUserMenu, setShowUserMenu] = useState(false);
-
   const [count, setCount] = useState(0);
   const [malas, setMalas] = useState(0);
   const [total, setTotal] = useState(0);
-
   const [seconds, setSeconds] = useState(0);
   const [minutesInput, setMinutesInput] = useState('1');
   const [targetSeconds, setTargetSeconds] = useState(60);
   const [isRunning, setIsRunning] = useState(false);
   const [loopTimer, setLoopTimer] = useState(false);
   const [, setAutoCompletedMalas] = useState(0);
-
   const [japamName, setJapamName] = useState('Japam');
   const [nameInput, setNameInput] = useState('');
   const [showNameEditor, setShowNameEditor] = useState(false);
-
   const [userName, setUserName] = useState('');
   const [showUserModal, setShowUserModal] = useState(false);
   const [isSigningIn, setIsSigningIn] = useState(false);
-
-  const googleRedirectUri =
-  Platform.OS === 'web' && typeof window !== 'undefined'
-    ? window.location.origin
-    : undefined;
-
-const [request, response, promptAsync] = Google.useAuthRequest({
-  clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
-  scopes: ['profile', 'email'],
-  redirectUri: googleRedirectUri,
-});
-
   const [quote, setQuote] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
 
-const totalRef = useRef(0);
-const isSavingSessionRef = useRef(false);
-const lastTapRef = useRef(0);
+  const totalRef = useRef(0);
+  const rippleAnim = useRef(new Animated.Value(0)).current;
+  const isSavingSessionRef = useRef(false);
+  const lastTapRef = useRef(0);
 
-const pressAnim = useRef(new Animated.Value(0)).current;
-const fade = useRef(new Animated.Value(0)).current;
-const glowAnim = useRef(new Animated.Value(0)).current;
+  const pressAnim = useRef(new Animated.Value(0)).current;
+  const fade = useRef(new Animated.Value(0)).current;
+  const glowAnim = useRef(new Animated.Value(0)).current;
+
+  // ✅ Fix 1: moved inside component
+  const particleAnim = useRef(new Animated.Value(0)).current;
+  const omPulseAnim = useRef(new Animated.Value(1)).current;
+
+  const googleRedirectUri =
+    Platform.OS === 'web' && typeof window !== 'undefined'
+      ? window.location.origin
+      : undefined;
+
+  const [request, response, promptAsync] = Google.useAuthRequest({
+    clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
+    scopes: ['profile', 'email'],
+    redirectUri: googleRedirectUri,
+  });
 
   const restoreTotal = useCallback(
-    async (
-      nextTotal: number,
-      options?: {
-        userId?: string | null;
+    async (nextTotal: number, options?: { userId?: string | null }) => {
+      const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
+      const nextMalas = Math.floor(safeTotal / 108);
+      const nextCount = safeTotal % 108;
+      const activeUserId =
+        options?.userId === undefined
+          ? await AsyncStorage.getItem(USER_ID_KEY)
+          : options.userId;
+
+      totalRef.current = safeTotal;
+      setTotal(safeTotal);
+      setMalas(nextMalas);
+      setCount(nextCount);
+
+      await AsyncStorage.setItem(TOTAL_KEY, String(safeTotal));
+      await AsyncStorage.setItem(MALAS_KEY, String(nextMalas));
+      await AsyncStorage.setItem(COUNT_KEY, String(nextCount));
+
+      if (activeUserId) {
+        await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, activeUserId), String(safeTotal));
+        await AsyncStorage.setItem(getUserStorageKey(MALAS_KEY, activeUserId), String(nextMalas));
+        await AsyncStorage.setItem(getUserStorageKey(COUNT_KEY, activeUserId), String(nextCount));
       }
-    ) => {
-    const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
-    const nextMalas = Math.floor(safeTotal / 108);
-    const nextCount = safeTotal % 108;
-    const activeUserId =
-      options?.userId === undefined
-        ? await AsyncStorage.getItem(USER_ID_KEY)
-        : options.userId;
-
-    totalRef.current = safeTotal;
-    setTotal(safeTotal);
-    setMalas(nextMalas);
-    setCount(nextCount);
-
-    await AsyncStorage.setItem(TOTAL_KEY, String(safeTotal));
-    await AsyncStorage.setItem(MALAS_KEY, String(nextMalas));
-    await AsyncStorage.setItem(COUNT_KEY, String(nextCount));
-
-    if (activeUserId) {
-      await AsyncStorage.setItem(
-        getUserStorageKey(TOTAL_KEY, activeUserId),
-        String(safeTotal)
-      );
-      await AsyncStorage.setItem(
-        getUserStorageKey(MALAS_KEY, activeUserId),
-        String(nextMalas)
-      );
-      await AsyncStorage.setItem(
-        getUserStorageKey(COUNT_KEY, activeUserId),
-        String(nextCount)
-      );
-    }
-  },
+    },
     []
   );
 
@@ -204,71 +178,54 @@ const glowAnim = useRef(new Animated.Value(0)).current;
       })
       .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
 
-    const savedCount = Number(
-      (await AsyncStorage.getItem(getUserStorageKey(COUNT_KEY, savedUserId))) ||
-        '0'
-    );
-    const savedMalas = Number(
-      (await AsyncStorage.getItem(getUserStorageKey(MALAS_KEY, savedUserId))) ||
-        '0'
-    );
-    const savedTotal = Number(
-      (await AsyncStorage.getItem(getUserStorageKey(TOTAL_KEY, savedUserId))) ||
-        '0'
-    );
+    const savedCount = Number((await AsyncStorage.getItem(getUserStorageKey(COUNT_KEY, savedUserId))) || '0');
+    const savedMalas = Number((await AsyncStorage.getItem(getUserStorageKey(MALAS_KEY, savedUserId))) || '0');
+    const savedTotal = Number((await AsyncStorage.getItem(getUserStorageKey(TOTAL_KEY, savedUserId))) || '0');
 
     return Math.max(savedTotal, todayHistoryTotal, savedMalas * 108 + savedCount);
   }, []);
 
   const fetchTodayTotalFromSupabase = useCallback(
     async (userId: string, userNameForFallback?: string | null) => {
-    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      if (!url || !key || !userId) return null;
 
-    if (!url || !key || !userId) return null;
+      try {
+        const { start, end } = getTodayRange();
 
-    try {
-      const { start, end } = getTodayRange();
+        const fetchBy = async (field: 'user_id' | 'user_name', value: string) => {
+          const query = new URLSearchParams({
+            select: 'count',
+            [field]: `eq.${value}`,
+            created_at: `gte.${start}`,
+          });
+          query.append('created_at', `lt.${end}`);
 
-      const fetchBy = async (field: 'user_id' | 'user_name', value: string) => {
-        const query = new URLSearchParams({
-          select: 'count',
-          [field]: `eq.${value}`,
-          created_at: `gte.${start}`,
-        });
+          const result = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
+            headers: { apikey: key, Authorization: `Bearer ${key}` },
+          });
 
-        query.append('created_at', `lt.${end}`);
+          if (!result.ok) {
+            console.log('Supabase fetch error:', await result.text());
+            return null;
+          }
 
-        const result = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
-          headers: {
-            apikey: key,
-            Authorization: `Bearer ${key}`,
-          },
-        });
+          const rows: { count?: number | string }[] = await result.json();
+          return rows.reduce((sum, row) => sum + (Number(row.count) || 0), 0);
+        };
 
-        if (!result.ok) {
-          console.log('Supabase fetch error:', await result.text());
-          return null;
-        }
+        const byUserId = await fetchBy('user_id', userId);
+        const byUserName = userNameForFallback ? await fetchBy('user_name', userNameForFallback) : null;
 
-        const rows: { count?: number | string }[] = await result.json();
-        return rows.reduce((sum, row) => sum + (Number(row.count) || 0), 0);
-      };
-
-      const byUserId = await fetchBy('user_id', userId);
-      const byUserName = userNameForFallback
-        ? await fetchBy('user_name', userNameForFallback)
-        : null;
-
-      if (byUserId === null) return byUserName;
-      if (byUserName === null) return byUserId;
-
-      return Math.max(byUserId, byUserName);
-    } catch (error) {
-      console.log('Supabase today total error:', error);
-      return null;
-    }
-  },
+        if (byUserId === null) return byUserName;
+        if (byUserName === null) return byUserId;
+        return Math.max(byUserId, byUserName);
+      } catch (error) {
+        console.log('Supabase today total error:', error);
+        return null;
+      }
+    },
     []
   );
 
@@ -278,15 +235,9 @@ const glowAnim = useRef(new Animated.Value(0)).current;
     const localTodayTotal = await getLocalTodayTotal(savedUserId);
 
     if (savedUserId) {
-      const remoteTodayTotal = await fetchTodayTotalFromSupabase(
-        savedUserId,
-        savedUserName
-      );
-
+      const remoteTodayTotal = await fetchTodayTotalFromSupabase(savedUserId, savedUserName);
       if (remoteTodayTotal !== null) {
-        await restoreTotal(Math.max(localTodayTotal, remoteTodayTotal), {
-          userId: savedUserId,
-        });
+        await restoreTotal(Math.max(localTodayTotal, remoteTodayTotal), { userId: savedUserId });
         return;
       }
     }
@@ -299,31 +250,22 @@ const glowAnim = useRef(new Animated.Value(0)).current;
       const loadSettingsAndRestoreToday = async () => {
         const savedSound = await AsyncStorage.getItem(SOUND_ENABLED_KEY);
         const savedVibration = await AsyncStorage.getItem(VIBRATION_ENABLED_KEY);
-
         setSoundEnabled(savedSound !== 'false');
         setVibrationEnabled(savedVibration !== 'false');
-
         await restoreTodayTotal();
       };
-
       void loadSettingsAndRestoreToday();
     }, [restoreTodayTotal])
   );
 
   useEffect(() => {
     setQuote(getRandomQuote());
-
-    Animated.timing(fade, {
-      toValue: 1,
-      duration: 800,
-      useNativeDriver: true,
-    }).start();
+    Animated.timing(fade, { toValue: 1, duration: 800, useNativeDriver: true }).start();
   }, [fade]);
 
   useEffect(() => {
     const loadData = async () => {
       const today = getLocalDateKey();
-      
       const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
       const authPending = await isAuthPending();
@@ -336,9 +278,6 @@ const glowAnim = useRef(new Animated.Value(0)).current;
         if (userJapamName) {
           setJapamName(userJapamName);
           setNameInput(userJapamName);
-        } else {
-          setJapamName('Japam');
-          setNameInput('Japam');
         }
       }
 
@@ -358,43 +297,45 @@ const glowAnim = useRef(new Animated.Value(0)).current;
 
     void loadData();
   }, [restoreTodayTotal, restoreTotal]);
+
+  // ✅ Fix 2: particleAnim dependency added
+  useEffect(() => {
+    Animated.loop(
+      Animated.timing(particleAnim, { toValue: 1, duration: 6000, useNativeDriver: true })
+    ).start();
+  }, [particleAnim]);
+
+  // ✅ omPulseAnim breathing animation
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(omPulseAnim, { toValue: 1.05, duration: 1800, useNativeDriver: true }),
+        Animated.timing(omPulseAnim, { toValue: 1, duration: 1800, useNativeDriver: true }),
+      ])
+    ).start();
+  }, [omPulseAnim]);
+
   const loadJapamNameFromSupabase = async (googleUserId: string) => {
     try {
       const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-  
       if (!supabaseUrl || !supabaseKey) return;
-  
+
       const encodedUserId = encodeURIComponent(googleUserId);
-  
       const profileResponse = await fetch(
         `${supabaseUrl}/rest/v1/user_profiles?user_id=eq.${encodedUserId}&select=japam_name`,
-        {
-          headers: {
-            apikey: supabaseKey,
-            Authorization: `Bearer ${supabaseKey}`,
-          },
-        }
+        { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` } }
       );
-  
+
       const rows = await profileResponse.json();
-  
       if (rows?.length > 0 && rows[0]?.japam_name) {
         setJapamName(rows[0].japam_name);
         setNameInput(rows[0].japam_name);
-      
-        await AsyncStorage.setItem(
-          getUserStorageKey(JAPAM_NAME_KEY, googleUserId),
-          rows[0].japam_name
-        );
-      
+        await AsyncStorage.setItem(getUserStorageKey(JAPAM_NAME_KEY, googleUserId), rows[0].japam_name);
         return;
       }
-      
-      const localName = await AsyncStorage.getItem(
-        getUserStorageKey(JAPAM_NAME_KEY, googleUserId)
-      );
-      
+
+      const localName = await AsyncStorage.getItem(getUserStorageKey(JAPAM_NAME_KEY, googleUserId));
       if (localName) {
         setJapamName(localName);
         setNameInput(localName);
@@ -403,32 +344,25 @@ const glowAnim = useRef(new Animated.Value(0)).current;
       console.log('Profile fetch error:', error);
     }
   };
+
   const restoreHistoryFromSupabase = async (googleUserId: string) => {
     try {
       const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-  
       if (!supabaseUrl || !supabaseKey) return;
-  
+
       const encodedUserId = encodeURIComponent(googleUserId);
-  
       const response = await fetch(
         `${supabaseUrl}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=*&order=created_at.asc`,
-        {
-          headers: {
-            apikey: supabaseKey,
-            Authorization: `Bearer ${supabaseKey}`,
-          },
-        }
+        { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` } }
       );
-  
+
       if (!response.ok) {
         console.log('History restore error:', await response.text());
         return;
       }
-  
+
       const rows = await response.json();
-  
       const remoteHistory: Session[] = rows.map((item: any) => ({
         date: item.created_at,
         malas: Number(item.malas) || 0,
@@ -437,32 +371,28 @@ const glowAnim = useRef(new Animated.Value(0)).current;
         manual: false,
         userId: googleUserId,
       }));
-  
+
       const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
       const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
-  
-      const sameUserLocalHistory = localHistory.filter(
-        (item) => item.userId === googleUserId
-      );
-  
+      const sameUserLocalHistory = localHistory.filter((item) => item.userId === googleUserId);
+
       const mergedMap = new Map<string, Session>();
-  
       [...remoteHistory, ...sameUserLocalHistory].forEach((item) => {
         const key = `${item.date}-${item.totalCount}-${item.malas}-${item.manual ? 'manual' : 'auto'}`;
         mergedMap.set(key, item);
       });
-  
+
       const mergedHistory = [...mergedMap.values()].sort(
         (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
       );
-  
+
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
-  
       await restoreTodayTotal();
     } catch (error) {
       console.log('History restore error:', error);
     }
   };
+
   useEffect(() => {
     const handleGoogleLogin = async () => {
       if (!response) return;
@@ -471,11 +401,7 @@ const glowAnim = useRef(new Animated.Value(0)).current;
         setIsSigningIn(false);
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-
-        if (!savedUserId) {
-          setShowUserModal(true);
-        }
-
+        if (!savedUserId) setShowUserModal(true);
         return;
       }
 
@@ -495,22 +421,14 @@ const glowAnim = useRef(new Animated.Value(0)).current;
       }
 
       try {
-        const userInfoResponse = await fetch(
-          'https://www.googleapis.com/userinfo/v2/me',
-          {
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-            },
-          }
-        );
+        const userInfoResponse = await fetch('https://www.googleapis.com/userinfo/v2/me', {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
 
         const userInfo = await userInfoResponse.json();
+        const googleName = userInfo?.given_name || userInfo?.name || userInfo?.email || 'User';
+        const googleUserId = String(userInfo?.id || '').trim();
 
-        const googleName =
-          userInfo?.given_name || userInfo?.name || userInfo?.email || 'User';
-          const googleUserId = String(userInfo?.id || '').trim();
-
-        
         if (!googleUserId) {
           setShowUserModal(true);
           return;
@@ -524,7 +442,7 @@ const glowAnim = useRef(new Animated.Value(0)).current;
         await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
         await loadJapamNameFromSupabase(googleUserId);
         await restoreHistoryFromSupabase(googleUserId);
-        } catch (error) {
+      } catch (error) {
         console.log('Google login error:', error);
         setShowUserModal(true);
       } finally {
@@ -545,84 +463,41 @@ const glowAnim = useRef(new Animated.Value(0)).current;
       await AsyncStorage.setItem(TOTAL_KEY, String(total));
 
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-
       if (savedUserId) {
-        await AsyncStorage.setItem(
-          getUserStorageKey(COUNT_KEY, savedUserId),
-          String(count)
-        );
-        await AsyncStorage.setItem(
-          getUserStorageKey(MALAS_KEY, savedUserId),
-          String(malas)
-        );
-        await AsyncStorage.setItem(
-          getUserStorageKey(TOTAL_KEY, savedUserId),
-          String(total)
-        );
+        await AsyncStorage.setItem(getUserStorageKey(COUNT_KEY, savedUserId), String(count));
+        await AsyncStorage.setItem(getUserStorageKey(MALAS_KEY, savedUserId), String(malas));
+        await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, savedUserId), String(total));
       }
     })();
   }, [count, malas, total]);
 
   useEffect(() => {
     if (!isRunning) return;
-  
-    const interval = setInterval(() => {
-      setSeconds((prev) => prev + 1);
-    }, 1000);
-  
+    const interval = setInterval(() => setSeconds((prev) => prev + 1), 1000);
     return () => clearInterval(interval);
   }, [isRunning]);
-  
+
   useEffect(() => {
     if (!isRunning) return;
     if (seconds < targetSeconds) return;
-  
     completeTimerSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seconds, isRunning, targetSeconds, loopTimer]);
-  
-  useEffect(() => {
-    Animated.loop(
-      Animated.timing(particleAnim, {
-        toValue: 1,
-        duration: 6000,
-        useNativeDriver: true,
-      })
-    ).start();
-  }, []);
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(omPulseAnim, {
-          toValue: 1.03,
-          duration: 1800,
-          useNativeDriver: true,
-        }),
-        Animated.timing(omPulseAnim, {
-          toValue: 1,
-          duration: 1800,
-          useNativeDriver: true,
-        }),
-      ])
-    ).start();
-  }, [omPulseAnim]);
+
   const playCompleteSound = async () => {
     try {
       const { sound } = await Audio.Sound.createAsync(
         require('../../assets/om_complete.mp3'),
-        {
-          shouldPlay: true,
-          volume: 1.0,
-        }
+        { shouldPlay: true, volume: 1.0 }
       );
-  
+
       sound.setOnPlaybackStatusUpdate((status) => {
         if (status.isLoaded && status.didJustFinish) {
           sound.setOnPlaybackStatusUpdate(null);
           sound.unloadAsync().catch(console.log);
         }
       });
-  
+
       await sound.playAsync();
       setTimeout(() => {
         sound.stopAsync().catch(console.log);
@@ -633,23 +508,21 @@ const glowAnim = useRef(new Animated.Value(0)).current;
     }
   };
 
-
   const saveSession = useCallback(async (
     duration: number,
     sessionMalas: number,
     sessionTotal: number,
-    accumulatedTotal: number
+    _accumulatedTotal: number
   ) => {
     if (isSavingSessionRef.current) return;
-  
     isSavingSessionRef.current = true;
-  
+
     try {
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
       const history: Session[] = raw ? JSON.parse(raw) : [];
       const userId = await AsyncStorage.getItem(USER_ID_KEY);
       const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
-  
+
       const session: Session = {
         date: new Date().toISOString(),
         malas: sessionMalas,
@@ -658,26 +531,22 @@ const glowAnim = useRef(new Animated.Value(0)).current;
         manual: false,
         userId: userId || undefined,
       };
-  
-      await AsyncStorage.setItem(
-        HISTORY_KEY,
-        JSON.stringify([session, ...history])
-      );
-  
+
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([session, ...history]));
       if (!userId) return;
-  
+
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-  
+
       if (url && key) {
         const baseBody = {
           user_name: savedUserName || userName,
           malas: sessionMalas,
           count: sessionTotal,
         };
-  
+
         const postHistory = async (body: Record<string, unknown>) => {
-          const response = await fetch(`${url}/rest/v1/japam_history`, {
+          const res = await fetch(`${url}/rest/v1/japam_history`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -687,56 +556,30 @@ const glowAnim = useRef(new Animated.Value(0)).current;
             },
             body: JSON.stringify(body),
           });
-  
-          if (!response.ok) {
-            console.log('Supabase save error:', await response.text());
+          if (!res.ok) {
+            console.log('Supabase save error:', await res.text());
             return false;
           }
-  
           return true;
         };
-  
-        const savedWithUserId = await postHistory({
-          user_id: userId,
-          ...baseBody,
-        });
-  
-        if (!savedWithUserId) {
-          await postHistory(baseBody);
-        }
+
+        const savedWithUserId = await postHistory({ user_id: userId, ...baseBody });
+        if (!savedWithUserId) await postHistory(baseBody);
       }
     } catch (error) {
       console.log('Supabase save error:', error);
     } finally {
       isSavingSessionRef.current = false;
     }
-  },[userName]);
-  
+  }, [userName]);
 
   const playCompletionAnimation = () => {
     glowAnim.setValue(0);
-
     Animated.sequence([
-      Animated.timing(glowAnim, {
-        toValue: 1,
-        duration: 300,
-        useNativeDriver: false,
-      }),
-      Animated.timing(glowAnim, {
-        toValue: 0,
-        duration: 300,
-        useNativeDriver: false,
-      }),
-      Animated.timing(glowAnim, {
-        toValue: 1,
-        duration: 300,
-        useNativeDriver: false,
-      }),
-      Animated.timing(glowAnim, {
-        toValue: 0,
-        duration: 500,
-        useNativeDriver: false,
-      }),
+      Animated.timing(glowAnim, { toValue: 1, duration: 300, useNativeDriver: false }),
+      Animated.timing(glowAnim, { toValue: 0, duration: 300, useNativeDriver: false }),
+      Animated.timing(glowAnim, { toValue: 1, duration: 300, useNativeDriver: false }),
+      Animated.timing(glowAnim, { toValue: 0, duration: 500, useNativeDriver: false }),
     ]).start();
   };
 
@@ -746,24 +589,19 @@ const glowAnim = useRef(new Animated.Value(0)).current;
     }
   };
 
+  // ✅ Fix 3: playCompletionAnimation added
   const completeFeedback = useCallback(async () => {
-    if (soundEnabled) {
-      await playCompleteSound();
-    }
-  
-    if (vibrationEnabled) {
-      Vibration.vibrate(700);
-    }
+    playCompletionAnimation();
+    if (soundEnabled) await playCompleteSound();
+    if (vibrationEnabled) Vibration.vibrate(700);
   }, [soundEnabled, vibrationEnabled]);
 
   const setCountersFromTotal = (nextTotal: number) => {
     const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
-
     totalRef.current = safeTotal;
     setTotal(safeTotal);
     setMalas(Math.floor(safeTotal / 108));
     setCount(safeTotal % 108);
-
     return safeTotal;
   };
 
@@ -773,45 +611,39 @@ const glowAnim = useRef(new Animated.Value(0)).current;
 
   const playPressAnimation = () => {
     pressAnim.setValue(0);
-
     Animated.sequence([
-      Animated.timing(pressAnim, {
-        toValue: 1,
-        duration: 120,
-        useNativeDriver: true,
-      }),
-      Animated.timing(pressAnim, {
-        toValue: 0,
-        duration: 260,
-        useNativeDriver: true,
-      }),
+      Animated.timing(pressAnim, { toValue: 1, duration: 120, useNativeDriver: true }),
+      Animated.timing(pressAnim, { toValue: 0, duration: 260, useNativeDriver: true }),
     ]).start();
   };
+
   const requireLogin = () => {
     if (!userName) {
       setShowUserModal(true);
       return false;
     }
-  
     return true;
   };
+
   const handleTap = () => {
-    const canContinue = requireLogin();
-  
-    if (!canContinue) return;
-  
+    if (!requireLogin()) return;
+
     const now = Date.now();
-  
     if (now - lastTapRef.current < 100) return;
-  
     lastTapRef.current = now;
-  
+
     playPressAnimation();
     tapFeedback();
-  
+    rippleAnim.setValue(0);
+Animated.timing(rippleAnim, {
+  toValue: 1,
+  duration: 700,
+  useNativeDriver: true,
+}).start();
+
     const newTotal = setCountersFromTotal(totalRef.current + 1);
     const newCount = newTotal % 108;
-  
+
     if (newCount === 0) {
       void saveSession(0, 1, 108, newTotal);
       void completeFeedback();
@@ -819,12 +651,8 @@ const glowAnim = useRef(new Animated.Value(0)).current;
   };
 
   const handleStart = () => {
-    const canContinue = requireLogin();
-  
-    if (!canContinue) return;
-  
+    if (!requireLogin()) return;
     const mins = Math.max(1, Math.floor(Number(minutesInput) || 1));
-  
     setMinutesInput(String(mins));
     setTargetSeconds(mins * 60);
     setSeconds(0);
@@ -832,9 +660,7 @@ const glowAnim = useRef(new Animated.Value(0)).current;
     setIsRunning(true);
   };
 
-  const handlePause = () => {
-    setIsRunning(false);
-  };
+  const handlePause = () => setIsRunning(false);
 
   const handleStop = () => {
     setIsRunning(false);
@@ -844,14 +670,12 @@ const glowAnim = useRef(new Animated.Value(0)).current;
 
   const completeTimerSession = useCallback(() => {
     const newTotal = setCountersFromTotal(totalRef.current + 108);
-
     void saveSession(targetSeconds, 1, 108, newTotal);
     void completeFeedback();
 
     if (loopTimer) {
       setAutoCompletedMalas((prev) => {
         const next = prev + 1;
-
         if (next >= 5) {
           setSeconds(0);
           setIsRunning(false);
@@ -860,7 +684,6 @@ const glowAnim = useRef(new Animated.Value(0)).current;
           setSeconds(0);
           setIsRunning(true);
         }
-
         return next;
       });
     } else {
@@ -868,58 +691,32 @@ const glowAnim = useRef(new Animated.Value(0)).current;
       setIsRunning(false);
     }
   }, [loopTimer, targetSeconds, saveSession, completeFeedback]);
-  const saveJapamNameToSupabase = async (
-    userId: string,
-    userNameValue: string,
-    japamNameValue: string
-  ) => {
+
+  const saveJapamNameToSupabase = async (userId: string, userNameValue: string, japamNameValue: string) => {
     try {
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-  
       if (!url || !key) return;
-  
+
       const encodedUserId = encodeURIComponent(userId);
-  
       const checkResponse = await fetch(
         `${url}/rest/v1/user_profiles?user_id=eq.${encodedUserId}&select=id`,
-        {
-          headers: {
-            apikey: key,
-            Authorization: `Bearer ${key}`,
-          },
-        }
+        { headers: { apikey: key, Authorization: `Bearer ${key}` } }
       );
-  
+
       const rows = await checkResponse.json();
-  
+
       if (rows.length > 0) {
         await fetch(`${url}/rest/v1/user_profiles?user_id=eq.${encodedUserId}`, {
           method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            apikey: key,
-            Authorization: `Bearer ${key}`,
-          },
-          body: JSON.stringify({
-            user_name: userNameValue,
-            japam_name: japamNameValue,
-            updated_at: new Date().toISOString(),
-          }),
+          headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}` },
+          body: JSON.stringify({ user_name: userNameValue, japam_name: japamNameValue, updated_at: new Date().toISOString() }),
         });
       } else {
         await fetch(`${url}/rest/v1/user_profiles`, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            apikey: key,
-            Authorization: `Bearer ${key}`,
-          },
-          body: JSON.stringify({
-            user_id: userId,
-            user_name: userNameValue,
-            japam_name: japamNameValue,
-          }),
+          headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}` },
+          body: JSON.stringify({ user_id: userId, user_name: userNameValue, japam_name: japamNameValue }),
         });
       }
     } catch (error) {
@@ -929,58 +726,40 @@ const glowAnim = useRef(new Animated.Value(0)).current;
 
   const saveJapamName = async () => {
     const name = nameInput.trim();
-  
     if (!name) return;
-  
+
     setJapamName(name);
     setNameInput(name);
     setShowNameEditor(false);
-  
+
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-  
     if (savedUserId) {
-      await AsyncStorage.setItem(
-        getUserStorageKey(JAPAM_NAME_KEY, savedUserId),
-        name
-      );
-  
+      await AsyncStorage.setItem(getUserStorageKey(JAPAM_NAME_KEY, savedUserId), name);
       const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
-  
-      await saveJapamNameToSupabase(
-        savedUserId,
-        savedUserName || 'User',
-        name
-      );
+      await saveJapamNameToSupabase(savedUserId, savedUserName || 'User', name);
     } else {
       await AsyncStorage.setItem(JAPAM_NAME_KEY, name);
     }
   };
 
   const performLogout = async () => {
-
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
-  
     if (currentUserId) {
-      await AsyncStorage.setItem(
-        getUserStorageKey(TOTAL_KEY, currentUserId),
-        String(totalRef.current)
-      );
+      await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, currentUserId), String(totalRef.current));
     }
-  
+
     setIsRunning(false);
     setSeconds(0);
     setLoopTimer(false);
     setAutoCompletedMalas(0);
     setShowUserMenu(false);
-  
     setUserName('');
     setJapamName('Japam');
     setNameInput('Japam');
     setShowUserModal(false);
-  
+
     await AsyncStorage.removeItem(USER_NAME_KEY);
     await AsyncStorage.removeItem(USER_ID_KEY);
-  
     await restoreTotal(0, { userId: null });
   };
 
@@ -990,310 +769,264 @@ const glowAnim = useRef(new Animated.Value(0)).current;
       if (ok) void performLogout();
       return;
     }
-
     Alert.alert('Logout', 'Do you want to logout?', [
       { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Logout',
-        style: 'destructive',
-        onPress: () => void performLogout(),
-      },
+      { text: 'Logout', style: 'destructive', onPress: () => void performLogout() },
     ]);
   };
 
-  const openRename = () => {
-    setNameInput(japamName);
-    setShowNameEditor(true);
-  };
-
-  const cancelRename = () => {
-    setNameInput(japamName);
-    setShowNameEditor(false);
-  };
-
-  const formatTime = (s: number) =>
-    `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-
+  const openRename = () => { setNameInput(japamName); setShowNameEditor(true); };
+  const cancelRename = () => { setNameInput(japamName); setShowNameEditor(false); };
+  const formatTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   const todayLabel = new Date().toLocaleDateString();
 
   return (
     <LinearGradient
-      colors={['#0f172a', '#1e1b4b', '#0f172a']}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={{ flex: 1 }}
-    >
-      <ScrollView
-  style={[styles.container, { backgroundColor: '#111136' }]}
-  contentContainerStyle={styles.content}
-  showsVerticalScrollIndicator={false}
->
-  
-      {isSigningIn && (
-        <View style={styles.signingInBanner}>
-          <Text style={styles.signingInText}>Signing in...</Text>
-        </View>
-      )}
-  
-      <View style={styles.topBar}>
-        <View style={styles.headerCenter}>
-          <Pressable onPress={openRename}>
-            <Text style={styles.title}>🧘 {japamName}</Text>
-          </Pressable>
-
-{!userName && (
-  <Pressable
-    style={[
-      styles.loginButton,
-      isMobile ? styles.loginButtonMobile : styles.loginButtonDesktop,
-    ]}
-    onPress={() => setShowUserModal(true)}
+    colors={['#0a0015', '#1a0a35', '#0a0015']}
+    start={{ x: 0, y: 0 }}
+    end={{ x: 0, y: 1 }}
+    style={{ flex: 1 }}
   >
-    <Text style={styles.loginButtonText}>Sign in</Text>
-  </Pressable>
-)}
-
-      
-
-          {!!userName && (
-            <View
-              style={[
-                styles.userMenuWrap,
-                isMobile ? styles.mobileUserBadge : styles.desktopUserBadge,
-              ]}
-            >
-              <Pressable
-                style={styles.userBadge}
-                onPress={() => setShowUserMenu((prev) => !prev)}
-              >
-                <Text style={styles.userBadgeText}>🙏 {userName}</Text>
-              </Pressable>
-
-              {showUserMenu && (
-                <View style={styles.userMenu}>
-                  <Pressable style={styles.userMenuItem} onPress={handleLogout}>
-                    <Text style={styles.userMenuText}>Logout</Text>
-                  </Pressable>
-                </View>
-              )}
-            </View>
-          )}
-
-          <Text style={styles.renameHint}>Tap name to rename</Text>
-        </View>
-      </View>
-
-      {showNameEditor && (
-        <View style={styles.nameEditor}>
-          <TextInput
-            style={styles.nameInput}
-            value={nameInput}
-            onChangeText={setNameInput}
-            placeholder="Enter japam name"
-            placeholderTextColor="#94a3b8"
-          />
-
-          <Pressable style={styles.smallBtn} onPress={saveJapamName}>
-            <Text style={styles.smallBtnText}>Save</Text>
-          </Pressable>
-
-          <Pressable style={styles.graySmallBtn} onPress={cancelRename}>
-            <Text style={styles.smallBtnText}>Cancel</Text>
-          </Pressable>
-        </View>
-      )}
-
-      <Animated.Text style={[styles.quote, { opacity: fade }]}>
-        {quote}
-      </Animated.Text>
-
-      <Text style={styles.dateText}>Today: {todayLabel}</Text>
-
-      <Text style={styles.big}>{count}</Text>
-
-      <View style={styles.progressBarBackground}>
-        <View
-          style={[
-            styles.progressBarFill,
-            {
-              width: `${(count / 108) * 100}%`,
-            },
-          ]}
-        />
-      </View>
-
-      <Text style={styles.progressText}>{count} / 108</Text>
-
-      <View style={styles.metricsRow}>
-      <Text style={styles.metricText}>
-  📿 {malas} {malas === 1 ? 'mala' : 'malas'}
-</Text>
-        <Text style={[styles.metricText, isRunning && styles.timerRunningText]}>
-          ⏱ {formatTime(seconds)}
-        </Text>
-        <Text style={styles.metricText}>Total {total}</Text>
-      </View>
-
+    {/* Stars */}
+    {[...Array(40)].map((_, i) => (
       <Animated.View
-  style={[
-    styles.circleGlow,
-    {
-      shadowOpacity: 0.45,
-      transform: [{ scale: 1 }],
-    },
-  ]}
->
-  <Pressable
-    onPress={handleTap}
-    style={({ pressed }) => [pressed && styles.circlePressed]}
-  >
-    <LinearGradient
-      colors={['#7c3aed', '#4f46e5', '#312e81']}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={styles.circle}
-    >
-      <Text style={styles.omText}>ॐ</Text>
-
-      <Animated.View
+        key={i}
         pointerEvents="none"
-        style={[
-          styles.omPressGlow,
-          {
-            opacity: pressAnim.interpolate({
-              inputRange: [0, 1],
-              outputRange: [0, 0.65],
-            }),
-            transform: [
-              {
-                scale: pressAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [0.8, 1.25],
-                }),
-              },
-            ],
-          },
-        ]}
+        style={{
+          position: 'absolute',
+          width: i % 3 === 0 ? 3 : 2,
+          height: i % 3 === 0 ? 3 : 2,
+          borderRadius: 99,
+          backgroundColor: 'white',
+          left: `${(i * 37 + 11) % 100}%`,
+          top: `${(i * 53 + 7) % 100}%`,
+          opacity: particleAnim.interpolate({
+            inputRange: [0, (i % 5) * 0.2, 1],
+            outputRange: [0.1, 0.9, 0.1],
+          }),
+        }}
       />
-    </LinearGradient>
-  </Pressable>
-</Animated.View>
+    ))}
+  
+    
+      {/* ✅ Fix 4: transparent background — gradient visible */}
+      <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 
-<Pressable style={styles.undoBtn} onPress={handleUndo}>
-  <Text style={styles.undoText}>↻ Undo last tap</Text>
-</Pressable>
+        {isSigningIn && (
+          <View style={styles.signingInBanner}>
+            <Text style={styles.signingInText}>Signing in...</Text>
+          </View>
+        )}
 
-<Text style={styles.inputLabel}>Timer (minutes)</Text>
-
-      <TextInput
-  style={[
-    styles.input,
-    isRunning && styles.disabledInput,
-  ]}
-  value={minutesInput}
-  onChangeText={(value) => {
-    if (isRunning) return;
-
-    setMinutesInput(value);
-    setSeconds(0);
-  }}
-  editable={!isRunning}
-  selectTextOnFocus={!isRunning}
-  keyboardType="numeric"
-/>
-
-<Text style={styles.timerHint}>
-Timer ending = 1 mala automatically added
-</Text>
-      <View style={styles.autoRepeatRow}>
-        <Text style={styles.autoRepeatText}>Auto Repeat (Max 5 Malas)</Text>
-
-        <Switch
-          value={loopTimer}
-          onValueChange={(value) => {
-            setLoopTimer(value);
-            setAutoCompletedMalas(0);
-
-            if (!value) {
-              setIsRunning(false);
-              setSeconds(0);
-            }
-          }}
-        />
-      </View>
-
-      <View style={styles.row}>
-        <Pressable style={styles.btn} onPress={handleStart}>
-          <Text style={styles.btnText}>Start</Text>
-        </Pressable>
-
-        <Pressable style={[styles.btn, styles.gray]} onPress={handlePause}>
-          <Text style={styles.btnText}>Pause</Text>
-        </Pressable>
-
-        <Pressable style={[styles.btn, styles.red]} onPress={handleStop}>
-          <Text style={styles.btnText}>Stop</Text>
-        </Pressable>
-      </View>
-
-      <Modal visible={showUserModal && !isSigningIn} transparent animationType="fade">
-  <View style={styles.modalOverlay}>
-    <View style={styles.modalCard}>
-
-      <Pressable
-        style={styles.modalClose}
-        onPress={() => setShowUserModal(false)}
-      >
-        <Text style={styles.modalCloseText}>×</Text>
-      </Pressable>
-
-      <View style={styles.modalTopMark}>
-        <Text style={styles.modalTopMarkText}>ॐ</Text>
-      </View>
-
-            <Text style={styles.modalTitle}>
-              Sign in to save history
-            </Text>
-
-            <Text style={styles.modalSubtitle}>
-              Sign in with Google to save your Japam history and sync it across devices.
-            </Text>
-
-            <Pressable
-              disabled={!request}
-              style={[styles.modalButton, !request && styles.disabledButton]}
-              onPress={() => {
-                setIsSigningIn(true);
-                setShowUserModal(false);
-                void (async () => {
-                  await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
-                  const result = await promptAsync({
-                    showInRecents: true,
-                  });
-
-                  if (result.type !== 'success') {
-                    await AsyncStorage.removeItem(AUTH_PENDING_KEY);
-                    setIsSigningIn(false);
-                    setShowUserModal(true);
-                  }
-                })();
-              }}
-            >
-              <View style={styles.googleIcon}>
-                <Text style={styles.googleIconText}>G</Text>
-              </View>
-              <Text style={styles.modalButtonText}>Continue with Google</Text>
+        <View style={styles.topBar}>
+          <View style={styles.headerCenter}>
+            <Pressable onPress={openRename}>
+              <Text style={styles.title}>🧘 {japamName}</Text>
             </Pressable>
 
-            <Text style={styles.modalFootnote}>
-              Your history stays separate from other users on this device.
-            </Text>
+            {!userName && (
+              <Pressable
+                style={[styles.loginButton, isMobile ? styles.loginButtonMobile : styles.loginButtonDesktop]}
+                onPress={() => setShowUserModal(true)}
+              >
+                <Text style={styles.loginButtonText}>Sign in</Text>
+              </Pressable>
+            )}
+
+            {!!userName && (
+              <View style={[styles.userMenuWrap, isMobile ? styles.mobileUserBadge : styles.desktopUserBadge]}>
+                <Pressable style={styles.userBadge} onPress={() => setShowUserMenu((prev) => !prev)}>
+                  <Text style={styles.userBadgeText}>🙏 {userName}</Text>
+                </Pressable>
+                {showUserMenu && (
+                  <View style={styles.userMenu}>
+                    <Pressable style={styles.userMenuItem} onPress={handleLogout}>
+                      <Text style={styles.userMenuText}>Logout</Text>
+                    </Pressable>
+                  </View>
+                )}
+              </View>
+            )}
+
+            <Text style={styles.renameHint}>Tap name to rename</Text>
           </View>
         </View>
-      </Modal>
-      </ScrollView>
-  </LinearGradient>
 
+        {showNameEditor && (
+          <View style={styles.nameEditor}>
+            <TextInput
+              style={styles.nameInput}
+              value={nameInput}
+              onChangeText={setNameInput}
+              placeholder="Enter japam name"
+              placeholderTextColor="#94a3b8"
+            />
+            <Pressable style={styles.smallBtn} onPress={saveJapamName}>
+              <Text style={styles.smallBtnText}>Save</Text>
+            </Pressable>
+            <Pressable style={styles.graySmallBtn} onPress={cancelRename}>
+              <Text style={styles.smallBtnText}>Cancel</Text>
+            </Pressable>
+          </View>
+        )}
+
+        <Animated.Text style={[styles.quote, { opacity: fade }]}>{quote}</Animated.Text>
+
+        <Text style={styles.dateText}>Today: {todayLabel}</Text>
+        <Text style={styles.big}>{count}</Text>
+
+        <View style={styles.progressBarBackground}>
+          <View style={[styles.progressBarFill, { width: `${(count / 108) * 100}%` }]} />
+        </View>
+
+        <Text style={styles.progressText}>{count} / 108</Text>
+
+        <View style={styles.metricsRow}>
+          <Text style={styles.metricText}>📿 {malas} {malas === 1 ? 'mala' : 'malas'}</Text>
+          <Text style={[styles.metricText, isRunning && styles.timerRunningText]}>
+            ⏱ {formatTime(seconds)}
+          </Text>
+          <Text style={styles.metricText}>Total {total}</Text>
+        </View>
+
+        {/* ✅ Fix 5: omPulseAnim applied to circle */}
+        <Animated.View style={[styles.circleGlow, { transform: [{ scale: omPulseAnim }] }]}>
+        <Animated.View
+  pointerEvents="none"
+  style={{
+    position: 'absolute',
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    borderWidth: 2,
+    borderColor: 'rgba(251, 191, 36, 0.6)',
+    transform: [{ scale: rippleAnim.interpolate({
+      inputRange: [0, 1],
+      outputRange: [1, 1.9],
+    })}],
+    opacity: rippleAnim.interpolate({
+      inputRange: [0, 0.7, 1],
+      outputRange: [0.9, 0.3, 0],
+    }),
+  }}
+/>
+          <Pressable onPress={handleTap} style={({ pressed }) => [pressed && styles.circlePressed]}>
+          <LinearGradient
+  colors={['#4c1d95', '#2e1065', '#0a0015']}
+  start={{ x: 0, y: 0 }}
+  end={{ x: 1, y: 1 }}
+  style={styles.circle}
+>
+              <Text style={{
+  fontSize: 96,
+  color: '#ffffff',
+  fontWeight: '300',
+  textShadowColor: 'rgba(251,191,36,1)',
+  textShadowOffset: { width: 0, height: 0 },
+  textShadowRadius: 40,
+}}>ॐ</Text>
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.omPressGlow,
+                  {
+                    opacity: pressAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 0.65] }),
+                    transform: [{ scale: pressAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1.25] }) }],
+                  },
+                ]}
+              />
+            </LinearGradient>
+          </Pressable>
+        </Animated.View>
+
+        <Pressable style={styles.undoBtn} onPress={handleUndo}>
+          <Text style={styles.undoText}>↻ Undo last tap</Text>
+        </Pressable>
+
+        <Text style={styles.inputLabel}>Timer (minutes)</Text>
+
+        <TextInput
+          style={[styles.input, isRunning && styles.disabledInput]}
+          value={minutesInput}
+          onChangeText={(value) => {
+            if (isRunning) return;
+            setMinutesInput(value);
+            setSeconds(0);
+          }}
+          editable={!isRunning}
+          selectTextOnFocus={!isRunning}
+          keyboardType="numeric"
+        />
+
+        <Text style={styles.timerHint}>Timer ending = 1 mala automatically added</Text>
+
+        <View style={styles.autoRepeatRow}>
+          <Text style={styles.autoRepeatText}>Auto Repeat (Max 5 Malas)</Text>
+          <Switch
+            value={loopTimer}
+            onValueChange={(value) => {
+              setLoopTimer(value);
+              setAutoCompletedMalas(0);
+              if (!value) { setIsRunning(false); setSeconds(0); }
+            }}
+          />
+        </View>
+
+        <View style={styles.row}>
+          <Pressable style={styles.btn} onPress={handleStart}>
+            <Text style={styles.btnText}>Start</Text>
+          </Pressable>
+          <Pressable style={[styles.btn, styles.gray]} onPress={handlePause}>
+            <Text style={styles.btnText}>Pause</Text>
+          </Pressable>
+          <Pressable style={[styles.btn, styles.red]} onPress={handleStop}>
+            <Text style={styles.btnText}>Stop</Text>
+          </Pressable>
+        </View>
+
+        <Modal visible={showUserModal && !isSigningIn} transparent animationType="fade">
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Pressable style={styles.modalClose} onPress={() => setShowUserModal(false)}>
+                <Text style={styles.modalCloseText}>×</Text>
+              </Pressable>
+              <View style={styles.modalTopMark}>
+                <Text style={styles.modalTopMarkText}>ॐ</Text>
+              </View>
+              <Text style={styles.modalTitle}>Sign in to save history</Text>
+              <Text style={styles.modalSubtitle}>
+                Sign in with Google to save your Japam history and sync it across devices.
+              </Text>
+              <Pressable
+                disabled={!request}
+                style={[styles.modalButton, !request && styles.disabledButton]}
+                onPress={() => {
+                  setIsSigningIn(true);
+                  setShowUserModal(false);
+                  void (async () => {
+                    await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
+                    const result = await promptAsync({ showInRecents: true });
+                    if (result.type !== 'success') {
+                      await AsyncStorage.removeItem(AUTH_PENDING_KEY);
+                      setIsSigningIn(false);
+                      setShowUserModal(true);
+                    }
+                  })();
+                }}
+              >
+                <View style={styles.googleIcon}>
+                  <Text style={styles.googleIconText}>G</Text>
+                </View>
+                <Text style={styles.modalButtonText}>Continue with Google</Text>
+              </Pressable>
+              <Text style={styles.modalFootnote}>
+                Your history stays separate from other users on this device.
+              </Text>
+            </View>
+          </View>
+        </Modal>
+      </ScrollView>
+    </LinearGradient>
   );
 }
 
@@ -1301,7 +1034,6 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: 'transparent' },
   content: {
     alignItems: 'center',
-  
     paddingHorizontal: 20,
     paddingTop: 34,
     paddingBottom: 120,
@@ -1347,39 +1079,13 @@ const styles = StyleSheet.create({
   userMenuText: { color: 'white', fontSize: 14, fontWeight: '800' },
   title: {
     color: '#f8fafc',
-  
     fontSize: 28,
     fontWeight: '500',
-  
     textAlign: 'center',
-  
     letterSpacing: 0.3,
-  
     textShadowColor: 'rgba(255,255,255,0.06)',
-    textShadowOffset: {
-      width: 0,
-      height: 1,
-    },
+    textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 6,
-  },
-  subtitle: {
-    color: 'rgba(255,255,255,0.55)',
-    fontSize: 13,
-    letterSpacing: 1.8,
-    marginTop: 4,
-    textTransform: 'uppercase',
-  },
-  count: {
-    fontSize: 82,
-    fontWeight: '300',
-    color: '#ffffff',
-  
-    textShadowColor: 'rgba(255,255,255,0.12)',
-    textShadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    textShadowRadius: 12,
   },
   renameHint: { color: '#64748b', fontSize: 12, marginTop: 4 },
   nameEditor: {
@@ -1401,15 +1107,11 @@ const styles = StyleSheet.create({
   quote: {
     color: 'rgba(255,255,255,0.82)',
     textAlign: 'center',
-  
     marginTop: 10,
     marginBottom: 12,
-  
     fontSize: 18,
     fontStyle: 'italic',
-  
     lineHeight: 30,
-  
     maxWidth: 620,
   },
   dateText: { color: '#94a3b8', fontSize: 14, marginBottom: 4 },
@@ -1425,8 +1127,8 @@ const styles = StyleSheet.create({
   },
   progressBarFill: {
     height: '100%',
-    backgroundColor: '#6366f1',
-    borderRadius: 999,
+  backgroundColor: '#f59e0b', // ← ఇది మార్చండి
+  borderRadius: 999,
   },
   progressText: { color: '#94a3b8', fontSize: 13, marginBottom: 8 },
   metricsRow: {
@@ -1451,40 +1153,29 @@ const styles = StyleSheet.create({
     borderRadius: 110,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(139, 92, 246, 0.10)',
-    shadowColor: '#8b5cf6',
+    backgroundColor: 'rgba(251, 191, 36, 0.08)',
+    shadowColor: '#fbbf24',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.45,
     shadowRadius: 35,
     elevation: 20,
-    borderWidth: 0,
+    
+  
   },
   circle: {
     width: 180,
     height: 180,
     borderRadius: 90,
-  
     justifyContent: 'center',
     alignItems: 'center',
-  
+    overflow: 'hidden', // ✅ ఇది add చేయండి
     shadowColor: '#8b5cf6',
-    shadowOffset: {
-      width: 0,
-      height: 0,
-    },
+    shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.95,
     shadowRadius: 40,
-  
     elevation: 25,
   },
   circlePressed: { transform: [{ scale: 0.96 }] },
-  innerBead: {
-    position: 'absolute',
-    width: 70,
-    height: 70,
-    borderRadius: 35,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-  },
   undoBtn: {
     backgroundColor: 'rgba(15, 23, 42, 0.55)',
     paddingVertical: 9,
@@ -1495,12 +1186,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.16)',
   },
-  undoText: {
-    color: '#f8fafc',
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-  },
+  undoText: { color: '#f8fafc', fontSize: 14, fontWeight: '700', letterSpacing: 0.2 },
   inputLabel: { color: '#94a3b8', fontSize: 13, marginBottom: 6 },
   input: {
     backgroundColor: '#1e293b',
@@ -1530,18 +1216,8 @@ const styles = StyleSheet.create({
   },
   gray: { backgroundColor: '#475569' },
   red: { backgroundColor: '#991b1b' },
-  smallBtn: {
-    backgroundColor: '#6366f1',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-  },
-  graySmallBtn: {
-    backgroundColor: '#475569',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-  },
+  smallBtn: { backgroundColor: '#6366f1', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10 },
+  graySmallBtn: { backgroundColor: '#475569', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10 },
   smallBtnText: { color: 'white', fontWeight: '700', fontSize: 14 },
   btnText: { color: 'white', fontWeight: '700', fontSize: 16 },
   modalOverlay: {
@@ -1578,25 +1254,9 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     marginBottom: 14,
   },
-  modalTopMarkText: {
-    color: '#e0e7ff',
-    fontSize: 28,
-    fontWeight: '800',
-  },
-  modalTitle: {
-    color: 'white',
-    fontSize: 30,
-    fontWeight: '900',
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-  modalSubtitle: {
-    color: '#cbd5e1',
-    fontSize: 15,
-    lineHeight: 22,
-    textAlign: 'center',
-    marginBottom: 22,
-  },
+  modalTopMarkText: { color: '#e0e7ff', fontSize: 28, fontWeight: '800' },
+  modalTitle: { color: 'white', fontSize: 30, fontWeight: '900', marginBottom: 10, textAlign: 'center' },
+  modalSubtitle: { color: '#cbd5e1', fontSize: 15, lineHeight: 22, textAlign: 'center', marginBottom: 22 },
   modalButton: {
     backgroundColor: '#f8fafc',
     minHeight: 52,
@@ -1621,31 +1281,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#cbd5e1',
   },
-  googleIconText: {
-    color: '#2563eb',
-    fontSize: 16,
-    fontWeight: '900',
-  },
+  googleIconText: { color: '#2563eb', fontSize: 16, fontWeight: '900' },
   modalButtonText: { color: '#0f172a', fontWeight: '900', fontSize: 16 },
-  modalFootnote: {
-    color: '#94a3b8',
-    fontSize: 12,
-    lineHeight: 17,
-    textAlign: 'center',
-    marginTop: 14,
-  },
-  modalClose: {
-    position: 'absolute',
-    right: 14,
-    top: 10,
-    zIndex: 10,
-  },
-  
-  modalCloseText: {
-    color: '#94a3b8',
-    fontSize: 28,
-    fontWeight: '800',
-  },
+  modalFootnote: { color: '#94a3b8', fontSize: 12, lineHeight: 17, textAlign: 'center', marginTop: 14 },
+  modalClose: { position: 'absolute', right: 14, top: 10, zIndex: 10 },
+  modalCloseText: { color: '#94a3b8', fontSize: 28, fontWeight: '800' },
   loginButton: {
     backgroundColor: '#6366f1',
     paddingHorizontal: 16,
@@ -1656,30 +1296,11 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 4,
   },
-  loginButtonDesktop: {
-    position: 'absolute',
-    right: 16,
-    top: 12,
-  },
-  loginButtonMobile: {
-    marginTop: 8,
-    alignSelf: 'center',
-  },
-  
-  loginButtonText: {
-    color: '#ffffff',
-    fontWeight: '900',
-    fontSize: 14,
-  },
-  timerHint: {
-    color: '#94a3b8',
-    fontSize: 12,
-    marginTop: 6,
-    textAlign: 'center',
-  },
-  disabledInput: {
-    opacity: 0.55,
-  },
+  loginButtonDesktop: { position: 'absolute', right: 16, top: 12 },
+  loginButtonMobile: { marginTop: 8, alignSelf: 'center' },
+  loginButtonText: { color: '#ffffff', fontWeight: '900', fontSize: 14 },
+  timerHint: { color: '#94a3b8', fontSize: 12, marginTop: 6, textAlign: 'center' },
+  disabledInput: { opacity: 0.55 },
   signingInBanner: {
     position: 'absolute',
     top: 60,
@@ -1690,26 +1311,14 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     zIndex: 20,
   },
-  
-  signingInText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  
+  signingInText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   omText: {
     fontSize: 96,
     color: '#fbbf24',
     fontWeight: '300',
-  
     textShadowColor: 'rgba(251,191,36,0.8)',
-    textShadowOffset: {
-      width: 0,
-      height: 0,
-    },
+    textShadowOffset: { width: 0, height: 0 },
     textShadowRadius: 22,
-  
-    opacity: 1,
   },
   omPressGlow: {
     position: 'absolute',
@@ -1723,4 +1332,5 @@ const styles = StyleSheet.create({
     shadowRadius: 30,
     zIndex: 1,
   },
+  
 });
