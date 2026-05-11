@@ -494,9 +494,7 @@ const glowAnim = useRef(new Animated.Value(0)).current;
           userInfo?.given_name || userInfo?.name || userInfo?.email || 'User';
           const googleUserId = String(userInfo?.id || '').trim();
 
-          const googleEmail = String(userInfo?.email || '')
-            .trim()
-            .toLowerCase();
+        
         if (!googleUserId) {
           setShowUserModal(true);
           return;
@@ -595,7 +593,7 @@ const glowAnim = useRef(new Animated.Value(0)).current;
   };
 
 
-  const saveSession = async (
+  const saveSession = useCallback(async (
     duration: number,
     sessionMalas: number,
     sessionTotal: number,
@@ -671,7 +669,8 @@ const glowAnim = useRef(new Animated.Value(0)).current;
     } finally {
       isSavingSessionRef.current = false;
     }
-  };
+  },[userName]);
+  
 
   const playCompletionAnimation = () => {
     glowAnim.setValue(0);
@@ -706,18 +705,15 @@ const glowAnim = useRef(new Animated.Value(0)).current;
     }
   };
 
-  const completeFeedback = async () => {
-    playCompletionAnimation();
-
-    if (Platform.OS !== 'web' && vibrationEnabled) {
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      Vibration.vibrate([0, 400, 150, 400, 150, 700]);
-    }
-
+  const completeFeedback = useCallback(async () => {
     if (soundEnabled) {
-      void playCompleteSound();
+      await playCompleteSound();
     }
-  };
+  
+    if (vibrationEnabled) {
+      Vibration.vibrate(700);
+    }
+  }, [soundEnabled, vibrationEnabled]);
 
   const setCountersFromTotal = (nextTotal: number) => {
     const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
@@ -765,7 +761,7 @@ const glowAnim = useRef(new Animated.Value(0)).current;
   
     const now = Date.now();
   
-    if (now - lastTapRef.current < 60) return;
+    if (now - lastTapRef.current < 100) return;
   
     lastTapRef.current = now;
   
@@ -830,7 +826,7 @@ const glowAnim = useRef(new Animated.Value(0)).current;
       setSeconds(0);
       setIsRunning(false);
     }
-  }, [loopTimer, targetSeconds]);
+  }, [loopTimer, targetSeconds, saveSession, completeFeedback]);
   const saveJapamNameToSupabase = async (
     userId: string,
     userNameValue: string,
@@ -965,11 +961,18 @@ await saveJapamNameToSupabase(
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-  <View style={styles.topBar}>
-    <View style={styles.headerCenter}>
-    <Pressable onPress={openRename}>
-  <Text style={styles.title}>🧘 {japamName}</Text>
-</Pressable>
+  
+      {isSigningIn && (
+        <View style={styles.signingInBanner}>
+          <Text style={styles.signingInText}>Signing in...</Text>
+        </View>
+      )}
+  
+      <View style={styles.topBar}>
+        <View style={styles.headerCenter}>
+          <Pressable onPress={openRename}>
+            <Text style={styles.title}>🧘 {japamName}</Text>
+          </Pressable>
 
 {!userName && (
   <Pressable
@@ -1131,7 +1134,7 @@ await saveJapamNameToSupabase(
 />
 
 <Text style={styles.timerHint}>
-  Each completion counts as 1 mala
+Timer ending = 1 mala automatically added
 </Text>
       <View style={styles.autoRepeatRow}>
         <Text style={styles.autoRepeatText}>Auto Repeat (Max 5 Malas)</Text>
@@ -1529,7 +1532,7 @@ const styles = StyleSheet.create({
   },
   loginButtonDesktop: {
     position: 'absolute',
-    right: 45,
+    right: 16,
     top: 12,
   },
   loginButtonMobile: {
@@ -1550,5 +1553,21 @@ const styles = StyleSheet.create({
   },
   disabledInput: {
     opacity: 0.55,
+  },
+  signingInBanner: {
+    position: 'absolute',
+    top: 60,
+    alignSelf: 'center',
+    backgroundColor: '#111827',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    zIndex: 20,
+  },
+  
+  signingInText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });
