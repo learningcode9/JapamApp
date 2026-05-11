@@ -377,11 +377,22 @@ const glowAnim = useRef(new Animated.Value(0)).current;
       if (rows?.length > 0 && rows[0]?.japam_name) {
         setJapamName(rows[0].japam_name);
         setNameInput(rows[0].japam_name);
-  
+      
         await AsyncStorage.setItem(
           getUserStorageKey(JAPAM_NAME_KEY, googleUserId),
           rows[0].japam_name
         );
+      
+        return;
+      }
+      
+      const localName = await AsyncStorage.getItem(
+        getUserStorageKey(JAPAM_NAME_KEY, googleUserId)
+      );
+      
+      if (localName) {
+        setJapamName(localName);
+        setNameInput(localName);
       }
     } catch (error) {
       console.log('Profile fetch error:', error);
@@ -902,13 +913,16 @@ const glowAnim = useRef(new Animated.Value(0)).current;
         getUserStorageKey(JAPAM_NAME_KEY, savedUserId),
         name
       );
+  
       const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
-
-await saveJapamNameToSupabase(
-  savedUserId,
-  savedUserName || 'User',
-  name
-);
+  
+      await saveJapamNameToSupabase(
+        savedUserId,
+        savedUserName || 'User',
+        name
+      );
+    } else {
+      await AsyncStorage.setItem(JAPAM_NAME_KEY, name);
     }
   };
 
@@ -918,10 +932,12 @@ await saveJapamNameToSupabase(
     setLoopTimer(false);
     setAutoCompletedMalas(0);
     setShowUserMenu(false);
-
+  
     setUserName('');
+    setJapamName('Japam');
+    setNameInput('Japam');
     setShowUserModal(false);
-
+  
     await AsyncStorage.removeItem(USER_NAME_KEY);
     await AsyncStorage.removeItem(USER_ID_KEY);
     await restoreTotal(0, { userId: null });
