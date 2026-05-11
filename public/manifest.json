@@ -1,22 +1,25 @@
 {
-    "name": "Mantra Japam",
-    "short_name": "Japam",
-    "description": "Daily mantra chanting and mala counter app",
-    "start_url": "/",
-    "display": "standalone",
-    "background_color": "#0b102f",
-    "theme_color": "#0b102f",
-    "orientation": "portrait",
-    "icons": [
-      {
-        "src": "/icon-192.png",
-        "sizes": "192x192",
-        "type": "image/png"
-      },
-      {
-        "src": "/icon-512.png",
-        "sizes": "512x512",
-        "type": "image/png"
-      }
-    ]
-  }
+  "name": "Mantra Japam",
+  "short_name": "Mantra Japam",
+  "description": "Daily mantra chanting and mala counter app",
+  "start_url": "/?v=3",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b102f",
+  "theme_color": "#0b102f",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icon-192-v3.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512-v3.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
