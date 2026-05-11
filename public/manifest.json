@@ -1,20 +1,20 @@
 {
-    "name": "Japam",
-    "short_name": "Japam",
-    "start_url": "/",
-    "display": "standalone",
-    "background_color": "#0f172a",
-    "theme_color": "#6366f1",
+    "name": "Mantra Japam",
+    "short_name": "Mantra Japam",
     "icons": [
-  {
-    "src": "/icon-192.png",
-    "sizes": "192x192",
-    "type": "image/png"
-  },
-  {
-    "src": "/icon-512.png",
-    "sizes": "512x512",
-    "type": "image/png"
-  }
-]
+      {
+        "src": "/icon-192.png",
+        "sizes": "192x192",
+        "type": "image/png"
+      },
+      {
+        "src": "/icon-512.png",
+        "sizes": "512x512",
+        "type": "image/png"
+      }
+    ],
+    "theme_color": "#0b102f",
+    "background_color": "#0b102f",
+    "display": "standalone",
+    "start_url": "/"
   }
