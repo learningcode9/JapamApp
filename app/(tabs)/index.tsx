@@ -967,18 +967,21 @@ await saveJapamNameToSupabase(
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
   <View style={styles.topBar}>
     <View style={styles.headerCenter}>
-      <Pressable onPress={openRename}>
-        <Text style={styles.title}>🧘 {japamName}</Text>
-      </Pressable>
+    <Pressable onPress={openRename}>
+  <Text style={styles.title}>🧘 {japamName}</Text>
+</Pressable>
 
-      {!userName && (
-        <Pressable
-          style={styles.loginButton}
-          onPress={() => setShowUserModal(true)}
-        >
-          <Text style={styles.loginButtonText}>Sign in</Text>
-        </Pressable>
-      )}
+{!userName && (
+  <Pressable
+    style={[
+      styles.loginButton,
+      isMobile ? styles.loginButtonMobile : styles.loginButtonDesktop,
+    ]}
+    onPress={() => setShowUserModal(true)}
+  >
+    <Text style={styles.loginButtonText}>Sign in</Text>
+  </Pressable>
+)}
 
       
 
@@ -1515,9 +1518,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   loginButton: {
-    position: 'absolute',
-    right: 45,
-    top: 12,
     backgroundColor: '#6366f1',
     paddingHorizontal: 16,
     paddingVertical: 9,
@@ -1527,12 +1527,20 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 4,
   },
+  loginButtonDesktop: {
+    position: 'absolute',
+    right: 45,
+    top: 12,
+  },
+  loginButtonMobile: {
+    marginTop: 8,
+    alignSelf: 'center',
+  },
   
   loginButtonText: {
     color: '#ffffff',
     fontWeight: '900',
     fontSize: 14,
-  
   },
   timerHint: {
     color: '#94a3b8',
