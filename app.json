@@ -34,7 +34,7 @@
       "bundler": "metro",
       "favicon": "./public/favicon-48.png",
       "name": "Mantra Japam",
-      "shortName": "Japam",
+      "shortName": "Mantra Japam",
       "themeColor": "#0f172a",
       "backgroundColor": "#0f172a"
     },
