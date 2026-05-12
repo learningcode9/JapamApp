@@ -56,8 +56,9 @@ const TIMER_MINUTES_KEY = 'timerMinutes';
 const TIMER_LOOP_KEY = 'timerLoop';
 
 const screenWidth = Dimensions.get('window').width;
+const screenHeight = Dimensions.get('window').height;
 const isMobile = screenWidth < 500;
-const isShortMobile = isMobile;
+const isShortMobile = isMobile && screenHeight < 700;
 
 
 const getLocalDateKey = (date = new Date()) => {
@@ -1496,7 +1497,7 @@ const styles = StyleSheet.create({
   content: {
     flexGrow: 1,
     alignItems: 'center',
-    justifyContent: isShortMobile ? 'flex-start' : 'center',
+    justifyContent: 'center',
     paddingHorizontal: isMobile ? 14 : 24,
     paddingTop: isShortMobile ? 6 : isMobile ? 8 : 14,
     paddingBottom: isMobile ? 70 : 96,
