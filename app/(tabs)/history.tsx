@@ -356,7 +356,7 @@ export default function HistoryScreen() {
       <View style={styles.header}>
       <Text style={styles.omMark}>ॐ</Text>
       <Text style={styles.title}>History</Text>
-      <Text style={styles.subtitle}>Your synced japam progress by day.</Text>
+      
       </View>
       <View style={styles.simpleSummary}>
         <Text style={styles.summaryText}>📿 Total Malas: {totalMalas}</Text>
@@ -364,7 +364,7 @@ export default function HistoryScreen() {
       </View>
 
       <Pressable style={styles.exportBtn} onPress={exportHistory}>
-        <Text style={styles.exportBtnText}>Export History</Text>
+      <Text style={styles.exportBtnText}>⬇ Export</Text>
       </Pressable>
 
       <View style={styles.tableCard}>
@@ -472,17 +472,17 @@ const styles = StyleSheet.create({
 
   exportBtn: {
     backgroundColor: '#6366f1',
-    paddingVertical: 12,
-    paddingHorizontal: 22,
-    borderRadius: 10,
-    alignSelf: 'flex-start',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    alignSelf: 'center',
     marginBottom: 14,
   },
 
   exportBtnText: {
     color: 'white',
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: 14,
+    fontWeight: '800',
   },
 
   tableCard: {

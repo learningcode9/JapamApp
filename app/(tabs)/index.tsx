@@ -23,8 +23,6 @@ import {
   View,
 } from 'react-native';
 
-import { getRandomQuote } from '@/constants/quotes';
-
 WebBrowser.maybeCompleteAuthSession();
 
 type Session = {
@@ -59,7 +57,6 @@ const screenWidth = Dimensions.get('window').width;
 const screenHeight = Dimensions.get('window').height;
 const isMobile = screenWidth < 500;
 const isShortMobile = isMobile && screenHeight < 700;
-
 
 const getLocalDateKey = (date = new Date()) => {
   const y = date.getFullYear();
@@ -108,13 +105,13 @@ export default function JapamMain() {
   const [isRunning, setIsRunning] = useState(false);
   const [loopTimer, setLoopTimer] = useState(false);
   const [, setAutoCompletedMalas] = useState(0);
-  const [japamName, setJapamName] = useState('Japam');
+  const [japamName, setJapamName] = useState('');
   const [nameInput, setNameInput] = useState('');
   const [showNameEditor, setShowNameEditor] = useState(false);
+  const [hasSetName, setHasSetName] = useState(false); // ✅ Fix 1: track if name is set
   const [userName, setUserName] = useState('');
   const [showUserModal, setShowUserModal] = useState(false);
   const [isSigningIn, setIsSigningIn] = useState(false);
-  const [quote, setQuote] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
 
@@ -127,14 +124,12 @@ export default function JapamMain() {
     loopTimer: false,
   });
   const suppressTimerSaveRef = useRef(false);
-  const backgroundTimerNoticeShownRef = useRef(false);
   const rippleAnim = useRef(new Animated.Value(0)).current;
   const isSavingSessionRef = useRef(false);
   const lastTapRef = useRef(0);
 
   const fade = useRef(new Animated.Value(0)).current;
   const glowAnim = useRef(new Animated.Value(0)).current;
-
   const particleAnim = useRef(new Animated.Value(0)).current;
   const omPulseAnim = useRef(new Animated.Value(1)).current;
 
@@ -142,16 +137,10 @@ export default function JapamMain() {
 
   const vibrateDevice = useCallback((pattern: number | number[]) => {
     if (!vibrationEnabled) return;
-
-    if (
-      Platform.OS === 'web' &&
-      typeof navigator !== 'undefined' &&
-      'vibrate' in navigator
-    ) {
+    if (Platform.OS === 'web' && typeof navigator !== 'undefined' && 'vibrate' in navigator) {
       navigator.vibrate(pattern);
       return;
     }
-
     Vibration.vibrate(pattern);
   }, [vibrationEnabled]);
 
@@ -241,11 +230,7 @@ export default function JapamMain() {
             headers: { apikey: key, Authorization: `Bearer ${key}` },
           });
 
-          if (!result.ok) {
-            console.log('Supabase fetch error:', await result.text());
-            return null;
-          }
-
+          if (!result.ok) return null;
           const rows: { count?: number | string }[] = await result.json();
           return rows.reduce((sum, row) => sum + (Number(row.count) || 0), 0);
         };
@@ -263,94 +248,64 @@ export default function JapamMain() {
     },
     []
   );
+
   const fetchUserTotalFromSupabase = async (userId: string) => {
     const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
     const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-
     if (!url || !key || !userId) return null;
 
     const encodedUserId = encodeURIComponent(userId);
-
     const response = await fetch(
-      `${url}/rest/v1/japam_user_totals?user_id=eq.${encodedUserId}&select=total_count,count,malas&limit=1`,
-      {
-        headers: {
-          apikey: key,
-          Authorization: `Bearer ${key}`,
-        },
-      }
+      `${url}/rest/v1/japam_user_totals?user_id=eq.${encodedUserId}&select=total_count&limit=1`,
+      { headers: { apikey: key, Authorization: `Bearer ${key}` } }
     );
 
     if (!response.ok) return null;
-
     const rows = await response.json();
-
     if (!rows?.[0]) return null;
-
     return Number(rows[0].total_count) || 0;
   };
-  const saveUserTotalToSupabase = async (
-    userId: string,
-    userNameValue: string | null,
-    totalValue: number
-  ) => {
+
+  const saveUserTotalToSupabase = async (userId: string, userNameValue: string | null, totalValue: number) => {
     const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
     const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-
-    if (!url || !key || !userId) {
-      console.log('Missing Supabase total config');
-      return;
-    }
+    if (!url || !key || !userId) return;
 
     const safeTotal = Math.max(0, Math.floor(Number(totalValue) || 0));
-    if (safeTotal === 0) {
-      return;
-    }
+    if (safeTotal === 0) return;
 
-    const response = await fetch(
-      `${url}/rest/v1/japam_user_totals?on_conflict=user_id`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: key,
-          Authorization: `Bearer ${key}`,
-          Prefer: 'resolution=merge-duplicates,return=minimal',
-        },
-        body: JSON.stringify({
-          user_id: userId,
-          user_name: userNameValue || 'User',
-          total_count: safeTotal,
-          malas: Math.floor(safeTotal / 108),
-          count: safeTotal % 108,
-          updated_at: new Date().toISOString(),
-        }),
-      }
-    );
+    const response = await fetch(`${url}/rest/v1/japam_user_totals?on_conflict=user_id`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        user_name: userNameValue || 'User',
+        total_count: safeTotal,
+        malas: Math.floor(safeTotal / 108),
+        count: safeTotal % 108,
+        updated_at: new Date().toISOString(),
+      }),
+    });
 
-    if (!response.ok) {
-      console.log('Total save error:', await response.text());
-    }
+    if (!response.ok) console.log('Total save error:', await response.text());
   };
+
   const restoreTodayTotal = useCallback(async () => {
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
     const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
     const localTodayTotal = await getLocalTodayTotal(savedUserId);
 
-    let cloudTotal: number | null = null;
-
     if (savedUserId) {
-      cloudTotal = await fetchUserTotalFromSupabase(savedUserId);
-
-      const remoteTodayTotal = await fetchTodayTotalFromSupabase(
-        savedUserId,
-        savedUserName
-      );
-
-      const finalTotal =
-        cloudTotal !== null
-          ? Math.max(cloudTotal, localTodayTotal, remoteTodayTotal || 0)
-          : Math.max(localTodayTotal, remoteTodayTotal || 0);
+      const cloudTotal = await fetchUserTotalFromSupabase(savedUserId);
+      const remoteTodayTotal = await fetchTodayTotalFromSupabase(savedUserId, savedUserName);
+      const finalTotal = cloudTotal !== null
+        ? Math.max(cloudTotal, localTodayTotal, remoteTodayTotal || 0)
+        : Math.max(localTodayTotal, remoteTodayTotal || 0);
 
       await restoreTotal(finalTotal, { userId: savedUserId });
       setHasRestoredTotal(true);
@@ -359,11 +314,8 @@ export default function JapamMain() {
 
     await restoreTotal(localTodayTotal, { userId: savedUserId });
     setHasRestoredTotal(true);
-  }, [
-    fetchTodayTotalFromSupabase,
-    getLocalTodayTotal,
-    restoreTotal
-  ]);
+  }, [fetchTodayTotalFromSupabase, getLocalTodayTotal, restoreTotal]);
+
   useFocusEffect(
     useCallback(() => {
       const loadSettingsAndRestoreToday = async () => {
@@ -378,59 +330,47 @@ export default function JapamMain() {
   );
 
   useEffect(() => {
-    setQuote(getRandomQuote());
     Animated.timing(fade, { toValue: 1, duration: 800, useNativeDriver: true }).start();
   }, [fade]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
-
-    let manifestLink = document.querySelector<HTMLLinkElement>('link[rel="manifest"]');
-    if (!manifestLink) {
-      manifestLink = document.createElement('link');
-      manifestLink.rel = 'manifest';
-      document.head.appendChild(manifestLink);
-    }
-    manifestLink.href = '/manifest.json';
-
-    let appleIconLink = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]');
-    if (!appleIconLink) {
-      appleIconLink = document.createElement('link');
-      appleIconLink.rel = 'apple-touch-icon';
-      document.head.appendChild(appleIconLink);
-    }
-    appleIconLink.href = '/apple-touch-icon.png';
-
-    let themeMeta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
-    if (!themeMeta) {
-      themeMeta = document.createElement('meta');
-      themeMeta.name = 'theme-color';
-      document.head.appendChild(themeMeta);
-    }
-    themeMeta.content = '#0f172a';
-  }, []);
-
-  useEffect(() => {
-    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
-
-    document.title = isRunning
-      ? `Japam timer running - ${formatTime(seconds)}`
-      : 'Mantra Japam';
+    document.title = isRunning ? `⏱ ${formatTime(seconds)} — Mantra Japam` : 'Mantra Japam';
   }, [isRunning, seconds]);
 
   useEffect(() => {
-    timerRef.current = {
-      seconds,
-      isRunning,
-      targetSeconds,
-      minutesInput,
-      loopTimer,
-    };
+    timerRef.current = { seconds, isRunning, targetSeconds, minutesInput, loopTimer };
   }, [seconds, isRunning, targetSeconds, minutesInput, loopTimer]);
+
+  const saveTimerStateToSupabase = async (userId: string, timerState: {
+    seconds: number; isRunning: boolean; targetSeconds: number; minutesInput: string; loopTimer: boolean;
+  }) => {
+    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    if (!url || !key || !userId) return;
+
+    await fetch(`${url}/rest/v1/japam_timer_state?on_conflict=user_id`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        Prefer: 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        seconds: timerState.seconds,
+        is_running: timerState.isRunning,
+        target_seconds: timerState.targetSeconds,
+        minutes_input: timerState.minutesInput,
+        loop_timer: timerState.loopTimer,
+        updated_at: new Date().toISOString(),
+      }),
+    });
+  };
 
   useEffect(() => {
     if (!hasRestoredTimer || suppressTimerSaveRef.current) return;
-
     void (async () => {
       await AsyncStorage.setItem(TIMER_SECONDS_KEY, String(seconds));
       await AsyncStorage.setItem(TIMER_RUNNING_KEY, String(isRunning));
@@ -439,7 +379,6 @@ export default function JapamMain() {
       await AsyncStorage.setItem(TIMER_LOOP_KEY, String(loopTimer));
 
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-
       if (!savedUserId) return;
 
       await AsyncStorage.setItem(getUserStorageKey(TIMER_SECONDS_KEY, savedUserId), String(seconds));
@@ -447,39 +386,23 @@ export default function JapamMain() {
       await AsyncStorage.setItem(getUserStorageKey(TIMER_TARGET_KEY, savedUserId), String(targetSeconds));
       await AsyncStorage.setItem(getUserStorageKey(TIMER_MINUTES_KEY, savedUserId), minutesInput);
       await AsyncStorage.setItem(getUserStorageKey(TIMER_LOOP_KEY, savedUserId), String(loopTimer));
-
-      await saveTimerStateToSupabase(savedUserId, {
-        seconds,
-        isRunning,
-        targetSeconds,
-        minutesInput,
-        loopTimer,
-      });
+      await saveTimerStateToSupabase(savedUserId, { seconds, isRunning, targetSeconds, minutesInput, loopTimer });
     })();
   }, [seconds, isRunning, targetSeconds, minutesInput, loopTimer, hasRestoredTimer]);
 
   const fetchTimerStateFromSupabase = useCallback(async (userId: string) => {
     const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
     const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-
     if (!url || !key || !userId) return null;
 
     const encodedUserId = encodeURIComponent(userId);
-
     const response = await fetch(
       `${url}/rest/v1/japam_timer_state?user_id=eq.${encodedUserId}&select=seconds,is_running,target_seconds,minutes_input,loop_timer&limit=1`,
-      {
-        headers: {
-          apikey: key,
-          Authorization: `Bearer ${key}`,
-        },
-      }
+      { headers: { apikey: key, Authorization: `Bearer ${key}` } }
     );
 
     if (!response.ok) return null;
-
     const rows = await response.json();
-
     return rows?.[0] || null;
   }, []);
 
@@ -491,13 +414,11 @@ export default function JapamMain() {
       const authPending = await isAuthPending();
 
       if (savedUserId) {
-        const userJapamName = await AsyncStorage.getItem(
-          getUserStorageKey(JAPAM_NAME_KEY, savedUserId)
-        );
-
+        const userJapamName = await AsyncStorage.getItem(getUserStorageKey(JAPAM_NAME_KEY, savedUserId));
         if (userJapamName) {
           setJapamName(userJapamName);
           setNameInput(userJapamName);
+          setHasSetName(true); // ✅ name already set
         }
       }
 
@@ -509,34 +430,12 @@ export default function JapamMain() {
         setUserName('');
         setIsSigningIn(authPending);
         setShowUserModal(false);
-
-        const lastTotal = Number(
-          (await AsyncStorage.getItem(LAST_TOTAL_KEY)) || '0'
-        );
-
+        const lastTotal = Number((await AsyncStorage.getItem(LAST_TOTAL_KEY)) || '0');
         await restoreTotal(lastTotal);
       }
 
       if (savedUserId) {
-        const savedTimerSeconds = Number(
-          (await AsyncStorage.getItem(getUserStorageKey(TIMER_SECONDS_KEY, savedUserId))) || '0'
-        );
-
-        const savedTimerRunning =
-          (await AsyncStorage.getItem(getUserStorageKey(TIMER_RUNNING_KEY, savedUserId))) === 'true';
-
-        const savedTimerTarget = Number(
-          (await AsyncStorage.getItem(getUserStorageKey(TIMER_TARGET_KEY, savedUserId))) || '60'
-        );
-
-        const savedTimerMinutes =
-          (await AsyncStorage.getItem(getUserStorageKey(TIMER_MINUTES_KEY, savedUserId))) || '1';
-
-        const savedTimerLoop =
-          (await AsyncStorage.getItem(getUserStorageKey(TIMER_LOOP_KEY, savedUserId))) === 'true';
-
         const timerState = await fetchTimerStateFromSupabase(savedUserId);
-
         if (timerState) {
           setSeconds(Number(timerState.seconds) || 0);
           setIsRunning(Boolean(timerState.is_running));
@@ -544,6 +443,11 @@ export default function JapamMain() {
           setMinutesInput(timerState.minutes_input || '1');
           setLoopTimer(Boolean(timerState.loop_timer));
         } else {
+          const savedTimerSeconds = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_SECONDS_KEY, savedUserId))) || '0');
+          const savedTimerRunning = (await AsyncStorage.getItem(getUserStorageKey(TIMER_RUNNING_KEY, savedUserId))) === 'true';
+          const savedTimerTarget = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_TARGET_KEY, savedUserId))) || '60');
+          const savedTimerMinutes = (await AsyncStorage.getItem(getUserStorageKey(TIMER_MINUTES_KEY, savedUserId))) || '1';
+          const savedTimerLoop = (await AsyncStorage.getItem(getUserStorageKey(TIMER_LOOP_KEY, savedUserId))) === 'true';
           setSeconds(savedTimerSeconds);
           setIsRunning(savedTimerRunning);
           setTargetSeconds(savedTimerTarget);
@@ -551,23 +455,11 @@ export default function JapamMain() {
           setLoopTimer(savedTimerLoop);
         }
       } else {
-        const savedTimerSeconds = Number(
-          (await AsyncStorage.getItem(TIMER_SECONDS_KEY)) || '0'
-        );
-
-        const savedTimerRunning =
-          (await AsyncStorage.getItem(TIMER_RUNNING_KEY)) === 'true';
-
-        const savedTimerTarget = Number(
-          (await AsyncStorage.getItem(TIMER_TARGET_KEY)) || '60'
-        );
-
-        const savedTimerMinutes =
-          (await AsyncStorage.getItem(TIMER_MINUTES_KEY)) || '1';
-
-        const savedTimerLoop =
-          (await AsyncStorage.getItem(TIMER_LOOP_KEY)) === 'true';
-
+        const savedTimerSeconds = Number((await AsyncStorage.getItem(TIMER_SECONDS_KEY)) || '0');
+        const savedTimerRunning = (await AsyncStorage.getItem(TIMER_RUNNING_KEY)) === 'true';
+        const savedTimerTarget = Number((await AsyncStorage.getItem(TIMER_TARGET_KEY)) || '60');
+        const savedTimerMinutes = (await AsyncStorage.getItem(TIMER_MINUTES_KEY)) || '1';
+        const savedTimerLoop = (await AsyncStorage.getItem(TIMER_LOOP_KEY)) === 'true';
         setSeconds(savedTimerSeconds);
         setIsRunning(savedTimerRunning);
         setTargetSeconds(savedTimerTarget);
@@ -576,10 +468,8 @@ export default function JapamMain() {
       }
 
       setHasRestoredTimer(true);
-
       await AsyncStorage.setItem(LAST_OPEN_DATE_KEY, today);
     };
-
 
     void loadData();
   }, [fetchTimerStateFromSupabase, restoreTodayTotal, restoreTotal]);
@@ -590,7 +480,6 @@ export default function JapamMain() {
     ).start();
   }, [particleAnim]);
 
-  // ✅ omPulseAnim breathing animation
   useEffect(() => {
     Animated.loop(
       Animated.sequence([
@@ -599,101 +488,6 @@ export default function JapamMain() {
       ])
     ).start();
   }, [omPulseAnim]);
-
-  const saveTimerStateToSupabase = async (
-    userId: string,
-    timerState: {
-      seconds: number;
-      isRunning: boolean;
-      targetSeconds: number;
-      minutesInput: string;
-      loopTimer: boolean;
-    }
-  ) => {
-    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-
-    if (!url || !key || !userId) return;
-
-    const response = await fetch(
-      `${url}/rest/v1/japam_timer_state?on_conflict=user_id`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: key,
-          Authorization: `Bearer ${key}`,
-          Prefer: 'resolution=merge-duplicates,return=minimal',
-        },
-        body: JSON.stringify({
-          user_id: userId,
-          seconds: timerState.seconds,
-          is_running: timerState.isRunning,
-          target_seconds: timerState.targetSeconds,
-          minutes_input: timerState.minutesInput,
-          loop_timer: timerState.loopTimer,
-          updated_at: new Date().toISOString(),
-        }),
-      }
-    );
-
-    if (!response.ok) {
-      console.log('Timer save error:', await response.text());
-    }
-  };
-
-  const restoreTimerForUser = useCallback(async (userId: string) => {
-    const savedTimerSeconds = Number(
-      (await AsyncStorage.getItem(getUserStorageKey(TIMER_SECONDS_KEY, userId))) || '0'
-    );
-
-    const savedTimerRunning =
-      (await AsyncStorage.getItem(getUserStorageKey(TIMER_RUNNING_KEY, userId))) === 'true';
-
-    const savedTimerTarget = Number(
-      (await AsyncStorage.getItem(getUserStorageKey(TIMER_TARGET_KEY, userId))) || '60'
-    );
-
-    const savedTimerMinutes =
-      (await AsyncStorage.getItem(getUserStorageKey(TIMER_MINUTES_KEY, userId))) || '1';
-
-    const savedTimerLoop =
-      (await AsyncStorage.getItem(getUserStorageKey(TIMER_LOOP_KEY, userId))) === 'true';
-
-    const timerState = await fetchTimerStateFromSupabase(userId);
-
-    if (timerState) {
-      const remoteSeconds = Number(timerState.seconds) || 0;
-      const remoteTarget = Number(timerState.target_seconds) || 60;
-      const restoredSeconds = Math.max(remoteSeconds, savedTimerSeconds);
-
-      setSeconds(restoredSeconds);
-      setIsRunning(Boolean(timerState.is_running || savedTimerRunning));
-      setTargetSeconds(remoteTarget || savedTimerTarget);
-      setMinutesInput(timerState.minutes_input || savedTimerMinutes || '1');
-      setLoopTimer(Boolean(timerState.loop_timer || savedTimerLoop));
-    } else {
-      setSeconds(savedTimerSeconds);
-      setIsRunning(savedTimerRunning);
-      setTargetSeconds(savedTimerTarget);
-      setMinutesInput(savedTimerMinutes);
-      setLoopTimer(savedTimerLoop);
-    }
-
-    setHasRestoredTimer(true);
-  }, [fetchTimerStateFromSupabase]);
-
-  const saveCurrentTimerForUser = async (
-    userId: string,
-    timerState = timerRef.current
-  ) => {
-    await AsyncStorage.setItem(getUserStorageKey(TIMER_SECONDS_KEY, userId), String(timerState.seconds));
-    await AsyncStorage.setItem(getUserStorageKey(TIMER_RUNNING_KEY, userId), String(timerState.isRunning));
-    await AsyncStorage.setItem(getUserStorageKey(TIMER_TARGET_KEY, userId), String(timerState.targetSeconds));
-    await AsyncStorage.setItem(getUserStorageKey(TIMER_MINUTES_KEY, userId), timerState.minutesInput);
-    await AsyncStorage.setItem(getUserStorageKey(TIMER_LOOP_KEY, userId), String(timerState.loopTimer));
-    await saveTimerStateToSupabase(userId, timerState);
-  };
 
   const loadJapamNameFromSupabase = useCallback(async (googleUserId: string) => {
     try {
@@ -711,6 +505,7 @@ export default function JapamMain() {
       if (rows?.length > 0 && rows[0]?.japam_name) {
         setJapamName(rows[0].japam_name);
         setNameInput(rows[0].japam_name);
+        setHasSetName(true);
         await AsyncStorage.setItem(getUserStorageKey(JAPAM_NAME_KEY, googleUserId), rows[0].japam_name);
         return;
       }
@@ -719,6 +514,7 @@ export default function JapamMain() {
       if (localName) {
         setJapamName(localName);
         setNameInput(localName);
+        setHasSetName(true);
       }
     } catch (error) {
       console.log('Profile fetch error:', error);
@@ -737,10 +533,7 @@ export default function JapamMain() {
         { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` } }
       );
 
-      if (!response.ok) {
-        console.log('History restore error:', await response.text());
-        return;
-      }
+      if (!response.ok) return;
 
       const rows = await response.json();
       const remoteHistory: Session[] = rows.map((item: any) => ({
@@ -772,6 +565,18 @@ export default function JapamMain() {
       console.log('History restore error:', error);
     }
   }, [restoreTodayTotal]);
+
+  const restoreTimerForUser = useCallback(async (userId: string) => {
+    const timerState = await fetchTimerStateFromSupabase(userId);
+    if (timerState) {
+      setSeconds(Number(timerState.seconds) || 0);
+      setIsRunning(Boolean(timerState.is_running));
+      setTargetSeconds(Number(timerState.target_seconds) || 60);
+      setMinutesInput(timerState.minutes_input || '1');
+      setLoopTimer(Boolean(timerState.loop_timer));
+    }
+    setHasRestoredTimer(true);
+  }, [fetchTimerStateFromSupabase]);
 
   useEffect(() => {
     const handleGoogleLogin = async () => {
@@ -809,10 +614,7 @@ export default function JapamMain() {
         const googleName = userInfo?.given_name || userInfo?.name || userInfo?.email || 'User';
         const googleUserId = String(userInfo?.id || '').trim();
 
-        if (!googleUserId) {
-          setShowUserModal(true);
-          return;
-        }
+        if (!googleUserId) { setShowUserModal(true); return; }
 
         setHasRestoredTimer(false);
         setUserName(googleName);
@@ -834,23 +636,11 @@ export default function JapamMain() {
     };
 
     void handleGoogleLogin();
-  }, [
-    response,
-    loadJapamNameFromSupabase,
-    restoreHistoryFromSupabase,
-    restoreTimerForUser,
-  ]);
+  }, [response, loadJapamNameFromSupabase, restoreHistoryFromSupabase, restoreTimerForUser]);
 
   useEffect(() => {
     totalRef.current = total;
-
-    if (!hasRestoredTotal) {
-      return;
-    }
-
-    if (!userName) {
-      return;
-    }
+    if (!hasRestoredTotal || !userName) return;
 
     void (async () => {
       await AsyncStorage.setItem(COUNT_KEY, String(count));
@@ -858,19 +648,12 @@ export default function JapamMain() {
       await AsyncStorage.setItem(TOTAL_KEY, String(total));
 
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-
       if (savedUserId) {
         await AsyncStorage.setItem(getUserStorageKey(COUNT_KEY, savedUserId), String(count));
         await AsyncStorage.setItem(getUserStorageKey(MALAS_KEY, savedUserId), String(malas));
         await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, savedUserId), String(total));
-
         const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
-
-        await saveUserTotalToSupabase(
-          savedUserId,
-          savedUserName || userName || 'User',
-          total
-        );
+        await saveUserTotalToSupabase(savedUserId, savedUserName || userName || 'User', total);
       }
     })();
   }, [count, malas, total, userName, hasRestoredTotal]);
@@ -894,14 +677,12 @@ export default function JapamMain() {
         require('../../assets/om_complete.mp3'),
         { shouldPlay: true, volume: 1.0 }
       );
-
       sound.setOnPlaybackStatusUpdate((status) => {
         if (status.isLoaded && status.didJustFinish) {
           sound.setOnPlaybackStatusUpdate(null);
           sound.unloadAsync().catch(console.log);
         }
       });
-
       await sound.playAsync();
       setTimeout(() => {
         sound.stopAsync().catch(console.log);
@@ -913,10 +694,7 @@ export default function JapamMain() {
   };
 
   const saveSession = useCallback(async (
-    duration: number,
-    sessionMalas: number,
-    sessionTotal: number,
-    _accumulatedTotal: number
+    duration: number, sessionMalas: number, sessionTotal: number, _accumulatedTotal: number
   ) => {
     if (isSavingSessionRef.current) return;
     isSavingSessionRef.current = true;
@@ -943,30 +721,15 @@ export default function JapamMain() {
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
       if (url && key) {
-        const baseBody = {
-          user_name: savedUserName || userName,
-          malas: sessionMalas,
-          count: sessionTotal,
-        };
-
+        const baseBody = { user_name: savedUserName || userName, malas: sessionMalas, count: sessionTotal };
         const postHistory = async (body: Record<string, unknown>) => {
           const res = await fetch(`${url}/rest/v1/japam_history`, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              apikey: key,
-              Authorization: `Bearer ${key}`,
-              Prefer: 'return=minimal',
-            },
+            headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal' },
             body: JSON.stringify(body),
           });
-          if (!res.ok) {
-            console.log('Supabase save error:', await res.text());
-            return false;
-          }
-          return true;
+          return res.ok;
         };
-
         const savedWithUserId = await postHistory({ user_id: userId, ...baseBody });
         if (!savedWithUserId) await postHistory(baseBody);
       }
@@ -979,7 +742,6 @@ export default function JapamMain() {
 
   const tapFeedback = () => {
     vibrateDevice(35);
-
     if (Platform.OS !== 'web' && vibrationEnabled) {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
@@ -1007,9 +769,7 @@ export default function JapamMain() {
     const nextCount = safeTotal % 108;
 
     void AsyncStorage.setItem(LAST_TOTAL_KEY, String(safeTotal));
-
     totalRef.current = safeTotal;
-
     setTotal(safeTotal);
     setMalas(nextMalas);
     setCount(nextCount);
@@ -1018,39 +778,21 @@ export default function JapamMain() {
       await AsyncStorage.setItem(TOTAL_KEY, String(safeTotal));
       await AsyncStorage.setItem(MALAS_KEY, String(nextMalas));
       await AsyncStorage.setItem(COUNT_KEY, String(nextCount));
-
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-
       if (savedUserId) {
-        await AsyncStorage.setItem(
-          getUserStorageKey(TOTAL_KEY, savedUserId),
-          String(safeTotal)
-        );
-
-        await AsyncStorage.setItem(
-          getUserStorageKey(MALAS_KEY, savedUserId),
-          String(nextMalas)
-        );
-
-        await AsyncStorage.setItem(
-          getUserStorageKey(COUNT_KEY, savedUserId),
-          String(nextCount)
-        );
+        await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, savedUserId), String(safeTotal));
+        await AsyncStorage.setItem(getUserStorageKey(MALAS_KEY, savedUserId), String(nextMalas));
+        await AsyncStorage.setItem(getUserStorageKey(COUNT_KEY, savedUserId), String(nextCount));
       }
     })();
 
     return safeTotal;
   };
 
-  const handleUndo = () => {
-    setCountersFromTotal(Math.max(0, totalRef.current - 1));
-  };
+  const handleUndo = () => setCountersFromTotal(Math.max(0, totalRef.current - 1));
 
   const requireLogin = () => {
-    if (!userName) {
-      setShowUserModal(true);
-      return false;
-    }
+    if (!userName) { setShowUserModal(true); return false; }
     return true;
   };
 
@@ -1062,11 +804,7 @@ export default function JapamMain() {
     lastTapRef.current = now;
 
     rippleAnim.setValue(0);
-    Animated.timing(rippleAnim, {
-      toValue: 1,
-      duration: 700,
-      useNativeDriver: true,
-    }).start();
+    Animated.timing(rippleAnim, { toValue: 1, duration: 700, useNativeDriver: true }).start();
 
     const newTotal = setCountersFromTotal(totalRef.current + 1);
     const newCount = newTotal % 108;
@@ -1074,52 +812,37 @@ export default function JapamMain() {
     if (newCount === 0) {
       void saveSession(0, 1, 108, newTotal);
       void completeFeedback();
+    } else {
+      tapFeedback();
     }
   };
 
   const handleStart = () => {
     if (!requireLogin()) return;
-
     const mins = Math.max(1, Math.floor(Number(minutesInput) || 1));
     const nextTargetSeconds = mins * 60;
     const nextSeconds = seconds <= 0 || seconds >= nextTargetSeconds ? 0 : seconds;
 
-    timerRef.current = {
-      seconds: nextSeconds,
-      isRunning: true,
-      targetSeconds: nextTargetSeconds,
-      minutesInput: String(mins),
-      loopTimer,
-    };
-
+    timerRef.current = { seconds: nextSeconds, isRunning: true, targetSeconds: nextTargetSeconds, minutesInput: String(mins), loopTimer };
     setMinutesInput(String(mins));
     setTargetSeconds(nextTargetSeconds);
     setSeconds(nextSeconds);
-
     setAutoCompletedMalas(0);
     setIsRunning(true);
   };
 
   const handlePause = () => {
     setIsRunning(false);
-
     void (async () => {
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
       if (!savedUserId) return;
-
-      await saveCurrentTimerForUser(savedUserId, {
-        seconds,
-        isRunning: false,
-        targetSeconds,
-        minutesInput,
-        loopTimer,
-      });
+      await saveTimerStateToSupabase(savedUserId, { seconds, isRunning: false, targetSeconds, minutesInput, loopTimer });
     })();
   };
 
+  // ✅ Fix 4: Stop button removed — handleStop kept for loop timer internal use only
   const handleStop = () => {
     setIsRunning(false);
-    backgroundTimerNoticeShownRef.current = false;
     setSeconds(0);
     setAutoCompletedMalas(0);
   };
@@ -1132,14 +855,8 @@ export default function JapamMain() {
     if (loopTimer) {
       setAutoCompletedMalas((prev) => {
         const next = prev + 1;
-        if (next >= 5) {
-          setSeconds(0);
-          setIsRunning(false);
-          setLoopTimer(false);
-        } else {
-          setSeconds(0);
-          setIsRunning(true);
-        }
+        if (next >= 5) { setSeconds(0); setIsRunning(false); setLoopTimer(false); }
+        else { setSeconds(0); setIsRunning(true); }
         return next;
       });
     } else {
@@ -1159,7 +876,6 @@ export default function JapamMain() {
         `${url}/rest/v1/user_profiles?user_id=eq.${encodedUserId}&select=id`,
         { headers: { apikey: key, Authorization: `Bearer ${key}` } }
       );
-
       const rows = await checkResponse.json();
 
       if (rows.length > 0) {
@@ -1187,6 +903,7 @@ export default function JapamMain() {
     setJapamName(name);
     setNameInput(name);
     setShowNameEditor(false);
+    setHasSetName(true); // ✅ hide rename hint after saving
 
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
     if (savedUserId) {
@@ -1202,13 +919,7 @@ export default function JapamMain() {
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
     if (currentUserId) {
       await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, currentUserId), String(totalRef.current));
-      await saveCurrentTimerForUser(currentUserId, {
-        seconds,
-        isRunning,
-        targetSeconds,
-        minutesInput,
-        loopTimer,
-      });
+      await saveTimerStateToSupabase(currentUserId, { seconds, isRunning, targetSeconds, minutesInput, loopTimer });
     }
 
     suppressTimerSaveRef.current = true;
@@ -1219,16 +930,15 @@ export default function JapamMain() {
     setHasRestoredTimer(false);
     setShowUserMenu(false);
     setUserName('');
-    setJapamName('Japam');
-    setNameInput('Japam');
+    setJapamName('');
+    setNameInput('');
+    setHasSetName(false); // ✅ reset on logout
     setShowUserModal(false);
 
     await AsyncStorage.removeItem(USER_NAME_KEY);
     await AsyncStorage.removeItem(USER_ID_KEY);
     await restoreTotal(0, { userId: null });
-    setTimeout(() => {
-      suppressTimerSaveRef.current = false;
-    }, 0);
+    setTimeout(() => { suppressTimerSaveRef.current = false; }, 0);
   };
 
   const handleLogout = () => {
@@ -1249,32 +959,31 @@ export default function JapamMain() {
 
   return (
     <LinearGradient
-    colors={['#0a0015', '#1a0a35', '#0a0015']}
-    start={{ x: 0, y: 0 }}
-    end={{ x: 0, y: 1 }}
-    style={{ flex: 1 }}
-  >
-    {/* Stars */}
-    {[...Array(40)].map((_, i) => (
-      <Animated.View
-        key={i}
-        pointerEvents="none"
-        style={{
-          position: 'absolute',
-          width: i % 3 === 0 ? 3 : 2,
-          height: i % 3 === 0 ? 3 : 2,
-          borderRadius: 99,
-          backgroundColor: 'white',
-          left: `${(i * 37 + 11) % 100}%`,
-          top: `${(i * 53 + 7) % 100}%`,
-          opacity: particleAnim.interpolate({
-            inputRange: [0, (i % 5) * 0.2, 1],
-            outputRange: [0.1, 0.9, 0.1],
-          }),
-        }}
-      />
-    ))}
-
+      colors={['#0a0015', '#1a0a35', '#0a0015']}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 0, y: 1 }}
+      style={{ flex: 1 }}
+    >
+      {/* Stars */}
+      {[...Array(40)].map((_, i) => (
+        <Animated.View
+          key={i}
+          pointerEvents="none"
+          style={{
+            position: 'absolute',
+            width: i % 3 === 0 ? 3 : 2,
+            height: i % 3 === 0 ? 3 : 2,
+            borderRadius: 99,
+            backgroundColor: 'white',
+            left: `${(i * 37 + 11) % 100}%`,
+            top: `${(i * 53 + 7) % 100}%`,
+            opacity: particleAnim.interpolate({
+              inputRange: [0, (i % 5) * 0.2, 1],
+              outputRange: [0.1, 0.9, 0.1],
+            }),
+          }}
+        />
+      ))}
 
       <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 
@@ -1286,22 +995,29 @@ export default function JapamMain() {
 
         {isRunning && (
           <View style={styles.runningBanner}>
-            <Text style={styles.runningBannerText}>Timer running • {formatTime(seconds)}</Text>
+            <Text style={styles.runningBannerText}>⏱ Timer running • {formatTime(seconds)}</Text>
           </View>
         )}
 
         <View style={styles.topBar}>
           <View style={styles.headerCenter}>
+
+            {/* ✅ Fix 1: show rename hint only if name not set yet */}
             <Pressable onPress={openRename}>
-              <Text style={styles.title}>{japamName}</Text>
+              <Text style={styles.title}>{japamName || 'Tap to set mantra name'}</Text>
             </Pressable>
 
+            {!hasSetName && (
+              <Text style={styles.renameHint}>👆 Tap to set your mantra name</Text>
+            )}
+
+            {/* ✅ Fix 2: Better Sign in button for mobile */}
             {!userName && (
               <Pressable
                 style={[styles.loginButton, isMobile ? styles.loginButtonMobile : styles.loginButtonDesktop]}
                 onPress={() => setShowUserModal(true)}
               >
-                <Text style={styles.loginButtonText}>Sign in</Text>
+                <Text style={styles.loginButtonText}>🔐 Sign in to save</Text>
               </Pressable>
             )}
 
@@ -1319,8 +1035,6 @@ export default function JapamMain() {
                 )}
               </View>
             )}
-
-            <Text style={styles.renameHint}>Tap name to rename</Text>
           </View>
         </View>
 
@@ -1330,8 +1044,9 @@ export default function JapamMain() {
               style={styles.nameInput}
               value={nameInput}
               onChangeText={setNameInput}
-              placeholder="Enter japam name"
+              placeholder="e.g. Gayatri Mantram"
               placeholderTextColor="#94a3b8"
+              autoFocus
             />
             <Pressable style={styles.smallBtn} onPress={saveJapamName}>
               <Text style={styles.smallBtnText}>Save</Text>
@@ -1342,7 +1057,7 @@ export default function JapamMain() {
           </View>
         )}
 
-        <Animated.Text style={[styles.quote, { opacity: fade }]}>{quote}</Animated.Text>
+        {/* ✅ Fix 3: Quotes removed */}
 
         <Text style={styles.dateText}>Today: {todayLabel}</Text>
         <Text style={styles.big}>{count}</Text>
@@ -1371,32 +1086,22 @@ export default function JapamMain() {
               borderRadius: 64,
               borderWidth: 2,
               borderColor: 'rgba(251, 191, 36, 0.6)',
-              transform: [{
-                scale: rippleAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [1, 1.9],
-                }),
-              }],
-              opacity: rippleAnim.interpolate({
-                inputRange: [0, 0.7, 1],
-                outputRange: [0.9, 0.3, 0],
-              }),
+              transform: [{ scale: rippleAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.9] }) }],
+              opacity: rippleAnim.interpolate({ inputRange: [0, 0.7, 1], outputRange: [0.9, 0.3, 0] }),
             }}
           />
           <Pressable
             onPress={handleTap}
-            onPressIn={() => {
-              if (userName) tapFeedback();
-            }}
+            onPressIn={() => { if (userName) tapFeedback(); }}
             style={({ pressed }) => [pressed && styles.circlePressed]}
           >
-          <LinearGradient
-  colors={['#6d28d9', '#3b0764', '#160032']}
-  start={{ x: 0, y: 0 }}
-  end={{ x: 1, y: 1 }}
-  style={styles.circle}
->
-              <Text style={styles.omText}>🕉</Text>
+            <LinearGradient
+              colors={['#6d28d9', '#3b0764', '#160032']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.circle}
+            >
+              <Text style={styles.omText}>ॐ</Text>
             </LinearGradient>
           </Pressable>
         </Animated.View>
@@ -1405,20 +1110,17 @@ export default function JapamMain() {
           <Text style={styles.undoText}>↻ Undo last tap</Text>
         </Pressable>
 
+        {/* ✅ Fix 4: Start/Pause only — Stop removed */}
         <View style={styles.row}>
           <Pressable style={styles.btn} onPress={handleStart}>
-            <Text style={styles.btnText}>Start</Text>
+            <Text style={styles.btnText}>▶ Start</Text>
           </Pressable>
-          <Pressable style={[styles.btn, styles.gray]} onPress={handlePause}>
-            <Text style={styles.btnText}>Pause</Text>
-          </Pressable>
-          <Pressable style={[styles.btn, styles.red]} onPress={handleStop}>
-            <Text style={styles.btnText}>Stop</Text>
+          <Pressable style={[styles.btn, styles.gray]} onPress={isRunning ? handlePause : handleStop}>
+          <Text style={styles.btnText}>⏸ Pause</Text>
           </Pressable>
         </View>
 
         <Text style={styles.inputLabel}>Timer (minutes)</Text>
-
         <TextInput
           style={[styles.input, isRunning && styles.disabledInput]}
           value={minutesInput}
@@ -1455,9 +1157,9 @@ export default function JapamMain() {
               <View style={styles.modalTopMark}>
                 <Text style={styles.modalTopMarkText}>ॐ</Text>
               </View>
-              <Text style={styles.modalTitle}>Sign in to save history</Text>
+              <Text style={styles.modalTitle}>Sign in to save</Text>
               <Text style={styles.modalSubtitle}>
-                Sign in with Google to save your Japam history and sync it across devices.
+                Sign in with Google to save your Japam history and sync across devices.
               </Text>
               <Pressable
                 disabled={!request}
@@ -1508,12 +1210,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
+    marginBottom: 8,
   },
   headerCenter: {
     alignItems: 'center',
     justifyContent: 'center',
     width: '100%',
-    marginBottom: isShortMobile ? 4 : 10,
   },
   userMenuWrap: { alignItems: 'flex-end', zIndex: 20 },
   userBadge: {
@@ -1523,14 +1225,11 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
     borderColor: '#334155',
-    shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 6,
     elevation: 4,
   },
-  desktopUserBadge: { position: 'absolute', right: 45, top: 12 },
-  mobileUserBadge: { marginTop: isShortMobile ? 4 : 8, alignItems: 'center' },
-  userBadgeText: { color: '#ffffff', fontSize: isShortMobile ? 13 : 14, fontWeight: '800' },
+  desktopUserBadge: { position: 'absolute', right: 45, top: 0 },
+  mobileUserBadge: { marginTop: 8, alignItems: 'center' },
+  userBadgeText: { color: '#ffffff', fontSize: 14, fontWeight: '800' },
   userMenu: {
     marginTop: 8,
     backgroundColor: '#1e293b',
@@ -1544,15 +1243,17 @@ const styles = StyleSheet.create({
   userMenuText: { color: 'white', fontSize: 14, fontWeight: '800' },
   title: {
     color: '#f8fafc',
-    fontSize: isShortMobile ? 36 : isMobile ? 42 : 36,
+    fontSize: isShortMobile ? 28 : isMobile ? 34 : 36,
     fontWeight: '800',
     textAlign: 'center',
     letterSpacing: 0.3,
-    textShadowColor: 'rgba(255,255,255,0.06)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 6,
   },
-  renameHint: { color: '#94a3b8', fontSize: isShortMobile ? 12 : isMobile ? 13 : 14, marginTop: 2 },
+  renameHint: {
+    color: '#fbbf24',
+    fontSize: 13,
+    marginTop: 4,
+    fontWeight: '600',
+  },
   nameEditor: {
     width: '100%',
     maxWidth: 520,
@@ -1560,6 +1261,7 @@ const styles = StyleSheet.create({
     gap: 8,
     alignItems: 'center',
     marginBottom: 14,
+    marginTop: 6,
   },
   nameInput: {
     flex: 1,
@@ -1568,58 +1270,36 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 10,
+    fontSize: 16,
   },
-  quote: {
-    color: 'rgba(255,255,255,0.82)',
-    textAlign: 'center',
-    marginTop: isShortMobile ? 2 : 4,
-    marginBottom: isShortMobile ? 1 : 4,
-    fontSize: isShortMobile ? 14 : isMobile ? 16 : 18,
-    fontStyle: 'italic',
-    lineHeight: isShortMobile ? 19 : isMobile ? 22 : 28,
-    maxWidth: 760,
-  },
-  dateText: { color: '#94a3b8', fontSize: isShortMobile ? 13 : isMobile ? 15 : 17, marginBottom: 0 },
-  big: { color: 'white', fontSize: isShortMobile ? 42 : isMobile ? 50 : 60, fontWeight: '900', marginTop: 0 },
+  dateText: { color: '#94a3b8', fontSize: isMobile ? 14 : 16, marginBottom: 2, marginTop: 8 },
+  big: { color: 'white', fontSize: isShortMobile ? 52 : isMobile ? 64 : 72, fontWeight: '900', marginTop: 0 },
   progressBarBackground: {
-    width: isShortMobile ? 210 : isMobile ? 230 : 310,
-    height: isShortMobile ? 6 : 8,
+    width: isMobile ? 240 : 320,
+    height: 8,
     backgroundColor: '#1e293b',
     borderRadius: 999,
     overflow: 'hidden',
-    marginBottom: isShortMobile ? 2 : 4,
+    marginBottom: 4,
     alignSelf: 'center',
   },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: '#f59e0b',
-    borderRadius: 999,
-  },
-  progressText: { color: '#cbd5e1', fontSize: isShortMobile ? 13 : isMobile ? 15 : 17, marginBottom: isShortMobile ? 2 : 6 },
+  progressBarFill: { height: '100%', backgroundColor: '#f59e0b', borderRadius: 999 },
+  progressText: { color: '#cbd5e1', fontSize: isMobile ? 15 : 17, marginBottom: 6 },
   metricsRow: {
     width: '100%',
     maxWidth: isMobile ? 440 : 560,
     flexDirection: 'row',
     justifyContent: 'space-evenly',
     alignItems: 'center',
-    marginTop: isShortMobile ? 2 : 6,
-    marginBottom: isShortMobile ? 3 : isMobile ? 6 : 10,
+    marginTop: 4,
+    marginBottom: 8,
   },
-  metricText: {
-    color: '#e2e8f0',
-    fontSize: isShortMobile ? 15 : isMobile ? 17 : 22,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  timerRunningText: {
-    fontSize: isShortMobile ? 20 : isMobile ? 24 : 34,
-    color: '#fbbf24',
-    fontWeight: '900',
-  },
+  metricText: { color: '#e2e8f0', fontSize: isMobile ? 16 : 20, fontWeight: '700', textAlign: 'center' },
+  timerRunningText: { fontSize: isMobile ? 26 : 34, color: '#fbbf24', fontWeight: '900' },
   circleGlow: {
-    width: isShortMobile ? 112 : isMobile ? 132 : 154,
-    height: isShortMobile ? 112 : isMobile ? 132 : 154,
-    borderRadius: isShortMobile ? 56 : isMobile ? 66 : 77,
+    width: isShortMobile ? 130 : isMobile ? 160 : 190,
+    height: isShortMobile ? 130 : isMobile ? 160 : 190,
+    borderRadius: isShortMobile ? 65 : isMobile ? 80 : 95,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: 'rgba(251, 191, 36, 0.1)',
@@ -1628,78 +1308,66 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.55,
     shadowRadius: 28,
     elevation: 20,
-    marginTop: isShortMobile ? 2 : isMobile ? 6 : 10,
-    marginBottom: isShortMobile ? 4 : isMobile ? 8 : 12,
+    marginTop: 8,
+    marginBottom: 8,
   },
   circle: {
-    width: isShortMobile ? 100 : isMobile ? 116 : 132,
-    height: isShortMobile ? 100 : isMobile ? 116 : 132,
-    borderRadius: isShortMobile ? 50 : isMobile ? 58 : 66,
+    width: isShortMobile ? 114 : isMobile ? 140 : 166,
+    height: isShortMobile ? 114 : isMobile ? 140 : 166,
+    borderRadius: isShortMobile ? 57 : isMobile ? 70 : 83,
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
-    shadowColor: '#8b5cf6',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.78,
-    shadowRadius: 22,
-    elevation: 25,
     borderWidth: 1,
     borderColor: 'rgba(251, 191, 36, 0.28)',
   },
   circlePressed: { transform: [{ scale: 0.96 }] },
   undoBtn: {
     backgroundColor: 'rgba(15, 23, 42, 0.55)',
-    paddingVertical: isShortMobile ? 8 : isMobile ? 10 : 12,
-    paddingHorizontal: isShortMobile ? 16 : isMobile ? 20 : 24,
+    paddingVertical: 10,
+    paddingHorizontal: 22,
     borderRadius: 999,
-    marginTop: isShortMobile ? 4 : 6,
-    marginBottom: isShortMobile ? 2 : 4,
-  
+    marginTop: 8,
+    marginBottom: 6,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.16)',
   },
-  undoText: { color: '#f8fafc', fontSize: isShortMobile ? 13 : isMobile ? 15 : 18, fontWeight: '800', letterSpacing: 0.2 },
-  inputLabel: {
-    color: '#cbd5e1',
-    fontSize: isShortMobile ? 13 : isMobile ? 14 : 16,
-    marginTop: isMobile ? 8 : 6,
-    marginBottom: 4,
-  },
+  undoText: { color: '#f8fafc', fontSize: isMobile ? 15 : 17, fontWeight: '800' },
+  inputLabel: { color: '#cbd5e1', fontSize: isMobile ? 14 : 16, marginTop: 10, marginBottom: 4 },
   input: {
     backgroundColor: '#1e293b',
     color: 'white',
     borderRadius: 10,
-    width: isShortMobile ? 88 : isMobile ? 104 : 120,
+    width: isMobile ? 100 : 120,
     textAlign: 'center',
-    padding: isShortMobile ? 5 : isMobile ? 7 : 8,
-    fontSize: isShortMobile ? 16 : isMobile ? 18 : 22,
+    padding: 8,
+    fontSize: isMobile ? 18 : 22,
   },
   autoRepeatRow: {
-    width: isShortMobile ? 236 : isMobile ? 250 : 300,
+    width: isMobile ? 260 : 320,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: isShortMobile ? 2 : 4,
+    marginTop: 8,
   },
-  autoRepeatText: { color: '#e2e8f0', fontSize: isShortMobile ? 13 : isMobile ? 15 : 19, fontWeight: '800' },
-  row: { flexDirection: 'row', gap: isShortMobile ? 6 : 10, marginTop: isShortMobile ? 3 : 5 },
+  autoRepeatText: { color: '#e2e8f0', fontSize: isMobile ? 15 : 18, fontWeight: '800' },
+  row: { flexDirection: 'row', gap: 12, marginTop: 8, marginBottom: 6 },
   btn: {
     backgroundColor: '#6366f1',
-    paddingVertical: isShortMobile ? 8 : isMobile ? 10 : 12,
-    paddingHorizontal: isShortMobile ? 12 : isMobile ? 16 : 22,
+    paddingVertical: isMobile ? 12 : 14,
+    paddingHorizontal: isMobile ? 24 : 32,
     borderRadius: 12,
-    minWidth: isShortMobile ? 74 : isMobile ? 88 : 118,
+    minWidth: isMobile ? 120 : 150,
     alignItems: 'center',
   },
   gray: { backgroundColor: '#475569' },
-  red: { backgroundColor: '#991b1b' },
-  smallBtn: { backgroundColor: '#6366f1', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10 },
-  graySmallBtn: { backgroundColor: '#475569', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10 },
+  smallBtn: { backgroundColor: '#6366f1', paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10 },
+  graySmallBtn: { backgroundColor: '#475569', paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10 },
   smallBtnText: { color: 'white', fontWeight: '700', fontSize: 14 },
-  btnText: { color: 'white', fontWeight: '900', fontSize: isShortMobile ? 15 : isMobile ? 17 : 22 },
+  btnText: { color: 'white', fontWeight: '900', fontSize: isMobile ? 17 : 20 },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(2,6,23,0.78)',
+    backgroundColor: 'rgba(2,6,23,0.82)',
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 24,
@@ -1714,9 +1382,6 @@ const styles = StyleSheet.create({
     paddingBottom: 22,
     borderWidth: 1,
     borderColor: '#374151',
-    shadowColor: '#000',
-    shadowOpacity: 0.35,
-    shadowRadius: 18,
     elevation: 12,
   },
   modalTopMark: {
@@ -1732,7 +1397,7 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   modalTopMarkText: { color: '#e0e7ff', fontSize: 28, fontWeight: '800' },
-  modalTitle: { color: 'white', fontSize: 30, fontWeight: '900', marginBottom: 10, textAlign: 'center' },
+  modalTitle: { color: 'white', fontSize: 26, fontWeight: '900', marginBottom: 10, textAlign: 'center' },
   modalSubtitle: { color: '#cbd5e1', fontSize: 15, lineHeight: 22, textAlign: 'center', marginBottom: 22 },
   modalButton: {
     backgroundColor: '#f8fafc',
@@ -1749,14 +1414,9 @@ const styles = StyleSheet.create({
   },
   disabledButton: { opacity: 0.5 },
   googleIcon: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: 'white',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
+    width: 26, height: 26, borderRadius: 13,
+    backgroundColor: 'white', alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: '#cbd5e1',
   },
   googleIconText: { color: '#2563eb', fontSize: 16, fontWeight: '900' },
   modalButtonText: { color: '#0f172a', fontWeight: '900', fontSize: 16 },
@@ -1765,34 +1425,20 @@ const styles = StyleSheet.create({
   modalCloseText: { color: '#94a3b8', fontSize: 28, fontWeight: '800' },
   loginButton: {
     backgroundColor: '#6366f1',
-    paddingHorizontal: 16,
-    paddingVertical: 9,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
     borderRadius: 999,
-    shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 6,
     elevation: 4,
   },
-  loginButtonDesktop: { position: 'absolute', right: 16, top: 12 },
-  loginButtonMobile: { marginTop: isShortMobile ? 4 : 8, alignSelf: 'center' },
-  loginButtonText: { color: '#ffffff', fontWeight: '900', fontSize: 14 },
-  timerHint: {
-    color: '#94a3b8',
-    fontSize: isShortMobile ? 11 : isMobile ? 12 : 14,
-    marginTop: isMobile ? 8 : 4,
-    marginBottom: isMobile ? 4 : 0,
-    textAlign: 'center',
-  },
+  loginButtonDesktop: { position: 'absolute', right: 16, top: 0 },
+  loginButtonMobile: { marginTop: 10, alignSelf: 'center' },
+  loginButtonText: { color: '#ffffff', fontWeight: '900', fontSize: isMobile ? 15 : 16 },
+  timerHint: { color: '#94a3b8', fontSize: isMobile ? 12 : 14, marginTop: 6, textAlign: 'center' },
   disabledInput: { opacity: 0.55 },
   signingInBanner: {
-    position: 'absolute',
-    top: 60,
-    alignSelf: 'center',
-    backgroundColor: '#111827',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    zIndex: 20,
+    position: 'absolute', top: 60, alignSelf: 'center',
+    backgroundColor: '#111827', paddingHorizontal: 16, paddingVertical: 8,
+    borderRadius: 20, zIndex: 20,
   },
   signingInText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   runningBanner: {
@@ -1800,21 +1446,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(251, 191, 36, 0.35)',
     borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    marginBottom: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    marginBottom: 8,
   },
-  runningBannerText: {
-    color: '#fbbf24',
-    fontSize: 13,
-    fontWeight: '900',
-  },
+  runningBannerText: { color: '#fbbf24', fontSize: 14, fontWeight: '900' },
   omText: {
-    fontSize: isShortMobile ? 56 : isMobile ? 64 : 74,
+    fontSize: isShortMobile ? 56 : isMobile ? 68 : 80,
     color: '#ffd166',
-    fontWeight: '400',
     includeFontPadding: false,
-    lineHeight: isShortMobile ? 68 : isMobile ? 78 : 90,
+    lineHeight: isShortMobile ? 70 : isMobile ? 84 : 96,
     textShadowColor: 'rgba(251,191,36,0.8)',
     textShadowOffset: { width: 0, height: 0 },
     textShadowRadius: 22,
