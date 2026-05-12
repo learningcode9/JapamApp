@@ -759,8 +759,24 @@ export default function JapamMain() {
 
   const completeFeedback = useCallback(async () => {
     playCompletionAnimation();
-    if (soundEnabled) await playCompleteSound();
-    vibrateDevice([0, 350, 120, 350, 120, 650]);
+  
+    if (soundEnabled) {
+      await playCompleteSound();
+    }
+  
+    if (Platform.OS === 'ios') {
+      await Haptics.notificationAsync(
+        Haptics.NotificationFeedbackType.Success
+      );
+  
+      setTimeout(() => {
+        Haptics.notificationAsync(
+          Haptics.NotificationFeedbackType.Success
+        ).catch(console.log);
+      }, 400);
+    } else {
+      vibrateDevice([0, 500, 150, 500, 150, 900]);
+    }
   }, [playCompletionAnimation, soundEnabled, vibrateDevice]);
 
   const setCountersFromTotal = (nextTotal: number) => {
@@ -1327,7 +1343,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 22,
     borderRadius: 999,
-    marginTop: 8,
+    marginTop: 18,
     marginBottom: 6,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.16)',
