@@ -1396,7 +1396,7 @@ export default function JapamMain() {
   end={{ x: 1, y: 1 }}
   style={styles.circle}
 >
-              <Text style={styles.omText}>ॐ</Text>
+              <Text style={styles.omText}>🕉</Text>
             </LinearGradient>
           </Pressable>
         </Animated.View>
@@ -1810,11 +1810,11 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   omText: {
-    fontSize: isShortMobile ? 58 : isMobile ? 66 : 76,
+    fontSize: isShortMobile ? 56 : isMobile ? 64 : 74,
     color: '#ffd166',
     fontWeight: '400',
     includeFontPadding: false,
-    lineHeight: isShortMobile ? 72 : isMobile ? 82 : 94,
+    lineHeight: isShortMobile ? 68 : isMobile ? 78 : 90,
     textShadowColor: 'rgba(251,191,36,0.8)',
     textShadowOffset: { width: 0, height: 0 },
     textShadowRadius: 22,
