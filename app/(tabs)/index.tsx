@@ -130,7 +130,6 @@ export default function JapamMain() {
   const isSavingSessionRef = useRef(false);
   const lastTapRef = useRef(0);
 
-  const pressAnim = useRef(new Animated.Value(0)).current;
   const fade = useRef(new Animated.Value(0)).current;
   const glowAnim = useRef(new Animated.Value(0)).current;
 
@@ -1101,14 +1100,6 @@ export default function JapamMain() {
     setCountersFromTotal(Math.max(0, totalRef.current - 1));
   };
 
-  const playPressAnimation = () => {
-    pressAnim.setValue(0);
-    Animated.sequence([
-      Animated.timing(pressAnim, { toValue: 1, duration: 120, useNativeDriver: true }),
-      Animated.timing(pressAnim, { toValue: 0, duration: 260, useNativeDriver: true }),
-    ]).start();
-  };
-
   const requireLogin = () => {
     if (!userName) {
       setShowUserModal(true);
@@ -1124,7 +1115,6 @@ export default function JapamMain() {
     if (now - lastTapRef.current < 100) return;
     lastTapRef.current = now;
 
-    playPressAnimation();
     tapFeedback();
     rippleAnim.setValue(0);
 Animated.timing(rippleAnim, {
@@ -1446,16 +1436,6 @@ Animated.timing(rippleAnim, {
   style={styles.circle}
 >
               <Text style={styles.omText}>ॐ</Text>
-              <Animated.View
-                pointerEvents="none"
-                style={[
-                  styles.omPressGlow,
-                  {
-                    opacity: pressAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 0.65] }),
-                    transform: [{ scale: pressAnim.interpolate({ inputRange: [0, 1], outputRange: [0.8, 1.25] }) }],
-                  },
-                ]}
-              />
             </LinearGradient>
           </Pressable>
         </Animated.View>
@@ -1839,17 +1819,4 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 0 },
     textShadowRadius: 22,
   },
-  omPressGlow: {
-    position: 'absolute',
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: 'rgba(251,191,36,0.22)',
-    shadowColor: '#fbbf24',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 1,
-    shadowRadius: 30,
-    zIndex: 1,
-  },
-
 });
