@@ -5,25 +5,21 @@ import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
-const TIMER_ALERT_ENABLED_KEY = 'timerAlertEnabled';
 
 
 export default function SettingsScreen() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
-  const [timerAlertEnabled, setTimerAlertEnabled] = useState(true);
   
 
   useEffect(() => {
     const loadSettings = async () => {
       const savedSound = await AsyncStorage.getItem(SOUND_ENABLED_KEY);
       const savedVibration = await AsyncStorage.getItem(VIBRATION_ENABLED_KEY);
-      const savedTimerAlert = await AsyncStorage.getItem(TIMER_ALERT_ENABLED_KEY);
      
 
       setSoundEnabled(savedSound !== 'false');
       setVibrationEnabled(savedVibration !== 'false');
-      setTimerAlertEnabled(savedTimerAlert !== 'false');
      
     };
 
@@ -38,11 +34,6 @@ export default function SettingsScreen() {
   const toggleVibration = async (value: boolean) => {
     setVibrationEnabled(value);
     await AsyncStorage.setItem(VIBRATION_ENABLED_KEY, String(value));
-  };
-
-  const toggleTimerAlert = async (value: boolean) => {
-    setTimerAlertEnabled(value);
-    await AsyncStorage.setItem(TIMER_ALERT_ENABLED_KEY, String(value));
   };
 
   
@@ -94,18 +85,6 @@ export default function SettingsScreen() {
           <Switch value={vibrationEnabled} onValueChange={toggleVibration} />
         </View>
 
-        <View style={styles.card}>
-          <View style={styles.textBlock}>
-            <Text style={styles.label}>Lock Screen Timer Alert</Text>
-            <Text style={styles.description}>
-              Show a native phone notification while the timer is running
-            </Text>
-          </View>
-
-          <Switch value={timerAlertEnabled} onValueChange={toggleTimerAlert} />
-        </View>
-
-        
       </View>
 
       <View style={styles.infoBox}>

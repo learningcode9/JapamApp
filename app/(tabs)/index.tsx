@@ -3,7 +3,6 @@ import * as Google from 'expo-auth-session/providers/google';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as Notifications from 'expo-notifications';
 import { useFocusEffect } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -28,15 +27,6 @@ import { getRandomQuote } from '@/constants/quotes';
 
 WebBrowser.maybeCompleteAuthSession();
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: false,
-    shouldSetBadge: false,
-  }),
-});
-
 type Session = {
   date: string;
   malas: number;
@@ -54,7 +44,6 @@ const JAPAM_NAME_KEY = 'japamName';
 const LAST_OPEN_DATE_KEY = 'lastOpenDate';
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
-const TIMER_ALERT_ENABLED_KEY = 'timerAlertEnabled';
 const USER_NAME_KEY = 'userName';
 const USER_ID_KEY = 'userId';
 const AUTH_PENDING_KEY = 'authPending';
@@ -65,7 +54,6 @@ const TIMER_RUNNING_KEY = 'timerRunning';
 const TIMER_TARGET_KEY = 'timerTarget';
 const TIMER_MINUTES_KEY = 'timerMinutes';
 const TIMER_LOOP_KEY = 'timerLoop';
-const TIMER_NOTIFICATION_CHANNEL_ID = 'japam-timer';
 
 const screenWidth = Dimensions.get('window').width;
 const isMobile = screenWidth < 500;
@@ -127,7 +115,6 @@ export default function JapamMain() {
   const [quote, setQuote] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
-  const [timerAlertEnabled, setTimerAlertEnabled] = useState(true);
 
   const totalRef = useRef(0);
   const timerRef = useRef({
@@ -139,8 +126,6 @@ export default function JapamMain() {
   });
   const suppressTimerSaveRef = useRef(false);
   const backgroundTimerNoticeShownRef = useRef(false);
-  const runningNotificationIdRef = useRef<string | null>(null);
-  const completionNotificationIdRef = useRef<string | null>(null);
   const rippleAnim = useRef(new Animated.Value(0)).current;
   const isSavingSessionRef = useRef(false);
   const lastTapRef = useRef(0);
@@ -152,130 +137,6 @@ export default function JapamMain() {
   const omPulseAnim = useRef(new Animated.Value(1)).current;
 
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-
-  const requestTimerNotificationPermission = useCallback(async () => {
-    if (Platform.OS === 'web' || !timerAlertEnabled) return false;
-
-    if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync(TIMER_NOTIFICATION_CHANNEL_ID, {
-        name: 'Japam Timer',
-        importance: Notifications.AndroidImportance.HIGH,
-        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-        vibrationPattern: [0, 250, 120, 250],
-        enableVibrate: true,
-        showBadge: false,
-      });
-    }
-
-    const existing = await Notifications.getPermissionsAsync();
-    if (existing.granted) return true;
-
-    const requested = await Notifications.requestPermissionsAsync({
-      ios: {
-        allowAlert: true,
-        allowSound: false,
-        allowBadge: false,
-      },
-    });
-
-    return requested.granted;
-  }, [timerAlertEnabled]);
-
-  const dismissTimerNotifications = useCallback(async () => {
-    if (Platform.OS === 'web') return;
-
-    try {
-      if (runningNotificationIdRef.current) {
-        await Notifications.dismissNotificationAsync(runningNotificationIdRef.current);
-        runningNotificationIdRef.current = null;
-      }
-
-      if (completionNotificationIdRef.current) {
-        await Notifications.cancelScheduledNotificationAsync(completionNotificationIdRef.current);
-        completionNotificationIdRef.current = null;
-      }
-    } catch (error) {
-      console.log('Timer notification dismiss error:', error);
-    }
-  }, []);
-
-  const showTimerNotification = useCallback(async (title: string, body: string) => {
-    if (Platform.OS === 'web' || !timerAlertEnabled) return;
-
-    try {
-      const hasPermission = await requestTimerNotificationPermission();
-      if (!hasPermission) return;
-
-      const notificationId = await Notifications.scheduleNotificationAsync({
-        content: {
-          title,
-          body,
-          data: { screen: 'japam' },
-          sound: false,
-          priority: Notifications.AndroidNotificationPriority.HIGH,
-          color: '#fbbf24',
-          autoDismiss: false,
-          sticky: true,
-        },
-        trigger: Platform.OS === 'android'
-          ? { channelId: TIMER_NOTIFICATION_CHANNEL_ID }
-          : null,
-      });
-
-      runningNotificationIdRef.current = notificationId;
-    } catch (error) {
-      console.log('Timer notification error:', error);
-    }
-  }, [requestTimerNotificationPermission, timerAlertEnabled]);
-
-  const showTimerRunningNotification = useCallback(async (currentSeconds: number, currentTargetSeconds: number) => {
-    if (Platform.OS === 'web' || !timerAlertEnabled) return;
-
-    try {
-      await dismissTimerNotifications();
-      const hasPermission = await requestTimerNotificationPermission();
-      if (!hasPermission) return;
-
-      const remainingSeconds = Math.max(1, currentTargetSeconds - currentSeconds);
-
-      const runningId = await Notifications.scheduleNotificationAsync({
-        content: {
-          title: 'Japam timer is running',
-          body: `Started at ${formatTime(currentSeconds)}. Open Mantra Japam to pause or stop.`,
-          data: { screen: 'japam', type: 'running' },
-          sound: false,
-          priority: Notifications.AndroidNotificationPriority.HIGH,
-          color: '#fbbf24',
-          autoDismiss: false,
-          sticky: true,
-        },
-        trigger: Platform.OS === 'android'
-          ? { channelId: TIMER_NOTIFICATION_CHANNEL_ID }
-          : null,
-      });
-
-      const completionId = await Notifications.scheduleNotificationAsync({
-        content: {
-          title: 'Japam timer completed',
-          body: 'One mala timer finished. Open Mantra Japam to continue.',
-          data: { screen: 'japam', type: 'completed' },
-          sound: false,
-          priority: Notifications.AndroidNotificationPriority.HIGH,
-          color: '#fbbf24',
-        },
-        trigger: {
-          type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-          seconds: remainingSeconds,
-          channelId: TIMER_NOTIFICATION_CHANNEL_ID,
-        },
-      });
-
-      runningNotificationIdRef.current = runningId;
-      completionNotificationIdRef.current = completionId;
-    } catch (error) {
-      console.log('Timer running notification error:', error);
-    }
-  }, [dismissTimerNotifications, requestTimerNotificationPermission, timerAlertEnabled]);
 
   const vibrateDevice = useCallback((pattern: number | number[]) => {
     if (!vibrationEnabled) return;
@@ -506,10 +367,8 @@ export default function JapamMain() {
       const loadSettingsAndRestoreToday = async () => {
         const savedSound = await AsyncStorage.getItem(SOUND_ENABLED_KEY);
         const savedVibration = await AsyncStorage.getItem(VIBRATION_ENABLED_KEY);
-        const savedTimerAlert = await AsyncStorage.getItem(TIMER_ALERT_ENABLED_KEY);
         setSoundEnabled(savedSound !== 'false');
         setVibrationEnabled(savedVibration !== 'false');
-        setTimerAlertEnabled(savedTimerAlert !== 'false');
         await restoreTodayTotal();
       };
       void loadSettingsAndRestoreToday();
@@ -556,49 +415,6 @@ export default function JapamMain() {
       ? `Japam timer running - ${formatTime(seconds)}`
       : 'Mantra Japam';
   }, [isRunning, seconds]);
-
-  useEffect(() => {
-    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
-
-    const handleVisibilityChange = () => {
-      if (!document.hidden || !isRunning) {
-        if (!document.hidden) backgroundTimerNoticeShownRef.current = false;
-        return;
-      }
-
-      if (backgroundTimerNoticeShownRef.current) return;
-
-      backgroundTimerNoticeShownRef.current = true;
-      showTimerNotification(
-        'Japam timer is running',
-        `Current timer: ${formatTime(seconds)}. Come back when you are ready to continue.`
-      );
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    handleVisibilityChange();
-
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [isRunning, seconds, showTimerNotification]);
-
-  useEffect(() => {
-    if (isRunning && timerAlertEnabled) return;
-    void dismissTimerNotifications();
-  }, [dismissTimerNotifications, isRunning, timerAlertEnabled]);
-
-  useEffect(() => {
-    if (!hasRestoredTimer || !isRunning || !timerAlertEnabled) return;
-    const currentTimer = timerRef.current;
-    void showTimerRunningNotification(
-      currentTimer.seconds,
-      currentTimer.targetSeconds
-    );
-  }, [
-    hasRestoredTimer,
-    isRunning,
-    showTimerRunningNotification,
-    timerAlertEnabled,
-  ]);
 
   useEffect(() => {
     timerRef.current = {
@@ -1284,7 +1100,6 @@ export default function JapamMain() {
 
   const handlePause = () => {
     setIsRunning(false);
-    void dismissTimerNotifications();
 
     void (async () => {
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
@@ -1303,7 +1118,6 @@ export default function JapamMain() {
   const handleStop = () => {
     setIsRunning(false);
     backgroundTimerNoticeShownRef.current = false;
-    void dismissTimerNotifications();
     setSeconds(0);
     setAutoCompletedMalas(0);
   };
@@ -1312,8 +1126,6 @@ export default function JapamMain() {
     const newTotal = setCountersFromTotal(totalRef.current + 108);
     void saveSession(targetSeconds, 1, 108, newTotal);
     void completeFeedback();
-    void dismissTimerNotifications();
-    showTimerNotification('Japam timer completed', 'One mala has been added to your count.');
 
     if (loopTimer) {
       setAutoCompletedMalas((prev) => {
@@ -1325,7 +1137,6 @@ export default function JapamMain() {
         } else {
           setSeconds(0);
           setIsRunning(true);
-          void showTimerRunningNotification(0, targetSeconds);
         }
         return next;
       });
@@ -1333,15 +1144,7 @@ export default function JapamMain() {
       setSeconds(0);
       setIsRunning(false);
     }
-  }, [
-    dismissTimerNotifications,
-    loopTimer,
-    targetSeconds,
-    saveSession,
-    completeFeedback,
-    showTimerNotification,
-    showTimerRunningNotification,
-  ]);
+  }, [loopTimer, targetSeconds, saveSession, completeFeedback]);
 
   const saveJapamNameToSupabase = async (userId: string, userNameValue: string, japamNameValue: string) => {
     try {
