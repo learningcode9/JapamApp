@@ -56,7 +56,7 @@ export default function SettingsScreen() {
     ))}
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
       <View style={styles.header}>
-        <Text style={styles.omMark}>ॐ</Text>
+        
       <Text style={styles.title}>Settings</Text>
       <Text style={styles.subtitle}>Sound and vibration preferences.</Text>
       </View>

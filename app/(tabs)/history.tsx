@@ -354,7 +354,7 @@ export default function HistoryScreen() {
     ))}
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
       <View style={styles.header}>
-      <Text style={styles.omMark}>ॐ</Text>
+      
       <Text style={styles.title}>History</Text>
       
       </View>

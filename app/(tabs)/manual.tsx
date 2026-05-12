@@ -151,13 +151,19 @@ if (!userId) {
         />
       ))}
       <View style={styles.panel}>
-      <Text style={styles.omMark}>ॐ</Text>
-      <Text style={styles.title}>Manual Entry</Text>
-      <Text style={styles.subtitle}>Add japam completed outside the timer.</Text>
-      {!userId && (
-  <Text style={styles.loginHint}>
-    Sign in with Google from the Japam screen to save entries.
+  
+
+  <Text style={styles.title}>Manual Entry</Text>
+
+  <Text style={styles.subtitle}>
+    Add Japam completed outside the app
   </Text>
+
+  {!userId && (
+    <Text style={styles.loginHint}>
+      Sign in with Google from the Japam screen to save entries.
+    </Text>
+  
 )}
 
       <TextInput
@@ -286,5 +292,5 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     maxWidth: 320,
   },
-
+  
 });

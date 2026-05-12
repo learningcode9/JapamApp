@@ -3,39 +3,47 @@ import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 const faqs = [
-  {
-    q: 'What is Japam?',
-    a: 'Japam is the repetitive chanting of a mantra with devotion and focus.',
-  },
-  {
-    q: 'What is a mala?',
-    a: 'A mala is a string of beads used to count mantra repetitions. A full mala is usually 108 repetitions.',
-  },
-  {
-    q: 'Why 108 count?',
-    a: 'The number 108 is considered spiritually significant in many traditions and is treated as one complete chanting cycle.',
-  },
-  {
-    q: 'How does the blue button work?',
-    a: 'Each tap on the blue button increases the count by 1. When count reaches 108, it resets to 0 and adds 1 mala.',
-  },
-  {
-    q: 'How do I use the timer?',
-    a: 'Enter minutes, tap Apply, then tap Start. When the timer ends, the session is saved automatically.',
-  },
-  {
-    q: 'What is Auto Repeat Timer?',
-    a:'Auto Repeat Timer is useful when you chant by time. After the timer finishes, the app saves one mala, plays completion sound, and automatically starts the next timer. It continues until you press Stop.',
-  },
-  {
-    q: 'Does the app save data?',
-    a: 'Yes. Your data is stored locally on your device using AsyncStorage and works offline.',
-  },
-  {
-    q: 'Can I add data manually?',
-    a: 'Yes. Use the Manual tab to add japam done outside the app.',
-  },
-];
+    {
+      q: 'What is Japam?',
+      a: 'Japam is the repetitive chanting of a mantra with devotion, focus, and spiritual intention.',
+    },
+    {
+      q: 'What is a mala?',
+      a: 'A mala is a string of prayer beads used to count mantra repetitions. One full mala usually contains 108 chants.',
+    },
+    {
+      q: 'Why is 108 important?',
+      a: 'The number 108 is spiritually significant in many traditions and is treated as one complete cycle of chanting.',
+    },
+    {
+      q: 'How does the Om button work?',
+      a: 'Each tap on the glowing Om button increases the count by 1. When the count reaches 108, the app automatically completes one mala and starts the next cycle.',
+    },
+    {
+      q: 'How do I use the timer?',
+      a: 'Enter the number of minutes and tap Start. When the timer finishes, one mala is automatically added to your progress.',
+    },
+    {
+      q: 'What is Auto Repeat Timer?',
+      a: 'Auto Repeat Timer is useful for continuous chanting sessions. After each timer completes, the app automatically adds one mala and starts the next session until paused.',
+    },
+    {
+      q: 'Does the app save my progress?',
+      a: 'Yes. After signing in, your japam count, timer progress, and history sync across devices using cloud storage.',
+    },
+    {
+      q: 'Can I add Japam manually?',
+      a: 'Yes. Open the Manual tab to add malas or counts completed outside the app.',
+    },
+    {
+      q: 'Does the app work offline?',
+      a: 'Yes. Basic japam counting works offline. When internet is available, your progress syncs automatically.',
+    },
+    {
+      q: 'Can I change the Japam name?',
+      a: 'Yes. Open Settings and update your mantra or japam name anytime.',
+    },
+  ];
 
 export default function FAQ() {
   const [open, setOpen] = useState<number | null>(0);
@@ -58,10 +66,14 @@ export default function FAQ() {
       ))}
       <ScrollView contentContainerStyle={styles.content}>
       <View style={styles.header}>
-      <Text style={styles.omMark}>ॐ</Text>
-      <Text style={styles.title}>FAQ</Text>
-      <Text style={styles.subtitle}>Frequently asked questions</Text>
-      </View>
+  
+
+  <Text style={styles.title}>FAQ</Text>
+
+  <Text style={styles.subtitle}>
+    Guidance for your Japam journey
+  </Text>
+</View>
 
       {faqs.map((item, i) => {
         const isOpen = open === i;
@@ -133,4 +145,5 @@ const styles = StyleSheet.create({
   q: { color: 'white', fontWeight: '800', fontSize: 20, flex: 1, paddingRight: 10 },
   icon: { color: '#fbbf24', fontSize: 30, fontWeight: '700' },
   a: { color: '#cbd5e1', marginTop: 12, lineHeight: 29, fontSize: 18 },
+ 
 });
