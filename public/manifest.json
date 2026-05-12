@@ -2,7 +2,7 @@
   "name": "Mantra Japam",
   "short_name": "Mantra Japam",
   "id": "/",
-  "start_url": "/?v=9",
+  "start_url": "/?v=10",
   "scope": "/",
   "display": "standalone",
   "display_override": ["standalone", "fullscreen"],
@@ -11,25 +11,25 @@
   "orientation": "portrait",
   "icons": [
     {
-      "src": "/apple-touch-icon.png",
+      "src": "/apple-touch-icon-v2.png",
       "sizes": "180x180",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-192.png",
+      "src": "/icon-v2-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-512.png",
+      "src": "/icon-v2-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon.png",
+      "src": "/icon-v2-1024.png",
       "sizes": "1024x1024",
       "type": "image/png",
       "purpose": "any"

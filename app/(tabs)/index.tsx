@@ -1479,10 +1479,11 @@ const styles = StyleSheet.create({
   },
   runningBannerText: { color: '#fbbf24', fontSize: 14, fontWeight: '900' },
   omText: {
-    fontSize: isShortMobile ? 56 : isMobile ? 68 : 80,
+    fontSize: isShortMobile ? 60 : isMobile ? 72 : 84,
     color: '#ffd166',
+    fontWeight: '500',
     includeFontPadding: false,
-    lineHeight: isShortMobile ? 70 : isMobile ? 84 : 96,
+    lineHeight: isShortMobile ? 72 : isMobile ? 88 : 102,
     textShadowColor: 'rgba(251,191,36,0.8)',
     textShadowOffset: { width: 0, height: 0 },
     textShadowRadius: 22,
