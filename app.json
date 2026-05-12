@@ -25,14 +25,18 @@
 
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundColor": "#0f172a"
       }
     },
 
     "web": {
       "bundler": "metro",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./public/favicon-48.png",
+      "name": "Mantra Japam",
+      "shortName": "Japam",
+      "themeColor": "#0f172a",
+      "backgroundColor": "#0f172a"
     },
 
     "plugins": [

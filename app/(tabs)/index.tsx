@@ -47,10 +47,17 @@ const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
 const USER_NAME_KEY = 'userName';
 const USER_ID_KEY = 'userId';
 const AUTH_PENDING_KEY = 'authPending';
+const LAST_TOTAL_KEY = 'lastTotal';
 const AUTH_PENDING_MAX_MS = 2 * 60 * 1000;
+const TIMER_SECONDS_KEY = 'timerSeconds';
+const TIMER_RUNNING_KEY = 'timerRunning';
+const TIMER_TARGET_KEY = 'timerTarget';
+const TIMER_MINUTES_KEY = 'timerMinutes';
+const TIMER_LOOP_KEY = 'timerLoop';
 
 const screenWidth = Dimensions.get('window').width;
 const isMobile = screenWidth < 500;
+
 
 const getLocalDateKey = (date = new Date()) => {
   const y = date.getFullYear();
@@ -92,6 +99,8 @@ export default function JapamMain() {
   const [malas, setMalas] = useState(0);
   const [total, setTotal] = useState(0);
   const [seconds, setSeconds] = useState(0);
+  const [hasRestoredTotal, setHasRestoredTotal] = useState(false);
+  const [hasRestoredTimer, setHasRestoredTimer] = useState(false);
   const [minutesInput, setMinutesInput] = useState('1');
   const [targetSeconds, setTargetSeconds] = useState(60);
   const [isRunning, setIsRunning] = useState(false);
@@ -108,6 +117,15 @@ export default function JapamMain() {
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
 
   const totalRef = useRef(0);
+  const timerRef = useRef({
+    seconds: 0,
+    isRunning: false,
+    targetSeconds: 60,
+    minutesInput: '1',
+    loopTimer: false,
+  });
+  const suppressTimerSaveRef = useRef(false);
+  const backgroundTimerNoticeShownRef = useRef(false);
   const rippleAnim = useRef(new Animated.Value(0)).current;
   const isSavingSessionRef = useRef(false);
   const lastTapRef = useRef(0);
@@ -116,9 +134,42 @@ export default function JapamMain() {
   const fade = useRef(new Animated.Value(0)).current;
   const glowAnim = useRef(new Animated.Value(0)).current;
 
-  // ✅ Fix 1: moved inside component
   const particleAnim = useRef(new Animated.Value(0)).current;
   const omPulseAnim = useRef(new Animated.Value(1)).current;
+
+  const formatTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+  const requestTimerNotificationPermission = async () => {
+    if (
+      Platform.OS !== 'web' ||
+      typeof window === 'undefined' ||
+      !('Notification' in window)
+    ) {
+      return;
+    }
+
+    if (window.Notification.permission === 'default') {
+      await window.Notification.requestPermission();
+    }
+  };
+
+  const showTimerNotification = useCallback((title: string, body: string) => {
+    if (
+      Platform.OS !== 'web' ||
+      typeof window === 'undefined' ||
+      !('Notification' in window) ||
+      window.Notification.permission !== 'granted'
+    ) {
+      return;
+    }
+
+    new window.Notification(title, {
+      body,
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      tag: 'japam-timer',
+    });
+  }, []);
 
   const googleRedirectUri =
     Platform.OS === 'web' && typeof window !== 'undefined'
@@ -228,23 +279,107 @@ export default function JapamMain() {
     },
     []
   );
+  const fetchUserTotalFromSupabase = async (userId: string) => {
+    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
+    if (!url || !key || !userId) return null;
+
+    const encodedUserId = encodeURIComponent(userId);
+
+    const response = await fetch(
+      `${url}/rest/v1/japam_user_totals?user_id=eq.${encodedUserId}&select=total_count,count,malas&limit=1`,
+      {
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+        },
+      }
+    );
+
+    if (!response.ok) return null;
+
+    const rows = await response.json();
+
+    if (!rows?.[0]) return null;
+
+    return Number(rows[0].total_count) || 0;
+  };
+  const saveUserTotalToSupabase = async (
+    userId: string,
+    userNameValue: string | null,
+    totalValue: number
+  ) => {
+    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!url || !key || !userId) {
+      console.log('Missing Supabase total config');
+      return;
+    }
+
+    const safeTotal = Math.max(0, Math.floor(Number(totalValue) || 0));
+    if (safeTotal === 0) {
+      return;
+    }
+
+    const response = await fetch(
+      `${url}/rest/v1/japam_user_totals?on_conflict=user_id`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          Prefer: 'resolution=merge-duplicates,return=minimal',
+        },
+        body: JSON.stringify({
+          user_id: userId,
+          user_name: userNameValue || 'User',
+          total_count: safeTotal,
+          malas: Math.floor(safeTotal / 108),
+          count: safeTotal % 108,
+          updated_at: new Date().toISOString(),
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      console.log('Total save error:', await response.text());
+    }
+  };
   const restoreTodayTotal = useCallback(async () => {
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
     const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
     const localTodayTotal = await getLocalTodayTotal(savedUserId);
 
+    let cloudTotal: number | null = null;
+
     if (savedUserId) {
-      const remoteTodayTotal = await fetchTodayTotalFromSupabase(savedUserId, savedUserName);
-      if (remoteTodayTotal !== null) {
-        await restoreTotal(Math.max(localTodayTotal, remoteTodayTotal), { userId: savedUserId });
-        return;
-      }
+      cloudTotal = await fetchUserTotalFromSupabase(savedUserId);
+
+      const remoteTodayTotal = await fetchTodayTotalFromSupabase(
+        savedUserId,
+        savedUserName
+      );
+
+      const finalTotal =
+        cloudTotal !== null
+          ? Math.max(cloudTotal, localTodayTotal, remoteTodayTotal || 0)
+          : Math.max(localTodayTotal, remoteTodayTotal || 0);
+
+      await restoreTotal(finalTotal, { userId: savedUserId });
+      setHasRestoredTotal(true);
+      return;
     }
 
     await restoreTotal(localTodayTotal, { userId: savedUserId });
-  }, [fetchTodayTotalFromSupabase, getLocalTodayTotal, restoreTotal]);
-
+    setHasRestoredTotal(true);
+  }, [
+    fetchTodayTotalFromSupabase,
+    getLocalTodayTotal,
+    restoreTotal
+  ]);
   useFocusEffect(
     useCallback(() => {
       const loadSettingsAndRestoreToday = async () => {
@@ -264,6 +399,131 @@ export default function JapamMain() {
   }, [fade]);
 
   useEffect(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+
+    let manifestLink = document.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+    if (!manifestLink) {
+      manifestLink = document.createElement('link');
+      manifestLink.rel = 'manifest';
+      document.head.appendChild(manifestLink);
+    }
+    manifestLink.href = '/manifest.json';
+
+    let appleIconLink = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]');
+    if (!appleIconLink) {
+      appleIconLink = document.createElement('link');
+      appleIconLink.rel = 'apple-touch-icon';
+      document.head.appendChild(appleIconLink);
+    }
+    appleIconLink.href = '/apple-touch-icon.png';
+
+    let themeMeta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    if (!themeMeta) {
+      themeMeta = document.createElement('meta');
+      themeMeta.name = 'theme-color';
+      document.head.appendChild(themeMeta);
+    }
+    themeMeta.content = '#0f172a';
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+
+    document.title = isRunning
+      ? `Japam timer running - ${formatTime(seconds)}`
+      : 'Mantra Japam';
+  }, [isRunning, seconds]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden || !isRunning) {
+        if (!document.hidden) backgroundTimerNoticeShownRef.current = false;
+        return;
+      }
+
+      if (backgroundTimerNoticeShownRef.current) return;
+
+      backgroundTimerNoticeShownRef.current = true;
+      showTimerNotification(
+        'Japam timer is running',
+        `Current timer: ${formatTime(seconds)}. Come back when you are ready to continue.`
+      );
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    handleVisibilityChange();
+
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [isRunning, seconds, showTimerNotification]);
+
+  useEffect(() => {
+    timerRef.current = {
+      seconds,
+      isRunning,
+      targetSeconds,
+      minutesInput,
+      loopTimer,
+    };
+  }, [seconds, isRunning, targetSeconds, minutesInput, loopTimer]);
+
+  useEffect(() => {
+    if (!hasRestoredTimer || suppressTimerSaveRef.current) return;
+
+    void (async () => {
+      await AsyncStorage.setItem(TIMER_SECONDS_KEY, String(seconds));
+      await AsyncStorage.setItem(TIMER_RUNNING_KEY, String(isRunning));
+      await AsyncStorage.setItem(TIMER_TARGET_KEY, String(targetSeconds));
+      await AsyncStorage.setItem(TIMER_MINUTES_KEY, minutesInput);
+      await AsyncStorage.setItem(TIMER_LOOP_KEY, String(loopTimer));
+
+      const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+
+      if (!savedUserId) return;
+
+      await AsyncStorage.setItem(getUserStorageKey(TIMER_SECONDS_KEY, savedUserId), String(seconds));
+      await AsyncStorage.setItem(getUserStorageKey(TIMER_RUNNING_KEY, savedUserId), String(isRunning));
+      await AsyncStorage.setItem(getUserStorageKey(TIMER_TARGET_KEY, savedUserId), String(targetSeconds));
+      await AsyncStorage.setItem(getUserStorageKey(TIMER_MINUTES_KEY, savedUserId), minutesInput);
+      await AsyncStorage.setItem(getUserStorageKey(TIMER_LOOP_KEY, savedUserId), String(loopTimer));
+
+      await saveTimerStateToSupabase(savedUserId, {
+        seconds,
+        isRunning,
+        targetSeconds,
+        minutesInput,
+        loopTimer,
+      });
+    })();
+  }, [seconds, isRunning, targetSeconds, minutesInput, loopTimer, hasRestoredTimer]);
+
+  const fetchTimerStateFromSupabase = useCallback(async (userId: string) => {
+    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!url || !key || !userId) return null;
+
+    const encodedUserId = encodeURIComponent(userId);
+
+    const response = await fetch(
+      `${url}/rest/v1/japam_timer_state?user_id=eq.${encodedUserId}&select=seconds,is_running,target_seconds,minutes_input,loop_timer&limit=1`,
+      {
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+        },
+      }
+    );
+
+    if (!response.ok) return null;
+
+    const rows = await response.json();
+
+    return rows?.[0] || null;
+  }, []);
+
+  useEffect(() => {
     const loadData = async () => {
       const today = getLocalDateKey();
       const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
@@ -274,7 +534,7 @@ export default function JapamMain() {
         const userJapamName = await AsyncStorage.getItem(
           getUserStorageKey(JAPAM_NAME_KEY, savedUserId)
         );
-      
+
         if (userJapamName) {
           setJapamName(userJapamName);
           setNameInput(userJapamName);
@@ -289,16 +549,81 @@ export default function JapamMain() {
         setUserName('');
         setIsSigningIn(authPending);
         setShowUserModal(false);
-        await restoreTotal(0);
+
+        const lastTotal = Number(
+          (await AsyncStorage.getItem(LAST_TOTAL_KEY)) || '0'
+        );
+
+        await restoreTotal(lastTotal);
       }
+
+      if (savedUserId) {
+        const savedTimerSeconds = Number(
+          (await AsyncStorage.getItem(getUserStorageKey(TIMER_SECONDS_KEY, savedUserId))) || '0'
+        );
+
+        const savedTimerRunning =
+          (await AsyncStorage.getItem(getUserStorageKey(TIMER_RUNNING_KEY, savedUserId))) === 'true';
+
+        const savedTimerTarget = Number(
+          (await AsyncStorage.getItem(getUserStorageKey(TIMER_TARGET_KEY, savedUserId))) || '60'
+        );
+
+        const savedTimerMinutes =
+          (await AsyncStorage.getItem(getUserStorageKey(TIMER_MINUTES_KEY, savedUserId))) || '1';
+
+        const savedTimerLoop =
+          (await AsyncStorage.getItem(getUserStorageKey(TIMER_LOOP_KEY, savedUserId))) === 'true';
+
+        const timerState = await fetchTimerStateFromSupabase(savedUserId);
+
+        if (timerState) {
+          setSeconds(Number(timerState.seconds) || 0);
+          setIsRunning(Boolean(timerState.is_running));
+          setTargetSeconds(Number(timerState.target_seconds) || 60);
+          setMinutesInput(timerState.minutes_input || '1');
+          setLoopTimer(Boolean(timerState.loop_timer));
+        } else {
+          setSeconds(savedTimerSeconds);
+          setIsRunning(savedTimerRunning);
+          setTargetSeconds(savedTimerTarget);
+          setMinutesInput(savedTimerMinutes);
+          setLoopTimer(savedTimerLoop);
+        }
+      } else {
+        const savedTimerSeconds = Number(
+          (await AsyncStorage.getItem(TIMER_SECONDS_KEY)) || '0'
+        );
+
+        const savedTimerRunning =
+          (await AsyncStorage.getItem(TIMER_RUNNING_KEY)) === 'true';
+
+        const savedTimerTarget = Number(
+          (await AsyncStorage.getItem(TIMER_TARGET_KEY)) || '60'
+        );
+
+        const savedTimerMinutes =
+          (await AsyncStorage.getItem(TIMER_MINUTES_KEY)) || '1';
+
+        const savedTimerLoop =
+          (await AsyncStorage.getItem(TIMER_LOOP_KEY)) === 'true';
+
+        setSeconds(savedTimerSeconds);
+        setIsRunning(savedTimerRunning);
+        setTargetSeconds(savedTimerTarget);
+        setMinutesInput(savedTimerMinutes);
+        setLoopTimer(savedTimerLoop);
+      }
+
+      setHasRestoredTimer(true);
 
       await AsyncStorage.setItem(LAST_OPEN_DATE_KEY, today);
     };
 
-    void loadData();
-  }, [restoreTodayTotal, restoreTotal]);
 
-  // ✅ Fix 2: particleAnim dependency added
+    void loadData();
+  }, [fetchTimerStateFromSupabase, restoreTodayTotal, restoreTotal]);
+
   useEffect(() => {
     Animated.loop(
       Animated.timing(particleAnim, { toValue: 1, duration: 6000, useNativeDriver: true })
@@ -315,7 +640,86 @@ export default function JapamMain() {
     ).start();
   }, [omPulseAnim]);
 
-  const loadJapamNameFromSupabase = async (googleUserId: string) => {
+  const saveTimerStateToSupabase = async (
+    userId: string,
+    timerState: {
+      seconds: number;
+      isRunning: boolean;
+      targetSeconds: number;
+      minutesInput: string;
+      loopTimer: boolean;
+    }
+  ) => {
+    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!url || !key || !userId) return;
+
+    const response = await fetch(
+      `${url}/rest/v1/japam_timer_state?on_conflict=user_id`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          Prefer: 'resolution=merge-duplicates,return=minimal',
+        },
+        body: JSON.stringify({
+          user_id: userId,
+          seconds: timerState.seconds,
+          is_running: timerState.isRunning,
+          target_seconds: timerState.targetSeconds,
+          minutes_input: timerState.minutesInput,
+          loop_timer: timerState.loopTimer,
+          updated_at: new Date().toISOString(),
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      console.log('Timer save error:', await response.text());
+    }
+  };
+
+  const restoreTimerForUser = useCallback(async (userId: string) => {
+    const savedTimerSeconds = Number(
+      (await AsyncStorage.getItem(getUserStorageKey(TIMER_SECONDS_KEY, userId))) || '0'
+    );
+
+    const savedTimerRunning =
+      (await AsyncStorage.getItem(getUserStorageKey(TIMER_RUNNING_KEY, userId))) === 'true';
+
+    const savedTimerTarget = Number(
+      (await AsyncStorage.getItem(getUserStorageKey(TIMER_TARGET_KEY, userId))) || '60'
+    );
+
+    const savedTimerMinutes =
+      (await AsyncStorage.getItem(getUserStorageKey(TIMER_MINUTES_KEY, userId))) || '1';
+
+    const savedTimerLoop =
+      (await AsyncStorage.getItem(getUserStorageKey(TIMER_LOOP_KEY, userId))) === 'true';
+
+    const timerState = await fetchTimerStateFromSupabase(userId);
+
+    if (timerState) {
+      setSeconds(Number(timerState.seconds) || 0);
+      setIsRunning(Boolean(timerState.is_running));
+      setTargetSeconds(Number(timerState.target_seconds) || 60);
+      setMinutesInput(timerState.minutes_input || '1');
+      setLoopTimer(Boolean(timerState.loop_timer));
+    } else {
+      setSeconds(savedTimerSeconds);
+      setIsRunning(savedTimerRunning);
+      setTargetSeconds(savedTimerTarget);
+      setMinutesInput(savedTimerMinutes);
+      setLoopTimer(savedTimerLoop);
+    }
+
+    setHasRestoredTimer(true);
+  }, [fetchTimerStateFromSupabase]);
+
+  const loadJapamNameFromSupabase = useCallback(async (googleUserId: string) => {
     try {
       const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -343,9 +747,9 @@ export default function JapamMain() {
     } catch (error) {
       console.log('Profile fetch error:', error);
     }
-  };
+  }, []);
 
-  const restoreHistoryFromSupabase = async (googleUserId: string) => {
+  const restoreHistoryFromSupabase = useCallback(async (googleUserId: string) => {
     try {
       const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -391,7 +795,7 @@ export default function JapamMain() {
     } catch (error) {
       console.log('History restore error:', error);
     }
-  };
+  }, [restoreTodayTotal]);
 
   useEffect(() => {
     const handleGoogleLogin = async () => {
@@ -434,6 +838,7 @@ export default function JapamMain() {
           return;
         }
 
+        setHasRestoredTimer(false);
         setUserName(googleName);
         setShowUserModal(false);
         setShowUserMenu(false);
@@ -442,6 +847,7 @@ export default function JapamMain() {
         await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
         await loadJapamNameFromSupabase(googleUserId);
         await restoreHistoryFromSupabase(googleUserId);
+        await restoreTimerForUser(googleUserId);
       } catch (error) {
         console.log('Google login error:', error);
         setShowUserModal(true);
@@ -452,10 +858,23 @@ export default function JapamMain() {
     };
 
     void handleGoogleLogin();
-  }, [response]);
+  }, [
+    response,
+    loadJapamNameFromSupabase,
+    restoreHistoryFromSupabase,
+    restoreTimerForUser,
+  ]);
 
   useEffect(() => {
     totalRef.current = total;
+
+    if (!hasRestoredTotal) {
+      return;
+    }
+
+    if (!userName) {
+      return;
+    }
 
     void (async () => {
       await AsyncStorage.setItem(COUNT_KEY, String(count));
@@ -463,13 +882,22 @@ export default function JapamMain() {
       await AsyncStorage.setItem(TOTAL_KEY, String(total));
 
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+
       if (savedUserId) {
         await AsyncStorage.setItem(getUserStorageKey(COUNT_KEY, savedUserId), String(count));
         await AsyncStorage.setItem(getUserStorageKey(MALAS_KEY, savedUserId), String(malas));
         await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, savedUserId), String(total));
+
+        const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+
+        await saveUserTotalToSupabase(
+          savedUserId,
+          savedUserName || userName || 'User',
+          total
+        );
       }
     })();
-  }, [count, malas, total]);
+  }, [count, malas, total, userName, hasRestoredTotal]);
 
   useEffect(() => {
     if (!isRunning) return;
@@ -573,7 +1001,13 @@ export default function JapamMain() {
     }
   }, [userName]);
 
-  const playCompletionAnimation = () => {
+  const tapFeedback = () => {
+    if (Platform.OS !== 'web' && vibrationEnabled) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+  };
+
+  const playCompletionAnimation = useCallback(() => {
     glowAnim.setValue(0);
     Animated.sequence([
       Animated.timing(glowAnim, { toValue: 1, duration: 300, useNativeDriver: false }),
@@ -581,27 +1015,52 @@ export default function JapamMain() {
       Animated.timing(glowAnim, { toValue: 1, duration: 300, useNativeDriver: false }),
       Animated.timing(glowAnim, { toValue: 0, duration: 500, useNativeDriver: false }),
     ]).start();
-  };
+  }, [glowAnim]);
 
-  const tapFeedback = () => {
-    if (Platform.OS !== 'web' && vibrationEnabled) {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    }
-  };
-
-  // ✅ Fix 3: playCompletionAnimation added
   const completeFeedback = useCallback(async () => {
     playCompletionAnimation();
     if (soundEnabled) await playCompleteSound();
     if (vibrationEnabled) Vibration.vibrate(700);
-  }, [soundEnabled, vibrationEnabled]);
+  }, [playCompletionAnimation, soundEnabled, vibrationEnabled]);
 
   const setCountersFromTotal = (nextTotal: number) => {
     const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
+    const nextMalas = Math.floor(safeTotal / 108);
+    const nextCount = safeTotal % 108;
+
+    void AsyncStorage.setItem(LAST_TOTAL_KEY, String(safeTotal));
+
     totalRef.current = safeTotal;
+
     setTotal(safeTotal);
-    setMalas(Math.floor(safeTotal / 108));
-    setCount(safeTotal % 108);
+    setMalas(nextMalas);
+    setCount(nextCount);
+
+    void (async () => {
+      await AsyncStorage.setItem(TOTAL_KEY, String(safeTotal));
+      await AsyncStorage.setItem(MALAS_KEY, String(nextMalas));
+      await AsyncStorage.setItem(COUNT_KEY, String(nextCount));
+
+      const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+
+      if (savedUserId) {
+        await AsyncStorage.setItem(
+          getUserStorageKey(TOTAL_KEY, savedUserId),
+          String(safeTotal)
+        );
+
+        await AsyncStorage.setItem(
+          getUserStorageKey(MALAS_KEY, savedUserId),
+          String(nextMalas)
+        );
+
+        await AsyncStorage.setItem(
+          getUserStorageKey(COUNT_KEY, savedUserId),
+          String(nextCount)
+        );
+      }
+    })();
+
     return safeTotal;
   };
 
@@ -652,10 +1111,18 @@ Animated.timing(rippleAnim, {
 
   const handleStart = () => {
     if (!requireLogin()) return;
+    void requestTimerNotificationPermission();
+
     const mins = Math.max(1, Math.floor(Number(minutesInput) || 1));
+    const nextTargetSeconds = mins * 60;
+
     setMinutesInput(String(mins));
-    setTargetSeconds(mins * 60);
-    setSeconds(0);
+    setTargetSeconds(nextTargetSeconds);
+
+    if (seconds <= 0 || seconds >= nextTargetSeconds) {
+      setSeconds(0);
+    }
+
     setAutoCompletedMalas(0);
     setIsRunning(true);
   };
@@ -664,6 +1131,7 @@ Animated.timing(rippleAnim, {
 
   const handleStop = () => {
     setIsRunning(false);
+    backgroundTimerNoticeShownRef.current = false;
     setSeconds(0);
     setAutoCompletedMalas(0);
   };
@@ -672,6 +1140,7 @@ Animated.timing(rippleAnim, {
     const newTotal = setCountersFromTotal(totalRef.current + 108);
     void saveSession(targetSeconds, 1, 108, newTotal);
     void completeFeedback();
+    showTimerNotification('Japam timer completed', 'One mala has been added to your count.');
 
     if (loopTimer) {
       setAutoCompletedMalas((prev) => {
@@ -690,7 +1159,7 @@ Animated.timing(rippleAnim, {
       setSeconds(0);
       setIsRunning(false);
     }
-  }, [loopTimer, targetSeconds, saveSession, completeFeedback]);
+  }, [loopTimer, targetSeconds, saveSession, completeFeedback, showTimerNotification]);
 
   const saveJapamNameToSupabase = async (userId: string, userNameValue: string, japamNameValue: string) => {
     try {
@@ -746,12 +1215,15 @@ Animated.timing(rippleAnim, {
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
     if (currentUserId) {
       await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, currentUserId), String(totalRef.current));
+      await saveTimerStateToSupabase(currentUserId, timerRef.current);
     }
 
+    suppressTimerSaveRef.current = true;
     setIsRunning(false);
     setSeconds(0);
     setLoopTimer(false);
     setAutoCompletedMalas(0);
+    setHasRestoredTimer(false);
     setShowUserMenu(false);
     setUserName('');
     setJapamName('Japam');
@@ -761,6 +1233,9 @@ Animated.timing(rippleAnim, {
     await AsyncStorage.removeItem(USER_NAME_KEY);
     await AsyncStorage.removeItem(USER_ID_KEY);
     await restoreTotal(0, { userId: null });
+    setTimeout(() => {
+      suppressTimerSaveRef.current = false;
+    }, 0);
   };
 
   const handleLogout = () => {
@@ -777,7 +1252,6 @@ Animated.timing(rippleAnim, {
 
   const openRename = () => { setNameInput(japamName); setShowNameEditor(true); };
   const cancelRename = () => { setNameInput(japamName); setShowNameEditor(false); };
-  const formatTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   const todayLabel = new Date().toLocaleDateString();
 
   return (
@@ -807,9 +1281,8 @@ Animated.timing(rippleAnim, {
         }}
       />
     ))}
-  
-    
-      {/* ✅ Fix 4: transparent background — gradient visible */}
+
+
       <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 
         {isSigningIn && (
@@ -889,27 +1362,28 @@ Animated.timing(rippleAnim, {
           <Text style={styles.metricText}>Total {total}</Text>
         </View>
 
-        {/* ✅ Fix 5: omPulseAnim applied to circle */}
         <Animated.View style={[styles.circleGlow, { transform: [{ scale: omPulseAnim }] }]}>
-        <Animated.View
-  pointerEvents="none"
-  style={{
-    position: 'absolute',
-    width: 220,
-    height: 220,
-    borderRadius: 110,
-    borderWidth: 2,
-    borderColor: 'rgba(251, 191, 36, 0.6)',
-    transform: [{ scale: rippleAnim.interpolate({
-      inputRange: [0, 1],
-      outputRange: [1, 1.9],
-    })}],
-    opacity: rippleAnim.interpolate({
-      inputRange: [0, 0.7, 1],
-      outputRange: [0.9, 0.3, 0],
-    }),
-  }}
-/>
+          <Animated.View
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              width: 154,
+              height: 154,
+              borderRadius: 77,
+              borderWidth: 2,
+              borderColor: 'rgba(251, 191, 36, 0.6)',
+              transform: [{
+                scale: rippleAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [1, 1.9],
+                }),
+              }],
+              opacity: rippleAnim.interpolate({
+                inputRange: [0, 0.7, 1],
+                outputRange: [0.9, 0.3, 0],
+              }),
+            }}
+          />
           <Pressable onPress={handleTap} style={({ pressed }) => [pressed && styles.circlePressed]}>
           <LinearGradient
   colors={['#4c1d95', '#2e1065', '#0a0015']}
@@ -917,14 +1391,7 @@ Animated.timing(rippleAnim, {
   end={{ x: 1, y: 1 }}
   style={styles.circle}
 >
-              <Text style={{
-  fontSize: 96,
-  color: '#ffffff',
-  fontWeight: '300',
-  textShadowColor: 'rgba(251,191,36,1)',
-  textShadowOffset: { width: 0, height: 0 },
-  textShadowRadius: 40,
-}}>ॐ</Text>
+              <Text style={styles.omText}>ॐ</Text>
               <Animated.View
                 pointerEvents="none"
                 style={[
@@ -1035,8 +1502,8 @@ const styles = StyleSheet.create({
   content: {
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingTop: 34,
-    paddingBottom: 120,
+    paddingTop: 14,
+    paddingBottom: 142,
   },
   topBar: {
     width: '100%',
@@ -1107,72 +1574,70 @@ const styles = StyleSheet.create({
   quote: {
     color: 'rgba(255,255,255,0.82)',
     textAlign: 'center',
-    marginTop: 10,
-    marginBottom: 12,
-    fontSize: 18,
+    marginTop: 6,
+    marginBottom: 6,
+    fontSize: 15,
     fontStyle: 'italic',
-    lineHeight: 30,
+    lineHeight: 21,
     maxWidth: 620,
   },
-  dateText: { color: '#94a3b8', fontSize: 14, marginBottom: 4 },
-  big: { color: 'white', fontSize: 68, fontWeight: '900', marginTop: 0 },
+  dateText: { color: '#94a3b8', fontSize: 13, marginBottom: 2 },
+  big: { color: 'white', fontSize: 48, fontWeight: '900', marginTop: 0 },
   progressBarBackground: {
     width: 220,
     height: 6,
     backgroundColor: '#1e293b',
     borderRadius: 999,
     overflow: 'hidden',
-    marginBottom: 8,
+    marginBottom: 6,
     alignSelf: 'center',
   },
   progressBarFill: {
     height: '100%',
-  backgroundColor: '#f59e0b', // ← ఇది మార్చండి
-  borderRadius: 999,
+    backgroundColor: '#f59e0b',
+    borderRadius: 999,
   },
-  progressText: { color: '#94a3b8', fontSize: 13, marginBottom: 8 },
+  progressText: { color: '#94a3b8', fontSize: 13, marginBottom: 5 },
   metricsRow: {
     width: '100%',
     maxWidth: 440,
     flexDirection: 'row',
     justifyContent: 'space-evenly',
     alignItems: 'center',
-    marginTop: 10,
-    marginBottom: 18,
+    marginTop: 5,
+    marginBottom: 8,
   },
   metricText: {
     color: '#e2e8f0',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700',
     textAlign: 'center',
   },
   timerRunningText: { fontSize: 24, color: 'white', fontWeight: '900' },
   circleGlow: {
-    width: 220,
-    height: 220,
-    borderRadius: 110,
+    width: 154,
+    height: 154,
+    borderRadius: 77,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: 'rgba(251, 191, 36, 0.08)',
     shadowColor: '#fbbf24',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.45,
-    shadowRadius: 35,
+    shadowRadius: 24,
     elevation: 20,
-    
-  
   },
   circle: {
-    width: 180,
-    height: 180,
-    borderRadius: 90,
+    width: 128,
+    height: 128,
+    borderRadius: 64,
     justifyContent: 'center',
     alignItems: 'center',
-    overflow: 'hidden', // ✅ ఇది add చేయండి
+    overflow: 'hidden',
     shadowColor: '#8b5cf6',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.95,
-    shadowRadius: 40,
+    shadowRadius: 28,
     elevation: 25,
   },
   circlePressed: { transform: [{ scale: 0.96 }] },
@@ -1181,34 +1646,34 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     paddingHorizontal: 18,
     borderRadius: 999,
-    marginTop: 10,
-    marginBottom: 10,
+    marginTop: 6,
+    marginBottom: 6,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.16)',
   },
   undoText: { color: '#f8fafc', fontSize: 14, fontWeight: '700', letterSpacing: 0.2 },
-  inputLabel: { color: '#94a3b8', fontSize: 13, marginBottom: 6 },
+  inputLabel: { color: '#94a3b8', fontSize: 12, marginBottom: 4 },
   input: {
     backgroundColor: '#1e293b',
     color: 'white',
     borderRadius: 10,
-    width: 110,
+    width: 100,
     textAlign: 'center',
-    padding: 10,
-    fontSize: 18,
+    padding: 7,
+    fontSize: 17,
   },
   autoRepeatRow: {
     width: 260,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 10,
+    marginTop: 6,
   },
   autoRepeatText: { color: '#cbd5e1', fontSize: 15, fontWeight: '700' },
-  row: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  row: { flexDirection: 'row', gap: 10, marginTop: 7 },
   btn: {
     backgroundColor: '#6366f1',
-    paddingVertical: 12,
+    paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 10,
     minWidth: 86,
@@ -1299,7 +1764,7 @@ const styles = StyleSheet.create({
   loginButtonDesktop: { position: 'absolute', right: 16, top: 12 },
   loginButtonMobile: { marginTop: 8, alignSelf: 'center' },
   loginButtonText: { color: '#ffffff', fontWeight: '900', fontSize: 14 },
-  timerHint: { color: '#94a3b8', fontSize: 12, marginTop: 6, textAlign: 'center' },
+  timerHint: { color: '#94a3b8', fontSize: 11, marginTop: 4, textAlign: 'center' },
   disabledInput: { opacity: 0.55 },
   signingInBanner: {
     position: 'absolute',
@@ -1313,7 +1778,7 @@ const styles = StyleSheet.create({
   },
   signingInText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   omText: {
-    fontSize: 96,
+    fontSize: 68,
     color: '#fbbf24',
     fontWeight: '300',
     textShadowColor: 'rgba(251,191,36,0.8)',
@@ -1332,5 +1797,5 @@ const styles = StyleSheet.create({
     shadowRadius: 30,
     zIndex: 1,
   },
-  
+
 });
