@@ -1,5 +1,6 @@
+import { LinearGradient } from 'expo-linear-gradient';
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 const faqs = [
   {
@@ -40,8 +41,9 @@ export default function FAQ() {
   const [open, setOpen] = useState<number | null>(0);
 
   return (
-    <View style={styles.container}>
-      
+    <LinearGradient colors={['#05010c', '#120022', '#05010c']} style={styles.container}>
+      <ScrollView contentContainerStyle={styles.content}>
+      <Text style={styles.title}>FAQ</Text>
       <Text style={styles.subtitle}>Frequently asked questions</Text>
 
       {faqs.map((item, i) => {
@@ -56,27 +58,29 @@ export default function FAQ() {
           </View>
         );
       })}
-    </View>
+      </ScrollView>
+    </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0f172a', padding: 16 },
-  title: { color: 'white', fontSize: 34, fontWeight: '800', marginTop: 4 },
-  subtitle: { color: '#94a3b8', marginTop: 4, marginBottom: 14, fontSize: 16 },
+  container: { flex: 1 },
+  content: { padding: 18, paddingBottom: 120 },
+  title: { color: 'white', fontSize: 30, fontWeight: '900', marginTop: 4 },
+  subtitle: { color: '#cbd5e1', marginTop: 4, marginBottom: 14, fontSize: 16 },
 
   card: {
-    backgroundColor: '#1e293b',
+    backgroundColor: 'rgba(15, 23, 42, 0.72)',
     borderRadius: 14,
     marginBottom: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderWidth: 1,
-    borderColor: '#334155',
+    borderColor: 'rgba(251, 191, 36, 0.16)',
   },
   cardOpen: {
-    borderColor: '#6366f1',
-    backgroundColor: '#24324b',
+    borderColor: '#f59e0b',
+    backgroundColor: 'rgba(36, 50, 75, 0.82)',
   },
 
   questionRow: {

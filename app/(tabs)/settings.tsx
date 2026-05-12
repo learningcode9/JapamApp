@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
@@ -38,7 +39,10 @@ export default function SettingsScreen() {
   
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <LinearGradient colors={['#05010c', '#120022', '#05010c']} style={styles.container}>
+    <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+      <Text style={styles.title}>Settings</Text>
+      <Text style={styles.subtitle}>Sound and vibration preferences.</Text>
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Japam Options</Text>
 
@@ -74,19 +78,36 @@ export default function SettingsScreen() {
         </Text>
       </View>
     </ScrollView>
+    </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0f172a',
+  },
+
+  scroll: {
+    flex: 1,
   },
 
   content: {
     paddingHorizontal: 20,
     paddingTop: 32,
     paddingBottom: 120,
+  },
+
+  title: {
+    color: 'white',
+    fontSize: 30,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+
+  subtitle: {
+    color: '#cbd5e1',
+    fontSize: 14,
+    marginBottom: 18,
   },
 
   section: {
@@ -103,7 +124,7 @@ const styles = StyleSheet.create({
   },
 
   card: {
-    backgroundColor: '#1e293b',
+    backgroundColor: 'rgba(15, 23, 42, 0.72)',
     borderRadius: 16,
     padding: 16,
     marginBottom: 12,
@@ -111,7 +132,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderColor: '#334155',
+    borderColor: 'rgba(251, 191, 36, 0.16)',
   },
 
   textBlock: {
@@ -133,11 +154,11 @@ const styles = StyleSheet.create({
   },
 
   infoBox: {
-    backgroundColor: '#172554',
+    backgroundColor: 'rgba(23, 37, 84, 0.72)',
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#1d4ed8',
+    borderColor: 'rgba(96, 165, 250, 0.34)',
   },
 
   infoTitle: {

@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect } from 'expo-router';
 import React, { useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -134,8 +135,10 @@ if (!userId) {
   };
 
   return (
-    <View style={styles.container}>
+    <LinearGradient colors={['#05010c', '#120022', '#05010c']} style={styles.container}>
+      <View style={styles.panel}>
       <Text style={styles.title}>Manual Entry</Text>
+      <Text style={styles.subtitle}>Add japam completed outside the timer.</Text>
       {!userId && (
   <Text style={styles.loginHint}>
     Sign in with Google from the Japam screen to save entries.
@@ -173,23 +176,42 @@ if (!userId) {
       <Pressable style={styles.btn} onPress={onSave}>
         <Text style={styles.btnText}>Save</Text>
       </Pressable>
-    </View>
+      </View>
+    </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0f172a',
     padding: 20,
     alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  panel: {
+    width: '100%',
+    maxWidth: 420,
+    alignItems: 'center',
+    backgroundColor: 'rgba(15, 23, 42, 0.56)',
+    borderWidth: 1,
+    borderColor: 'rgba(251, 191, 36, 0.18)',
+    borderRadius: 18,
+    padding: 22,
   },
 
   title: {
     color: 'white',
     fontSize: 28,
-    fontWeight: '800',
-    marginVertical: 24,
+    fontWeight: '900',
+    marginBottom: 6,
+  },
+
+  subtitle: {
+    color: '#cbd5e1',
+    fontSize: 14,
+    marginBottom: 14,
+    textAlign: 'center',
   },
 
   input: {
@@ -200,6 +222,8 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 12,
     marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#334155',
   },
 
   or: {
@@ -209,7 +233,7 @@ const styles = StyleSheet.create({
 
   btn: {
     marginTop: 16,
-    backgroundColor: '#6366f1',
+    backgroundColor: '#7c3aed',
     borderRadius: 10,
     paddingVertical: 12,
     paddingHorizontal: 22,

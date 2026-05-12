@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import React, { useCallback, useMemo, useState } from 'react';
@@ -336,7 +337,10 @@ export default function HistoryScreen() {
   };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <LinearGradient colors={['#05010c', '#120022', '#05010c']} style={styles.container}>
+    <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+      <Text style={styles.title}>History</Text>
+      <Text style={styles.subtitle}>Your synced japam progress by day.</Text>
       <View style={styles.simpleSummary}>
         <Text style={styles.summaryText}>📿 Total Malas: {totalMalas}</Text>
         <Text style={styles.summaryText}>🔢 Total Count: {totalCount}</Text>
@@ -376,19 +380,36 @@ export default function HistoryScreen() {
         )}
       </View>
     </ScrollView>
+    </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0f172a',
+  },
+
+  scroll: {
+    flex: 1,
   },
 
   content: {
     paddingHorizontal: 18,
     paddingTop: 24,
     paddingBottom: 120,
+  },
+
+  title: {
+    color: 'white',
+    fontSize: 30,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+
+  subtitle: {
+    color: '#cbd5e1',
+    fontSize: 14,
+    marginBottom: 16,
   },
 
   simpleSummary: {
@@ -420,10 +441,10 @@ const styles = StyleSheet.create({
   },
 
   tableCard: {
-    backgroundColor: '#1e293b',
+    backgroundColor: 'rgba(15, 23, 42, 0.72)',
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#334155',
+    borderColor: 'rgba(251, 191, 36, 0.18)',
     overflow: 'hidden',
   },
 
@@ -436,12 +457,12 @@ const styles = StyleSheet.create({
   },
 
   tableHeader: {
-    backgroundColor: '#334155',
+    backgroundColor: 'rgba(51, 65, 85, 0.82)',
     borderTopWidth: 0,
   },
 
   altTableRow: {
-    backgroundColor: '#23314a',
+    backgroundColor: 'rgba(35, 49, 74, 0.78)',
   },
 
   tableCell: {
