@@ -1,5 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
+import { Dimensions } from 'react-native';
+
+const screenWidth = Dimensions.get('window').width;
+const isMobile = screenWidth < 500;
 
 export default function TabLayout() {
   return (
@@ -11,12 +15,12 @@ export default function TabLayout() {
         tabBarStyle: {
           backgroundColor: '#111827',
           borderTopColor: '#1e293b',
-          height: 78,
-          paddingTop: 8,
-          paddingBottom: 10,
+          height: isMobile ? 64 : 78,
+          paddingTop: isMobile ? 5 : 8,
+          paddingBottom: isMobile ? 5 : 10,
         },
         tabBarLabelStyle: {
-          fontSize: 13,
+          fontSize: isMobile ? 12 : 13,
           fontWeight: '700',
         },
       }}

@@ -42,13 +42,17 @@ export default function RootLayout() {
     document.documentElement.style.height = '100%';
     document.documentElement.style.backgroundColor = '#05010c';
     document.body.style.height = '100%';
+    document.body.style.minHeight = '100dvh';
     document.body.style.margin = '0';
     document.body.style.backgroundColor = '#05010c';
+    document.body.style.overflow = 'hidden';
 
     const root = document.getElementById('root');
     if (root) {
+      root.style.height = '100dvh';
       root.style.minHeight = '100dvh';
       root.style.backgroundColor = '#05010c';
+      root.style.overflow = 'hidden';
     }
   }, []);
 
