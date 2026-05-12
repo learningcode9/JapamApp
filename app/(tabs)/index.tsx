@@ -1293,7 +1293,7 @@ export default function JapamMain() {
         <View style={styles.topBar}>
           <View style={styles.headerCenter}>
             <Pressable onPress={openRename}>
-              <Text style={styles.title}>🧘 {japamName}</Text>
+              <Text style={styles.title}>{japamName}</Text>
             </Pressable>
 
             {!userName && (
@@ -1391,7 +1391,7 @@ export default function JapamMain() {
             style={({ pressed }) => [pressed && styles.circlePressed]}
           >
           <LinearGradient
-  colors={['#4c1d95', '#2e1065', '#0a0015']}
+  colors={['#6d28d9', '#3b0764', '#160032']}
   start={{ x: 0, y: 0 }}
   end={{ x: 1, y: 1 }}
   style={styles.circle}
@@ -1499,8 +1499,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: isMobile ? 14 : 24,
-    paddingTop: isShortMobile ? 6 : isMobile ? 8 : 14,
-    paddingBottom: isMobile ? 70 : 96,
+    paddingTop: isShortMobile ? 10 : isMobile ? 18 : 14,
+    paddingBottom: isMobile ? 46 : 96,
     minHeight: '100%',
   },
   topBar: {
@@ -1513,7 +1513,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     width: '100%',
-    marginBottom: isShortMobile ? 2 : 8,
+    marginBottom: isShortMobile ? 4 : 10,
   },
   userMenuWrap: { alignItems: 'flex-end', zIndex: 20 },
   userBadge: {
@@ -1544,7 +1544,7 @@ const styles = StyleSheet.create({
   userMenuText: { color: 'white', fontSize: 14, fontWeight: '800' },
   title: {
     color: '#f8fafc',
-    fontSize: isShortMobile ? 27 : isMobile ? 30 : 36,
+    fontSize: isShortMobile ? 36 : isMobile ? 42 : 36,
     fontWeight: '800',
     textAlign: 'center',
     letterSpacing: 0.3,
@@ -1622,27 +1622,29 @@ const styles = StyleSheet.create({
     borderRadius: isShortMobile ? 56 : isMobile ? 66 : 77,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(251, 191, 36, 0.08)',
+    backgroundColor: 'rgba(251, 191, 36, 0.1)',
     shadowColor: '#fbbf24',
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.45,
-    shadowRadius: 24,
+    shadowOpacity: 0.55,
+    shadowRadius: 28,
     elevation: 20,
     marginTop: isShortMobile ? 2 : isMobile ? 6 : 10,
     marginBottom: isShortMobile ? 4 : isMobile ? 8 : 12,
   },
   circle: {
-    width: isShortMobile ? 92 : isMobile ? 108 : 124,
-    height: isShortMobile ? 92 : isMobile ? 108 : 124,
-    borderRadius: isShortMobile ? 46 : isMobile ? 54 : 62,
+    width: isShortMobile ? 100 : isMobile ? 116 : 132,
+    height: isShortMobile ? 100 : isMobile ? 116 : 132,
+    borderRadius: isShortMobile ? 50 : isMobile ? 58 : 66,
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
     shadowColor: '#8b5cf6',
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.95,
-    shadowRadius: 28,
+    shadowOpacity: 0.78,
+    shadowRadius: 22,
     elevation: 25,
+    borderWidth: 1,
+    borderColor: 'rgba(251, 191, 36, 0.28)',
   },
   circlePressed: { transform: [{ scale: 0.96 }] },
   undoBtn: {
@@ -1657,7 +1659,12 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.16)',
   },
   undoText: { color: '#f8fafc', fontSize: isShortMobile ? 13 : isMobile ? 15 : 18, fontWeight: '800', letterSpacing: 0.2 },
-  inputLabel: { color: '#cbd5e1', fontSize: isShortMobile ? 13 : isMobile ? 14 : 16, marginBottom: 2 },
+  inputLabel: {
+    color: '#cbd5e1',
+    fontSize: isShortMobile ? 13 : isMobile ? 14 : 16,
+    marginTop: isMobile ? 8 : 6,
+    marginBottom: 4,
+  },
   input: {
     backgroundColor: '#1e293b',
     color: 'white',
@@ -1769,7 +1776,13 @@ const styles = StyleSheet.create({
   loginButtonDesktop: { position: 'absolute', right: 16, top: 12 },
   loginButtonMobile: { marginTop: isShortMobile ? 4 : 8, alignSelf: 'center' },
   loginButtonText: { color: '#ffffff', fontWeight: '900', fontSize: 14 },
-  timerHint: { color: '#94a3b8', fontSize: isShortMobile ? 11 : isMobile ? 12 : 14, marginTop: 1, textAlign: 'center' },
+  timerHint: {
+    color: '#94a3b8',
+    fontSize: isShortMobile ? 11 : isMobile ? 12 : 14,
+    marginTop: isMobile ? 8 : 4,
+    marginBottom: isMobile ? 4 : 0,
+    textAlign: 'center',
+  },
   disabledInput: { opacity: 0.55 },
   signingInBanner: {
     position: 'absolute',
@@ -1797,9 +1810,11 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   omText: {
-    fontSize: isShortMobile ? 44 : isMobile ? 52 : 64,
-    color: '#fbbf24',
-    fontWeight: '300',
+    fontSize: isShortMobile ? 58 : isMobile ? 66 : 76,
+    color: '#ffd166',
+    fontWeight: '400',
+    includeFontPadding: false,
+    lineHeight: isShortMobile ? 72 : isMobile ? 82 : 94,
     textShadowColor: 'rgba(251,191,36,0.8)',
     textShadowOffset: { width: 0, height: 0 },
     textShadowRadius: 22,

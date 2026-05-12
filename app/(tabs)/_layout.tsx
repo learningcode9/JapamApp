@@ -15,9 +15,9 @@ export default function TabLayout() {
         tabBarStyle: {
           backgroundColor: '#111827',
           borderTopColor: '#1e293b',
-          height: isMobile ? 64 : 78,
-          paddingTop: isMobile ? 5 : 8,
-          paddingBottom: isMobile ? 5 : 10,
+          height: isMobile ? 58 : 78,
+          paddingTop: isMobile ? 3 : 8,
+          paddingBottom: isMobile ? 3 : 10,
         },
         tabBarLabelStyle: {
           fontSize: isMobile ? 12 : 13,
