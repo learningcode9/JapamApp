@@ -1536,10 +1536,14 @@ const styles = StyleSheet.create({
   content: {
     flexGrow: 1,
     alignItems: 'center',
-    justifyContent: 'center',
+  
+    justifyContent: 'flex-start',
+  
     paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 110,
+    paddingTop: 70,
+    paddingBottom: 120,
+  
+    minHeight: '100%',
   },
   topBar: {
     width: '100%',
@@ -1662,6 +1666,8 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.45,
     shadowRadius: 24,
     elevation: 20,
+    marginTop: 18,
+    marginBottom: 18,
   },
   circle: {
     width: 136,
@@ -1682,8 +1688,10 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     paddingHorizontal: 18,
     borderRadius: 999,
-    marginTop: 5,
-    marginBottom: 5,
+  
+    marginTop: 18,
+    marginBottom: 8,
+  
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.16)',
   },
