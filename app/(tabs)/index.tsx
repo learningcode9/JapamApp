@@ -100,7 +100,7 @@ export default function JapamMain() {
   const [seconds, setSeconds] = useState(0);
   const [hasRestoredTotal, setHasRestoredTotal] = useState(false);
   const [hasRestoredTimer, setHasRestoredTimer] = useState(false);
-  const [minutesInput, setMinutesInput] = useState('1');
+  const [minutesInput, setMinutesInput] = useState('0');
   const [targetSeconds, setTargetSeconds] = useState(60);
   const [isRunning, setIsRunning] = useState(false);
   const [loopTimer, setLoopTimer] = useState(false);
@@ -440,13 +440,13 @@ export default function JapamMain() {
           setSeconds(Number(timerState.seconds) || 0);
           setIsRunning(Boolean(timerState.is_running));
           setTargetSeconds(Number(timerState.target_seconds) || 60);
-          setMinutesInput(timerState.minutes_input || '1');
+          setMinutesInput(timerState.minutes_input || '0');
           setLoopTimer(Boolean(timerState.loop_timer));
         } else {
           const savedTimerSeconds = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_SECONDS_KEY, savedUserId))) || '0');
           const savedTimerRunning = (await AsyncStorage.getItem(getUserStorageKey(TIMER_RUNNING_KEY, savedUserId))) === 'true';
           const savedTimerTarget = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_TARGET_KEY, savedUserId))) || '60');
-          const savedTimerMinutes = (await AsyncStorage.getItem(getUserStorageKey(TIMER_MINUTES_KEY, savedUserId))) || '1';
+          const savedTimerMinutes = (await AsyncStorage.getItem(TIMER_MINUTES_KEY)) || '0';
           const savedTimerLoop = (await AsyncStorage.getItem(getUserStorageKey(TIMER_LOOP_KEY, savedUserId))) === 'true';
           setSeconds(savedTimerSeconds);
           setIsRunning(savedTimerRunning);
@@ -458,7 +458,7 @@ export default function JapamMain() {
         const savedTimerSeconds = Number((await AsyncStorage.getItem(TIMER_SECONDS_KEY)) || '0');
         const savedTimerRunning = (await AsyncStorage.getItem(TIMER_RUNNING_KEY)) === 'true';
         const savedTimerTarget = Number((await AsyncStorage.getItem(TIMER_TARGET_KEY)) || '60');
-        const savedTimerMinutes = (await AsyncStorage.getItem(TIMER_MINUTES_KEY)) || '1';
+        const savedTimerMinutes= (await AsyncStorage.getItem(TIMER_MINUTES_KEY)) || '0';
         const savedTimerLoop = (await AsyncStorage.getItem(TIMER_LOOP_KEY)) === 'true';
         setSeconds(savedTimerSeconds);
         setIsRunning(savedTimerRunning);
@@ -572,7 +572,7 @@ export default function JapamMain() {
       setSeconds(Number(timerState.seconds) || 0);
       setIsRunning(Boolean(timerState.is_running));
       setTargetSeconds(Number(timerState.target_seconds) || 60);
-      setMinutesInput(timerState.minutes_input || '1');
+      setMinutesInput(timerState.minutes_input || '0');
       setLoopTimer(Boolean(timerState.loop_timer));
     }
     setHasRestoredTimer(true);
@@ -741,9 +741,20 @@ export default function JapamMain() {
   }, [userName]);
 
   const tapFeedback = () => {
-    vibrateDevice(35);
-    if (Platform.OS !== 'web' && vibrationEnabled) {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (Platform.OS === 'ios') {
+      Haptics.impactAsync(
+        Haptics.ImpactFeedbackStyle.Medium
+      ).catch(console.log);
+  
+      return;
+    }
+  
+    vibrateDevice(80);
+  
+    if (Platform.OS !== 'web') {
+      Haptics.impactAsync(
+        Haptics.ImpactFeedbackStyle.Medium
+      ).catch(console.log);
     }
   };
 
@@ -766,16 +777,16 @@ export default function JapamMain() {
   
     if (Platform.OS === 'ios') {
       await Haptics.notificationAsync(
-        Haptics.NotificationFeedbackType.Success
+        Haptics.NotificationFeedbackType.Warning
       );
   
       setTimeout(() => {
         Haptics.notificationAsync(
-          Haptics.NotificationFeedbackType.Success
+          Haptics.NotificationFeedbackType.Warning
         ).catch(console.log);
       }, 400);
     } else {
-      vibrateDevice([0, 500, 150, 500, 150, 900]);
+      vibrateDevice([0, 700, 180, 700, 180, 1000]);
     }
   }, [playCompletionAnimation, soundEnabled, vibrateDevice]);
 

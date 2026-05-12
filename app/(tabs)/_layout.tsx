@@ -35,45 +35,49 @@ export default function TabLayout() {
         }}
       />
 
-      <Tabs.Screen
-        name="manual"
-        options={{
-          title: 'Manual',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="book-outline" size={size} color={color} />
-          ),
-        }}
-      />
+<Tabs.Screen
+  name="manual"
+  options={{
+    title: 'Manual',
+    tabBarIcon: ({ color, size }) => (
+      <Ionicons name="create-outline" size={size} color={color} />
+    ),
+  }}
+/>
 
-      <Tabs.Screen
-        name="history"
-        options={{
-          title: 'History',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="time-outline" size={size} color={color} />
-          ),
-        }}
+<Tabs.Screen
+  name="history"
+  options={{
+    title: 'History',
+    tabBarIcon: ({ color, size }) => (
+      <Ionicons
+        name="document-text-outline"
+        size={size}
+        color={color}
       />
+    ),
+  }}
+/>
 
-      <Tabs.Screen
-        name="faq"
-        options={{
-          title: 'FAQ',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="help-circle-outline" size={size} color={color} />
-          ),
-        }}
-      />
+<Tabs.Screen
+  name="faq"
+  options={{
+    title: 'FAQ',
+    tabBarIcon: ({ color, size }) => (
+      <Ionicons name="help-circle-outline" size={size} color={color} />
+    ),
+  }}
+/>
 
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: 'Settings',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="settings-outline" size={size} color={color} />
-          ),
-        }}
-      />
+<Tabs.Screen
+  name="settings"
+  options={{
+    title: 'Settings',
+    tabBarIcon: ({ color, size }) => (
+      <Ionicons name="sparkles-outline" size={size} color={color} />
+    ),
+  }}
+/>
     </Tabs>
   );
 }
