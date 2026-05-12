@@ -1536,13 +1536,10 @@ const styles = StyleSheet.create({
   content: {
     flexGrow: 1,
     alignItems: 'center',
-  
     justifyContent: 'flex-start',
-  
     paddingHorizontal: 20,
-    paddingTop: 70,
+    paddingTop: 20, // 70 → 20
     paddingBottom: 120,
-  
     minHeight: '100%',
   },
   topBar: {
@@ -1653,7 +1650,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textAlign: 'center',
   },
-  timerRunningText: { fontSize: 24, color: 'white', fontWeight: '900' },
+  timerRunningText: { 
+    fontSize: 32,  // 24 → 32
+    color: '#fbbf24', // white → golden
+    fontWeight: '900' 
+  },
   circleGlow: {
     width: 160,
     height: 160,
