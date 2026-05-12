@@ -338,9 +338,26 @@ export default function HistoryScreen() {
 
   return (
     <LinearGradient colors={['#05010c', '#120022', '#05010c']} style={styles.container}>
+    {[...Array(30)].map((_, i) => (
+      <View
+        key={i}
+        pointerEvents="none"
+        style={[
+          styles.star,
+          {
+            left: `${(i * 37 + 11) % 100}%`,
+            top: `${(i * 53 + 7) % 100}%`,
+            opacity: i % 3 === 0 ? 0.72 : 0.28,
+          },
+        ]}
+      />
+    ))}
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+      <View style={styles.header}>
+      <Text style={styles.omMark}>ॐ</Text>
       <Text style={styles.title}>History</Text>
       <Text style={styles.subtitle}>Your synced japam progress by day.</Text>
+      </View>
       <View style={styles.simpleSummary}>
         <Text style={styles.summaryText}>📿 Total Malas: {totalMalas}</Text>
         <Text style={styles.summaryText}>🔢 Total Count: {totalCount}</Text>
@@ -393,23 +410,50 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
+  star: {
+    position: 'absolute',
+    width: 2,
+    height: 2,
+    borderRadius: 99,
+    backgroundColor: 'white',
+  },
+
   content: {
+    width: '100%',
+    maxWidth: 980,
+    alignSelf: 'center',
     paddingHorizontal: 18,
-    paddingTop: 24,
+    paddingTop: 28,
     paddingBottom: 120,
+  },
+
+  header: {
+    alignItems: 'center',
+    marginBottom: 18,
+  },
+
+  omMark: {
+    color: '#fbbf24',
+    fontSize: 48,
+    fontWeight: '700',
+    marginBottom: 2,
+    textShadowColor: 'rgba(251,191,36,0.65)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 18,
   },
 
   title: {
     color: 'white',
-    fontSize: 30,
+    fontSize: 36,
     fontWeight: '900',
     marginBottom: 4,
+    textAlign: 'center',
   },
 
   subtitle: {
     color: '#cbd5e1',
-    fontSize: 14,
-    marginBottom: 16,
+    fontSize: 18,
+    textAlign: 'center',
   },
 
   simpleSummary: {
@@ -417,18 +461,19 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 18,
     marginBottom: 16,
+    justifyContent: 'center',
   },
 
   summaryText: {
     color: '#cbd5e1',
-    fontSize: 16,
+    fontSize: 20,
     fontWeight: '700',
   },
 
   exportBtn: {
     backgroundColor: '#6366f1',
-    paddingVertical: 10,
-    paddingHorizontal: 18,
+    paddingVertical: 12,
+    paddingHorizontal: 22,
     borderRadius: 10,
     alignSelf: 'flex-start',
     marginBottom: 14,
@@ -436,7 +481,7 @@ const styles = StyleSheet.create({
 
   exportBtnText: {
     color: 'white',
-    fontSize: 15,
+    fontSize: 18,
     fontWeight: '700',
   },
 
@@ -451,7 +496,7 @@ const styles = StyleSheet.create({
   tableRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: 48,
+    minHeight: 58,
     borderTopWidth: 1,
     borderTopColor: '#334155',
   },
@@ -468,10 +513,10 @@ const styles = StyleSheet.create({
   tableCell: {
     flex: 1,
     color: 'white',
-    fontSize: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    fontWeight: '600',
+    fontSize: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
+    fontWeight: '700',
   },
 
   dateCell: {
@@ -484,6 +529,6 @@ const styles = StyleSheet.create({
 
   emptyText: {
     color: '#94a3b8',
-    fontSize: 15,
+    fontSize: 18,
   },
 });

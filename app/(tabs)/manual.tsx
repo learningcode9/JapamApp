@@ -136,7 +136,22 @@ if (!userId) {
 
   return (
     <LinearGradient colors={['#05010c', '#120022', '#05010c']} style={styles.container}>
+      {[...Array(30)].map((_, i) => (
+        <View
+          key={i}
+          pointerEvents="none"
+          style={[
+            styles.star,
+            {
+              left: `${(i * 37 + 11) % 100}%`,
+              top: `${(i * 53 + 7) % 100}%`,
+              opacity: i % 3 === 0 ? 0.75 : 0.32,
+            },
+          ]}
+        />
+      ))}
       <View style={styles.panel}>
+      <Text style={styles.omMark}>ॐ</Text>
       <Text style={styles.title}>Manual Entry</Text>
       <Text style={styles.subtitle}>Add japam completed outside the timer.</Text>
       {!userId && (
@@ -184,32 +199,50 @@ if (!userId) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 20,
+    padding: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
+  star: {
+    position: 'absolute',
+    width: 2,
+    height: 2,
+    borderRadius: 99,
+    backgroundColor: 'white',
+  },
+
   panel: {
     width: '100%',
-    maxWidth: 420,
+    maxWidth: 560,
     alignItems: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.56)',
+    backgroundColor: 'rgba(15, 23, 42, 0.66)',
     borderWidth: 1,
     borderColor: 'rgba(251, 191, 36, 0.18)',
     borderRadius: 18,
-    padding: 22,
+    padding: 26,
+  },
+
+  omMark: {
+    color: '#fbbf24',
+    fontSize: 48,
+    fontWeight: '700',
+    marginBottom: 4,
+    textShadowColor: 'rgba(251,191,36,0.65)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 18,
   },
 
   title: {
     color: 'white',
-    fontSize: 28,
+    fontSize: 36,
     fontWeight: '900',
     marginBottom: 6,
   },
 
   subtitle: {
     color: '#cbd5e1',
-    fontSize: 14,
+    fontSize: 18,
     marginBottom: 14,
     textAlign: 'center',
   },
@@ -220,28 +253,30 @@ const styles = StyleSheet.create({
     backgroundColor: '#1e293b',
     color: 'white',
     borderRadius: 10,
-    padding: 12,
+    padding: 14,
     marginTop: 10,
     borderWidth: 1,
     borderColor: '#334155',
   },
 
   or: {
-    color: '#94a3b8',
+    color: '#cbd5e1',
     marginTop: 12,
+    fontSize: 18,
   },
 
   btn: {
     marginTop: 16,
     backgroundColor: '#7c3aed',
     borderRadius: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 22,
+    paddingVertical: 14,
+    paddingHorizontal: 28,
   },
 
   btnText: {
     color: 'white',
-    fontWeight: '700',
+    fontWeight: '900',
+    fontSize: 20,
   },
   loginHint: {
     color: '#cbd5e1',

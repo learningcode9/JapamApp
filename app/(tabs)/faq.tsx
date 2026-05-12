@@ -42,9 +42,26 @@ export default function FAQ() {
 
   return (
     <LinearGradient colors={['#05010c', '#120022', '#05010c']} style={styles.container}>
+      {[...Array(30)].map((_, i) => (
+        <View
+          key={i}
+          pointerEvents="none"
+          style={[
+            styles.star,
+            {
+              left: `${(i * 37 + 11) % 100}%`,
+              top: `${(i * 53 + 7) % 100}%`,
+              opacity: i % 3 === 0 ? 0.72 : 0.28,
+            },
+          ]}
+        />
+      ))}
       <ScrollView contentContainerStyle={styles.content}>
+      <View style={styles.header}>
+      <Text style={styles.omMark}>ॐ</Text>
       <Text style={styles.title}>FAQ</Text>
       <Text style={styles.subtitle}>Frequently asked questions</Text>
+      </View>
 
       {faqs.map((item, i) => {
         const isOpen = open === i;
@@ -65,16 +82,40 @@ export default function FAQ() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content: { padding: 18, paddingBottom: 120 },
-  title: { color: 'white', fontSize: 30, fontWeight: '900', marginTop: 4 },
-  subtitle: { color: '#cbd5e1', marginTop: 4, marginBottom: 14, fontSize: 16 },
+  star: {
+    position: 'absolute',
+    width: 2,
+    height: 2,
+    borderRadius: 99,
+    backgroundColor: 'white',
+  },
+  content: {
+    width: '100%',
+    maxWidth: 820,
+    alignSelf: 'center',
+    padding: 20,
+    paddingTop: 28,
+    paddingBottom: 120,
+  },
+  header: { alignItems: 'center', marginBottom: 18 },
+  omMark: {
+    color: '#fbbf24',
+    fontSize: 48,
+    fontWeight: '700',
+    marginBottom: 2,
+    textShadowColor: 'rgba(251,191,36,0.65)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 18,
+  },
+  title: { color: 'white', fontSize: 36, fontWeight: '900', marginTop: 4, textAlign: 'center' },
+  subtitle: { color: '#cbd5e1', marginTop: 4, fontSize: 18, textAlign: 'center' },
 
   card: {
     backgroundColor: 'rgba(15, 23, 42, 0.72)',
     borderRadius: 14,
     marginBottom: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 15,
     borderWidth: 1,
     borderColor: 'rgba(251, 191, 36, 0.16)',
   },
@@ -89,7 +130,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 
-  q: { color: 'white', fontWeight: '700', fontSize: 17, flex: 1, paddingRight: 10 },
-  icon: { color: '#a5b4fc', fontSize: 24, fontWeight: '700' },
-  a: { color: '#cbd5e1', marginTop: 10, lineHeight: 24, fontSize: 16 },
+  q: { color: 'white', fontWeight: '800', fontSize: 20, flex: 1, paddingRight: 10 },
+  icon: { color: '#fbbf24', fontSize: 30, fontWeight: '700' },
+  a: { color: '#cbd5e1', marginTop: 12, lineHeight: 29, fontSize: 18 },
 });

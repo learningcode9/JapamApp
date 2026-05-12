@@ -40,9 +40,26 @@ export default function SettingsScreen() {
 
   return (
     <LinearGradient colors={['#05010c', '#120022', '#05010c']} style={styles.container}>
+    {[...Array(30)].map((_, i) => (
+      <View
+        key={i}
+        pointerEvents="none"
+        style={[
+          styles.star,
+          {
+            left: `${(i * 37 + 11) % 100}%`,
+            top: `${(i * 53 + 7) % 100}%`,
+            opacity: i % 3 === 0 ? 0.72 : 0.28,
+          },
+        ]}
+      />
+    ))}
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+      <View style={styles.header}>
+        <Text style={styles.omMark}>ॐ</Text>
       <Text style={styles.title}>Settings</Text>
       <Text style={styles.subtitle}>Sound and vibration preferences.</Text>
+      </View>
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Japam Options</Text>
 
@@ -91,23 +108,50 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
+  star: {
+    position: 'absolute',
+    width: 2,
+    height: 2,
+    borderRadius: 99,
+    backgroundColor: 'white',
+  },
+
   content: {
+    width: '100%',
+    maxWidth: 820,
+    alignSelf: 'center',
     paddingHorizontal: 20,
-    paddingTop: 32,
+    paddingTop: 28,
     paddingBottom: 120,
+  },
+
+  header: {
+    alignItems: 'center',
+    marginBottom: 22,
+  },
+
+  omMark: {
+    color: '#fbbf24',
+    fontSize: 48,
+    fontWeight: '700',
+    marginBottom: 2,
+    textShadowColor: 'rgba(251,191,36,0.65)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 18,
   },
 
   title: {
     color: 'white',
-    fontSize: 30,
+    fontSize: 36,
     fontWeight: '900',
     marginBottom: 4,
+    textAlign: 'center',
   },
 
   subtitle: {
     color: '#cbd5e1',
-    fontSize: 14,
-    marginBottom: 18,
+    fontSize: 18,
+    textAlign: 'center',
   },
 
   section: {
@@ -116,7 +160,7 @@ const styles = StyleSheet.create({
 
   sectionTitle: {
     color: '#cbd5e1',
-    fontSize: 15,
+    fontSize: 18,
     fontWeight: '800',
     marginBottom: 12,
     textTransform: 'uppercase',
@@ -126,7 +170,7 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: 'rgba(15, 23, 42, 0.72)',
     borderRadius: 16,
-    padding: 16,
+    padding: 18,
     marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
@@ -142,15 +186,15 @@ const styles = StyleSheet.create({
 
   label: {
     color: 'white',
-    fontSize: 17,
+    fontSize: 20,
     fontWeight: '800',
   },
 
   description: {
     color: '#94a3b8',
-    fontSize: 13,
+    fontSize: 17,
     marginTop: 5,
-    lineHeight: 18,
+    lineHeight: 24,
   },
 
   infoBox: {
@@ -163,14 +207,14 @@ const styles = StyleSheet.create({
 
   infoTitle: {
     color: 'white',
-    fontSize: 16,
+    fontSize: 20,
     fontWeight: '800',
     marginBottom: 6,
   },
 
   infoText: {
     color: '#bfdbfe',
-    fontSize: 14,
-    lineHeight: 20,
+    fontSize: 17,
+    lineHeight: 24,
   },
 });

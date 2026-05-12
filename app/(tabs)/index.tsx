@@ -139,35 +139,12 @@ export default function JapamMain() {
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
   const requestTimerNotificationPermission = async () => {
-    if (
-      Platform.OS !== 'web' ||
-      typeof window === 'undefined' ||
-      !('Notification' in window)
-    ) {
-      return;
-    }
-
-    if (window.Notification.permission === 'default') {
-      await window.Notification.requestPermission();
-    }
+    return;
   };
 
   const showTimerNotification = useCallback((title: string, body: string) => {
-    if (
-      Platform.OS !== 'web' ||
-      typeof window === 'undefined' ||
-      !('Notification' in window) ||
-      window.Notification.permission !== 'granted'
-    ) {
-      return;
-    }
-
-    new window.Notification(title, {
-      body,
-      icon: '/icon-192.png',
-      badge: '/icon-192.png',
-      tag: 'japam-timer',
-    });
+    void title;
+    void body;
   }, []);
 
   const vibrateDevice = useCallback((pattern: number | number[]) => {
@@ -1115,13 +1092,12 @@ export default function JapamMain() {
     if (now - lastTapRef.current < 100) return;
     lastTapRef.current = now;
 
-    tapFeedback();
     rippleAnim.setValue(0);
-Animated.timing(rippleAnim, {
-  toValue: 1,
-  duration: 700,
-  useNativeDriver: true,
-}).start();
+    Animated.timing(rippleAnim, {
+      toValue: 1,
+      duration: 700,
+      useNativeDriver: true,
+    }).start();
 
     const newTotal = setCountersFromTotal(totalRef.current + 1);
     const newCount = newTotal % 108;
@@ -1335,6 +1311,12 @@ Animated.timing(rippleAnim, {
           </View>
         )}
 
+        {isRunning && (
+          <View style={styles.runningBanner}>
+            <Text style={styles.runningBannerText}>Timer running • {formatTime(seconds)}</Text>
+          </View>
+        )}
+
         <View style={styles.topBar}>
           <View style={styles.headerCenter}>
             <Pressable onPress={openRename}>
@@ -1428,7 +1410,13 @@ Animated.timing(rippleAnim, {
               }),
             }}
           />
-          <Pressable onPress={handleTap} style={({ pressed }) => [pressed && styles.circlePressed]}>
+          <Pressable
+            onPress={handleTap}
+            onPressIn={() => {
+              if (userName) tapFeedback();
+            }}
+            style={({ pressed }) => [pressed && styles.circlePressed]}
+          >
           <LinearGradient
   colors={['#4c1d95', '#2e1065', '#0a0015']}
   start={{ x: 0, y: 0 }}
@@ -1443,6 +1431,18 @@ Animated.timing(rippleAnim, {
         <Pressable style={styles.undoBtn} onPress={handleUndo}>
           <Text style={styles.undoText}>↻ Undo last tap</Text>
         </Pressable>
+
+        <View style={styles.row}>
+          <Pressable style={styles.btn} onPress={handleStart}>
+            <Text style={styles.btnText}>Start</Text>
+          </Pressable>
+          <Pressable style={[styles.btn, styles.gray]} onPress={handlePause}>
+            <Text style={styles.btnText}>Pause</Text>
+          </Pressable>
+          <Pressable style={[styles.btn, styles.red]} onPress={handleStop}>
+            <Text style={styles.btnText}>Stop</Text>
+          </Pressable>
+        </View>
 
         <Text style={styles.inputLabel}>Timer (minutes)</Text>
 
@@ -1471,18 +1471,6 @@ Animated.timing(rippleAnim, {
               if (!value) { setIsRunning(false); setSeconds(0); }
             }}
           />
-        </View>
-
-        <View style={styles.row}>
-          <Pressable style={styles.btn} onPress={handleStart}>
-            <Text style={styles.btnText}>Start</Text>
-          </Pressable>
-          <Pressable style={[styles.btn, styles.gray]} onPress={handlePause}>
-            <Text style={styles.btnText}>Pause</Text>
-          </Pressable>
-          <Pressable style={[styles.btn, styles.red]} onPress={handleStop}>
-            <Text style={styles.btnText}>Stop</Text>
-          </Pressable>
         </View>
 
         <Modal visible={showUserModal && !isSigningIn} transparent animationType="fade">
@@ -1536,10 +1524,10 @@ const styles = StyleSheet.create({
   content: {
     flexGrow: 1,
     alignItems: 'center',
-    justifyContent: 'flex-start',
-    paddingHorizontal: 20,
-    paddingTop: 20, // 70 → 20
-    paddingBottom: 120,
+    justifyContent: 'center',
+    paddingHorizontal: isMobile ? 16 : 24,
+    paddingTop: isMobile ? 10 : 14,
+    paddingBottom: isMobile ? 92 : 96,
     minHeight: '100%',
   },
   topBar: {
@@ -1583,15 +1571,15 @@ const styles = StyleSheet.create({
   userMenuText: { color: 'white', fontSize: 14, fontWeight: '800' },
   title: {
     color: '#f8fafc',
-    fontSize: 24,
-    fontWeight: '500',
+    fontSize: isMobile ? 30 : 36,
+    fontWeight: '800',
     textAlign: 'center',
     letterSpacing: 0.3,
     textShadowColor: 'rgba(255,255,255,0.06)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 6,
   },
-  renameHint: { color: '#64748b', fontSize: 11, marginTop: 2 },
+  renameHint: { color: '#94a3b8', fontSize: isMobile ? 13 : 14, marginTop: 3 },
   nameEditor: {
     width: '100%',
     maxWidth: 520,
@@ -1613,16 +1601,16 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 4,
     marginBottom: 4,
-    fontSize: 14,
+    fontSize: isMobile ? 16 : 18,
     fontStyle: 'italic',
-    lineHeight: 19,
-    maxWidth: 620,
+    lineHeight: isMobile ? 22 : 28,
+    maxWidth: 760,
   },
-  dateText: { color: '#94a3b8', fontSize: 13, marginBottom: 2 },
-  big: { color: 'white', fontSize: 40, fontWeight: '900', marginTop: 0 },
+  dateText: { color: '#94a3b8', fontSize: isMobile ? 15 : 17, marginBottom: 2 },
+  big: { color: 'white', fontSize: isMobile ? 50 : 60, fontWeight: '900', marginTop: 0 },
   progressBarBackground: {
-    width: 220,
-    height: 6,
+    width: isMobile ? 230 : 310,
+    height: 8,
     backgroundColor: '#1e293b',
     borderRadius: 999,
     overflow: 'hidden',
@@ -1634,31 +1622,31 @@ const styles = StyleSheet.create({
     backgroundColor: '#f59e0b',
     borderRadius: 999,
   },
-  progressText: { color: '#94a3b8', fontSize: 12, marginBottom: 4 },
+  progressText: { color: '#cbd5e1', fontSize: isMobile ? 15 : 17, marginBottom: 6 },
   metricsRow: {
     width: '100%',
-    maxWidth: 440,
+    maxWidth: isMobile ? 440 : 560,
     flexDirection: 'row',
     justifyContent: 'space-evenly',
     alignItems: 'center',
-    marginTop: 4,
-    marginBottom: 6,
+    marginTop: 6,
+    marginBottom: isMobile ? 6 : 10,
   },
   metricText: {
     color: '#e2e8f0',
-    fontSize: 15,
+    fontSize: isMobile ? 17 : 22,
     fontWeight: '700',
     textAlign: 'center',
   },
-  timerRunningText: { 
-    fontSize: 32,  // 24 → 32
-    color: '#fbbf24', // white → golden
-    fontWeight: '900' 
+  timerRunningText: {
+    fontSize: isMobile ? 24 : 34,
+    color: '#fbbf24',
+    fontWeight: '900',
   },
   circleGlow: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
+    width: isMobile ? 132 : 154,
+    height: isMobile ? 132 : 154,
+    borderRadius: isMobile ? 66 : 77,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: 'rgba(251, 191, 36, 0.08)',
@@ -1667,13 +1655,13 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.45,
     shadowRadius: 24,
     elevation: 20,
-    marginTop: 18,
-    marginBottom: 18,
+    marginTop: isMobile ? 6 : 10,
+    marginBottom: isMobile ? 8 : 12,
   },
   circle: {
-    width: 136,
-    height: 136,
-    borderRadius: 68,
+    width: isMobile ? 108 : 124,
+    height: isMobile ? 108 : 124,
+    borderRadius: isMobile ? 54 : 62,
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
@@ -1686,42 +1674,41 @@ const styles = StyleSheet.create({
   circlePressed: { transform: [{ scale: 0.96 }] },
   undoBtn: {
     backgroundColor: 'rgba(15, 23, 42, 0.55)',
-    paddingVertical: 9,
-    paddingHorizontal: 18,
+    paddingVertical: isMobile ? 10 : 12,
+    paddingHorizontal: isMobile ? 20 : 24,
     borderRadius: 999,
-  
-    marginTop: 18,
-    marginBottom: 8,
+    marginTop: 6,
+    marginBottom: 4,
   
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.16)',
   },
-  undoText: { color: '#f8fafc', fontSize: 14, fontWeight: '700', letterSpacing: 0.2 },
-  inputLabel: { color: '#94a3b8', fontSize: 12, marginBottom: 4 },
+  undoText: { color: '#f8fafc', fontSize: isMobile ? 15 : 18, fontWeight: '800', letterSpacing: 0.2 },
+  inputLabel: { color: '#cbd5e1', fontSize: isMobile ? 14 : 16, marginBottom: 4 },
   input: {
     backgroundColor: '#1e293b',
     color: 'white',
     borderRadius: 10,
-    width: 100,
+    width: isMobile ? 104 : 120,
     textAlign: 'center',
-    padding: 6,
-    fontSize: 16,
+    padding: isMobile ? 7 : 8,
+    fontSize: isMobile ? 18 : 22,
   },
   autoRepeatRow: {
-    width: 260,
+    width: isMobile ? 250 : 300,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 5,
+    marginTop: 4,
   },
-  autoRepeatText: { color: '#cbd5e1', fontSize: 14, fontWeight: '700' },
-  row: { flexDirection: 'row', gap: 10, marginTop: 6 },
+  autoRepeatText: { color: '#e2e8f0', fontSize: isMobile ? 15 : 19, fontWeight: '800' },
+  row: { flexDirection: 'row', gap: 10, marginTop: 5 },
   btn: {
     backgroundColor: '#6366f1',
-    paddingVertical: 9,
-    paddingHorizontal: 16,
-    borderRadius: 10,
-    minWidth: 86,
+    paddingVertical: isMobile ? 10 : 12,
+    paddingHorizontal: isMobile ? 16 : 22,
+    borderRadius: 12,
+    minWidth: isMobile ? 88 : 118,
     alignItems: 'center',
   },
   gray: { backgroundColor: '#475569' },
@@ -1729,7 +1716,7 @@ const styles = StyleSheet.create({
   smallBtn: { backgroundColor: '#6366f1', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10 },
   graySmallBtn: { backgroundColor: '#475569', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10 },
   smallBtnText: { color: 'white', fontWeight: '700', fontSize: 14 },
-  btnText: { color: 'white', fontWeight: '700', fontSize: 16 },
+  btnText: { color: 'white', fontWeight: '900', fontSize: isMobile ? 17 : 22 },
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(2,6,23,0.78)',
@@ -1809,7 +1796,7 @@ const styles = StyleSheet.create({
   loginButtonDesktop: { position: 'absolute', right: 16, top: 12 },
   loginButtonMobile: { marginTop: 8, alignSelf: 'center' },
   loginButtonText: { color: '#ffffff', fontWeight: '900', fontSize: 14 },
-  timerHint: { color: '#94a3b8', fontSize: 10, marginTop: 3, textAlign: 'center' },
+  timerHint: { color: '#94a3b8', fontSize: isMobile ? 12 : 14, marginTop: 2, textAlign: 'center' },
   disabledInput: { opacity: 0.55 },
   signingInBanner: {
     position: 'absolute',
@@ -1822,8 +1809,22 @@ const styles = StyleSheet.create({
     zIndex: 20,
   },
   signingInText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+  runningBanner: {
+    backgroundColor: 'rgba(251, 191, 36, 0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(251, 191, 36, 0.35)',
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    marginBottom: 6,
+  },
+  runningBannerText: {
+    color: '#fbbf24',
+    fontSize: 13,
+    fontWeight: '900',
+  },
   omText: {
-    fontSize: 62,
+    fontSize: isMobile ? 52 : 64,
     color: '#fbbf24',
     fontWeight: '300',
     textShadowColor: 'rgba(251,191,36,0.8)',
