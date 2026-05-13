@@ -16,7 +16,8 @@ const fixedWebTabBarStyle =
         width: 'calc(100% - 24px)',
         maxWidth: desktopTabWidth,
         transform: 'translateX(-50%)',
-        zIndex: 100,
+        zIndex: 999,
+        backdropFilter: 'blur(16px)',
       } as any)
     : {
         position: 'absolute' as const,
@@ -24,7 +25,7 @@ const fixedWebTabBarStyle =
         right: isMobile ? 16 : undefined,
         bottom: isMobile ? 12 : 22,
         width: isMobile ? undefined : desktopTabWidth,
-        zIndex: 100,
+        zIndex: 999,
       };
 
 export default function TabLayout() {
@@ -36,14 +37,15 @@ export default function TabLayout() {
         tabBarInactiveTintColor: '#5f7778',
         tabBarStyle: {
           ...fixedWebTabBarStyle,
-          backgroundColor: 'rgba(255,255,255,0.82)',
+          backgroundColor: 'rgba(255,255,255,0.92)',
           borderTopColor: 'rgba(255,255,255,0.78)',
           borderTopWidth: 1,
           borderRadius: 28,
-          height: isMobile ? 66 : 72,
+          height: 84,
           paddingTop: 8,
           paddingBottom: 8,
-          paddingHorizontal: 8,
+          paddingHorizontal: 10,
+          overflow: 'visible',
           shadowColor: '#0f766e',
           shadowOpacity: 0.14,
           shadowRadius: 22,
@@ -53,12 +55,19 @@ export default function TabLayout() {
         tabBarItemStyle: {
           borderRadius: 22,
           marginHorizontal: 2,
-          paddingVertical: 2,
+          marginVertical: 0,
+          minWidth: 72,
+          paddingVertical: 6,
+          paddingHorizontal: 8,
+          alignItems: 'center',
+          justifyContent: 'center',
         },
         tabBarActiveBackgroundColor: 'rgba(15, 143, 135, 0.12)',
         tabBarLabelStyle: {
-          fontSize: isMobile ? 12 : 13,
-          fontWeight: '800',
+          fontSize: 14,
+          fontWeight: '600',
+          lineHeight: 17,
+          marginTop: 4,
         },
       }}
     >
@@ -66,8 +75,14 @@ export default function TabLayout() {
         name="index"
         options={{
           title: 'Home',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="home-outline" size={size} color={color} />
+          tabBarLabelStyle: {
+            fontSize: 14,
+            fontWeight: '700',
+            lineHeight: 17,
+            marginTop: 4,
+          },
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name="home-outline" size={focused ? 30 : 28} color={color} />
           ),
         }}
       />
@@ -77,8 +92,8 @@ export default function TabLayout() {
   options={{
     href: null,
     title: 'Manual',
-    tabBarIcon: ({ color, size }) => (
-      <Ionicons name="create-outline" size={size} color={color} />
+    tabBarIcon: ({ color, focused }) => (
+      <Ionicons name="create-outline" size={focused ? 30 : 28} color={color} />
     ),
   }}
 />
@@ -87,10 +102,10 @@ export default function TabLayout() {
   name="history"
   options={{
     title: 'History',
-    tabBarIcon: ({ color, size }) => (
+    tabBarIcon: ({ color, focused }) => (
       <Ionicons
         name="document-text-outline"
-        size={size}
+        size={focused ? 30 : 28}
         color={color}
       />
     ),
@@ -101,8 +116,8 @@ export default function TabLayout() {
   name="faq"
   options={{
     title: 'Learn',
-    tabBarIcon: ({ color, size }) => (
-      <Ionicons name="book-outline" size={size} color={color} />
+    tabBarIcon: ({ color, focused }) => (
+      <Ionicons name="book-outline" size={focused ? 30 : 28} color={color} />
     ),
   }}
 />
@@ -111,8 +126,8 @@ export default function TabLayout() {
   name="settings"
   options={{
     title: 'Settings',
-    tabBarIcon: ({ color, size }) => (
-      <Ionicons name="sparkles-outline" size={size} color={color} />
+    tabBarIcon: ({ color, focused }) => (
+      <Ionicons name="sparkles-outline" size={focused ? 30 : 28} color={color} />
     ),
   }}
 />

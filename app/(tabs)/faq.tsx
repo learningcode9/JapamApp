@@ -39,10 +39,6 @@ const faqs = [
       q: 'Does the app work offline?',
       a: 'Yes. Basic japam counting works offline. When internet is available, your progress syncs automatically.',
     },
-    {
-      q: 'Can I change the Japam name?',
-      a: 'Yes. Open Settings and update your mantra or japam name anytime.',
-    },
   ];
 
 export default function FAQ() {
@@ -107,7 +103,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     padding: 20,
     paddingTop: 28,
-    paddingBottom: 120,
+    paddingBottom: 140,
   },
   header: { alignItems: 'center', marginBottom: 18 },
   title: { color: '#102f34', fontSize: 36, fontWeight: '900', marginTop: 4, textAlign: 'center' },

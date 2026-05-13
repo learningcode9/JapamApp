@@ -82,8 +82,8 @@ const scrollTopPadding =
   Platform.OS === 'web' ? ('env(safe-area-inset-top)' as any) : 0;
 const scrollBottomPadding =
   Platform.OS === 'web'
-    ? ('calc(110px + env(safe-area-inset-bottom))' as any)
-    : 110;
+    ? ('calc(125px + env(safe-area-inset-bottom))' as any)
+    : 125;
 
 const getLocalDateKey = (date = new Date()) => {
   const y = date.getFullYear();
@@ -1435,10 +1435,6 @@ setTimeout(() => { suppressTimerSaveRef.current = false; }, 0);
                       thumbColor={loopTimer ? '#0F8F87' : '#ffffff'}
                     />
                   </View>
-
-                  <Pressable style={styles.cancelSheetButton} onPress={() => setShowTimerSheet(false)}>
-                    <Text style={styles.cancelSheetText}>Cancel</Text>
-                  </Pressable>
                 </>
               )}
             </View>
@@ -2078,10 +2074,10 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   sessionChip: {
-    minHeight: isShortMobile ? 44 : 48,
+    minHeight: isShortMobile ? 46 : 50,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 11,
     borderRadius: 999,
     backgroundColor: 'rgba(255,255,255,0.74)',
     borderWidth: 1,
@@ -2097,13 +2093,13 @@ const styles = StyleSheet.create({
   },
   sessionChipIcon: {
     color: '#0F8F87',
-    fontSize: 18,
+    fontSize: isMobile ? 21 : 22,
     fontWeight: '900',
   },
   sessionChipText: {
     color: '#063B3B',
-    fontSize: 15,
-    fontWeight: '800',
+    fontSize: 16,
+    fontWeight: '700',
   },
   sessionChipArrow: {
     color: '#5F7F80',
@@ -2197,7 +2193,7 @@ const styles = StyleSheet.create({
     borderRadius: 28,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.72)',
-    paddingVertical: isShortMobile ? 12 : isMobile ? 16 : 22,
+    paddingVertical: isShortMobile ? 13 : isMobile ? 17 : 22,
     paddingHorizontal: isMobile ? 12 : 16,
     shadowColor: '#0f766e',
     shadowOpacity: 0.1,
@@ -2219,22 +2215,22 @@ const styles = StyleSheet.create({
   },
   statIcon: {
     color: '#0F8F87',
-    fontSize: isShortMobile ? 15 : isMobile ? 17 : 20,
+    fontSize: 24,
     fontWeight: '900',
-    marginBottom: 4,
+    marginBottom: 6,
   },
   statValue: {
     color: '#12383c',
-    fontSize: isShortMobile ? 20 : isMobile ? 22 : 26,
-    fontWeight: '900',
-    lineHeight: isShortMobile ? 24 : isMobile ? 26 : 30,
+    fontSize: isShortMobile ? 28 : isMobile ? 30 : 32,
+    fontWeight: '800',
+    lineHeight: isShortMobile ? 32 : isMobile ? 34 : 36,
   },
   statLabel: {
     color: '#5f7778',
-    fontSize: isShortMobile ? 10 : isMobile ? 11 : 12,
-    fontWeight: '800',
+    fontSize: isMobile ? 14 : 15,
+    fontWeight: '600',
     textAlign: 'center',
-    marginTop: 3,
+    marginTop: 4,
   },
   sheetOverlay: {
     flex: 1,

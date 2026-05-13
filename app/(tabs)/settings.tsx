@@ -3,12 +3,11 @@ import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Alert, Linking, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Alert, Linking, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
-const JAPAM_NAME_KEY = 'japamName';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
 const TIMER_SECONDS_KEY = 'timerSeconds';
@@ -25,9 +24,6 @@ export default function SettingsScreen() {
   const [repetitionSoundEnabled, setRepetitionSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
   const [isPreviewingSound, setIsPreviewingSound] = useState(false);
-  const [japamName, setJapamName] = useState('');
-  const [japamNameInput, setJapamNameInput] = useState('');
-  const [isEditingJapamName, setIsEditingJapamName] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [userName, setUserName] = useState('');
 
@@ -39,9 +35,6 @@ export default function SettingsScreen() {
       const savedVibration = await AsyncStorage.getItem(VIBRATION_ENABLED_KEY);
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
       const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
-      const savedJapamName = savedUserId
-        ? await AsyncStorage.getItem(getUserStorageKey(JAPAM_NAME_KEY, savedUserId))
-        : await AsyncStorage.getItem(JAPAM_NAME_KEY);
 
       setRepetitionSoundEnabled(
         savedRepetitionSound === null
@@ -51,9 +44,6 @@ export default function SettingsScreen() {
       setVibrationEnabled(savedVibration !== 'false');
       setUserId(savedUserId);
       setUserName(savedUserName || '');
-      setJapamName(savedJapamName || 'Japam');
-      setJapamNameInput(savedJapamName || 'Japam');
-      setIsEditingJapamName(false);
     };
 
     void loadSettings();
@@ -101,76 +91,6 @@ export default function SettingsScreen() {
   const toggleVibration = async (value: boolean) => {
     setVibrationEnabled(value);
     await AsyncStorage.setItem(VIBRATION_ENABLED_KEY, String(value));
-  };
-
-  const saveJapamName = async () => {
-    const name = japamNameInput.trim();
-    if (!name) {
-      Alert.alert('Enter japam name');
-      return;
-    }
-
-    if (userId) {
-      await AsyncStorage.setItem(getUserStorageKey(JAPAM_NAME_KEY, userId), name);
-    } else {
-      await AsyncStorage.setItem(JAPAM_NAME_KEY, name);
-    }
-
-    try {
-      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-
-      if (url && key && userId) {
-        const encodedUserId = encodeURIComponent(userId);
-        const headers = {
-          'Content-Type': 'application/json',
-          apikey: key,
-          Authorization: `Bearer ${key}`,
-        };
-
-        const checkResponse = await fetch(
-          `${url}/rest/v1/user_profiles?user_id=eq.${encodedUserId}&select=id`,
-          { headers }
-        );
-        const rows = await checkResponse.json();
-
-        if (rows.length > 0) {
-          await fetch(`${url}/rest/v1/user_profiles?user_id=eq.${encodedUserId}`, {
-            method: 'PATCH',
-            headers,
-            body: JSON.stringify({
-              user_name: userName || 'User',
-              japam_name: name,
-              updated_at: new Date().toISOString(),
-            }),
-          });
-        } else {
-          await fetch(`${url}/rest/v1/user_profiles`, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({
-              user_id: userId,
-              user_name: userName || 'User',
-              japam_name: name,
-            }),
-          });
-        }
-      }
-
-      Alert.alert('Saved', 'Japam name updated.');
-    } catch (error) {
-      console.log('Japam name save error:', error);
-      Alert.alert('Saved locally', 'Japam name was saved on this device.');
-    }
-
-    setJapamName(name);
-    setJapamNameInput(name);
-    setIsEditingJapamName(false);
-  };
-
-  const cancelJapamNameEdit = () => {
-    setJapamNameInput(japamName);
-    setIsEditingJapamName(false);
   };
 
   const openFeedbackForm = async () => {
@@ -255,9 +175,6 @@ export default function SettingsScreen() {
     ]);
     setUserId(null);
     setUserName('');
-    setJapamName('Japam');
-    setJapamNameInput('Japam');
-    setIsEditingJapamName(false);
     Alert.alert('Logged out', 'You have been logged out.');
   };
 
@@ -296,39 +213,6 @@ export default function SettingsScreen() {
             </Pressable>
           </View>
         )}
-
-        <View style={styles.cardStack}>
-          <Pressable
-            style={styles.nameRow}
-            onPress={() => setIsEditingJapamName(true)}
-          >
-            <View style={styles.textBlock}>
-              <Text style={styles.label}>Japam Name</Text>
-              <Text style={styles.description}>{japamName || 'Japam'}</Text>
-            </View>
-            <Text style={styles.changeText}>Change</Text>
-          </Pressable>
-
-          {isEditingJapamName && (
-            <View style={styles.inlineEditor}>
-              <TextInput
-                style={styles.input}
-                value={japamNameInput}
-                onChangeText={setJapamNameInput}
-                placeholder="Enter japam name"
-                placeholderTextColor="#94a3b8"
-              />
-              <View style={styles.inlineActions}>
-                <Pressable style={styles.smallButton} onPress={saveJapamName}>
-                  <Text style={styles.smallButtonText}>Save</Text>
-                </Pressable>
-                <Pressable style={[styles.smallButton, styles.secondaryButton]} onPress={cancelJapamNameEdit}>
-                  <Text style={styles.smallButtonText}>Cancel</Text>
-                </Pressable>
-              </View>
-            </View>
-          )}
-        </View>
 
         <View style={styles.card}>
           <View style={styles.textBlock}>
@@ -416,7 +300,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     paddingHorizontal: 20,
     paddingTop: 28,
-    paddingBottom: 120,
+    paddingBottom: 140,
   },
 
   header: {
@@ -463,41 +347,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(15, 118, 110, 0.16)',
   },
 
-  cardStack: {
-    backgroundColor: 'rgba(255, 255, 255, 0.54)',
-    borderRadius: 20,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(15, 118, 110, 0.16)',
-    overflow: 'hidden',
-  },
-
-  nameRow: {
-    padding: 18,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-
-  changeText: {
-    color: '#0f766e',
-    fontSize: 16,
-    fontWeight: '900',
-  },
-
-  inlineEditor: {
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(15, 118, 110, 0.14)',
-    paddingHorizontal: 18,
-    paddingBottom: 18,
-  },
-
-  inlineActions: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 10,
-  },
-
   textBlock: {
     flex: 1,
     paddingRight: 14,
@@ -514,37 +363,6 @@ const styles = StyleSheet.create({
     fontSize: 17,
     marginTop: 5,
     lineHeight: 24,
-  },
-
-  input: {
-    backgroundColor: 'rgba(255,255,255,0.68)',
-    color: '#12383c',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    borderWidth: 1,
-    borderColor: 'rgba(15,118,110,0.16)',
-    marginTop: 12,
-    fontSize: 17,
-    fontWeight: '700',
-  },
-
-  smallButton: {
-    flex: 1,
-    backgroundColor: '#0f8a87',
-    borderRadius: 999,
-    paddingVertical: 11,
-    alignItems: 'center',
-  },
-
-  secondaryButton: {
-    backgroundColor: '#5f7778',
-  },
-
-  smallButtonText: {
-    color: 'white',
-    fontSize: 15,
-    fontWeight: '900',
   },
 
   compactButton: {

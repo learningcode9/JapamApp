@@ -248,7 +248,7 @@ const styles = StyleSheet.create({
     padding: 18,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingBottom: 120,
+    paddingBottom: 140,
   },
 
   star: {

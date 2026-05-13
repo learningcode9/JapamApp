@@ -16,7 +16,7 @@
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0f172a"
+      "backgroundColor": "#eaf5f2"
     },
 
     "ios": {
@@ -26,7 +26,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundColor": "#0f172a"
+        "backgroundColor": "#dfeeed"
       }
     },
 
@@ -35,8 +35,8 @@
       "favicon": "./public/favicon-48.png",
       "name": "Mantra Japam",
       "shortName": "Mantra Japam",
-      "themeColor": "#0f172a",
-      "backgroundColor": "#0f172a"
+      "themeColor": "#eaf5f2",
+      "backgroundColor": "#eaf5f2"
     },
 
     "plugins": [

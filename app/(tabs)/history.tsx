@@ -394,7 +394,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     paddingHorizontal: 18,
     paddingTop: 28,
-    paddingBottom: 120,
+    paddingBottom: 140,
   },
 
   header: {
