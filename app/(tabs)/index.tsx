@@ -5,7 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   Alert,
@@ -134,15 +134,18 @@ export default function JapamMain() {
   });
   const suppressTimerSaveRef = useRef(false);
   const dbTotalSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timerCloudLastSavedAtRef = useRef(0);
   const timerStartedAtRef = useRef<number | null>(null);
   const rippleAnim = useRef(new Animated.Value(0)).current;
   const isSavingSessionRef = useRef(false);
+  const completeSoundRef = useRef<Audio.Sound | null>(null);
   const lastSavedSessionRef = useRef('');
   const lastTapRef = useRef(0);
 
   const glowAnim = useRef(new Animated.Value(0)).current;
   const particleAnim = useRef(new Animated.Value(0)).current;
   const omPulseAnim = useRef(new Animated.Value(1)).current;
+  const stars = useMemo(() => Array.from({ length: 40 }, (_, i) => i), []);
 
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
@@ -393,6 +396,10 @@ export default function JapamMain() {
       await AsyncStorage.setItem(getUserStorageKey(TIMER_TARGET_KEY, savedUserId), String(targetSeconds));
       await AsyncStorage.setItem(getUserStorageKey(TIMER_MINUTES_KEY, savedUserId), minutesInput);
       await AsyncStorage.setItem(getUserStorageKey(TIMER_LOOP_KEY, savedUserId), String(loopTimer));
+
+      const now = Date.now();
+      if (isRunning && now - timerCloudLastSavedAtRef.current < 10000) return;
+      timerCloudLastSavedAtRef.current = now;
       await saveTimerStateToSupabase(savedUserId, { seconds, isRunning, targetSeconds, minutesInput, loopTimer });
     })();
   }, [seconds, isRunning, targetSeconds, minutesInput, loopTimer, hasRestoredTimer]);
@@ -521,6 +528,7 @@ export default function JapamMain() {
       if (dbTotalSaveTimeoutRef.current) {
         clearTimeout(dbTotalSaveTimeoutRef.current);
       }
+      completeSoundRef.current?.unloadAsync().catch(console.log);
     };
   }, []);
 
@@ -724,20 +732,31 @@ export default function JapamMain() {
 
   const playCompleteSound = async () => {
     try {
+      if (completeSoundRef.current) {
+        await completeSoundRef.current.unloadAsync().catch(console.log);
+        completeSoundRef.current = null;
+      }
+
       const { sound } = await Audio.Sound.createAsync(
         require('../../assets/om_complete.mp3'),
         { shouldPlay: true, volume: 1.0 }
       );
+      completeSoundRef.current = sound;
       sound.setOnPlaybackStatusUpdate((status) => {
         if (status.isLoaded && status.didJustFinish) {
           sound.setOnPlaybackStatusUpdate(null);
           sound.unloadAsync().catch(console.log);
+          if (completeSoundRef.current === sound) {
+            completeSoundRef.current = null;
+          }
         }
       });
       await sound.playAsync();
       setTimeout(() => {
+        if (completeSoundRef.current !== sound) return;
         sound.stopAsync().catch(console.log);
         sound.unloadAsync().catch(console.log);
+        completeSoundRef.current = null;
       }, 3000);
     } catch (error) {
       console.log('Sound error:', error);
@@ -922,8 +941,10 @@ export default function JapamMain() {
   };
 
   const completeTimerSession = useCallback(() => {
-    const newTotal = setCountersFromTotal(totalRef.current + 108);
-    void saveSession(targetSeconds, 1, 108, newTotal);
+    const currentTotal = totalRef.current;
+    const nextTotal = currentTotal + 108;
+    setCountersFromTotal(nextTotal);
+    void saveSession(targetSeconds, 1, 108, nextTotal);
     void completeFeedback();
 
     if (loopTimer) {
@@ -1066,7 +1087,7 @@ export default function JapamMain() {
       style={{ flex: 1 }}
     >
       {/* Stars */}
-      {[...Array(40)].map((_, i) => (
+      {stars.map((i) => (
         <Animated.View
           key={i}
           pointerEvents="none"
