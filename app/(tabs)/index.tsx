@@ -846,7 +846,8 @@ export default function JapamMain() {
     if (!requireLogin()) return;
     const mins = Math.max(1, Math.floor(Number(minutesInput) || 1));
     const nextTargetSeconds = mins * 60;
-    const nextSeconds = seconds <= 0 || seconds >= nextTargetSeconds ? 0 : seconds;
+    const targetChanged = nextTargetSeconds !== targetSeconds;
+    const nextSeconds = targetChanged || seconds >= nextTargetSeconds ? 0 : seconds;
 
     timerRef.current = { seconds: nextSeconds, isRunning: true, targetSeconds: nextTargetSeconds, minutesInput: String(mins), loopTimer };
     setMinutesInput(String(mins));
