@@ -34,6 +34,15 @@ type Session = {
   userId?: string;
 };
 
+type TimerStateRow = {
+  seconds?: number | string;
+  is_running?: boolean;
+  target_seconds?: number | string;
+  minutes_input?: string | null;
+  loop_timer?: boolean;
+  updated_at?: string | null;
+};
+
 const COUNT_KEY = 'count';
 const MALAS_KEY = 'malas';
 const TOTAL_KEY = 'totalCount';
@@ -388,20 +397,44 @@ export default function JapamMain() {
     })();
   }, [seconds, isRunning, targetSeconds, minutesInput, loopTimer, hasRestoredTimer]);
 
-  const fetchTimerStateFromSupabase = useCallback(async (userId: string) => {
+  const fetchTimerStateFromSupabase = useCallback(async (userId: string): Promise<TimerStateRow | null> => {
     const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
     const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
     if (!url || !key || !userId) return null;
 
     const encodedUserId = encodeURIComponent(userId);
     const response = await fetch(
-      `${url}/rest/v1/japam_timer_state?user_id=eq.${encodedUserId}&select=seconds,is_running,target_seconds,minutes_input,loop_timer&limit=1`,
+      `${url}/rest/v1/japam_timer_state?user_id=eq.${encodedUserId}&select=seconds,is_running,target_seconds,minutes_input,loop_timer,updated_at&limit=1`,
       { headers: { apikey: key, Authorization: `Bearer ${key}` } }
     );
 
     if (!response.ok) return null;
     const rows = await response.json();
     return rows?.[0] || null;
+  }, []);
+
+  const applyRestoredTimerState = useCallback((timerState: TimerStateRow) => {
+    const savedSeconds = Math.max(0, Math.floor(Number(timerState.seconds) || 0));
+    const savedTarget = Math.max(60, Math.floor(Number(timerState.target_seconds) || 60));
+    const savedIsRunning = Boolean(timerState.is_running);
+    const updatedAtMs = timerState.updated_at ? new Date(timerState.updated_at).getTime() : NaN;
+    const elapsedWhileAway =
+      savedIsRunning && Number.isFinite(updatedAtMs)
+        ? Math.max(0, Math.floor((Date.now() - updatedAtMs) / 1000))
+        : 0;
+    const restoredSeconds = savedIsRunning
+      ? Math.min(savedTarget, savedSeconds + elapsedWhileAway)
+      : savedSeconds;
+
+    timerStartedAtRef.current = savedIsRunning
+      ? Date.now() - restoredSeconds * 1000
+      : null;
+
+    setSeconds(restoredSeconds);
+    setIsRunning(savedIsRunning);
+    setTargetSeconds(savedTarget);
+    setMinutesInput(timerState.minutes_input || String(Math.max(1, Math.floor(savedTarget / 60))));
+    setLoopTimer(Boolean(timerState.loop_timer));
   }, []);
 
   useEffect(() => {
@@ -435,11 +468,7 @@ export default function JapamMain() {
       if (savedUserId) {
         const timerState = await fetchTimerStateFromSupabase(savedUserId);
         if (timerState) {
-          setSeconds(Number(timerState.seconds) || 0);
-          setIsRunning(Boolean(timerState.is_running));
-          setTargetSeconds(Number(timerState.target_seconds) || 60);
-          setMinutesInput(timerState.minutes_input || '1');
-          setLoopTimer(Boolean(timerState.loop_timer));
+          applyRestoredTimerState(timerState);
         } else {
           const savedTimerSeconds = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_SECONDS_KEY, savedUserId))) || '0');
           const savedTimerRunning = (await AsyncStorage.getItem(getUserStorageKey(TIMER_RUNNING_KEY, savedUserId))) === 'true';
@@ -470,7 +499,7 @@ export default function JapamMain() {
     };
 
     void loadData();
-  }, [fetchTimerStateFromSupabase, restoreTodayTotal, restoreTotal]);
+  }, [applyRestoredTimerState, fetchTimerStateFromSupabase, restoreTodayTotal, restoreTotal]);
 
   useEffect(() => {
     Animated.loop(
@@ -575,14 +604,10 @@ export default function JapamMain() {
   const restoreTimerForUser = useCallback(async (userId: string) => {
     const timerState = await fetchTimerStateFromSupabase(userId);
     if (timerState) {
-      setSeconds(Number(timerState.seconds) || 0);
-      setIsRunning(Boolean(timerState.is_running));
-      setTargetSeconds(Number(timerState.target_seconds) || 60);
-      setMinutesInput(timerState.minutes_input || '1');
-      setLoopTimer(Boolean(timerState.loop_timer));
+      applyRestoredTimerState(timerState);
     }
     setHasRestoredTimer(true);
-  }, [fetchTimerStateFromSupabase]);
+  }, [applyRestoredTimerState, fetchTimerStateFromSupabase]);
 
   useEffect(() => {
     const handleGoogleLogin = async () => {
