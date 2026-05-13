@@ -752,7 +752,7 @@ export default function JapamMain() {
         sound.stopAsync().catch(console.log);
         sound.unloadAsync().catch(console.log);
         completeSoundRef.current = null;
-      }, 3000);
+      }, 4000);
     } catch (error) {
       console.log('Sound error:', error);
     }
@@ -976,9 +976,11 @@ export default function JapamMain() {
           setLoopTimer(false);
         }
         else {
-          timerStartedAtRef.current = Date.now();
-          setSeconds(0);
-          setIsRunning(true);
+          setTimeout(() => {
+            timerStartedAtRef.current = Date.now();
+            setSeconds(0);
+            setIsRunning(true);
+          }, 2200);
         }
         return next;
       });
