@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router, useFocusEffect } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { Alert, Linking, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 
@@ -145,6 +145,17 @@ export default function SettingsScreen() {
     await Linking.openURL(FEEDBACK_FORM_URL);
   };
 
+  const logout = async () => {
+    await AsyncStorage.removeItem(USER_NAME_KEY);
+    await AsyncStorage.removeItem(USER_ID_KEY);
+    setUserId(null);
+    setUserName('');
+    setJapamName('Japam');
+    setJapamNameInput('Japam');
+    setIsEditingJapamName(false);
+    Alert.alert('Logged out', 'You have been logged out.');
+  };
+
   return (
     <LinearGradient colors={['#05010c', '#120022', '#05010c']} style={styles.container}>
     {[...Array(30)].map((_, i) => (
@@ -169,22 +180,15 @@ export default function SettingsScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Japam Options</Text>
 
-        {!userId ? (
-          <View style={styles.card}>
-            <View style={styles.textBlock}>
-              <Text style={styles.label}>Sign in</Text>
-              <Text style={styles.description}>Save history and sync your japam across devices.</Text>
-            </View>
-            <Pressable style={styles.compactButton} onPress={() => router.push('/?signin=1')}>
-              <Text style={styles.compactButtonText}>Sign in</Text>
-            </Pressable>
-          </View>
-        ) : (
+        {!!userId && (
           <View style={styles.card}>
             <View style={styles.textBlock}>
               <Text style={styles.label}>Signed in</Text>
               <Text style={styles.description}>{userName || 'Google user'}</Text>
             </View>
+            <Pressable style={[styles.compactButton, styles.logoutButton]} onPress={logout}>
+              <Text style={styles.compactButtonText}>Logout</Text>
+            </Pressable>
           </View>
         )}
 
@@ -438,6 +442,10 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 18,
     paddingVertical: 10,
+  },
+
+  logoutButton: {
+    backgroundColor: '#991b1b',
   },
 
   compactButtonText: {
