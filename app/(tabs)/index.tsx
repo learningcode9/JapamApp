@@ -3,7 +3,7 @@ import * as Google from 'expo-auth-session/providers/google';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -93,7 +93,6 @@ const isAuthPending = async () => {
 };
 
 export default function JapamMain() {
-  const params = useLocalSearchParams<{ signin?: string }>();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [count, setCount] = useState(0);
   const [malas, setMalas] = useState(0);
@@ -328,12 +327,6 @@ export default function JapamMain() {
       void loadSettingsAndRestoreToday();
     }, [restoreTodayTotal])
   );
-
-  useEffect(() => {
-    if (params.signin === '1' && !userName && !isSigningIn) {
-      setShowUserModal(true);
-    }
-  }, [params.signin, userName, isSigningIn]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
@@ -866,13 +859,6 @@ export default function JapamMain() {
     })();
   };
 
-  // ✅ Fix 4: Stop button removed — handleStop kept for loop timer internal use only
-  const handleStop = () => {
-    setIsRunning(false);
-    setSeconds(0);
-    setAutoCompletedMalas(0);
-  };
-
   const completeTimerSession = useCallback(() => {
     const newTotal = setCountersFromTotal(totalRef.current + 108);
     void saveSession(targetSeconds, 1, 108, newTotal);
@@ -945,7 +931,13 @@ export default function JapamMain() {
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
     if (currentUserId) {
       await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, currentUserId), String(totalRef.current));
-      await saveTimerStateToSupabase(currentUserId, { seconds, isRunning, targetSeconds, minutesInput, loopTimer });
+      await saveTimerStateToSupabase(currentUserId, {
+        seconds: 0,
+        isRunning: false,
+        targetSeconds: 60,
+        minutesInput: '1',
+        loopTimer: false,
+      });
     }
 
     suppressTimerSaveRef.current = true;
@@ -1179,7 +1171,7 @@ export default function JapamMain() {
           <Pressable style={styles.btn} onPress={handleStart}>
             <Text style={styles.btnText}>▶ Start</Text>
           </Pressable>
-          <Pressable style={[styles.btn, styles.gray]} onPress={isRunning ? handlePause : handleStop}>
+          <Pressable style={[styles.btn, styles.gray]} onPress={handlePause}>
           <Text style={styles.btnText}>⏸ Pause</Text>
           </Pressable>
         </View>
