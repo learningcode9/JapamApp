@@ -18,6 +18,8 @@ export default function SettingsScreen() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
   const [japamName, setJapamName] = useState('');
+  const [japamNameInput, setJapamNameInput] = useState('');
+  const [isEditingJapamName, setIsEditingJapamName] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [userName, setUserName] = useState('');
 
@@ -37,6 +39,8 @@ export default function SettingsScreen() {
       setUserId(savedUserId);
       setUserName(savedUserName || '');
       setJapamName(savedJapamName || 'Japam');
+      setJapamNameInput(savedJapamName || 'Japam');
+      setIsEditingJapamName(false);
     };
 
     void loadSettings();
@@ -54,7 +58,7 @@ export default function SettingsScreen() {
   };
 
   const saveJapamName = async () => {
-    const name = japamName.trim();
+    const name = japamNameInput.trim();
     if (!name) {
       Alert.alert('Enter japam name');
       return;
@@ -112,6 +116,15 @@ export default function SettingsScreen() {
       console.log('Japam name save error:', error);
       Alert.alert('Saved locally', 'Japam name was saved on this device.');
     }
+
+    setJapamName(name);
+    setJapamNameInput(name);
+    setIsEditingJapamName(false);
+  };
+
+  const cancelJapamNameEdit = () => {
+    setJapamNameInput(japamName);
+    setIsEditingJapamName(false);
   };
 
   const openFeedbackForm = async () => {
@@ -157,19 +170,37 @@ export default function SettingsScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Japam Options</Text>
 
-        <View style={styles.formCard}>
-          <Text style={styles.label}>Japam Name</Text>
-          <Text style={styles.description}>This name appears on the main Japam screen.</Text>
-          <TextInput
-            style={styles.input}
-            value={japamName}
-            onChangeText={setJapamName}
-            placeholder="Enter japam name"
-            placeholderTextColor="#94a3b8"
-          />
-          <Pressable style={styles.primaryButton} onPress={saveJapamName}>
-            <Text style={styles.primaryButtonText}>Save Japam Name</Text>
+        <View style={styles.cardStack}>
+          <Pressable
+            style={styles.nameRow}
+            onPress={() => setIsEditingJapamName(true)}
+          >
+            <View style={styles.textBlock}>
+              <Text style={styles.label}>Japam Name</Text>
+              <Text style={styles.description}>{japamName || 'Japam'}</Text>
+            </View>
+            <Text style={styles.changeText}>Change</Text>
           </Pressable>
+
+          {isEditingJapamName && (
+            <View style={styles.inlineEditor}>
+              <TextInput
+                style={styles.input}
+                value={japamNameInput}
+                onChangeText={setJapamNameInput}
+                placeholder="Enter japam name"
+                placeholderTextColor="#94a3b8"
+              />
+              <View style={styles.inlineActions}>
+                <Pressable style={styles.smallButton} onPress={saveJapamName}>
+                  <Text style={styles.smallButtonText}>Save</Text>
+                </Pressable>
+                <Pressable style={[styles.smallButton, styles.secondaryButton]} onPress={cancelJapamNameEdit}>
+                  <Text style={styles.smallButtonText}>Cancel</Text>
+                </Pressable>
+              </View>
+            </View>
+          )}
         </View>
 
         <View style={styles.card}>
@@ -198,13 +229,13 @@ export default function SettingsScreen() {
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Feedback</Text>
-        <View style={styles.formCard}>
-          <Text style={styles.label}>Send Feedback</Text>
-          <Text style={styles.description}>
-            Open the Google Form to share bugs, ideas, or anything you want improved.
-          </Text>
-          <Pressable style={styles.primaryButton} onPress={openFeedbackForm}>
-            <Text style={styles.primaryButtonText}>Open Feedback Form</Text>
+        <View style={styles.card}>
+          <View style={styles.textBlock}>
+            <Text style={styles.label}>Send Feedback</Text>
+            <Text style={styles.description}>Open the Google Form to share bugs or ideas.</Text>
+          </View>
+          <Pressable style={styles.compactButton} onPress={openFeedbackForm}>
+            <Text style={styles.compactButtonText}>Open</Text>
           </Pressable>
         </View>
       </View>
@@ -300,13 +331,39 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(251, 191, 36, 0.16)',
   },
 
-  formCard: {
+  cardStack: {
     backgroundColor: 'rgba(15, 23, 42, 0.72)',
     borderRadius: 16,
-    padding: 18,
     marginBottom: 12,
     borderWidth: 1,
     borderColor: 'rgba(251, 191, 36, 0.16)',
+    overflow: 'hidden',
+  },
+
+  nameRow: {
+    padding: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+
+  changeText: {
+    color: '#fbbf24',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+
+  inlineEditor: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(251, 191, 36, 0.14)',
+    paddingHorizontal: 18,
+    paddingBottom: 18,
+  },
+
+  inlineActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 10,
   },
 
   textBlock: {
@@ -340,17 +397,34 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  primaryButton: {
-    marginTop: 14,
+  smallButton: {
+    flex: 1,
     backgroundColor: '#7c3aed',
-    borderRadius: 12,
-    paddingVertical: 14,
+    borderRadius: 10,
+    paddingVertical: 11,
     alignItems: 'center',
   },
 
-  primaryButtonText: {
+  secondaryButton: {
+    backgroundColor: '#475569',
+  },
+
+  smallButtonText: {
     color: 'white',
-    fontSize: 17,
+    fontSize: 15,
+    fontWeight: '900',
+  },
+
+  compactButton: {
+    backgroundColor: '#7c3aed',
+    borderRadius: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+  },
+
+  compactButtonText: {
+    color: 'white',
+    fontSize: 15,
     fontWeight: '900',
   },
 
