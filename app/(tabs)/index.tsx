@@ -738,14 +738,13 @@ export default function JapamMain() {
   const tapFeedback = () => {
     if (!vibrationEnabled) return;
 
-    Haptics.impactAsync(
-      Haptics.ImpactFeedbackStyle.Medium
-    ).catch(console.log);
-
     if (Platform.OS === 'ios') {
+      Haptics.impactAsync(
+        Haptics.ImpactFeedbackStyle.Medium
+      ).catch(console.log);
       return;
     }
-  
+
     vibrateDevice(80);
   };
 
@@ -1133,7 +1132,11 @@ export default function JapamMain() {
           />
           <Pressable
             onPress={handleTap}
-            onPressIn={() => { if (userName) tapFeedback(); }}
+            onPressIn={() => {
+              if (!userName) return;
+              const nextCount = (totalRef.current + 1) % 108;
+              if (nextCount !== 0) tapFeedback();
+            }}
             style={({ pressed }) => [pressed && styles.circlePressed]}
           >
             <LinearGradient
@@ -1157,7 +1160,6 @@ export default function JapamMain() {
           onChangeText={(value) => {
             if (isRunning) return;
             setMinutesInput(value);
-            setSeconds(0);
           }}
           editable={!isRunning}
           selectTextOnFocus={!isRunning}
