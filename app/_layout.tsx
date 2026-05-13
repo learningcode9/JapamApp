@@ -29,10 +29,36 @@ export default function RootLayout() {
       meta.content = content;
     };
 
+    const setLink = (
+      rel: string,
+      href: string,
+      options?: { sizes?: string; type?: string }
+    ) => {
+      let link = document.querySelector<HTMLLinkElement>(`link[rel="${rel}"]`);
+      if (!link) {
+        link = document.createElement('link');
+        link.rel = rel;
+        document.head.appendChild(link);
+      }
+
+      link.href = href;
+      if (options?.sizes) link.sizes = options.sizes;
+      if (options?.type) link.type = options.type;
+    };
+
     setMeta('theme-color', '#05010c');
     setMeta('apple-mobile-web-app-capable', 'yes');
     setMeta('apple-mobile-web-app-status-bar-style', 'black-translucent');
     setMeta('apple-mobile-web-app-title', 'Mantra Japam');
+    setLink('manifest', '/manifest-v12.json?v=12');
+    setLink('apple-touch-icon', '/apple-touch-icon.png?v=12', {
+      sizes: '180x180',
+      type: 'image/png',
+    });
+    setLink('icon', '/favicon-48.png?v=12', {
+      sizes: '48x48',
+      type: 'image/png',
+    });
 
     const viewport = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
     if (viewport) {
