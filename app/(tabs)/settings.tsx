@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { Alert, Linking, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 
@@ -168,6 +168,25 @@ export default function SettingsScreen() {
       </View>
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Japam Options</Text>
+
+        {!userId ? (
+          <View style={styles.card}>
+            <View style={styles.textBlock}>
+              <Text style={styles.label}>Sign in</Text>
+              <Text style={styles.description}>Save history and sync your japam across devices.</Text>
+            </View>
+            <Pressable style={styles.compactButton} onPress={() => router.push('/?signin=1')}>
+              <Text style={styles.compactButtonText}>Sign in</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <View style={styles.card}>
+            <View style={styles.textBlock}>
+              <Text style={styles.label}>Signed in</Text>
+              <Text style={styles.description}>{userName || 'Google user'}</Text>
+            </View>
+          </View>
+        )}
 
         <View style={styles.cardStack}>
           <Pressable

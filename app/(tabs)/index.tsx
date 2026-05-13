@@ -3,7 +3,7 @@ import * as Google from 'expo-auth-session/providers/google';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -93,6 +93,7 @@ const isAuthPending = async () => {
 };
 
 export default function JapamMain() {
+  const params = useLocalSearchParams<{ signin?: string }>();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [count, setCount] = useState(0);
   const [malas, setMalas] = useState(0);
@@ -327,6 +328,12 @@ export default function JapamMain() {
       void loadSettingsAndRestoreToday();
     }, [restoreTodayTotal])
   );
+
+  useEffect(() => {
+    if (params.signin === '1' && !userName && !isSigningIn) {
+      setShowUserModal(true);
+    }
+  }, [params.signin, userName, isSigningIn]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
@@ -1093,6 +1100,10 @@ export default function JapamMain() {
           <Text style={styles.metricText}>Total {total}</Text>
         </View>
 
+        <Text style={styles.guidanceText}>
+          Tap OM to count manually. Set a timer to add 1 mala when it ends.
+        </Text>
+
         <Animated.View style={[styles.circleGlow, { transform: [{ scale: omPulseAnim }] }]}>
           <Animated.View
             pointerEvents="none"
@@ -1339,6 +1350,16 @@ const styles = StyleSheet.create({
   },
   metricText: { color: '#e2e8f0', fontSize: isMobile ? 16 : 20, fontWeight: '700', textAlign: 'center' },
   timerRunningText: { fontSize: isMobile ? 26 : 34, color: '#fbbf24', fontWeight: '900' },
+  guidanceText: {
+    maxWidth: 430,
+    color: 'rgba(255,255,255,0.62)',
+    fontSize: isMobile ? 12 : 14,
+    lineHeight: isMobile ? 17 : 20,
+    textAlign: 'center',
+    marginTop: -2,
+    marginBottom: 4,
+    paddingHorizontal: 10,
+  },
   circleGlow: {
     width: isShortMobile ? 130 : isMobile ? 160 : 190,
     height: isShortMobile ? 130 : isMobile ? 160 : 190,
