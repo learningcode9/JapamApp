@@ -310,37 +310,21 @@ export default function JapamMain() {
 
   const restoreTodayTotal = useCallback(async () => {
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-    const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
-    const localTodayTotal = await getLocalTodayTotal(savedUserId);
-  
-    let finalTotal = localTodayTotal;
   
     if (savedUserId) {
       const cloudTotal = await fetchUserTotalFromSupabase(savedUserId);
+      const finalTotal = Math.max(0, Math.floor(Number(cloudTotal) || 0));
   
-      const remoteTodayTotal = await fetchTodayTotalFromSupabase(
-        savedUserId,
-        savedUserName
-      );
-  
-      if (cloudTotal !== null) {
-        finalTotal = Number(cloudTotal) || 0;
-      } else {
-        finalTotal = Math.max(
-          localTodayTotal,
-          Number(remoteTodayTotal) || 0
-        );
-      }
+      await restoreTotal(finalTotal, { userId: savedUserId });
+      totalRef.current = finalTotal;
+      setHasRestoredTotal(true);
+      return;
     }
   
-    await restoreTotal(finalTotal, { userId: savedUserId });
-    totalRef.current = finalTotal;
+    await restoreTotal(0, { userId: null });
+    totalRef.current = 0;
     setHasRestoredTotal(true);
-  }, [
-    fetchTodayTotalFromSupabase,
-    getLocalTodayTotal,
-    restoreTotal,
-  ]);
+  }, [restoreTotal]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
@@ -652,7 +636,8 @@ export default function JapamMain() {
         setUserName(googleName);
         setShowUserModal(false);
         setShowUserMenu(false);
-
+        await restoreTotal(0, { userId: null });
+        totalRef.current = 0;
         await AsyncStorage.setItem(USER_NAME_KEY, googleName);
         await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
 
