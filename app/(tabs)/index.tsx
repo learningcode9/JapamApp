@@ -1124,7 +1124,7 @@ export default function JapamMain() {
             </Pressable>
 
             {!hasSetName && (
-              <Text style={styles.renameHint}>👆 Tap to set your mantra name</Text>
+              <Text style={styles.renameHint}>👆 Tap title to set mantra name</Text>
             )}
 
             {/* ✅ Fix 2: Better Sign in button for mobile */}
@@ -1133,7 +1133,7 @@ export default function JapamMain() {
                 style={[styles.loginButton, isMobile ? styles.loginButtonMobile : styles.loginButtonDesktop]}
                 onPress={() => setShowUserModal(true)}
               >
-                <Text style={styles.loginButtonText}>🔐 Sign in to save</Text>
+                <Text style={styles.loginButtonText}>🔐 Sign in to save progress</Text>
               </Pressable>
             )}
 
@@ -1271,10 +1271,10 @@ export default function JapamMain() {
         {/* ✅ Fix 4: Start/Pause only — Stop removed */}
         <View style={styles.row}>
           <Pressable style={styles.btn} onPress={handleStart}>
-            <Text style={styles.btnText}>▶ Start</Text>
+            <Text style={styles.btnText}>▶ {isRunning ? 'Restart' : 'Start'}</Text>
           </Pressable>
           <Pressable style={[styles.btn, styles.gray]} onPress={handlePause}>
-          <Text style={styles.btnText}>⏸ Pause</Text>
+            <Text style={styles.btnText}>⏸ Pause</Text>
           </Pressable>
         </View>
 
@@ -1391,14 +1391,14 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
   renameHint: {
-    color: '#0f172a',
-    fontSize: 13,
-    marginTop: 6,
-    fontWeight: '800',
     backgroundColor: '#fbbf24',
+    color: '#0f172a',
     paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 999,
+    paddingVertical: 4,
+    borderRadius: 8,
+    fontSize: 12,
+    fontWeight: '800',
+    marginTop: 8,
     overflow: 'hidden',
   },
   nameEditor: {
@@ -1591,16 +1591,20 @@ const styles = StyleSheet.create({
   modalCloseText: { color: '#94a3b8', fontSize: 28, fontWeight: '800' },
   loginButton: {
     backgroundColor: '#6366f1',
-    paddingHorizontal: 18,
-    paddingVertical: 10,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
     borderRadius: 999,
+    marginTop: 10,
+    shadowColor: '#6366f1',
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
     elevation: 4,
   },
-  loginButtonDesktop: { position: 'absolute', right: 16, top: 0 },
+  loginButtonDesktop: { position: 'absolute', right: 20, top: 0 },
   loginButtonMobile: {
-    marginTop: 12,
     alignSelf: 'center',
-    width: '80%',
+    width: '90%',
+    maxWidth: 300,
     alignItems: 'center',
   },
   loginButtonText: { color: '#ffffff', fontWeight: '900', fontSize: isMobile ? 15 : 16 },
