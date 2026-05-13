@@ -1,22 +1,30 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { Alert, Linking, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
+const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
 const JAPAM_NAME_KEY = 'japamName';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
+const TIMER_SECONDS_KEY = 'timerSeconds';
+const TIMER_RUNNING_KEY = 'timerRunning';
+const TIMER_TARGET_KEY = 'timerTarget';
+const TIMER_MINUTES_KEY = 'timerMinutes';
+const TIMER_LOOP_KEY = 'timerLoop';
 const FEEDBACK_FORM_URL =
   'https://docs.google.com/forms/d/e/1FAIpQLScYFBZqgour0aN3hFFjW2hrOAkc9vVFdN0-1NPXdouZZRsHfQ/viewform?usp=publish-editor';
 
 const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
 
 export default function SettingsScreen() {
-  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [repetitionSoundEnabled, setRepetitionSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
+  const [isPreviewingSound, setIsPreviewingSound] = useState(false);
   const [japamName, setJapamName] = useState('');
   const [japamNameInput, setJapamNameInput] = useState('');
   const [isEditingJapamName, setIsEditingJapamName] = useState(false);
@@ -27,6 +35,7 @@ export default function SettingsScreen() {
     useCallback(() => {
     const loadSettings = async () => {
       const savedSound = await AsyncStorage.getItem(SOUND_ENABLED_KEY);
+      const savedRepetitionSound = await AsyncStorage.getItem(REPETITION_SOUND_ENABLED_KEY);
       const savedVibration = await AsyncStorage.getItem(VIBRATION_ENABLED_KEY);
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
       const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
@@ -34,7 +43,11 @@ export default function SettingsScreen() {
         ? await AsyncStorage.getItem(getUserStorageKey(JAPAM_NAME_KEY, savedUserId))
         : await AsyncStorage.getItem(JAPAM_NAME_KEY);
 
-      setSoundEnabled(savedSound !== 'false');
+      setRepetitionSoundEnabled(
+        savedRepetitionSound === null
+          ? savedSound !== 'false'
+          : savedRepetitionSound !== 'false'
+      );
       setVibrationEnabled(savedVibration !== 'false');
       setUserId(savedUserId);
       setUserName(savedUserName || '');
@@ -47,9 +60,42 @@ export default function SettingsScreen() {
   }, [])
   );
 
-  const toggleSound = async (value: boolean) => {
-    setSoundEnabled(value);
-    await AsyncStorage.setItem(SOUND_ENABLED_KEY, String(value));
+  const toggleRepetitionSound = async (value: boolean) => {
+    setRepetitionSoundEnabled(value);
+    await AsyncStorage.multiSet([
+      [REPETITION_SOUND_ENABLED_KEY, String(value)],
+      [SOUND_ENABLED_KEY, String(value)],
+    ]);
+  };
+
+  const previewSound = async () => {
+    if (isPreviewingSound) return;
+
+    setIsPreviewingSound(true);
+
+    try {
+      const { sound } = await Audio.Sound.createAsync(
+        require('../../assets/om_complete.mp3'),
+        { shouldPlay: true, volume: 0.75 }
+      );
+
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded && status.didJustFinish) {
+          sound.setOnPlaybackStatusUpdate(null);
+          sound.unloadAsync().catch(console.log);
+          setIsPreviewingSound(false);
+        }
+      });
+
+      setTimeout(() => {
+        sound.unloadAsync().catch(console.log);
+        setIsPreviewingSound(false);
+      }, 3000);
+    } catch (error) {
+      console.log('Preview sound error:', error);
+      setIsPreviewingSound(false);
+      Alert.alert('Preview unavailable', 'Unable to play the sound right now.');
+    }
   };
 
   const toggleVibration = async (value: boolean) => {
@@ -145,9 +191,68 @@ export default function SettingsScreen() {
     await Linking.openURL(FEEDBACK_FORM_URL);
   };
 
+  const savePausedTimerState = async (currentUserId: string) => {
+    try {
+      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      if (!url || !key) return;
+
+      const seconds = Number(
+        (await AsyncStorage.getItem(getUserStorageKey(TIMER_SECONDS_KEY, currentUserId))) ||
+          (await AsyncStorage.getItem(TIMER_SECONDS_KEY)) ||
+          '0'
+      );
+      const targetSeconds = Number(
+        (await AsyncStorage.getItem(getUserStorageKey(TIMER_TARGET_KEY, currentUserId))) ||
+          (await AsyncStorage.getItem(TIMER_TARGET_KEY)) ||
+          '60'
+      );
+      const minutesInput =
+        (await AsyncStorage.getItem(getUserStorageKey(TIMER_MINUTES_KEY, currentUserId))) ||
+        (await AsyncStorage.getItem(TIMER_MINUTES_KEY)) ||
+        '1';
+      const loopTimer =
+        ((await AsyncStorage.getItem(getUserStorageKey(TIMER_LOOP_KEY, currentUserId))) ||
+          (await AsyncStorage.getItem(TIMER_LOOP_KEY))) === 'true';
+
+      await fetch(`${url}/rest/v1/japam_timer_state?on_conflict=user_id`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          Prefer: 'resolution=merge-duplicates,return=minimal',
+        },
+        body: JSON.stringify({
+          user_id: currentUserId,
+          seconds: Math.max(0, Math.floor(seconds || 0)),
+          is_running: false,
+          target_seconds: Math.max(60, Math.floor(targetSeconds || 60)),
+          minutes_input: minutesInput,
+          loop_timer: loopTimer,
+          updated_at: new Date().toISOString(),
+        }),
+      });
+    } catch (error) {
+      console.log('Timer pause on logout error:', error);
+    }
+  };
+
   const logout = async () => {
+    const currentUserId = userId || (await AsyncStorage.getItem(USER_ID_KEY));
+    if (currentUserId) {
+      await savePausedTimerState(currentUserId);
+    }
+
     await AsyncStorage.removeItem(USER_NAME_KEY);
     await AsyncStorage.removeItem(USER_ID_KEY);
+    await AsyncStorage.multiRemove([
+      TIMER_SECONDS_KEY,
+      TIMER_RUNNING_KEY,
+      TIMER_TARGET_KEY,
+      TIMER_MINUTES_KEY,
+      TIMER_LOOP_KEY,
+    ]);
     setUserId(null);
     setUserName('');
     setJapamName('Japam');
@@ -157,7 +262,7 @@ export default function SettingsScreen() {
   };
 
   return (
-    <LinearGradient colors={['#05010c', '#120022', '#05010c']} style={styles.container}>
+    <LinearGradient colors={['#e7f5f5', '#c7e2e0', '#eef8f5']} style={styles.container}>
     {[...Array(30)].map((_, i) => (
       <View
         key={i}
@@ -227,13 +332,28 @@ export default function SettingsScreen() {
 
         <View style={styles.card}>
           <View style={styles.textBlock}>
-            <Text style={styles.label}>Completion Sound</Text>
+            <Text style={styles.label}>Sound on each repetition</Text>
             <Text style={styles.description}>
-              Play sound when one mala or timer session is completed
+              Play a soft chime after each mala completes
             </Text>
           </View>
 
-          <Switch value={soundEnabled} onValueChange={toggleSound} />
+          <Switch value={repetitionSoundEnabled} onValueChange={toggleRepetitionSound} />
+        </View>
+
+        <View style={styles.card}>
+          <View style={styles.textBlock}>
+            <Text style={styles.label}>Preview sound</Text>
+            <Text style={styles.description}>
+              Hear the soft chime used after each completed mala
+            </Text>
+          </View>
+
+          <Pressable style={styles.compactButton} onPress={() => void previewSound()}>
+            <Text style={styles.compactButtonText}>
+              {isPreviewingSound ? 'Playing' : 'Preview'}
+            </Text>
+          </Pressable>
         </View>
 
         <View style={styles.card}>
@@ -287,7 +407,7 @@ const styles = StyleSheet.create({
     width: 2,
     height: 2,
     borderRadius: 99,
-    backgroundColor: 'white',
+    backgroundColor: '#0f766e',
   },
 
   content: {
@@ -304,18 +424,8 @@ const styles = StyleSheet.create({
     marginBottom: 22,
   },
 
-  omMark: {
-    color: '#fbbf24',
-    fontSize: 48,
-    fontWeight: '700',
-    marginBottom: 2,
-    textShadowColor: 'rgba(251,191,36,0.65)',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 18,
-  },
-
   title: {
-    color: 'white',
+    color: '#102f34',
     fontSize: 36,
     fontWeight: '900',
     marginBottom: 4,
@@ -323,7 +433,7 @@ const styles = StyleSheet.create({
   },
 
   subtitle: {
-    color: '#cbd5e1',
+    color: '#365f61',
     fontSize: 18,
     textAlign: 'center',
   },
@@ -333,7 +443,7 @@ const styles = StyleSheet.create({
   },
 
   sectionTitle: {
-    color: '#cbd5e1',
+    color: '#365f61',
     fontSize: 18,
     fontWeight: '800',
     marginBottom: 12,
@@ -342,23 +452,23 @@ const styles = StyleSheet.create({
   },
 
   card: {
-    backgroundColor: 'rgba(15, 23, 42, 0.72)',
-    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.54)',
+    borderRadius: 20,
     padding: 18,
     marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderColor: 'rgba(251, 191, 36, 0.16)',
+    borderColor: 'rgba(15, 118, 110, 0.16)',
   },
 
   cardStack: {
-    backgroundColor: 'rgba(15, 23, 42, 0.72)',
-    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.54)',
+    borderRadius: 20,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: 'rgba(251, 191, 36, 0.16)',
+    borderColor: 'rgba(15, 118, 110, 0.16)',
     overflow: 'hidden',
   },
 
@@ -370,14 +480,14 @@ const styles = StyleSheet.create({
   },
 
   changeText: {
-    color: '#fbbf24',
+    color: '#0f766e',
     fontSize: 16,
     fontWeight: '900',
   },
 
   inlineEditor: {
     borderTopWidth: 1,
-    borderTopColor: 'rgba(251, 191, 36, 0.14)',
+    borderTopColor: 'rgba(15, 118, 110, 0.14)',
     paddingHorizontal: 18,
     paddingBottom: 18,
   },
@@ -394,26 +504,26 @@ const styles = StyleSheet.create({
   },
 
   label: {
-    color: 'white',
+    color: '#12383c',
     fontSize: 20,
     fontWeight: '800',
   },
 
   description: {
-    color: '#94a3b8',
+    color: '#547071',
     fontSize: 17,
     marginTop: 5,
     lineHeight: 24,
   },
 
   input: {
-    backgroundColor: '#1e293b',
-    color: 'white',
+    backgroundColor: 'rgba(255,255,255,0.68)',
+    color: '#12383c',
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 13,
     borderWidth: 1,
-    borderColor: '#334155',
+    borderColor: 'rgba(15,118,110,0.16)',
     marginTop: 12,
     fontSize: 17,
     fontWeight: '700',
@@ -421,14 +531,14 @@ const styles = StyleSheet.create({
 
   smallButton: {
     flex: 1,
-    backgroundColor: '#7c3aed',
-    borderRadius: 10,
+    backgroundColor: '#0f8a87',
+    borderRadius: 999,
     paddingVertical: 11,
     alignItems: 'center',
   },
 
   secondaryButton: {
-    backgroundColor: '#475569',
+    backgroundColor: '#5f7778',
   },
 
   smallButtonText: {
@@ -438,8 +548,8 @@ const styles = StyleSheet.create({
   },
 
   compactButton: {
-    backgroundColor: '#7c3aed',
-    borderRadius: 10,
+    backgroundColor: '#0f8a87',
+    borderRadius: 999,
     paddingHorizontal: 18,
     paddingVertical: 10,
   },
@@ -455,22 +565,22 @@ const styles = StyleSheet.create({
   },
 
   infoBox: {
-    backgroundColor: 'rgba(23, 37, 84, 0.72)',
-    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.42)',
+    borderRadius: 20,
     padding: 16,
     borderWidth: 1,
-    borderColor: 'rgba(96, 165, 250, 0.34)',
+    borderColor: 'rgba(15, 118, 110, 0.16)',
   },
 
   infoTitle: {
-    color: 'white',
+    color: '#12383c',
     fontSize: 20,
     fontWeight: '800',
     marginBottom: 6,
   },
 
   infoText: {
-    color: '#bfdbfe',
+    color: '#547071',
     fontSize: 17,
     lineHeight: 24,
   },

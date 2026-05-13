@@ -3,13 +3,15 @@ import * as Google from 'expo-auth-session/providers/google';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useFocusEffect } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   Alert,
   Animated,
   Dimensions,
+  ImageBackground,
   Modal,
   Platform,
   Pressable,
@@ -49,6 +51,7 @@ const HISTORY_KEY = 'history';
 const JAPAM_NAME_KEY = 'japamName';
 const LAST_OPEN_DATE_KEY = 'lastOpenDate';
 const SOUND_ENABLED_KEY = 'soundEnabled';
+const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
 const USER_NAME_KEY = 'userName';
 const USER_ID_KEY = 'userId';
@@ -60,11 +63,27 @@ const TIMER_RUNNING_KEY = 'timerRunning';
 const TIMER_TARGET_KEY = 'timerTarget';
 const TIMER_MINUTES_KEY = 'timerMinutes';
 const TIMER_LOOP_KEY = 'timerLoop';
+const DEFAULT_TIMER_MINUTES = 5;
+const SESSION_TIME_OPTIONS = [5, 10, 15];
 
 const screenWidth = Dimensions.get('window').width;
 const screenHeight = Dimensions.get('window').height;
 const isMobile = screenWidth < 500;
-const isShortMobile = isMobile && screenHeight < 700;
+const isShortMobile = isMobile && screenHeight < 760;
+const progressCircleSize = isShortMobile ? 220 : isMobile ? 260 : 300;
+const progressRingSize = progressCircleSize - (isMobile ? 10 : 14);
+const shellMinHeight =
+  isMobile
+    ? Platform.OS === 'web'
+      ? ('100dvh' as any)
+      : screenHeight
+    : Math.min(Math.max(screenHeight - 54, 820), 940);
+const scrollTopPadding =
+  Platform.OS === 'web' ? ('env(safe-area-inset-top)' as any) : 0;
+const scrollBottomPadding =
+  Platform.OS === 'web'
+    ? ('calc(110px + env(safe-area-inset-bottom))' as any)
+    : 110;
 
 const getLocalDateKey = (date = new Date()) => {
   const y = date.getFullYear();
@@ -73,10 +92,10 @@ const getLocalDateKey = (date = new Date()) => {
   return `${y}-${m}-${d}`;
 };
 
-const isSameLocalDay = (dateValue: string, dayKey = getLocalDateKey()) => {
-  const d = new Date(dateValue);
-  if (Number.isNaN(d.getTime())) return false;
-  return getLocalDateKey(d) === dayKey;
+const getPreviousDateKey = (dayKey: string) => {
+  const date = new Date(`${dayKey}T12:00:00`);
+  date.setDate(date.getDate() - 1);
+  return getLocalDateKey(date);
 };
 
 const getTodayRange = () => {
@@ -105,30 +124,35 @@ export default function JapamMain() {
   const [count, setCount] = useState(0);
   const [malas, setMalas] = useState(0);
   const [total, setTotal] = useState(0);
+  const [dayStreak, setDayStreak] = useState(0);
   const [seconds, setSeconds] = useState(0);
   const [hasRestoredTotal, setHasRestoredTotal] = useState(false);
   const [hasRestoredTimer, setHasRestoredTimer] = useState(false);
-  const [minutesInput, setMinutesInput] = useState('0');
-  const [targetSeconds, setTargetSeconds] = useState(60);
+  const [minutesInput, setMinutesInput] = useState(String(DEFAULT_TIMER_MINUTES));
+  const [targetSeconds, setTargetSeconds] = useState(DEFAULT_TIMER_MINUTES * 60);
   const [isRunning, setIsRunning] = useState(false);
   const [loopTimer, setLoopTimer] = useState(false);
   const [, setAutoCompletedMalas] = useState(0);
-  const [japamName, setJapamName] = useState('');
-  const [nameInput, setNameInput] = useState('');
-  const [showNameEditor, setShowNameEditor] = useState(false);
-  const [hasSetName, setHasSetName] = useState(false); // ✅ Fix 1: track if name is set
+  const [, setJapamName] = useState('');
+  const [, setNameInput] = useState('');
+  const [, setHasSetName] = useState(false);
   const [userName, setUserName] = useState('');
   const [showUserModal, setShowUserModal] = useState(false);
+  const [showTimerSheet, setShowTimerSheet] = useState(false);
+  const [showCustomTimerInput, setShowCustomTimerInput] = useState(false);
+  const [hasSelectedTimer, setHasSelectedTimer] = useState(false);
+  const [customMinutesInput, setCustomMinutesInput] = useState('');
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [repetitionSoundEnabled, setRepetitionSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
 
   const totalRef = useRef(0);
   const timerRef = useRef({
     seconds: 0,
     isRunning: false,
-    targetSeconds: 60,
-    minutesInput: '1',
+    targetSeconds: DEFAULT_TIMER_MINUTES * 60,
+    minutesInput: String(DEFAULT_TIMER_MINUTES),
     loopTimer: false,
   });
   const suppressTimerSaveRef = useRef(false);
@@ -142,20 +166,8 @@ export default function JapamMain() {
   const lastTapRef = useRef(0);
 
   const glowAnim = useRef(new Animated.Value(0)).current;
-  const particleAnim = useRef(new Animated.Value(0)).current;
-  const omPulseAnim = useRef(new Animated.Value(1)).current;
-  const stars = useMemo(() => Array.from({ length: 40 }, (_, i) => i), []);
 
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-
-  const vibrateDevice = useCallback((pattern: number | number[]) => {
-    if (!vibrationEnabled) return;
-    if (Platform.OS === 'web' && typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-      navigator.vibrate(pattern);
-      return;
-    }
-    Vibration.vibrate(pattern);
-  }, [vibrationEnabled]);
 
   const googleRedirectUri =
     Platform.OS === 'web' && typeof window !== 'undefined'
@@ -167,6 +179,31 @@ export default function JapamMain() {
     scopes: ['profile', 'email'],
     redirectUri: googleRedirectUri,
   });
+
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
+
+      void (async () => {
+        const savedSound = await AsyncStorage.getItem(SOUND_ENABLED_KEY);
+        const savedRepetitionSound = await AsyncStorage.getItem(REPETITION_SOUND_ENABLED_KEY);
+        const savedVibration = await AsyncStorage.getItem(VIBRATION_ENABLED_KEY);
+
+        if (!isActive) return;
+        setSoundEnabled(savedSound !== 'false');
+        setRepetitionSoundEnabled(
+          savedRepetitionSound === null
+            ? savedSound !== 'false'
+            : savedRepetitionSound !== 'false'
+        );
+        setVibrationEnabled(savedVibration !== 'false');
+      })();
+
+      return () => {
+        isActive = false;
+      };
+    }, [])
+  );
 
   const restoreTotal = useCallback(
     async (nextTotal: number, options?: { userId?: string | null }) => {
@@ -196,34 +233,85 @@ export default function JapamMain() {
     []
   );
 
-  const getLocalTodayTotal = useCallback(async (userIdOverride?: string | null) => {
-    const today = getLocalDateKey();
-    const savedUserId =
-      userIdOverride === undefined
-        ? await AsyncStorage.getItem(USER_ID_KEY)
-        : userIdOverride;
+  const refreshDayStreak = useCallback(
+    async (options?: { userId?: string | null; todayTotal?: number }) => {
+      const activeUserId =
+        options?.userId === undefined
+          ? await AsyncStorage.getItem(USER_ID_KEY)
+          : options.userId;
 
-    if (!savedUserId) return 0;
+      if (!activeUserId) {
+        setDayStreak(0);
+        return;
+      }
 
-    const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
-    const history: Session[] = rawHistory ? JSON.parse(rawHistory) : [];
+      const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
+      const history: Session[] = rawHistory ? JSON.parse(rawHistory) : [];
+      const activeDays = new Set<string>();
 
-    const todayHistoryTotal = history
-      .filter((item) => {
-        if (!savedUserId || item.userId !== savedUserId) return false;
-        return isSameLocalDay(item.date, today);
-      })
-      .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
+      history.forEach((item) => {
+        if (item.userId !== activeUserId) return;
+        if ((Number(item.totalCount) || 0) <= 0 && (Number(item.malas) || 0) <= 0) return;
 
-    const savedCount = Number((await AsyncStorage.getItem(getUserStorageKey(COUNT_KEY, savedUserId))) || '0');
-    const savedMalas = Number((await AsyncStorage.getItem(getUserStorageKey(MALAS_KEY, savedUserId))) || '0');
-    const savedTotal = Number((await AsyncStorage.getItem(getUserStorageKey(TOTAL_KEY, savedUserId))) || '0');
+        const itemDate = new Date(item.date);
+        if (Number.isNaN(itemDate.getTime())) return;
 
-    return Math.max(savedTotal, todayHistoryTotal, savedMalas * 108 + savedCount);
-  }, []);
+        activeDays.add(getLocalDateKey(itemDate));
+      });
+
+      const todayKey = getLocalDateKey();
+      if ((options?.todayTotal ?? totalRef.current) > 0) {
+        activeDays.add(todayKey);
+      }
+
+      let cursor = activeDays.has(todayKey) ? todayKey : getPreviousDateKey(todayKey);
+      let nextStreak = 0;
+
+      while (activeDays.has(cursor)) {
+        nextStreak += 1;
+        cursor = getPreviousDateKey(cursor);
+      }
+
+      setDayStreak(nextStreak);
+    },
+    []
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      let isActive = true;
+
+      void (async () => {
+        const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+        const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+
+        if (!isActive || savedUserId || savedUserName) return;
+
+        timerStartedAtRef.current = null;
+        totalRef.current = 0;
+        setUserName('');
+        setShowUserMenu(false);
+        setJapamName('');
+        setNameInput('');
+        setHasSetName(false);
+        setIsRunning(false);
+        setSeconds(0);
+        setTargetSeconds(DEFAULT_TIMER_MINUTES * 60);
+        setMinutesInput(String(DEFAULT_TIMER_MINUTES));
+        setHasSelectedTimer(false);
+        setLoopTimer(false);
+        setDayStreak(0);
+        await restoreTotal(0, { userId: null });
+      })();
+
+      return () => {
+        isActive = false;
+      };
+    }, [restoreTotal])
+  );
 
   const fetchTodayTotalFromSupabase = useCallback(
-    async (userId: string, userNameForFallback?: string | null) => {
+    async (userId: string) => {
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       if (!url || !key || !userId) return null;
@@ -249,11 +337,7 @@ export default function JapamMain() {
         };
 
         const byUserId = await fetchBy('user_id', userId);
-        const byUserName = userNameForFallback ? await fetchBy('user_name', userNameForFallback) : null;
-
-        if (byUserId === null) return byUserName;
-        if (byUserName === null) return byUserId;
-        return Math.max(byUserId, byUserName);
+        return byUserId;
       } catch (error) {
         console.log('Supabase today total error:', error);
         return null;
@@ -309,10 +393,9 @@ export default function JapamMain() {
 
   const restoreTodayTotal = useCallback(async () => {
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-    const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
   
     if (savedUserId) {
-      const remoteTodayTotal = await fetchTodayTotalFromSupabase(savedUserId, savedUserName);
+      const remoteTodayTotal = await fetchTodayTotalFromSupabase(savedUserId);
       const cloudTotal = await fetchUserTotalFromSupabase(savedUserId);
       const safeCloudTotal = Math.max(0, Math.floor(Number(cloudTotal) || 0));
       const safeRemoteTotal = Math.max(0, Math.floor(Number(remoteTodayTotal) || 0));
@@ -326,14 +409,16 @@ export default function JapamMain() {
   
       await restoreTotal(finalTotal, { userId: savedUserId });
       totalRef.current = finalTotal;
+      await refreshDayStreak({ userId: savedUserId, todayTotal: finalTotal });
       setHasRestoredTotal(true);
       return;
     }
   
     await restoreTotal(0, { userId: null });
     totalRef.current = 0;
+    await refreshDayStreak({ userId: null, todayTotal: 0 });
     setHasRestoredTotal(true);
-  }, [fetchTodayTotalFromSupabase, restoreTotal]);
+  }, [fetchTodayTotalFromSupabase, refreshDayStreak, restoreTotal]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
@@ -414,7 +499,7 @@ export default function JapamMain() {
 
   const applyRestoredTimerState = useCallback((timerState: TimerStateRow) => {
     const savedSeconds = Math.max(0, Math.floor(Number(timerState.seconds) || 0));
-    const savedTarget = Math.max(60, Math.floor(Number(timerState.target_seconds) || 60));
+    const savedTarget = Math.max(60, Math.floor(Number(timerState.target_seconds) || DEFAULT_TIMER_MINUTES * 60));
     const savedIsRunning = Boolean(timerState.is_running);
     const updatedAtMs = timerState.updated_at ? new Date(timerState.updated_at).getTime() : NaN;
     const elapsedWhileAway =
@@ -433,6 +518,7 @@ export default function JapamMain() {
     setIsRunning(savedIsRunning);
     setTargetSeconds(savedTarget);
     setMinutesInput(timerState.minutes_input || String(Math.max(1, Math.floor(savedTarget / 60))));
+    setHasSelectedTimer(true);
     setLoopTimer(Boolean(timerState.loop_timer));
   }, []);
 
@@ -460,6 +546,7 @@ export default function JapamMain() {
         setUserName('');
         setIsSigningIn(authPending);
         setShowUserModal(false);
+        setDayStreak(0);
         await restoreTotal(0, { userId: null });
       }
 
@@ -470,25 +557,27 @@ export default function JapamMain() {
         } else {
           const savedTimerSeconds = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_SECONDS_KEY, savedUserId))) || '0');
           const savedTimerRunning = (await AsyncStorage.getItem(getUserStorageKey(TIMER_RUNNING_KEY, savedUserId))) === 'true';
-          const savedTimerTarget = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_TARGET_KEY, savedUserId))) || '60');
-          const savedTimerMinutes = (await AsyncStorage.getItem(getUserStorageKey(TIMER_MINUTES_KEY, savedUserId))) || '1';
+          const savedTimerTarget = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_TARGET_KEY, savedUserId))) || String(DEFAULT_TIMER_MINUTES * 60));
+          const savedTimerMinutes = (await AsyncStorage.getItem(getUserStorageKey(TIMER_MINUTES_KEY, savedUserId))) || String(DEFAULT_TIMER_MINUTES);
           const savedTimerLoop = (await AsyncStorage.getItem(getUserStorageKey(TIMER_LOOP_KEY, savedUserId))) === 'true';
           setSeconds(savedTimerSeconds);
           setIsRunning(savedTimerRunning);
           setTargetSeconds(savedTimerTarget);
           setMinutesInput(savedTimerMinutes);
+          setHasSelectedTimer(true);
           setLoopTimer(savedTimerLoop);
         }
       } else {
         setSeconds(0);
         setIsRunning(false);
-        setTargetSeconds(60);
-        setMinutesInput('1');
+        setTargetSeconds(DEFAULT_TIMER_MINUTES * 60);
+        setMinutesInput(String(DEFAULT_TIMER_MINUTES));
+        setHasSelectedTimer(false);
         setLoopTimer(false);
         await AsyncStorage.setItem(TIMER_SECONDS_KEY, '0');
         await AsyncStorage.setItem(TIMER_RUNNING_KEY, 'false');
-        await AsyncStorage.setItem(TIMER_TARGET_KEY, '60');
-        await AsyncStorage.setItem(TIMER_MINUTES_KEY, '1');
+        await AsyncStorage.setItem(TIMER_TARGET_KEY, String(DEFAULT_TIMER_MINUTES * 60));
+        await AsyncStorage.setItem(TIMER_MINUTES_KEY, String(DEFAULT_TIMER_MINUTES));
         await AsyncStorage.setItem(TIMER_LOOP_KEY, 'false');
       }
 
@@ -498,21 +587,6 @@ export default function JapamMain() {
 
     void loadData();
   }, [applyRestoredTimerState, fetchTimerStateFromSupabase, restoreTodayTotal, restoreTotal]);
-
-  useEffect(() => {
-    Animated.loop(
-      Animated.timing(particleAnim, { toValue: 1, duration: 6000, useNativeDriver: true })
-    ).start();
-  }, [particleAnim]);
-
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(omPulseAnim, { toValue: 1.05, duration: 1800, useNativeDriver: true }),
-        Animated.timing(omPulseAnim, { toValue: 1, duration: 1800, useNativeDriver: true }),
-      ])
-    ).start();
-  }, [omPulseAnim]);
 
   useEffect(() => {
     return () => {
@@ -663,7 +737,14 @@ export default function JapamMain() {
     };
 
     void handleGoogleLogin();
-  }, [response, loadJapamNameFromSupabase, restoreHistoryFromSupabase, restoreTimerForUser]);
+  }, [
+    response,
+    loadJapamNameFromSupabase,
+    restoreHistoryFromSupabase,
+    restoreTimerForUser,
+    restoreTodayTotal,
+    restoreTotal,
+  ]);
 
   useEffect(() => {
     totalRef.current = total;
@@ -679,6 +760,7 @@ export default function JapamMain() {
         await AsyncStorage.setItem(getUserStorageKey(COUNT_KEY, savedUserId), String(count));
         await AsyncStorage.setItem(getUserStorageKey(MALAS_KEY, savedUserId), String(malas));
         await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, savedUserId), String(total));
+        await refreshDayStreak({ userId: savedUserId, todayTotal: total });
 
         if (dbTotalSaveTimeoutRef.current) {
           clearTimeout(dbTotalSaveTimeoutRef.current);
@@ -693,7 +775,7 @@ export default function JapamMain() {
         }, 2000);
       }
     })();
-  }, [count, malas, total, userName, hasRestoredTotal]);
+  }, [count, malas, total, userName, hasRestoredTotal, refreshDayStreak]);
 
   useEffect(() => {
     if (!isRunning) return;
@@ -803,10 +885,23 @@ export default function JapamMain() {
     }
   }, [userName]);
 
+  const webVibrate = useCallback((duration: number) => {
+    if (!vibrationEnabled || Platform.OS !== 'web' || typeof navigator === 'undefined') {
+      return false;
+    }
+
+    navigator.vibrate?.(duration);
+    return true;
+  }, [vibrationEnabled]);
+
   const tapFeedback = useCallback(async () => {
     if (!vibrationEnabled) return;
   
     try {
+      if (webVibrate(20)) {
+        return;
+      }
+
       if (Platform.OS === 'ios') {
         await Haptics.impactAsync(
           Haptics.ImpactFeedbackStyle.Light
@@ -814,17 +909,17 @@ export default function JapamMain() {
         return;
       }
   
-      Vibration.vibrate(60);
+      Vibration.vibrate(20);
   
       if (Platform.OS !== 'web') {
         await Haptics.impactAsync(
-          Haptics.ImpactFeedbackStyle.Medium
+          Haptics.ImpactFeedbackStyle.Light
         );
       }
     } catch (error) {
       console.log('Tap vibration error:', error);
     }
-  }, [vibrationEnabled]);
+  }, [vibrationEnabled, webVibrate]);
 
   const playCompletionAnimation = useCallback(() => {
     glowAnim.setValue(0);
@@ -841,13 +936,17 @@ export default function JapamMain() {
   const completeFeedback = useCallback(async () => {
     playCompletionAnimation();
   
-    if (soundEnabled) {
+    if (soundEnabled && repetitionSoundEnabled) {
       await playCompleteSound();
     }
   
     if (!vibrationEnabled) return;
   
     try {
+      if (webVibrate(120)) {
+        return;
+      }
+
       if (Platform.OS === 'ios') {
         await Haptics.notificationAsync(
           Haptics.NotificationFeedbackType.Success
@@ -862,11 +961,11 @@ export default function JapamMain() {
         return;
       }
   
-      Vibration.vibrate([0, 600, 180, 600, 180, 900]);
+      Vibration.vibrate(120);
     } catch (error) {
       console.log('Completion vibration error:', error);
     }
-  }, [playCompletionAnimation, soundEnabled, vibrationEnabled]);
+  }, [playCompletionAnimation, repetitionSoundEnabled, soundEnabled, vibrationEnabled, webVibrate]);
 
   const setCountersFromTotal = (nextTotal: number) => {
     const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
@@ -908,8 +1007,6 @@ export default function JapamMain() {
     if (now - lastTapRef.current < 100) return;
     lastTapRef.current = now;
   
-    void tapFeedback();
-  
     rippleAnim.setValue(0);
     Animated.timing(rippleAnim, {
       toValue: 1,
@@ -923,6 +1020,8 @@ export default function JapamMain() {
     if (newCount === 0) {
       void saveSession(0, 1, 108, newTotal);
       void completeFeedback();
+    } else {
+      void tapFeedback();
     }
   };
 
@@ -936,6 +1035,7 @@ export default function JapamMain() {
     timerStartedAtRef.current = Date.now() - nextSeconds * 1000;
     timerRef.current = { seconds: nextSeconds, isRunning: true, targetSeconds: nextTargetSeconds, minutesInput: String(mins), loopTimer };
     setMinutesInput(String(mins));
+    setHasSelectedTimer(true);
     setTargetSeconds(nextTargetSeconds);
     setSeconds(nextSeconds);
     setAutoCompletedMalas(0);
@@ -950,6 +1050,28 @@ export default function JapamMain() {
       if (!savedUserId) return;
       await saveTimerStateToSupabase(savedUserId, { seconds, isRunning: false, targetSeconds, minutesInput, loopTimer });
     })();
+  };
+
+  const applySessionMinutes = (minutes: number) => {
+    const safeMinutes = Math.max(1, Math.floor(Number(minutes) || 1));
+
+    if (isRunning) {
+      setIsRunning(false);
+      timerStartedAtRef.current = null;
+    }
+
+    setMinutesInput(String(safeMinutes));
+    setHasSelectedTimer(true);
+    setTargetSeconds(safeMinutes * 60);
+    setSeconds(0);
+    setAutoCompletedMalas(0);
+    setShowTimerSheet(false);
+    setShowCustomTimerInput(false);
+    setCustomMinutesInput('');
+  };
+
+  const applyCustomSessionMinutes = () => {
+    applySessionMinutes(Number(customMinutesInput) || DEFAULT_TIMER_MINUTES);
   };
 
   const completeTimerSession = useCallback(() => {
@@ -984,56 +1106,6 @@ export default function JapamMain() {
     }
   }, [loopTimer, targetSeconds, saveSession, completeFeedback]);
 
-  const saveJapamNameToSupabase = async (userId: string, userNameValue: string, japamNameValue: string) => {
-    try {
-      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-      if (!url || !key) return;
-
-      const encodedUserId = encodeURIComponent(userId);
-      const checkResponse = await fetch(
-        `${url}/rest/v1/user_profiles?user_id=eq.${encodedUserId}&select=id`,
-        { headers: { apikey: key, Authorization: `Bearer ${key}` } }
-      );
-      const rows = await checkResponse.json();
-
-      if (rows.length > 0) {
-        await fetch(`${url}/rest/v1/user_profiles?user_id=eq.${encodedUserId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}` },
-          body: JSON.stringify({ user_name: userNameValue, japam_name: japamNameValue, updated_at: new Date().toISOString() }),
-        });
-      } else {
-        await fetch(`${url}/rest/v1/user_profiles`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}` },
-          body: JSON.stringify({ user_id: userId, user_name: userNameValue, japam_name: japamNameValue }),
-        });
-      }
-    } catch (error) {
-      console.log('Profile save error:', error);
-    }
-  };
-
-  const saveJapamName = async () => {
-    const name = nameInput.trim();
-    if (!name) return;
-
-    setJapamName(name);
-    setNameInput(name);
-    setShowNameEditor(false);
-    setHasSetName(true); // ✅ hide rename hint after saving
-
-    const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-    if (savedUserId) {
-      await AsyncStorage.setItem(getUserStorageKey(JAPAM_NAME_KEY, savedUserId), name);
-      const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
-      await saveJapamNameToSupabase(savedUserId, savedUserName || 'User', name);
-    } else {
-      await AsyncStorage.setItem(JAPAM_NAME_KEY, name);
-    }
-  };
-
   const performLogout = async () => {
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
     const currentUserName = await AsyncStorage.getItem(USER_NAME_KEY);
@@ -1065,8 +1137,8 @@ export default function JapamMain() {
     suppressTimerSaveRef.current = true;
     await AsyncStorage.setItem(TIMER_SECONDS_KEY, '0');
     await AsyncStorage.setItem(TIMER_RUNNING_KEY, 'false');
-    await AsyncStorage.setItem(TIMER_TARGET_KEY, '60');
-    await AsyncStorage.setItem(TIMER_MINUTES_KEY, '1');
+    await AsyncStorage.setItem(TIMER_TARGET_KEY, String(DEFAULT_TIMER_MINUTES * 60));
+    await AsyncStorage.setItem(TIMER_MINUTES_KEY, String(DEFAULT_TIMER_MINUTES));
     await AsyncStorage.setItem(TIMER_LOOP_KEY, 'false');
     await AsyncStorage.multiRemove([
       TIMER_SECONDS_KEY,
@@ -1077,9 +1149,11 @@ export default function JapamMain() {
     ]);
     setIsRunning(false);
     setSeconds(0);
-    setTargetSeconds(60);
-    setMinutesInput('1'); 
+    setTargetSeconds(DEFAULT_TIMER_MINUTES * 60);
+    setMinutesInput(String(DEFAULT_TIMER_MINUTES)); 
+    setHasSelectedTimer(false);
     setLoopTimer(false);
+    setDayStreak(0);
     setAutoCompletedMalas(0);
     setHasRestoredTimer(false);
     setShowUserMenu(false);
@@ -1128,210 +1202,248 @@ setTimeout(() => { suppressTimerSaveRef.current = false; }, 0);
     ]);
   };
 
-  const openRename = () => { setNameInput(japamName); setShowNameEditor(true); };
-  const cancelRename = () => { setNameInput(japamName); setShowNameEditor(false); };
   const todayLabel = new Date().toLocaleDateString();
+  const progressPercent = Math.min(100, Math.max(0, (count / 108) * 100));
+  const progressRingBackground =
+    Platform.OS === 'web'
+      ? ({
+          background: `conic-gradient(#0F8F87 ${progressPercent}%, rgba(15,143,135,0.14) 0)`,
+        } as any)
+      : null;
 
   return (
     <LinearGradient
-      colors={['#0a0015', '#1a0a35', '#0a0015']}
+      colors={['#edf7f4', '#d9eeeb', '#f8fbf7']}
       start={{ x: 0, y: 0 }}
       end={{ x: 0, y: 1 }}
       style={{ flex: 1 }}
     >
-      {/* Stars */}
-      {stars.map((i) => (
-        <Animated.View
-          key={i}
-          pointerEvents="none"
-          style={{
-            position: 'absolute',
-            width: i % 3 === 0 ? 3 : 2,
-            height: i % 3 === 0 ? 3 : 2,
-            borderRadius: 99,
-            backgroundColor: 'white',
-            left: `${(i * 37 + 11) % 100}%`,
-            top: `${(i * 53 + 7) % 100}%`,
-            opacity: particleAnim.interpolate({
-              inputRange: [0, (i % 5) * 0.2, 1],
-              outputRange: [0.1, 0.9, 0.1],
-            }),
-          }}
-        />
-      ))}
-
       <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-
-        {isSigningIn && (
-          <View style={styles.signingInBanner}>
-            <Text style={styles.signingInText}>Signing in...</Text>
+        <View style={styles.appShell}>
+          <View pointerEvents="none" style={styles.sceneLayer}>
+            <ImageBackground
+              source={require('../../assets/images/zen-background.png')}
+              resizeMode="cover"
+              style={styles.backgroundImage}
+              imageStyle={styles.backgroundImageStyle}
+            >
+              <View style={styles.backgroundOverlay} />
+            </ImageBackground>
           </View>
-        )}
 
-        <View style={styles.topBar}>
-          <View style={styles.headerCenter}>
+          {isSigningIn && (
+            <View style={styles.signingInBanner}>
+              <Text style={styles.signingInText}>Signing in...</Text>
+            </View>
+          )}
 
-            {/* ✅ Fix 1: show rename hint only if name not set yet */}
-            <Pressable onPress={openRename}>
-              <Text style={styles.title}>{japamName || 'Mantra Japam'}</Text>
+          <View style={styles.topControls}>
+            <Text style={styles.welcomeText}>Welcome back</Text>
+
+            <Pressable
+              style={({ pressed }) => [styles.accountButton, pressed && styles.softPressed]}
+              onPress={() => {
+                if (userName) {
+                  setShowUserMenu((prev) => !prev);
+                  return;
+                }
+
+                setShowUserModal(true);
+              }}
+            >
+              <Text style={styles.accountNameText}>{userName || 'Sign in'}</Text>
             </Pressable>
 
-            {!hasSetName && (
-              <Text style={styles.renameHint}>👆 Tap title to set mantra name</Text>
-            )}
-
-            {/* ✅ Fix 2: Better Sign in button for mobile */}
-            {!userName && (
-              <Pressable
-                style={[styles.loginButton, isMobile ? styles.loginButtonMobile : styles.loginButtonDesktop]}
-                onPress={() => setShowUserModal(true)}
-              >
-                <Text style={styles.loginButtonText}>🔐 Sign in to save progress</Text>
-              </Pressable>
-            )}
-
-            {!!userName && (
-              <View style={[styles.userMenuWrap, isMobile ? styles.mobileUserBadge : styles.desktopUserBadge]}>
-                <Pressable style={styles.userBadge} onPress={() => setShowUserMenu((prev) => !prev)}>
-                  <Text style={styles.userBadgeText}>🙏 {userName}</Text>
+            {showUserMenu && (
+              <View style={styles.userMenu}>
+                <Pressable style={styles.userMenuItem} onPress={handleLogout}>
+                  <Text style={styles.userMenuText}>Logout</Text>
                 </Pressable>
-                {showUserMenu && (
-                  <View style={styles.userMenu}>
-                    <Pressable style={styles.userMenuItem} onPress={handleLogout}>
-                      <Text style={styles.userMenuText}>Logout</Text>
-                    </Pressable>
-                  </View>
-                )}
               </View>
             )}
           </View>
-        </View>
 
-        {showNameEditor && (
-          <View style={styles.nameEditor}>
-            <TextInput
-              style={styles.nameInput}
-              value={nameInput}
-              onChangeText={setNameInput}
-              placeholder="e.g. Gayatri Mantram"
-              placeholderTextColor="#94a3b8"
-              autoFocus
+          <Text style={styles.dateText}>Today · {todayLabel}</Text>
+
+          <Animated.View style={styles.progressShell}>
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.completionGlow,
+                {
+                  opacity: glowAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0, 0.42],
+                  }),
+                  transform: [
+                    {
+                      scale: glowAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0.92, 1.08],
+                      }),
+                    },
+                  ],
+                },
+              ]}
             />
-            <Pressable style={styles.smallBtn} onPress={saveJapamName}>
-              <Text style={styles.smallBtnText}>Save</Text>
-            </Pressable>
-            <Pressable style={styles.graySmallBtn} onPress={cancelRename}>
-              <Text style={styles.smallBtnText}>Cancel</Text>
-            </Pressable>
-          </View>
-        )}
-
-        {/* ✅ Fix 3: Quotes removed */}
-
-        <Text style={styles.dateText}>Today: {todayLabel}</Text>
-        <Text style={styles.big}>{count}</Text>
-
-        <View style={styles.progressBarBackground}>
-          <View style={[styles.progressBarFill, { width: `${(count / 108) * 100}%` }]} />
-        </View>
-
-        <Text style={styles.progressText}>{count} / 108</Text>
-
-        <View style={styles.metricsRow}>
-          <Text style={styles.metricText}>📿 {malas} {malas === 1 ? 'mala' : 'malas'}</Text>
-          <Text style={[styles.metricText, isRunning && styles.timerRunningText]}>
-            ⏱ {formatTime(seconds)}
-          </Text>
-          <Text style={styles.metricText}>Total {total}</Text>
-        </View>
-
-        <Animated.View style={[styles.circleGlow, { transform: [{ scale: omPulseAnim }] }]}>
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              styles.completionGlow,
-              {
-                opacity: glowAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [0, 0.9],
-                }),
-                transform: [
-                  {
-                    scale: glowAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0.85, 1.18],
-                    }),
-                  },
-                ],
-              },
-            ]}
-          />
-          <Animated.View
-            pointerEvents="none"
-            style={{
-              position: 'absolute',
-              width: 128,
-              height: 128,
-              borderRadius: 64,
-              borderWidth: 2,
-              borderColor: 'rgba(251, 191, 36, 0.6)',
-              transform: [{ scale: rippleAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.9] }) }],
-              opacity: rippleAnim.interpolate({ inputRange: [0, 0.7, 1], outputRange: [0.9, 0.3, 0] }),
-            }}
-          />
-          <Pressable
-            onPress={handleTap}
-            
-            style={({ pressed }) => [pressed && styles.circlePressed]}
-          >
-            <LinearGradient
-              colors={['#6d28d9', '#3b0764', '#160032']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.circle}
+            <Pressable
+              onPress={handleTap}
+              style={({ pressed }) => [
+                styles.progressPressable,
+                pressed && styles.progressPressed,
+              ]}
             >
-              <Text style={styles.omText}>ॐ</Text>
-            </LinearGradient>
+              <View style={[styles.progressRing, progressRingBackground]}>
+                <View style={styles.progressInner}>
+                  <Text style={styles.progressCount}>{count}</Text>
+                  <Text style={styles.progressGoal}>/ 108 malas</Text>
+                </View>
+              </View>
+            </Pressable>
+          </Animated.View>
+
+          <Pressable
+            style={({ pressed }) => [styles.primaryAction, pressed && styles.primaryActionPressed]}
+            onPress={isRunning ? handlePause : handleStart}
+          >
+            <Text style={styles.primaryActionText}>
+              {isRunning ? `Pause Japam · ${formatTime(seconds)}` : '▶ Start Japam'}
+            </Text>
           </Pressable>
-        </Animated.View>
-        
 
-        <Text style={styles.inputLabel}>Timer (minutes)</Text>
-        <TextInput
-          style={[styles.input, isRunning && styles.disabledInput]}
-          value={minutesInput}
-          onChangeText={(value) => {
-            if (isRunning) return;
-            setMinutesInput(value);
-          }}
-          editable={!isRunning}
-          selectTextOnFocus={!isRunning}
-          keyboardType="numeric"
-        />
-
-        <Text style={styles.timerHint}>Timer ending = 1 mala automatically added</Text>
-
-        {/* ✅ Fix 4: Start/Pause only — Stop removed */}
-        <View style={styles.row}>
-          <Pressable style={styles.btn} onPress={handleStart}>
-            <Text style={styles.btnText}>▶ {isRunning ? 'Restart' : 'Start'}</Text>
-          </Pressable>
-          <Pressable style={[styles.btn, styles.gray]} onPress={handlePause}>
-            <Text style={styles.btnText}>⏸ Pause</Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.autoRepeatRow}>
-          <Text style={styles.autoRepeatText}>Auto Repeat (Max 5 Malas)</Text>
-          <Switch
-            value={loopTimer}
-            onValueChange={(value) => {
-              setLoopTimer(value);
-              setAutoCompletedMalas(0);
-              if (!value) { setIsRunning(false); setSeconds(0); }
+          <Pressable
+            style={({ pressed }) => [styles.sessionChip, pressed && styles.softPressed]}
+            onPress={() => {
+              setShowCustomTimerInput(false);
+              setShowTimerSheet(true);
             }}
-          />
+          >
+            <Text style={styles.sessionChipIcon}>◷</Text>
+            <Text style={styles.sessionChipText}>
+              {hasSelectedTimer ? `Timer: ${minutesInput} min` : 'Select timer for Japam'}
+            </Text>
+            <Text style={styles.sessionChipArrow}>›</Text>
+          </Pressable>
+
+          <View style={styles.statsCard}>
+            <View style={styles.statColumn}>
+              <Text style={styles.statIcon}>◌</Text>
+              <Text style={styles.statValue}>{malas}</Text>
+              <Text style={styles.statLabel}>Malas today</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statColumn}>
+              <Text style={styles.statIcon}>•</Text>
+              <Text style={styles.statValue}>{dayStreak}</Text>
+              <Text style={styles.statLabel}>Day streak</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statColumn}>
+              <Text style={styles.statIcon}>◎</Text>
+              <Text style={styles.statValue}>{total}</Text>
+              <Text style={styles.statLabel}>Today count</Text>
+            </View>
+          </View>
         </View>
+
+        <Modal visible={showTimerSheet} transparent animationType="slide">
+          <View style={styles.sheetOverlay}>
+            <Pressable style={styles.sheetBackdrop} onPress={() => setShowTimerSheet(false)} />
+            <View style={styles.sessionSheet}>
+              <View style={styles.sheetHandle} />
+              {showCustomTimerInput ? (
+                <>
+                  <Text style={styles.sheetTitle}>Custom timer</Text>
+                  <Text style={styles.sheetSubtitle}>Enter your own practice length</Text>
+
+                  <View style={styles.customTimerPanel}>
+                    <TextInput
+                      style={styles.customTimerInput}
+                      value={customMinutesInput}
+                      onChangeText={setCustomMinutesInput}
+                      placeholder="Minutes"
+                      placeholderTextColor="#7f9798"
+                      keyboardType="numeric"
+                      autoFocus
+                    />
+                    <Pressable style={styles.customApplyButton} onPress={applyCustomSessionMinutes}>
+                      <Text style={styles.customApplyText}>Set</Text>
+                    </Pressable>
+                  </View>
+
+                  <Pressable
+                    style={styles.cancelSheetButton}
+                    onPress={() => setShowCustomTimerInput(false)}
+                  >
+                    <Text style={styles.cancelSheetText}>Back</Text>
+                  </Pressable>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.sheetTitle}>Select timer for Japam</Text>
+                  <Text style={styles.sheetSubtitle}>Choose how long you want to practice</Text>
+
+                  {SESSION_TIME_OPTIONS.map((minutes) => {
+                    const isSelected = Number(minutesInput) === minutes;
+
+                    return (
+                      <Pressable
+                        key={minutes}
+                        style={({ pressed }) => [
+                          styles.timeOption,
+                          isSelected && styles.timeOptionSelected,
+                          pressed && styles.softPressed,
+                        ]}
+                        onPress={() => applySessionMinutes(minutes)}
+                      >
+                        <Text style={styles.timeOptionIcon}>◷</Text>
+                        <Text style={styles.timeOptionText}>{minutes} min</Text>
+                        <View style={[styles.optionRadio, isSelected && styles.optionRadioSelected]}>
+                          {isSelected && <Text style={styles.optionCheck}>✓</Text>}
+                        </View>
+                      </Pressable>
+                    );
+                  })}
+
+                  <Pressable
+                    style={({ pressed }) => [styles.timeOption, pressed && styles.softPressed]}
+                    onPress={() => setShowCustomTimerInput(true)}
+                  >
+                    <Text style={styles.timeOptionIcon}>✎</Text>
+                    <Text style={styles.timeOptionText}>Custom</Text>
+                    <Text style={styles.sessionChipArrow}>›</Text>
+                  </Pressable>
+
+                  <View style={styles.sheetAutoRepeatRow}>
+                    <View style={styles.sheetAutoRepeatCopy}>
+                      <Text style={styles.sheetAutoRepeatTitle}>Auto repeat</Text>
+                      <Text style={styles.sheetAutoRepeatDescription}>
+                        Repeat up to 5 malas automatically
+                      </Text>
+                    </View>
+                    <Switch
+                      value={loopTimer}
+                      onValueChange={(value) => {
+                        setLoopTimer(value);
+                        setAutoCompletedMalas(0);
+                        if (!value) {
+                          setIsRunning(false);
+                          setSeconds(0);
+                        }
+                      }}
+                      trackColor={{ false: '#c8d8d5', true: '#9fd6d0' }}
+                      thumbColor={loopTimer ? '#0F8F87' : '#ffffff'}
+                    />
+                  </View>
+
+                  <Pressable style={styles.cancelSheetButton} onPress={() => setShowTimerSheet(false)}>
+                    <Text style={styles.cancelSheetText}>Cancel</Text>
+                  </Pressable>
+                </>
+              )}
+            </View>
+          </View>
+        </Modal>
 
         <Modal visible={showUserModal && !isSigningIn} transparent animationType="fade">
           <View style={styles.modalOverlay}>
@@ -1340,7 +1452,7 @@ setTimeout(() => { suppressTimerSaveRef.current = false; }, 0);
                 <Text style={styles.modalCloseText}>×</Text>
               </Pressable>
               <View style={styles.modalTopMark}>
-                <Text style={styles.modalTopMarkText}>ॐ</Text>
+                <View style={styles.modalTopDot} />
               </View>
               <Text style={styles.modalTitle}>Sign in to save</Text>
               <Text style={styles.modalSubtitle}>
@@ -1380,65 +1492,391 @@ setTimeout(() => { suppressTimerSaveRef.current = false; }, 0);
 }
 
 const styles = StyleSheet.create({
+  sceneLayer: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: 'hidden',
+  },
+  backgroundImage: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+  },
+  backgroundImageStyle: {
+    width: '100%',
+    height: '100%',
+    ...(Platform.OS === 'web'
+      ? ({ filter: 'contrast(1.08) saturate(1.04)' } as any)
+      : {}),
+  },
+  backgroundOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(245, 250, 250, 0.45)',
+  },
+  skyGlow: {
+    position: 'absolute',
+    width: 440,
+    height: 360,
+    borderRadius: 220,
+    backgroundColor: 'rgba(255,255,255,0.52)',
+    top: -100,
+    alignSelf: 'center',
+  },
+  horizonMist: {
+    position: 'absolute',
+    left: -20,
+    right: -20,
+    bottom: isMobile ? 214 : 230,
+    height: 130,
+    backgroundColor: 'rgba(255,255,255,0.32)',
+    borderRadius: 80,
+  },
+  mountainLeftBack: {
+    position: 'absolute',
+    width: 250,
+    height: 190,
+    borderRadius: 120,
+    backgroundColor: 'rgba(91, 130, 133, 0.16)',
+    left: -86,
+    bottom: isMobile ? 215 : 236,
+    transform: [{ rotate: '-18deg' }, { scaleX: 1.35 }],
+  },
+  mountainRightBack: {
+    position: 'absolute',
+    width: 260,
+    height: 190,
+    borderRadius: 130,
+    backgroundColor: 'rgba(81, 137, 138, 0.15)',
+    right: -92,
+    bottom: isMobile ? 204 : 224,
+    transform: [{ rotate: '18deg' }, { scaleX: 1.28 }],
+  },
+  mountainLeftFront: {
+    position: 'absolute',
+    width: 210,
+    height: 140,
+    borderRadius: 100,
+    backgroundColor: 'rgba(15, 143, 135, 0.11)',
+    left: -74,
+    bottom: isMobile ? 185 : 204,
+    transform: [{ rotate: '-10deg' }, { scaleX: 1.35 }],
+  },
+  mountainRightFront: {
+    position: 'absolute',
+    width: 230,
+    height: 150,
+    borderRadius: 112,
+    backgroundColor: 'rgba(15, 118, 110, 0.1)',
+    right: -92,
+    bottom: isMobile ? 177 : 198,
+    transform: [{ rotate: '10deg' }, { scaleX: 1.36 }],
+  },
+  lakeSurface: {
+    position: 'absolute',
+    left: -30,
+    right: -30,
+    bottom: isMobile ? 70 : 88,
+    height: isMobile ? 210 : 235,
+    backgroundColor: 'rgba(178, 220, 219, 0.34)',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.55)',
+  },
+  waterReflectionWide: {
+    position: 'absolute',
+    width: 250,
+    height: 2,
+    borderRadius: 99,
+    backgroundColor: 'rgba(255,255,255,0.34)',
+    alignSelf: 'center',
+    bottom: isMobile ? 176 : 194,
+  },
+  waterReflectionShort: {
+    position: 'absolute',
+    width: 132,
+    height: 2,
+    borderRadius: 99,
+    backgroundColor: 'rgba(255,255,255,0.28)',
+    right: 62,
+    bottom: isMobile ? 152 : 170,
+  },
+  waterReflectionTiny: {
+    position: 'absolute',
+    width: 80,
+    height: 2,
+    borderRadius: 99,
+    backgroundColor: 'rgba(255,255,255,0.24)',
+    left: 72,
+    bottom: isMobile ? 132 : 150,
+  },
+  leafStem: {
+    position: 'absolute',
+    width: 2,
+    height: 112,
+    backgroundColor: 'rgba(77, 132, 91, 0.18)',
+    left: 26,
+    bottom: isMobile ? 206 : 230,
+    transform: [{ rotate: '24deg' }],
+  },
+  leafOne: {
+    position: 'absolute',
+    width: 44,
+    height: 19,
+    borderRadius: 24,
+    backgroundColor: 'rgba(94, 145, 103, 0.26)',
+    left: 18,
+    bottom: isMobile ? 295 : 320,
+    transform: [{ rotate: '-24deg' }],
+  },
+  leafTwo: {
+    position: 'absolute',
+    width: 38,
+    height: 17,
+    borderRadius: 20,
+    backgroundColor: 'rgba(94, 145, 103, 0.22)',
+    left: 48,
+    bottom: isMobile ? 270 : 294,
+    transform: [{ rotate: '14deg' }],
+  },
+  leafThree: {
+    position: 'absolute',
+    width: 34,
+    height: 15,
+    borderRadius: 20,
+    backgroundColor: 'rgba(94, 145, 103, 0.2)',
+    left: 8,
+    bottom: isMobile ? 254 : 278,
+    transform: [{ rotate: '-34deg' }],
+  },
+  leafFour: {
+    position: 'absolute',
+    width: 36,
+    height: 15,
+    borderRadius: 20,
+    backgroundColor: 'rgba(94, 145, 103, 0.17)',
+    left: 42,
+    bottom: isMobile ? 232 : 256,
+    transform: [{ rotate: '22deg' }],
+  },
+  stoneShadow: {
+    position: 'absolute',
+    width: 124,
+    height: 20,
+    borderRadius: 99,
+    backgroundColor: 'rgba(27, 72, 76, 0.1)',
+    right: 42,
+    bottom: isMobile ? 80 : 104,
+  },
+  stoneBase: {
+    position: 'absolute',
+    width: 102,
+    height: 34,
+    borderRadius: 99,
+    backgroundColor: 'rgba(111, 139, 139, 0.38)',
+    right: 52,
+    bottom: isMobile ? 92 : 116,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.32)',
+  },
+  stoneMiddle: {
+    position: 'absolute',
+    width: 84,
+    height: 30,
+    borderRadius: 99,
+    backgroundColor: 'rgba(133, 157, 157, 0.42)',
+    right: 62,
+    bottom: isMobile ? 120 : 144,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.32)',
+  },
+  stoneTop: {
+    position: 'absolute',
+    width: 62,
+    height: 24,
+    borderRadius: 99,
+    backgroundColor: 'rgba(156, 176, 176, 0.44)',
+    right: 74,
+    bottom: isMobile ? 145 : 169,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.34)',
+  },
+  sceneSoftWash: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(245, 252, 250, 0.26)',
+  },
   container: { flex: 1, backgroundColor: 'transparent' },
   content: {
-    flexGrow: 1,
+    flexGrow: isMobile ? 0 : 1,
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: isMobile ? 14 : 24,
-    paddingTop: isShortMobile ? 10 : isMobile ? 18 : 14,
-    paddingBottom: isMobile ? 46 : 96,
-    minHeight: '100%',
-  },
-  topBar: {
+    justifyContent: isMobile ? 'flex-start' : 'center',
     width: '100%',
+    alignSelf: 'center',
+    paddingHorizontal: isMobile ? 0 : 24,
+    paddingTop: isMobile ? scrollTopPadding : 24,
+    paddingBottom: scrollBottomPadding,
+    minHeight: isMobile ? undefined : shellMinHeight,
+  },
+  appShell: {
+    width: '100%',
+    maxWidth: isMobile ? undefined : 460,
+    minHeight: isMobile ? undefined : shellMinHeight,
     alignItems: 'center',
-    justifyContent: 'center',
+    overflow: 'hidden',
     position: 'relative',
-    marginBottom: 8,
+    backgroundColor: 'rgba(238, 248, 246, 0.94)',
+    borderRadius: isMobile ? 0 : 28,
+    paddingHorizontal: isMobile ? 22 : 28,
+    paddingTop: isShortMobile ? 14 : isMobile ? 20 : 34,
+    paddingBottom: isMobile ? 20 : 116,
+    shadowColor: '#0f766e',
+    shadowOpacity: isMobile ? 0 : 0.16,
+    shadowRadius: 28,
+    shadowOffset: { width: 0, height: 16 },
+    elevation: isMobile ? 0 : 12,
   },
-  headerCenter: {
+  topControls: {
+    width: '100%',
+    minHeight: 48,
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: isShortMobile ? 10 : isMobile ? 16 : 32,
+  },
+  accountButton: {
+    position: 'absolute',
+    right: 0,
+    top: 2,
+    minHeight: 40,
+    maxWidth: 128,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.66)',
+    borderWidth: 1,
+    borderColor: 'rgba(15,143,135,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#0f8f87',
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 4,
+  },
+  softPressed: {
+    transform: [{ scale: 0.96 }],
+    opacity: 0.86,
+  },
+  headerRow: {
     width: '100%',
+    maxWidth: 760,
+    flexDirection: isMobile ? 'column' : 'row',
+    alignItems: 'center',
+    justifyContent: isMobile ? 'center' : 'space-between',
+    position: 'relative',
+    marginBottom: isMobile ? 18 : 30,
+  },
+  greetingBlock: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: 1,
+  },
+  headerActions: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    alignItems: 'center',
+    gap: 8,
+  },
+  welcomeText: {
+    color: '#063B3B',
+    fontSize: isMobile ? 22 : 24,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  accountNameText: {
+    color: '#063B3B',
+    fontSize: isMobile ? 14 : 15,
+    fontWeight: '900',
+  },
+  kicker: {
+    color: '#063B3B',
+    fontSize: isMobile ? 23 : 26,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  streakPill: {
+    minWidth: 78,
+    backgroundColor: 'rgba(255,255,255,0.64)',
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.14)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    alignItems: 'center',
+    shadowColor: '#0f766e',
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 4,
+  },
+  streakNumber: {
+    color: '#0f766e',
+    fontSize: 17,
+    fontWeight: '900',
+    lineHeight: 20,
+  },
+  streakLabel: {
+    color: '#517579',
+    fontSize: 10,
+    fontWeight: '800',
+    marginTop: 1,
   },
   userMenuWrap: { alignItems: 'flex-end', zIndex: 20 },
   userBadge: {
-    backgroundColor: '#1e293b',
+    backgroundColor: 'rgba(255,255,255,0.62)',
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#334155',
+    borderColor: 'rgba(15,118,110,0.18)',
     elevation: 4,
   },
   desktopUserBadge: { position: 'absolute', right: 45, top: 0 },
   mobileUserBadge: { marginTop: 8, alignItems: 'center' },
-  userBadgeText: { color: '#ffffff', fontSize: 14, fontWeight: '800' },
+  userBadgeText: { color: '#12383c', fontSize: 14, fontWeight: '800' },
   userMenu: {
-    marginTop: 8,
-    backgroundColor: '#1e293b',
-    borderRadius: 10,
+    position: 'absolute',
+    top: 48,
+    right: 0,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#334155',
+    borderColor: 'rgba(15,118,110,0.14)',
     overflow: 'hidden',
-    minWidth: 110,
+    minWidth: 124,
+    shadowColor: '#0f766e',
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 8,
+    zIndex: 30,
   },
-  userMenuItem: { paddingVertical: 10, paddingHorizontal: 14 },
-  userMenuText: { color: 'white', fontSize: 14, fontWeight: '800' },
+  userMenuItem: { paddingVertical: 12, paddingHorizontal: 18, alignItems: 'center' },
+  userMenuText: { color: '#12383c', fontSize: 14, fontWeight: '800' },
   title: {
-    color: '#f8fafc',
-    fontSize: isShortMobile ? 24 : isMobile ? 28 : 34,
-    fontWeight: '800',
+    color: '#102f34',
+    fontSize: isShortMobile ? 26 : isMobile ? 31 : 38,
+    fontWeight: '900',
     textAlign: 'center',
-    letterSpacing: 0.3,
+    letterSpacing: 0,
+  },
+  zenSubtitle: {
+    color: '#365f61',
+    fontSize: isMobile ? 13 : 16,
+    fontWeight: '600',
+    marginTop: 8,
+    textAlign: 'center',
   },
   renameHint: {
-    backgroundColor: '#fbbf24',
-    color: '#0f172a',
+    backgroundColor: 'rgba(15,118,110,0.12)',
+    color: '#0f766e',
     paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 8,
+    paddingVertical: 5,
+    borderRadius: 999,
     fontSize: 12,
     fontWeight: '800',
     marginTop: 8,
@@ -1455,40 +1893,126 @@ const styles = StyleSheet.create({
   },
   nameInput: {
     flex: 1,
-    backgroundColor: '#1e293b',
-    color: 'white',
-    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.72)',
+    color: '#12383c',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.14)',
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 16,
   },
-  dateText: { color: '#94a3b8', fontSize: isMobile ? 14 : 16, marginBottom: 2, marginTop: 8 },
-  big: { color: 'white', fontSize: isShortMobile ? 52 : isMobile ? 64 : 72, fontWeight: '900', marginTop: 0 },
+  dateText: {
+    color: '#5F7F80',
+    fontSize: isMobile ? 14 : 15,
+    fontWeight: '700',
+    marginBottom: isShortMobile ? 14 : isMobile ? 20 : 30,
+  },
+  progressShell: {
+    width: progressCircleSize,
+    height: progressCircleSize,
+    borderRadius: progressCircleSize / 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#0f766e',
+    shadowOpacity: 0.14,
+    shadowRadius: 28,
+    shadowOffset: { width: 0, height: 16 },
+    elevation: 18,
+    marginBottom: isShortMobile ? 18 : isMobile ? 24 : 34,
+  },
+  progressPressable: {
+    borderRadius: 999,
+  },
+  progressPressed: {
+    transform: [{ scale: 0.985 }],
+    opacity: 0.92,
+  },
+  progressRing: {
+    width: progressRingSize,
+    height: progressRingSize,
+    borderRadius: progressRingSize / 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(15,143,135,0.14)',
+    padding: isMobile ? 12 : 14,
+  },
+  progressInner: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: 'rgba(247,253,251,0.94)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.78)',
+  },
+  progressCount: {
+    color: '#063B3B',
+    fontSize: isShortMobile ? 58 : isMobile ? 72 : 88,
+    fontWeight: '900',
+    lineHeight: isShortMobile ? 68 : isMobile ? 82 : 98,
+  },
+  progressGoal: {
+    color: '#5F7F80',
+    fontSize: isMobile ? 15 : 17,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  ringProgressBar: {
+    position: 'absolute',
+    bottom: isMobile ? 34 : 42,
+    width: '58%',
+    height: 7,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15,118,110,0.12)',
+    overflow: 'hidden',
+  },
+  ringProgressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: '#0f766e',
+  },
+  big: {
+    color: '#f8ffff',
+    fontSize: isShortMobile ? 54 : isMobile ? 66 : 76,
+    fontWeight: '900',
+    marginTop: 0,
+    textShadowColor: 'rgba(15,118,110,0.34)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 10,
+  },
   progressBarBackground: {
     width: isMobile ? 240 : 320,
     height: 8,
-    backgroundColor: '#1e293b',
+    backgroundColor: 'rgba(15,118,110,0.16)',
     borderRadius: 999,
     overflow: 'hidden',
     marginBottom: 4,
     alignSelf: 'center',
   },
-  progressBarFill: { height: '100%', backgroundColor: '#f59e0b', borderRadius: 999 },
-  progressText: { color: '#cbd5e1', fontSize: isMobile ? 15 : 17, marginBottom: 6 },
+  progressBarFill: { height: '100%', backgroundColor: '#0f766e', borderRadius: 999 },
+  progressText: { color: '#365f61', fontSize: isMobile ? 15 : 17, marginBottom: 6 },
   metricsRow: {
     width: '100%',
     maxWidth: isMobile ? 440 : 560,
     flexDirection: 'row',
     justifyContent: 'space-evenly',
     alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.48)',
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.14)',
+    borderRadius: 24,
+    paddingVertical: 13,
+    paddingHorizontal: 10,
     marginTop: 8,
     marginBottom: 14,
   },
-  metricText: { color: '#e2e8f0', fontSize: isMobile ? 16 : 20, fontWeight: '700', textAlign: 'center' },
-  timerRunningText: { fontSize: isMobile ? 26 : 34, color: '#fbbf24', fontWeight: '900' },
+  metricText: { color: '#12383c', fontSize: isMobile ? 16 : 20, fontWeight: '800', textAlign: 'center' },
+  timerRunningText: { fontSize: isMobile ? 26 : 34, color: '#0f766e', fontWeight: '900' },
   guidanceText: {
     maxWidth: 430,
-    color: 'rgba(255,255,255,0.62)',
+    color: '#547071',
     fontSize: isMobile ? 12 : 14,
     lineHeight: isMobile ? 17 : 20,
     textAlign: 'center',
@@ -1497,77 +2021,402 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
   },
   circleGlow: {
-    width: isShortMobile ? 130 : isMobile ? 160 : 190,
-    height: isShortMobile ? 130 : isMobile ? 160 : 190,
-    borderRadius: isShortMobile ? 65 : isMobile ? 80 : 95,
+    width: isShortMobile ? 138 : isMobile ? 168 : 198,
+    height: isShortMobile ? 138 : isMobile ? 168 : 198,
+    borderRadius: isShortMobile ? 69 : isMobile ? 84 : 99,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(251, 191, 36, 0.1)',
-    shadowColor: '#fbbf24',
+    backgroundColor: 'rgba(255,255,255,0.26)',
+    shadowColor: '#0f766e',
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.55,
-    shadowRadius: 28,
+    shadowOpacity: 0.28,
+    shadowRadius: 30,
     elevation: 20,
     marginTop: 10,
     marginBottom: 4,
   },
   completionGlow: {
     position: 'absolute',
-    width: isShortMobile ? 128 : isMobile ? 156 : 184,
-    height: isShortMobile ? 128 : isMobile ? 156 : 184,
-    borderRadius: isShortMobile ? 64 : isMobile ? 78 : 92,
-    backgroundColor: 'rgba(251, 191, 36, 0.18)',
-    borderWidth: 3,
-    borderColor: 'rgba(251, 191, 36, 0.86)',
+    width: progressCircleSize,
+    height: progressCircleSize,
+    borderRadius: progressCircleSize / 2,
+    backgroundColor: 'rgba(15,143,135,0.18)',
   },
   circle: {
-    width: isShortMobile ? 114 : isMobile ? 140 : 166,
-    height: isShortMobile ? 114 : isMobile ? 140 : 166,
-    borderRadius: isShortMobile ? 57 : isMobile ? 70 : 83,
+    width: isShortMobile ? 118 : isMobile ? 146 : 172,
+    height: isShortMobile ? 118 : isMobile ? 146 : 172,
+    borderRadius: isShortMobile ? 59 : isMobile ? 73 : 86,
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: 'rgba(251, 191, 36, 0.28)',
+    borderColor: 'rgba(238,255,255,0.62)',
   },
   circlePressed: { transform: [{ scale: 0.96 }] },
-  
-  
-  inputLabel: { color: '#cbd5e1', fontSize: isMobile ? 14 : 16, marginTop: 14, marginBottom: 6 },
-  input: {
-    backgroundColor: '#1e293b',
-    color: 'white',
-    borderRadius: 10,
-    width: isMobile ? 100 : 120,
-    textAlign: 'center',
-    padding: 8,
-    fontSize: isMobile ? 18 : 22,
+  primaryAction: {
+    width: '100%',
+    maxWidth: 330,
+    minHeight: isShortMobile ? 56 : isMobile ? 58 : 62,
+    borderRadius: 999,
+    backgroundColor: '#0F8F87',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#0f766e',
+    shadowOpacity: 0.24,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 8,
+    marginBottom: isMobile ? 16 : 26,
   },
-  autoRepeatRow: {
-    width: isMobile ? 260 : 320,
+  primaryActionPressed: {
+    transform: [{ scale: 0.98 }],
+    opacity: 0.94,
+  },
+  primaryActionText: {
+    color: '#ffffff',
+    fontSize: isMobile ? 18 : 21,
+    fontWeight: '900',
+  },
+  sessionChip: {
+    minHeight: isShortMobile ? 44 : 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.74)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.8)',
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    marginBottom: isShortMobile ? 18 : isMobile ? 24 : 24,
+    shadowColor: '#0f8f87',
+    shadowOpacity: 0.1,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 5,
+  },
+  sessionChipIcon: {
+    color: '#0F8F87',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  sessionChipText: {
+    color: '#063B3B',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  sessionChipArrow: {
+    color: '#5F7F80',
+    fontSize: 24,
+    fontWeight: '700',
+    marginTop: -2,
+  },
+  autoRepeatSimpleRow: {
+    width: '100%',
+    maxWidth: 340,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 8,
+    marginBottom: isMobile ? 16 : 18,
   },
-  autoRepeatText: { color: '#e2e8f0', fontSize: isMobile ? 15 : 18, fontWeight: '800' },
+  sessionLengthRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginBottom: isMobile ? 22 : 26,
+  },
+  sessionLengthLabel: {
+    color: '#5F7F80',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  quietControlPanel: {
+    width: '100%',
+    maxWidth: isMobile ? 360 : 430,
+    backgroundColor: 'rgba(255,255,255,0.5)',
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.12)',
+    borderRadius: 24,
+    paddingHorizontal: isMobile ? 16 : 20,
+    paddingVertical: isMobile ? 14 : 18,
+    gap: 14,
+    shadowColor: '#0f766e',
+    shadowOpacity: 0.08,
+    shadowRadius: 20,
+    elevation: 4,
+  },
+  timerSummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 14,
+  },
+  controlCopy: {
+    flex: 1,
+  },
+  controlLabel: {
+    color: '#12383c',
+    fontSize: isMobile ? 15 : 17,
+    fontWeight: '900',
+  },
+  controlHint: {
+    color: '#5f7778',
+    fontSize: isMobile ? 12 : 13,
+    fontWeight: '600',
+    marginTop: 3,
+  },
+  inputLabel: { color: '#365f61', fontSize: isMobile ? 14 : 16, marginTop: 14, marginBottom: 6 },
+  input: {
+    backgroundColor: 'rgba(255,255,255,0.62)',
+    color: '#063B3B',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.14)',
+    width: 76,
+    textAlign: 'center',
+    paddingVertical: 7,
+    paddingHorizontal: 8,
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  autoRepeatRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 14,
+  },
+  autoRepeatText: { color: '#063B3B', fontSize: isMobile ? 15 : 16, fontWeight: '800' },
+  statsCard: {
+    width: '100%',
+    maxWidth: 380,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(255,255,255,0.75)',
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.72)',
+    paddingVertical: isShortMobile ? 12 : isMobile ? 16 : 22,
+    paddingHorizontal: isMobile ? 12 : 16,
+    shadowColor: '#0f766e',
+    shadowOpacity: 0.1,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 7,
+    marginBottom: isMobile ? 20 : 28,
+  },
+  statColumn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+  },
+  statDivider: {
+    width: 1,
+    height: isShortMobile ? 46 : isMobile ? 52 : 58,
+    backgroundColor: 'rgba(95,127,128,0.22)',
+  },
+  statIcon: {
+    color: '#0F8F87',
+    fontSize: isShortMobile ? 15 : isMobile ? 17 : 20,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+  statValue: {
+    color: '#12383c',
+    fontSize: isShortMobile ? 20 : isMobile ? 22 : 26,
+    fontWeight: '900',
+    lineHeight: isShortMobile ? 24 : isMobile ? 26 : 30,
+  },
+  statLabel: {
+    color: '#5f7778',
+    fontSize: isShortMobile ? 10 : isMobile ? 11 : 12,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginTop: 3,
+  },
+  sheetOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(6, 26, 27, 0.42)',
+  },
+  sheetBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  sessionSheet: {
+    width: '100%',
+    maxWidth: 480,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    borderTopLeftRadius: 34,
+    borderTopRightRadius: 34,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 20,
+    shadowColor: '#0f8f87',
+    shadowOpacity: 0.18,
+    shadowRadius: 28,
+    shadowOffset: { width: 0, height: -8 },
+    elevation: 20,
+  },
+  sheetHandle: {
+    width: 52,
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(95,127,128,0.3)',
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  sheetTitle: {
+    color: '#063B3B',
+    fontSize: 21,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  sheetSubtitle: {
+    color: '#5F7F80',
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginTop: 8,
+    marginBottom: 16,
+  },
+  timeOption: {
+    minHeight: 56,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(95,127,128,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.72)',
+    paddingHorizontal: 16,
+    marginBottom: 10,
+  },
+  timeOptionSelected: {
+    borderColor: '#0F8F87',
+    backgroundColor: 'rgba(15,143,135,0.08)',
+  },
+  timeOptionIcon: {
+    width: 30,
+    color: '#5F7F80',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  timeOptionText: {
+    flex: 1,
+    color: '#063B3B',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  optionRadio: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: 'rgba(95,127,128,0.28)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  optionRadioSelected: {
+    backgroundColor: '#0F8F87',
+    borderColor: '#0F8F87',
+  },
+  optionCheck: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  customTimerPanel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 16,
+  },
+  customTimerInput: {
+    flex: 1,
+    backgroundColor: 'rgba(237,247,244,0.9)',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(15,143,135,0.16)',
+    color: '#063B3B',
+    fontSize: 16,
+    fontWeight: '800',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  customApplyButton: {
+    backgroundColor: '#0F8F87',
+    borderRadius: 14,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+  },
+  customApplyText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  sheetAutoRepeatRow: {
+    minHeight: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(95,127,128,0.18)',
+    backgroundColor: 'rgba(237,247,244,0.74)',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    marginBottom: 16,
+    gap: 12,
+  },
+  sheetAutoRepeatCopy: {
+    flex: 1,
+  },
+  sheetAutoRepeatTitle: {
+    color: '#063B3B',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  sheetAutoRepeatDescription: {
+    color: '#5F7F80',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  cancelSheetButton: {
+    minHeight: 52,
+    borderRadius: 999,
+    backgroundColor: 'rgba(95,127,128,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cancelSheetText: {
+    color: '#063B3B',
+    fontSize: 16,
+    fontWeight: '800',
+  },
   row: { flexDirection: 'row', gap: 12, marginTop: 14, marginBottom: 10 },
   btn: {
-    backgroundColor: '#6366f1',
+    backgroundColor: '#0f8a87',
     paddingVertical: isMobile ? 12 : 14,
     paddingHorizontal: isMobile ? 24 : 32,
-    borderRadius: 12,
+    borderRadius: 999,
     minWidth: isMobile ? 120 : 150,
     alignItems: 'center',
+    shadowColor: '#0f766e',
+    shadowOpacity: 0.22,
+    shadowRadius: 12,
+    elevation: 5,
   },
-  gray: { backgroundColor: '#475569' },
-  smallBtn: { backgroundColor: '#6366f1', paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10 },
-  graySmallBtn: { backgroundColor: '#475569', paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10 },
+  gray: { backgroundColor: '#5f7778' },
+  smallBtn: { backgroundColor: '#0f8a87', paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10 },
+  graySmallBtn: { backgroundColor: '#5f7778', paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10 },
   smallBtnText: { color: 'white', fontWeight: '700', fontSize: 14 },
   btnText: { color: 'white', fontWeight: '900', fontSize: isMobile ? 17 : 20 },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(2,6,23,0.82)',
+    backgroundColor: 'rgba(7,32,34,0.52)',
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 24,
@@ -1575,30 +2424,38 @@ const styles = StyleSheet.create({
   modalCard: {
     width: '100%',
     maxWidth: 380,
-    backgroundColor: '#111827',
-    borderRadius: 18,
+    backgroundColor: '#f8ffff',
+    borderRadius: 22,
     paddingHorizontal: 24,
     paddingTop: 26,
     paddingBottom: 22,
     borderWidth: 1,
-    borderColor: '#374151',
+    borderColor: 'rgba(15,118,110,0.18)',
     elevation: 12,
   },
   modalTopMark: {
     width: 58,
     height: 58,
     borderRadius: 29,
-    backgroundColor: '#1f2937',
+    backgroundColor: '#dbeceb',
     borderWidth: 1,
-    borderColor: '#4f46e5',
+    borderColor: '#0f766e',
     alignItems: 'center',
     justifyContent: 'center',
     alignSelf: 'center',
     marginBottom: 14,
   },
-  modalTopMarkText: { color: '#e0e7ff', fontSize: 28, fontWeight: '800' },
-  modalTitle: { color: 'white', fontSize: 26, fontWeight: '900', marginBottom: 10, textAlign: 'center' },
-  modalSubtitle: { color: '#cbd5e1', fontSize: 15, lineHeight: 22, textAlign: 'center', marginBottom: 22 },
+  modalTopDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#0f8a87',
+    shadowColor: '#0f766e',
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+  },
+  modalTitle: { color: '#12383c', fontSize: 26, fontWeight: '900', marginBottom: 10, textAlign: 'center' },
+  modalSubtitle: { color: '#365f61', fontSize: 15, lineHeight: 22, textAlign: 'center', marginBottom: 22 },
   modalButton: {
     backgroundColor: '#f8fafc',
     minHeight: 52,
@@ -1610,7 +2467,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#dbeceb',
   },
   disabledButton: { opacity: 0.5 },
   googleIcon: {
@@ -1620,17 +2477,17 @@ const styles = StyleSheet.create({
   },
   googleIconText: { color: '#2563eb', fontSize: 16, fontWeight: '900' },
   modalButtonText: { color: '#0f172a', fontWeight: '900', fontSize: 16 },
-  modalFootnote: { color: '#94a3b8', fontSize: 12, lineHeight: 17, textAlign: 'center', marginTop: 14 },
+  modalFootnote: { color: '#547071', fontSize: 12, lineHeight: 17, textAlign: 'center', marginTop: 14 },
   modalClose: { position: 'absolute', right: 14, top: 10, zIndex: 10 },
-  modalCloseText: { color: '#94a3b8', fontSize: 28, fontWeight: '800' },
+  modalCloseText: { color: '#547071', fontSize: 28, fontWeight: '800' },
   loginButton: {
-    backgroundColor: '#6366f1',
+    backgroundColor: '#0f8a87',
     paddingHorizontal: 20,
     paddingVertical: 12,
     borderRadius: 999,
     marginTop: 10,
-    shadowColor: '#6366f1',
-    shadowOpacity: 0.4,
+    shadowColor: '#0f766e',
+    shadowOpacity: 0.22,
     shadowRadius: 10,
     elevation: 4,
   },
@@ -1642,23 +2499,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   loginButtonText: { color: '#ffffff', fontWeight: '900', fontSize: isMobile ? 15 : 16 },
-  timerHint: { color: '#94a3b8', fontSize: isMobile ? 12 : 14, marginTop: 8, textAlign: 'center' },
+  timerHint: { color: '#547071', fontSize: isMobile ? 12 : 14, marginTop: 8, textAlign: 'center' },
   disabledInput: { opacity: 0.55 },
   signingInBanner: {
     position: 'absolute', top: 60, alignSelf: 'center',
-    backgroundColor: '#111827', paddingHorizontal: 16, paddingVertical: 8,
+    backgroundColor: '#0f766e', paddingHorizontal: 16, paddingVertical: 8,
     borderRadius: 20, zIndex: 20,
   },
   signingInText: { color: '#fff', fontSize: 14, fontWeight: '600' },
-  omText: {
-    fontSize: isShortMobile ? 74 : isMobile ? 90 : 104,
-    color: '#f8fafc',
-    fontFamily: Platform.select({ web: 'Georgia, Times New Roman, serif', default: undefined }),
-    fontWeight: '900',
-    includeFontPadding: false,
-    lineHeight: isShortMobile ? 90 : isMobile ? 108 : 124,
-    textShadowColor: 'rgba(251,191,36,0.75)',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 16,
-  },
 });

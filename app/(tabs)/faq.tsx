@@ -16,8 +16,8 @@ const faqs = [
       a: 'The number 108 is spiritually significant in many traditions and is treated as one complete cycle of chanting.',
     },
     {
-      q: 'How does the Om button work?',
-      a: 'Each tap on the glowing Om button increases the count by 1. When the count reaches 108, the app automatically completes one mala and starts the next cycle.',
+      q: 'How does the count circle work?',
+      a: 'Each tap on the calm progress circle increases the count by 1. When the count reaches 108, the app completes one mala and starts the next cycle.',
     },
     {
       q: 'How do I use the timer?',
@@ -49,7 +49,7 @@ export default function FAQ() {
   const [open, setOpen] = useState<number | null>(0);
 
   return (
-    <LinearGradient colors={['#05010c', '#120022', '#05010c']} style={styles.container}>
+    <LinearGradient colors={['#e7f5f5', '#c7e2e0', '#eef8f5']} style={styles.container}>
       {[...Array(30)].map((_, i) => (
         <View
           key={i}
@@ -68,7 +68,7 @@ export default function FAQ() {
       <View style={styles.header}>
   
 
-  <Text style={styles.title}>FAQ</Text>
+  <Text style={styles.title}>Learn</Text>
 
   <Text style={styles.subtitle}>
     Guidance for your Japam journey
@@ -99,7 +99,7 @@ const styles = StyleSheet.create({
     width: 2,
     height: 2,
     borderRadius: 99,
-    backgroundColor: 'white',
+    backgroundColor: '#0f766e',
   },
   content: {
     width: '100%',
@@ -110,30 +110,21 @@ const styles = StyleSheet.create({
     paddingBottom: 120,
   },
   header: { alignItems: 'center', marginBottom: 18 },
-  omMark: {
-    color: '#fbbf24',
-    fontSize: 48,
-    fontWeight: '700',
-    marginBottom: 2,
-    textShadowColor: 'rgba(251,191,36,0.65)',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 18,
-  },
-  title: { color: 'white', fontSize: 36, fontWeight: '900', marginTop: 4, textAlign: 'center' },
-  subtitle: { color: '#cbd5e1', marginTop: 4, fontSize: 18, textAlign: 'center' },
+  title: { color: '#102f34', fontSize: 36, fontWeight: '900', marginTop: 4, textAlign: 'center' },
+  subtitle: { color: '#365f61', marginTop: 4, fontSize: 18, textAlign: 'center' },
 
   card: {
-    backgroundColor: 'rgba(15, 23, 42, 0.72)',
-    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.54)',
+    borderRadius: 20,
     marginBottom: 10,
     paddingHorizontal: 16,
     paddingVertical: 15,
     borderWidth: 1,
-    borderColor: 'rgba(251, 191, 36, 0.16)',
+    borderColor: 'rgba(15, 118, 110, 0.16)',
   },
   cardOpen: {
-    borderColor: '#f59e0b',
-    backgroundColor: 'rgba(36, 50, 75, 0.82)',
+    borderColor: '#0f766e',
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
   },
 
   questionRow: {
@@ -142,8 +133,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 
-  q: { color: 'white', fontWeight: '800', fontSize: 20, flex: 1, paddingRight: 10 },
-  icon: { color: '#fbbf24', fontSize: 30, fontWeight: '700' },
-  a: { color: '#cbd5e1', marginTop: 12, lineHeight: 29, fontSize: 18 },
+  q: { color: '#12383c', fontWeight: '800', fontSize: 20, flex: 1, paddingRight: 10 },
+  icon: { color: '#0f766e', fontSize: 30, fontWeight: '700' },
+  a: { color: '#365f61', marginTop: 12, lineHeight: 29, fontSize: 18 },
  
 });

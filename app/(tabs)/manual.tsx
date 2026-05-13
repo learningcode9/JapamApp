@@ -163,7 +163,7 @@ if (!userId) {
   };
 
   return (
-    <LinearGradient colors={['#05010c', '#120022', '#05010c']} style={styles.container}>
+    <LinearGradient colors={['#e7f5f5', '#c7e2e0', '#eef8f5']} style={styles.container}>
       {[...Array(30)].map((_, i) => (
         <View
           key={i}
@@ -256,49 +256,39 @@ const styles = StyleSheet.create({
     width: 2,
     height: 2,
     borderRadius: 99,
-    backgroundColor: 'white',
+    backgroundColor: '#0f766e',
   },
 
   panel: {
     width: '100%',
     maxWidth: 560,
     alignItems: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.66)',
+    backgroundColor: 'rgba(255, 255, 255, 0.56)',
     borderWidth: 1,
-    borderColor: 'rgba(251, 191, 36, 0.18)',
-    borderRadius: 18,
+    borderColor: 'rgba(15, 118, 110, 0.16)',
+    borderRadius: 24,
     padding: 26,
   },
 
   fieldLabel: {
     width: '100%',
     maxWidth: 360,
-    color: '#f8fafc',
+    color: '#12383c',
     fontSize: 18,
     fontWeight: '800',
     marginTop: 6,
     marginBottom: 8,
   },
 
-  omMark: {
-    color: '#fbbf24',
-    fontSize: 48,
-    fontWeight: '700',
-    marginBottom: 4,
-    textShadowColor: 'rgba(251,191,36,0.65)',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 18,
-  },
-
   title: {
-    color: 'white',
+    color: '#102f34',
     fontSize: 36,
     fontWeight: '900',
     marginBottom: 6,
   },
 
   subtitle: {
-    color: '#cbd5e1',
+    color: '#365f61',
     fontSize: 18,
     marginBottom: 14,
     textAlign: 'center',
@@ -307,25 +297,25 @@ const styles = StyleSheet.create({
   input: {
     width: '100%',
     maxWidth: 360,
-    backgroundColor: '#1e293b',
-    color: 'white',
-    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.68)',
+    color: '#12383c',
+    borderRadius: 12,
     padding: 14,
     marginTop: 10,
     borderWidth: 1,
-    borderColor: '#334155',
+    borderColor: 'rgba(15,118,110,0.16)',
   },
 
   or: {
-    color: '#cbd5e1',
+    color: '#547071',
     marginTop: 12,
     fontSize: 18,
   },
 
   btn: {
     marginTop: 16,
-    backgroundColor: '#7c3aed',
-    borderRadius: 10,
+    backgroundColor: '#0f8a87',
+    borderRadius: 999,
     paddingVertical: 14,
     paddingHorizontal: 28,
   },
@@ -336,7 +326,7 @@ const styles = StyleSheet.create({
     fontSize: 20,
   },
   loginHint: {
-    color: '#cbd5e1',
+    color: '#365f61',
     fontSize: 15,
     textAlign: 'center',
     marginBottom: 18,

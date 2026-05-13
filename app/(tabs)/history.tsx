@@ -41,7 +41,6 @@ type RemoteHistoryRow = {
 };
 
 const USER_ID_KEY = 'userId';
-const USER_NAME_KEY = 'userName';
 
 const getLocalDateKey = (date = new Date()) => {
   const y = date.getFullYear();
@@ -88,10 +87,7 @@ const parseHistory = (raw: string | null): Session[] => {
   }
 };
 
-const fetchRemoteSessions = async (
-  userId: string,
-  userNameForFallback?: string | null
-): Promise<Session[] | null> => {
+const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> => {
   const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
   const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -135,23 +131,7 @@ const fetchRemoteSessions = async (
     };
 
     const byUserId = await fetchBy('user_id', userId);
-    const byUserName = userNameForFallback
-      ? await fetchBy('user_name', userNameForFallback)
-      : null;
-
-    if (byUserId === null) return byUserName;
-    if (byUserName === null) return byUserId;
-
-    const userIdTotal = byUserId.reduce(
-      (sum, item) => sum + (Number(item.totalCount) || 0),
-      0
-    );
-    const userNameTotal = byUserName.reduce(
-      (sum, item) => sum + (Number(item.totalCount) || 0),
-      0
-    );
-
-    return userNameTotal > userIdTotal ? byUserName : byUserId;
+    return byUserId;
   } catch (error) {
     console.log('Supabase history fetch error:', error);
     return null;
@@ -164,7 +144,6 @@ export default function HistoryScreen() {
   const loadHistory = useCallback(async () => {
     const todayKey = getLocalDateKey();
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
-    const currentUserName = await AsyncStorage.getItem(USER_NAME_KEY);
     const raw = await AsyncStorage.getItem('history');
     const allSessions = parseHistory(raw);
 
@@ -183,7 +162,7 @@ export default function HistoryScreen() {
     }
 
     let sessions = cleanedSessions.filter((item) => item.userId === currentUserId);
-    const remoteSessions = await fetchRemoteSessions(currentUserId, currentUserName);
+    const remoteSessions = await fetchRemoteSessions(currentUserId);
 
     if (remoteSessions !== null) {
       const filteredRemoteSessions = remoteSessions.filter((item) => {
@@ -328,7 +307,7 @@ export default function HistoryScreen() {
   };
 
   return (
-    <LinearGradient colors={['#05010c', '#120022', '#05010c']} style={styles.container}>
+    <LinearGradient colors={['#e7f5f5', '#c7e2e0', '#eef8f5']} style={styles.container}>
     {[...Array(30)].map((_, i) => (
       <View
         key={i}
@@ -406,7 +385,7 @@ const styles = StyleSheet.create({
     width: 2,
     height: 2,
     borderRadius: 99,
-    backgroundColor: 'white',
+    backgroundColor: '#0f766e',
   },
 
   content: {
@@ -423,18 +402,8 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
 
-  omMark: {
-    color: '#fbbf24',
-    fontSize: 48,
-    fontWeight: '700',
-    marginBottom: 2,
-    textShadowColor: 'rgba(251,191,36,0.65)',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 18,
-  },
-
   title: {
-    color: 'white',
+    color: '#102f34',
     fontSize: 36,
     fontWeight: '900',
     marginBottom: 4,
@@ -442,7 +411,7 @@ const styles = StyleSheet.create({
   },
 
   subtitle: {
-    color: '#cbd5e1',
+    color: '#365f61',
     fontSize: 18,
     textAlign: 'center',
   },
@@ -456,13 +425,13 @@ const styles = StyleSheet.create({
   },
 
   summaryText: {
-    color: '#cbd5e1',
+    color: '#12383c',
     fontSize: 20,
     fontWeight: '700',
   },
 
   exportBtn: {
-    backgroundColor: '#6366f1',
+    backgroundColor: '#0f8a87',
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: 999,
@@ -477,10 +446,10 @@ const styles = StyleSheet.create({
   },
 
   tableCard: {
-    backgroundColor: 'rgba(15, 23, 42, 0.72)',
+    backgroundColor: 'rgba(255, 255, 255, 0.52)',
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(251, 191, 36, 0.18)',
+    borderColor: 'rgba(15, 118, 110, 0.16)',
     overflow: 'hidden',
   },
 
@@ -489,21 +458,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     minHeight: 58,
     borderTopWidth: 1,
-    borderTopColor: '#334155',
+    borderTopColor: 'rgba(15, 118, 110, 0.16)',
   },
 
   tableHeader: {
-    backgroundColor: 'rgba(51, 65, 85, 0.82)',
+    backgroundColor: 'rgba(15, 118, 110, 0.18)',
     borderTopWidth: 0,
   },
 
   altTableRow: {
-    backgroundColor: 'rgba(35, 49, 74, 0.78)',
+    backgroundColor: 'rgba(255, 255, 255, 0.34)',
   },
 
   tableCell: {
     flex: 1,
-    color: 'white',
+    color: '#12383c',
     fontSize: 18,
     paddingVertical: 14,
     paddingHorizontal: 10,
@@ -519,7 +488,7 @@ const styles = StyleSheet.create({
   },
 
   emptyText: {
-    color: '#94a3b8',
+    color: '#547071',
     fontSize: 18,
   },
 });
