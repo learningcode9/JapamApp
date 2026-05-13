@@ -901,23 +901,7 @@ export default function JapamMain() {
     return safeTotal;
   };
 
-  const handleUndo = async () => {
-    const newTotal = Math.max(0, totalRef.current - 1);
   
-    setCountersFromTotal(newTotal);
-  
-    const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-  
-    if (savedUserId) {
-      const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
-  
-      await saveUserTotalToSupabase(
-        savedUserId,
-        savedUserName || userName || 'User',
-        newTotal
-      );
-    }
-  };
 
   const requireLogin = () => {
     if (!userName) { setShowUserModal(true); return false; }
@@ -1060,11 +1044,11 @@ export default function JapamMain() {
     if (currentUserId) {
       await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, currentUserId), String(totalRef.current));
       await saveTimerStateToSupabase(currentUserId, {
-        seconds: 0,
-        isRunning: false,
-        targetSeconds: 60,
-        minutesInput: '1',
-        loopTimer: false,
+        seconds,
+        isRunning,
+        targetSeconds,
+        minutesInput,
+        loopTimer,
       });
     }
 
@@ -1285,9 +1269,7 @@ export default function JapamMain() {
             </LinearGradient>
           </Pressable>
         </Animated.View>
-        <Pressable style={styles.undoBtn} onPress={handleUndo}>
-          <Text style={styles.undoText}>↻ Undo last tap</Text>
-        </Pressable>
+        
 
         <Text style={styles.inputLabel}>Timer (minutes)</Text>
         <TextInput
@@ -1502,7 +1484,7 @@ const styles = StyleSheet.create({
     shadowRadius: 28,
     elevation: 20,
     marginTop: 10,
-    marginBottom: 12,
+    marginBottom: 4,
   },
   completionGlow: {
     position: 'absolute',
@@ -1524,17 +1506,8 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(251, 191, 36, 0.28)',
   },
   circlePressed: { transform: [{ scale: 0.96 }] },
-  undoBtn: {
-    backgroundColor: 'rgba(15, 23, 42, 0.55)',
-    paddingVertical: 10,
-    paddingHorizontal: 22,
-    borderRadius: 999,
-    marginTop: 12,
-    marginBottom: 6,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.16)',
-  },
-  undoText: { color: '#f8fafc', fontSize: isMobile ? 15 : 17, fontWeight: '800' },
+  
+  
   inputLabel: { color: '#cbd5e1', fontSize: isMobile ? 14 : 16, marginTop: 14, marginBottom: 6 },
   input: {
     backgroundColor: '#1e293b',
