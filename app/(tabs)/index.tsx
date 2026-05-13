@@ -323,12 +323,14 @@ export default function JapamMain() {
         savedUserName
       );
   
-      finalTotal = Math.max(
-        localTodayTotal,
-        Number(cloudTotal) || 0,
-        Number(remoteTodayTotal) || 0,
-        totalRef.current || 0
-      );
+      if (cloudTotal !== null) {
+        finalTotal = Number(cloudTotal) || 0;
+      } else {
+        finalTotal = Math.max(
+          localTodayTotal,
+          Number(remoteTodayTotal) || 0
+        );
+      }
     }
   
     await restoreTotal(finalTotal, { userId: savedUserId });
@@ -814,17 +816,20 @@ export default function JapamMain() {
     try {
       if (Platform.OS === 'ios') {
         await Haptics.impactAsync(
-          Haptics.ImpactFeedbackStyle.Heavy
+          Haptics.ImpactFeedbackStyle.Light
         );
-      } else {
-        Vibration.vibrate(90);
+        return;
+      }
   
-        Haptics.impactAsync(
-          Haptics.ImpactFeedbackStyle.Heavy
-        ).catch(console.log);
+      Vibration.vibrate(60);
+  
+      if (Platform.OS !== 'web') {
+        await Haptics.impactAsync(
+          Haptics.ImpactFeedbackStyle.Medium
+        );
       }
     } catch (error) {
-      console.log('Vibration error:', error);
+      console.log('Tap vibration error:', error);
     }
   }, [vibrationEnabled]);
 
@@ -847,20 +852,28 @@ export default function JapamMain() {
       await playCompleteSound();
     }
   
-    if (Platform.OS === 'ios') {
-      await Haptics.notificationAsync(
-        Haptics.NotificationFeedbackType.Warning
-      );
+    if (!vibrationEnabled) return;
   
-      setTimeout(() => {
-        Haptics.notificationAsync(
-          Haptics.NotificationFeedbackType.Warning
-        ).catch(console.log);
-      }, 400);
-    } else {
-      vibrateDevice([0, 700, 180, 700, 180, 1000]);
+    try {
+      if (Platform.OS === 'ios') {
+        await Haptics.notificationAsync(
+          Haptics.NotificationFeedbackType.Success
+        );
+  
+        setTimeout(() => {
+          Haptics.notificationAsync(
+            Haptics.NotificationFeedbackType.Warning
+          ).catch(console.log);
+        }, 350);
+  
+        return;
+      }
+  
+      Vibration.vibrate([0, 600, 180, 600, 180, 900]);
+    } catch (error) {
+      console.log('Completion vibration error:', error);
     }
-  }, [playCompletionAnimation, soundEnabled, vibrateDevice]);
+  }, [playCompletionAnimation, soundEnabled, vibrationEnabled]);
 
   const setCountersFromTotal = (nextTotal: number) => {
     const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
@@ -888,7 +901,23 @@ export default function JapamMain() {
     return safeTotal;
   };
 
-  const handleUndo = () => setCountersFromTotal(Math.max(0, totalRef.current - 1));
+  const handleUndo = async () => {
+    const newTotal = Math.max(0, totalRef.current - 1);
+  
+    setCountersFromTotal(newTotal);
+  
+    const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+  
+    if (savedUserId) {
+      const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+  
+      await saveUserTotalToSupabase(
+        savedUserId,
+        savedUserName || userName || 'User',
+        newTotal
+      );
+    }
+  };
 
   const requireLogin = () => {
     if (!userName) { setShowUserModal(true); return false; }
@@ -1051,8 +1080,17 @@ export default function JapamMain() {
     await AsyncStorage.setItem(TIMER_TARGET_KEY, '60');
     await AsyncStorage.setItem(TIMER_MINUTES_KEY, '1');
     await AsyncStorage.setItem(TIMER_LOOP_KEY, 'false');
+    await AsyncStorage.multiRemove([
+      TIMER_SECONDS_KEY,
+      TIMER_RUNNING_KEY,
+      TIMER_TARGET_KEY,
+      TIMER_MINUTES_KEY,
+      TIMER_LOOP_KEY,
+    ]);
     setIsRunning(false);
     setSeconds(0);
+    setTargetSeconds(60);
+    setMinutesInput('1'); 
     setLoopTimer(false);
     setAutoCompletedMalas(0);
     setHasRestoredTimer(false);
