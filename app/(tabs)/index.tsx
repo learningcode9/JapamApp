@@ -100,7 +100,7 @@ export default function JapamMain() {
   const [seconds, setSeconds] = useState(0);
   const [hasRestoredTotal, setHasRestoredTotal] = useState(false);
   const [hasRestoredTimer, setHasRestoredTimer] = useState(false);
-  const [minutesInput, setMinutesInput] = useState('0');
+  const [minutesInput, setMinutesInput] = useState('1');
   const [targetSeconds, setTargetSeconds] = useState(60);
   const [isRunning, setIsRunning] = useState(false);
   const [loopTimer, setLoopTimer] = useState(false);
@@ -128,7 +128,6 @@ export default function JapamMain() {
   const isSavingSessionRef = useRef(false);
   const lastTapRef = useRef(0);
 
-  const fade = useRef(new Animated.Value(0)).current;
   const glowAnim = useRef(new Animated.Value(0)).current;
   const particleAnim = useRef(new Animated.Value(0)).current;
   const omPulseAnim = useRef(new Animated.Value(1)).current;
@@ -330,10 +329,6 @@ export default function JapamMain() {
   );
 
   useEffect(() => {
-    Animated.timing(fade, { toValue: 1, duration: 800, useNativeDriver: true }).start();
-  }, [fade]);
-
-  useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
     document.title = isRunning ? `⏱ ${formatTime(seconds)} — Mantra Japam` : 'Mantra Japam';
   }, [isRunning, seconds]);
@@ -440,13 +435,13 @@ export default function JapamMain() {
           setSeconds(Number(timerState.seconds) || 0);
           setIsRunning(Boolean(timerState.is_running));
           setTargetSeconds(Number(timerState.target_seconds) || 60);
-          setMinutesInput(timerState.minutes_input || '0');
+          setMinutesInput(timerState.minutes_input || '1');
           setLoopTimer(Boolean(timerState.loop_timer));
         } else {
           const savedTimerSeconds = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_SECONDS_KEY, savedUserId))) || '0');
           const savedTimerRunning = (await AsyncStorage.getItem(getUserStorageKey(TIMER_RUNNING_KEY, savedUserId))) === 'true';
           const savedTimerTarget = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_TARGET_KEY, savedUserId))) || '60');
-          const savedTimerMinutes = (await AsyncStorage.getItem(getUserStorageKey(TIMER_MINUTES_KEY, savedUserId))) || '0';
+          const savedTimerMinutes = (await AsyncStorage.getItem(getUserStorageKey(TIMER_MINUTES_KEY, savedUserId))) || '1';
           const savedTimerLoop = (await AsyncStorage.getItem(getUserStorageKey(TIMER_LOOP_KEY, savedUserId))) === 'true';
           setSeconds(savedTimerSeconds);
           setIsRunning(savedTimerRunning);
@@ -458,12 +453,12 @@ export default function JapamMain() {
         setSeconds(0);
         setIsRunning(false);
         setTargetSeconds(60);
-        setMinutesInput('0');
+        setMinutesInput('1');
         setLoopTimer(false);
         await AsyncStorage.setItem(TIMER_SECONDS_KEY, '0');
         await AsyncStorage.setItem(TIMER_RUNNING_KEY, 'false');
         await AsyncStorage.setItem(TIMER_TARGET_KEY, '60');
-        await AsyncStorage.setItem(TIMER_MINUTES_KEY, '0');
+        await AsyncStorage.setItem(TIMER_MINUTES_KEY, '1');
         await AsyncStorage.setItem(TIMER_LOOP_KEY, 'false');
       }
 
@@ -837,8 +832,6 @@ export default function JapamMain() {
     if (newCount === 0) {
       void saveSession(0, 1, 108, newTotal);
       void completeFeedback();
-    } else {
-      tapFeedback();
     }
   };
 
@@ -1028,7 +1021,7 @@ export default function JapamMain() {
 
             {/* ✅ Fix 1: show rename hint only if name not set yet */}
             <Pressable onPress={openRename}>
-              <Text style={styles.title}>{japamName || 'Tap to set mantra name'}</Text>
+              <Text style={styles.title}>{japamName || 'Mantra Japam'}</Text>
             </Pressable>
 
             {!hasSetName && (
@@ -1149,20 +1142,11 @@ export default function JapamMain() {
             </LinearGradient>
           </Pressable>
         </Animated.View>
+        <Text style={styles.omHint}>Tap OM to count</Text>
 
         <Pressable style={styles.undoBtn} onPress={handleUndo}>
           <Text style={styles.undoText}>↻ Undo last tap</Text>
         </Pressable>
-
-        {/* ✅ Fix 4: Start/Pause only — Stop removed */}
-        <View style={styles.row}>
-          <Pressable style={styles.btn} onPress={handleStart}>
-            <Text style={styles.btnText}>▶ Start</Text>
-          </Pressable>
-          <Pressable style={[styles.btn, styles.gray]} onPress={isRunning ? handlePause : handleStop}>
-          <Text style={styles.btnText}>⏸ Pause</Text>
-          </Pressable>
-        </View>
 
         <Text style={styles.inputLabel}>Timer (minutes)</Text>
         <TextInput
@@ -1179,6 +1163,16 @@ export default function JapamMain() {
         />
 
         <Text style={styles.timerHint}>Timer ending = 1 mala automatically added</Text>
+
+        {/* ✅ Fix 4: Start/Pause only — Stop removed */}
+        <View style={styles.row}>
+          <Pressable style={styles.btn} onPress={handleStart}>
+            <Text style={styles.btnText}>▶ Start</Text>
+          </Pressable>
+          <Pressable style={[styles.btn, styles.gray]} onPress={isRunning ? handlePause : handleStop}>
+          <Text style={styles.btnText}>⏸ Pause</Text>
+          </Pressable>
+        </View>
 
         <View style={styles.autoRepeatRow}>
           <Text style={styles.autoRepeatText}>Auto Repeat (Max 5 Malas)</Text>
@@ -1287,16 +1281,21 @@ const styles = StyleSheet.create({
   userMenuText: { color: 'white', fontSize: 14, fontWeight: '800' },
   title: {
     color: '#f8fafc',
-    fontSize: isShortMobile ? 28 : isMobile ? 34 : 36,
+    fontSize: isShortMobile ? 24 : isMobile ? 28 : 34,
     fontWeight: '800',
     textAlign: 'center',
     letterSpacing: 0.3,
   },
   renameHint: {
-    color: '#fbbf24',
+    color: '#0f172a',
     fontSize: 13,
-    marginTop: 4,
-    fontWeight: '600',
+    marginTop: 6,
+    fontWeight: '800',
+    backgroundColor: '#fbbf24',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 999,
+    overflow: 'hidden',
   },
   nameEditor: {
     width: '100%',
@@ -1375,12 +1374,19 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(251, 191, 36, 0.28)',
   },
   circlePressed: { transform: [{ scale: 0.96 }] },
+  omHint: {
+    color: 'rgba(255,255,255,0.48)',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 2,
+    marginBottom: 2,
+  },
   undoBtn: {
     backgroundColor: 'rgba(15, 23, 42, 0.55)',
     paddingVertical: 10,
     paddingHorizontal: 22,
     borderRadius: 999,
-    marginTop: 18,
+    marginTop: 12,
     marginBottom: 6,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.16)',
@@ -1404,7 +1410,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   autoRepeatText: { color: '#e2e8f0', fontSize: isMobile ? 15 : 18, fontWeight: '800' },
-  row: { flexDirection: 'row', gap: 12, marginTop: 8, marginBottom: 6 },
+  row: { flexDirection: 'row', gap: 12, marginTop: 10, marginBottom: 6 },
   btn: {
     backgroundColor: '#6366f1',
     paddingVertical: isMobile ? 12 : 14,
@@ -1484,7 +1490,12 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   loginButtonDesktop: { position: 'absolute', right: 16, top: 0 },
-  loginButtonMobile: { marginTop: 10, alignSelf: 'center' },
+  loginButtonMobile: {
+    marginTop: 12,
+    alignSelf: 'center',
+    width: '80%',
+    alignItems: 'center',
+  },
   loginButtonText: { color: '#ffffff', fontWeight: '900', fontSize: isMobile ? 15 : 16 },
   timerHint: { color: '#94a3b8', fontSize: isMobile ? 12 : 14, marginTop: 6, textAlign: 'center' },
   disabledInput: { opacity: 0.55 },
@@ -1494,16 +1505,6 @@ const styles = StyleSheet.create({
     borderRadius: 20, zIndex: 20,
   },
   signingInText: { color: '#fff', fontSize: 14, fontWeight: '600' },
-  runningBanner: {
-    backgroundColor: 'rgba(251, 191, 36, 0.14)',
-    borderWidth: 1,
-    borderColor: 'rgba(251, 191, 36, 0.35)',
-    borderRadius: 999,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    marginBottom: 8,
-  },
-  runningBannerText: { color: '#fbbf24', fontSize: 14, fontWeight: '900' },
   omText: {
     fontSize: isShortMobile ? 60 : isMobile ? 72 : 84,
     color: '#ffd166',
