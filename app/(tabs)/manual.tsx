@@ -63,9 +63,17 @@ if (!userId) {
       return;
     }
 
+    const selectedYear = Number(typedDateMatch[1]);
+    const selectedMonth = Number(typedDateMatch[2]);
+    const selectedDay = Number(typedDateMatch[3]);
     const selectedDate = `${typedDateMatch[1]}-${typedDateMatch[2].padStart(2, '0')}-${typedDateMatch[3].padStart(2, '0')}`;
-    const selectedDateValue = new Date(`${selectedDate}T12:00:00`);
-    if (Number.isNaN(selectedDateValue.getTime())) {
+    const selectedDateValue = new Date(selectedYear, selectedMonth - 1, selectedDay, 12);
+    const isValidDate =
+      selectedDateValue.getFullYear() === selectedYear &&
+      selectedDateValue.getMonth() === selectedMonth - 1 &&
+      selectedDateValue.getDate() === selectedDay;
+
+    if (!isValidDate) {
       Alert.alert('Invalid date', 'Please enter a valid date');
       return;
     }

@@ -446,7 +446,7 @@ export default function JapamMain() {
           const savedTimerSeconds = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_SECONDS_KEY, savedUserId))) || '0');
           const savedTimerRunning = (await AsyncStorage.getItem(getUserStorageKey(TIMER_RUNNING_KEY, savedUserId))) === 'true';
           const savedTimerTarget = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_TARGET_KEY, savedUserId))) || '60');
-          const savedTimerMinutes = (await AsyncStorage.getItem(TIMER_MINUTES_KEY)) || '0';
+          const savedTimerMinutes = (await AsyncStorage.getItem(getUserStorageKey(TIMER_MINUTES_KEY, savedUserId))) || '0';
           const savedTimerLoop = (await AsyncStorage.getItem(getUserStorageKey(TIMER_LOOP_KEY, savedUserId))) === 'true';
           setSeconds(savedTimerSeconds);
           setIsRunning(savedTimerRunning);
