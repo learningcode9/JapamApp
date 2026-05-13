@@ -124,8 +124,11 @@ export default function JapamMain() {
     loopTimer: false,
   });
   const suppressTimerSaveRef = useRef(false);
+  const dbTotalSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timerStartedAtRef = useRef<number | null>(null);
   const rippleAnim = useRef(new Animated.Value(0)).current;
   const isSavingSessionRef = useRef(false);
+  const lastSavedSessionRef = useRef('');
   const lastTapRef = useRef(0);
 
   const glowAnim = useRef(new Animated.Value(0)).current;
@@ -484,6 +487,14 @@ export default function JapamMain() {
     ).start();
   }, [omPulseAnim]);
 
+  useEffect(() => {
+    return () => {
+      if (dbTotalSaveTimeoutRef.current) {
+        clearTimeout(dbTotalSaveTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const loadJapamNameFromSupabase = useCallback(async (googleUserId: string) => {
     try {
       const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -647,15 +658,35 @@ export default function JapamMain() {
         await AsyncStorage.setItem(getUserStorageKey(COUNT_KEY, savedUserId), String(count));
         await AsyncStorage.setItem(getUserStorageKey(MALAS_KEY, savedUserId), String(malas));
         await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, savedUserId), String(total));
-        const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
-        await saveUserTotalToSupabase(savedUserId, savedUserName || userName || 'User', total);
+
+        if (dbTotalSaveTimeoutRef.current) {
+          clearTimeout(dbTotalSaveTimeoutRef.current);
+        }
+
+        dbTotalSaveTimeoutRef.current = setTimeout(async () => {
+          const activeUserId = await AsyncStorage.getItem(USER_ID_KEY);
+          if (!activeUserId || activeUserId !== savedUserId) return;
+
+          const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+          await saveUserTotalToSupabase(activeUserId, savedUserName || userName || 'User', totalRef.current);
+        }, 2000);
       }
     })();
   }, [count, malas, total, userName, hasRestoredTotal]);
 
   useEffect(() => {
     if (!isRunning) return;
-    const interval = setInterval(() => setSeconds((prev) => prev + 1), 1000);
+    if (timerStartedAtRef.current === null) {
+      timerStartedAtRef.current = Date.now() - timerRef.current.seconds * 1000;
+    }
+
+    const tick = () => {
+      if (timerStartedAtRef.current === null) return;
+      setSeconds(Math.floor((Date.now() - timerStartedAtRef.current) / 1000));
+    };
+
+    tick();
+    const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
   }, [isRunning]);
 
@@ -689,15 +720,20 @@ export default function JapamMain() {
   };
 
   const saveSession = useCallback(async (
-    duration: number, sessionMalas: number, sessionTotal: number, _accumulatedTotal: number
+    duration: number, sessionMalas: number, sessionTotal: number, accumulatedTotal: number
   ) => {
     if (isSavingSessionRef.current) return;
+    const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    const sessionSignature = `${currentUserId || 'guest'}-${getLocalDateKey()}-${duration}-${sessionMalas}-${sessionTotal}-${accumulatedTotal}`;
+    if (lastSavedSessionRef.current === sessionSignature) return;
+
     isSavingSessionRef.current = true;
+    lastSavedSessionRef.current = sessionSignature;
 
     try {
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
       const history: Session[] = raw ? JSON.parse(raw) : [];
-      const userId = await AsyncStorage.getItem(USER_ID_KEY);
+      const userId = currentUserId;
       const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
 
       const session: Session = {
@@ -841,6 +877,7 @@ export default function JapamMain() {
     const targetChanged = nextTargetSeconds !== targetSeconds;
     const nextSeconds = targetChanged || seconds >= nextTargetSeconds ? 0 : seconds;
 
+    timerStartedAtRef.current = Date.now() - nextSeconds * 1000;
     timerRef.current = { seconds: nextSeconds, isRunning: true, targetSeconds: nextTargetSeconds, minutesInput: String(mins), loopTimer };
     setMinutesInput(String(mins));
     setTargetSeconds(nextTargetSeconds);
@@ -850,6 +887,7 @@ export default function JapamMain() {
   };
 
   const handlePause = () => {
+    timerStartedAtRef.current = null;
     setIsRunning(false);
     void (async () => {
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
@@ -866,11 +904,21 @@ export default function JapamMain() {
     if (loopTimer) {
       setAutoCompletedMalas((prev) => {
         const next = prev + 1;
-        if (next >= 5) { setSeconds(0); setIsRunning(false); setLoopTimer(false); }
-        else { setSeconds(0); setIsRunning(true); }
+        if (next >= 5) {
+          timerStartedAtRef.current = null;
+          setSeconds(0);
+          setIsRunning(false);
+          setLoopTimer(false);
+        }
+        else {
+          timerStartedAtRef.current = Date.now();
+          setSeconds(0);
+          setIsRunning(true);
+        }
         return next;
       });
     } else {
+      timerStartedAtRef.current = null;
       setSeconds(0);
       setIsRunning(false);
     }
@@ -939,6 +987,12 @@ export default function JapamMain() {
       });
     }
 
+    if (dbTotalSaveTimeoutRef.current) {
+      clearTimeout(dbTotalSaveTimeoutRef.current);
+      dbTotalSaveTimeoutRef.current = null;
+    }
+
+    timerStartedAtRef.current = null;
     suppressTimerSaveRef.current = true;
     await AsyncStorage.setItem(TIMER_SECONDS_KEY, '0');
     await AsyncStorage.setItem(TIMER_RUNNING_KEY, 'false');
