@@ -1037,15 +1037,22 @@ export default function JapamMain() {
   const performLogout = async () => {
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
     const currentUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+    const logoutSeconds = timerStartedAtRef.current === null
+      ? seconds
+      : Math.min(
+          targetSeconds,
+          Math.max(0, Math.floor((Date.now() - timerStartedAtRef.current) / 1000))
+        );
+
     if (currentUserId) {
       await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, currentUserId), String(totalRef.current));
       await saveUserTotalToSupabase(currentUserId, currentUserName || userName || 'User', totalRef.current);
       await saveTimerStateToSupabase(currentUserId, {
-        seconds: 0,
+        seconds: logoutSeconds,
         isRunning: false,
-        targetSeconds: 60,
-        minutesInput: '1',
-        loopTimer: false,
+        targetSeconds,
+        minutesInput,
+        loopTimer,
       });
     }
 
