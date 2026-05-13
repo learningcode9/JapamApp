@@ -574,7 +574,7 @@ export default function JapamMain() {
       setSeconds(Number(timerState.seconds) || 0);
       setIsRunning(Boolean(timerState.is_running));
       setTargetSeconds(Number(timerState.target_seconds) || 60);
-      setMinutesInput(timerState.minutes_input || '0');
+      setMinutesInput(timerState.minutes_input || '1');
       setLoopTimer(Boolean(timerState.loop_timer));
     }
     setHasRestoredTimer(true);
@@ -951,7 +951,7 @@ export default function JapamMain() {
     await AsyncStorage.setItem(TIMER_SECONDS_KEY, '0');
     await AsyncStorage.setItem(TIMER_RUNNING_KEY, 'false');
     await AsyncStorage.setItem(TIMER_TARGET_KEY, '60');
-    await AsyncStorage.setItem(TIMER_MINUTES_KEY, '0');
+    await AsyncStorage.setItem(TIMER_MINUTES_KEY, '1');
     await AsyncStorage.setItem(TIMER_LOOP_KEY, 'false');
     setIsRunning(false);
     setSeconds(0);
@@ -1153,8 +1153,6 @@ export default function JapamMain() {
             </LinearGradient>
           </Pressable>
         </Animated.View>
-        <Text style={styles.omHint}>Tap OM to count</Text>
-
         <Pressable style={styles.undoBtn} onPress={handleUndo}>
           <Text style={styles.undoText}>↻ Undo last tap</Text>
         </Pressable>
@@ -1395,13 +1393,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(251, 191, 36, 0.28)',
   },
   circlePressed: { transform: [{ scale: 0.96 }] },
-  omHint: {
-    color: 'rgba(255,255,255,0.48)',
-    fontSize: 12,
-    fontWeight: '700',
-    marginTop: 2,
-    marginBottom: 2,
-  },
   undoBtn: {
     backgroundColor: 'rgba(15, 23, 42, 0.55)',
     paddingVertical: 10,
