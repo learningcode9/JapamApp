@@ -741,21 +741,17 @@ export default function JapamMain() {
   }, [userName]);
 
   const tapFeedback = () => {
+    if (!vibrationEnabled) return;
+
+    Haptics.impactAsync(
+      Haptics.ImpactFeedbackStyle.Medium
+    ).catch(console.log);
+
     if (Platform.OS === 'ios') {
-      Haptics.impactAsync(
-        Haptics.ImpactFeedbackStyle.Medium
-      ).catch(console.log);
-  
       return;
     }
   
     vibrateDevice(80);
-  
-    if (Platform.OS !== 'web') {
-      Haptics.impactAsync(
-        Haptics.ImpactFeedbackStyle.Medium
-      ).catch(console.log);
-    }
   };
 
   const playCompletionAnimation = useCallback(() => {

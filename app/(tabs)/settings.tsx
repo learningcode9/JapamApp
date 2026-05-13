@@ -1,30 +1,47 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
-import React, { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { useFocusEffect } from 'expo-router';
+import React, { useCallback, useState } from 'react';
+import { Alert, Linking, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
+const JAPAM_NAME_KEY = 'japamName';
+const USER_ID_KEY = 'userId';
+const USER_NAME_KEY = 'userName';
+const FEEDBACK_FORM_URL =
+  'https://docs.google.com/forms/d/e/1FAIpQLScYFBZqgour0aN3hFFjW2hrOAkc9vVFdN0-1NPXdouZZRsHfQ/viewform?usp=publish-editor';
 
+const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
 
 export default function SettingsScreen() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
-  
+  const [japamName, setJapamName] = useState('');
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userName, setUserName] = useState('');
 
-  useEffect(() => {
+  useFocusEffect(
+    useCallback(() => {
     const loadSettings = async () => {
       const savedSound = await AsyncStorage.getItem(SOUND_ENABLED_KEY);
       const savedVibration = await AsyncStorage.getItem(VIBRATION_ENABLED_KEY);
-     
+      const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+      const savedJapamName = savedUserId
+        ? await AsyncStorage.getItem(getUserStorageKey(JAPAM_NAME_KEY, savedUserId))
+        : await AsyncStorage.getItem(JAPAM_NAME_KEY);
 
       setSoundEnabled(savedSound !== 'false');
       setVibrationEnabled(savedVibration !== 'false');
-     
+      setUserId(savedUserId);
+      setUserName(savedUserName || '');
+      setJapamName(savedJapamName || 'Japam');
     };
 
-    loadSettings();
-  }, []);
+    void loadSettings();
+  }, [])
+  );
 
   const toggleSound = async (value: boolean) => {
     setSoundEnabled(value);
@@ -36,7 +53,84 @@ export default function SettingsScreen() {
     await AsyncStorage.setItem(VIBRATION_ENABLED_KEY, String(value));
   };
 
-  
+  const saveJapamName = async () => {
+    const name = japamName.trim();
+    if (!name) {
+      Alert.alert('Enter japam name');
+      return;
+    }
+
+    if (userId) {
+      await AsyncStorage.setItem(getUserStorageKey(JAPAM_NAME_KEY, userId), name);
+    } else {
+      await AsyncStorage.setItem(JAPAM_NAME_KEY, name);
+    }
+
+    try {
+      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+      if (url && key && userId) {
+        const encodedUserId = encodeURIComponent(userId);
+        const headers = {
+          'Content-Type': 'application/json',
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+        };
+
+        const checkResponse = await fetch(
+          `${url}/rest/v1/user_profiles?user_id=eq.${encodedUserId}&select=id`,
+          { headers }
+        );
+        const rows = await checkResponse.json();
+
+        if (rows.length > 0) {
+          await fetch(`${url}/rest/v1/user_profiles?user_id=eq.${encodedUserId}`, {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify({
+              user_name: userName || 'User',
+              japam_name: name,
+              updated_at: new Date().toISOString(),
+            }),
+          });
+        } else {
+          await fetch(`${url}/rest/v1/user_profiles`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              user_id: userId,
+              user_name: userName || 'User',
+              japam_name: name,
+            }),
+          });
+        }
+      }
+
+      Alert.alert('Saved', 'Japam name updated.');
+    } catch (error) {
+      console.log('Japam name save error:', error);
+      Alert.alert('Saved locally', 'Japam name was saved on this device.');
+    }
+  };
+
+  const openFeedbackForm = async () => {
+    if (!FEEDBACK_FORM_URL) {
+      Alert.alert(
+        'Feedback form needed',
+        'Please add your Google Form link in Settings.'
+      );
+      return;
+    }
+
+    const canOpen = await Linking.canOpenURL(FEEDBACK_FORM_URL);
+    if (!canOpen) {
+      Alert.alert('Unable to open form', 'Please try again later.');
+      return;
+    }
+
+    await Linking.openURL(FEEDBACK_FORM_URL);
+  };
 
   return (
     <LinearGradient colors={['#05010c', '#120022', '#05010c']} style={styles.container}>
@@ -58,10 +152,25 @@ export default function SettingsScreen() {
       <View style={styles.header}>
         
       <Text style={styles.title}>Settings</Text>
-      <Text style={styles.subtitle}>Sound and vibration preferences.</Text>
+      <Text style={styles.subtitle}>Japam name, sound, vibration, and feedback.</Text>
       </View>
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Japam Options</Text>
+
+        <View style={styles.formCard}>
+          <Text style={styles.label}>Japam Name</Text>
+          <Text style={styles.description}>This name appears on the main Japam screen.</Text>
+          <TextInput
+            style={styles.input}
+            value={japamName}
+            onChangeText={setJapamName}
+            placeholder="Enter japam name"
+            placeholderTextColor="#94a3b8"
+          />
+          <Pressable style={styles.primaryButton} onPress={saveJapamName}>
+            <Text style={styles.primaryButtonText}>Save Japam Name</Text>
+          </Pressable>
+        </View>
 
         <View style={styles.card}>
           <View style={styles.textBlock}>
@@ -85,6 +194,19 @@ export default function SettingsScreen() {
           <Switch value={vibrationEnabled} onValueChange={toggleVibration} />
         </View>
 
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Feedback</Text>
+        <View style={styles.formCard}>
+          <Text style={styles.label}>Send Feedback</Text>
+          <Text style={styles.description}>
+            Open the Google Form to share bugs, ideas, or anything you want improved.
+          </Text>
+          <Pressable style={styles.primaryButton} onPress={openFeedbackForm}>
+            <Text style={styles.primaryButtonText}>Open Feedback Form</Text>
+          </Pressable>
+        </View>
       </View>
 
       <View style={styles.infoBox}>
@@ -178,6 +300,15 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(251, 191, 36, 0.16)',
   },
 
+  formCard: {
+    backgroundColor: 'rgba(15, 23, 42, 0.72)',
+    borderRadius: 16,
+    padding: 18,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(251, 191, 36, 0.16)',
+  },
+
   textBlock: {
     flex: 1,
     paddingRight: 14,
@@ -194,6 +325,33 @@ const styles = StyleSheet.create({
     fontSize: 17,
     marginTop: 5,
     lineHeight: 24,
+  },
+
+  input: {
+    backgroundColor: '#1e293b',
+    color: 'white',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    borderWidth: 1,
+    borderColor: '#334155',
+    marginTop: 12,
+    fontSize: 17,
+    fontWeight: '700',
+  },
+
+  primaryButton: {
+    marginTop: 14,
+    backgroundColor: '#7c3aed',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+
+  primaryButtonText: {
+    color: 'white',
+    fontSize: 17,
+    fontWeight: '900',
   },
 
   infoBox: {

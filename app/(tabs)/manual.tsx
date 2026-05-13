@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect } from 'expo-router';
 import React, { useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 
 type Session = {
@@ -18,17 +18,26 @@ const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
 
-export default function ManualEntry() {
-  const getLocalDate = () => {
-    const d = new Date();
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
+const clampNumber = (value: string, min: number, max: number) => {
+  const parsed = Math.floor(Number(value) || min);
+  return String(Math.min(max, Math.max(min, parsed)));
+};
 
-    return `${year}-${month}-${day}`;
+export default function ManualEntry() {
+  const getLocalDateParts = () => {
+    const d = new Date();
+    return {
+      year: String(d.getFullYear()),
+      month: String(d.getMonth() + 1).padStart(2, '0'),
+      day: String(d.getDate()).padStart(2, '0'),
+    };
   };
 
-  const [date, setDate] = useState(getLocalDate());
+  const today = getLocalDateParts();
+  const [dateText, setDateText] = useState(`${today.year}-${today.month}-${today.day}`);
+  const [year, setYear] = useState(today.year);
+  const [month, setMonth] = useState(today.month);
+  const [day, setDay] = useState(today.day);
   const [malas, setMalas] = useState('');
   const [total, setTotal] = useState('');
   const [userId, setUserId] = useState<string | null>(null);
@@ -37,6 +46,25 @@ export default function ManualEntry() {
       AsyncStorage.getItem(USER_ID_KEY).then(setUserId);
     }, [])
   );
+
+  const adjustDatePart = (part: 'year' | 'month' | 'day', amount: number) => {
+    setDateText('');
+
+    if (part === 'year') {
+      setYear((current) => clampNumber(String((Number(current) || Number(today.year)) + amount), 2020, 2100));
+      return;
+    }
+
+    if (part === 'month') {
+      setMonth((current) => clampNumber(String((Number(current) || Number(today.month)) + amount), 1, 12).padStart(2, '0'));
+      return;
+    }
+
+    const safeYear = Number(year) || Number(today.year);
+    const safeMonth = Number(month) || Number(today.month);
+    const daysInMonth = new Date(safeYear, safeMonth, 0).getDate();
+    setDay((current) => clampNumber(String((Number(current) || Number(today.day)) + amount), 1, daysInMonth).padStart(2, '0'));
+  };
 
   const onSave = async () => {
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
@@ -56,6 +84,23 @@ if (!userId) {
     );
     return;
   }
+
+    const typedDateMatch = dateText.trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    const inputYear = typedDateMatch?.[1] || year;
+    const inputMonth = typedDateMatch?.[2] || month;
+    const inputDay = typedDateMatch?.[3] || day;
+
+    const normalizedYear = clampNumber(inputYear, 2020, 2100);
+    const normalizedMonth = clampNumber(inputMonth, 1, 12).padStart(2, '0');
+    const daysInMonth = new Date(Number(normalizedYear), Number(normalizedMonth), 0).getDate();
+    const normalizedDay = clampNumber(inputDay, 1, daysInMonth).padStart(2, '0');
+    const selectedDate = `${normalizedYear}-${normalizedMonth}-${normalizedDay}`;
+    const selectedDateTime = `${selectedDate}T12:00:00`;
+
+    setDateText(selectedDate);
+    setYear(normalizedYear);
+    setMonth(normalizedMonth);
+    setDay(normalizedDay);
 
     const malaInput = Number(malas || 0);
     const totalInput = Number(total || 0);
@@ -79,7 +124,7 @@ if (!userId) {
     const userName = await AsyncStorage.getItem(USER_NAME_KEY);
 
     const payload: Session = {
-      date: `${date}T12:00:00`,
+      date: selectedDateTime,
       malas: malaNum,
       totalCount: totalNum,
       duration: 0,
@@ -107,6 +152,9 @@ if (!userId) {
             user_name: userName || 'User',
             malas: malaNum,
             count: totalNum,
+            accumulated: totalNum,
+            type: 'Manual',
+            created_at: selectedDateTime,
           }),
         });
 
@@ -150,6 +198,7 @@ if (!userId) {
           ]}
         />
       ))}
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
       <View style={styles.panel}>
   
 
@@ -166,13 +215,88 @@ if (!userId) {
   
 )}
 
+      <Text style={styles.fieldLabel}>Completed Date</Text>
       <TextInput
         style={styles.input}
-        value={date}
-        onChangeText={setDate}
+        value={dateText}
+        onChangeText={setDateText}
         placeholder="YYYY-MM-DD"
         placeholderTextColor="#94a3b8"
       />
+      <Text style={styles.dateHelp}>Type date above or choose year, month, and day below.</Text>
+      <View style={styles.dateRow}>
+        <View style={styles.dateField}>
+          <Text style={styles.dateLabel}>Year</Text>
+          <View style={styles.dateInputRow}>
+            <Pressable style={styles.dateStep} onPress={() => adjustDatePart('year', -1)}>
+              <Text style={styles.dateStepText}>−</Text>
+            </Pressable>
+            <TextInput
+              style={styles.dateInput}
+              value={year}
+              onChangeText={(value) => {
+                setYear(value);
+                setDateText('');
+              }}
+              keyboardType="numeric"
+              maxLength={4}
+              placeholder="2026"
+              placeholderTextColor="#94a3b8"
+            />
+            <Pressable style={styles.dateStep} onPress={() => adjustDatePart('year', 1)}>
+              <Text style={styles.dateStepText}>+</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        <View style={styles.dateField}>
+          <Text style={styles.dateLabel}>Month</Text>
+          <View style={styles.dateInputRow}>
+            <Pressable style={styles.dateStep} onPress={() => adjustDatePart('month', -1)}>
+              <Text style={styles.dateStepText}>−</Text>
+            </Pressable>
+            <TextInput
+              style={styles.dateInput}
+              value={month}
+              onChangeText={(value) => {
+                setMonth(value);
+                setDateText('');
+              }}
+              keyboardType="numeric"
+              maxLength={2}
+              placeholder="05"
+              placeholderTextColor="#94a3b8"
+            />
+            <Pressable style={styles.dateStep} onPress={() => adjustDatePart('month', 1)}>
+              <Text style={styles.dateStepText}>+</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        <View style={styles.dateField}>
+          <Text style={styles.dateLabel}>Day</Text>
+          <View style={styles.dateInputRow}>
+            <Pressable style={styles.dateStep} onPress={() => adjustDatePart('day', -1)}>
+              <Text style={styles.dateStepText}>−</Text>
+            </Pressable>
+            <TextInput
+              style={styles.dateInput}
+              value={day}
+              onChangeText={(value) => {
+                setDay(value);
+                setDateText('');
+              }}
+              keyboardType="numeric"
+              maxLength={2}
+              placeholder="12"
+              placeholderTextColor="#94a3b8"
+            />
+            <Pressable style={styles.dateStep} onPress={() => adjustDatePart('day', 1)}>
+              <Text style={styles.dateStepText}>+</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
 
       <TextInput
         style={styles.input}
@@ -198,6 +322,7 @@ if (!userId) {
         <Text style={styles.btnText}>Save</Text>
       </Pressable>
       </View>
+      </ScrollView>
     </LinearGradient>
   );
 }
@@ -205,9 +330,19 @@ if (!userId) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+
+  scroll: {
+    flex: 1,
+    width: '100%',
+  },
+
+  scrollContent: {
+    flexGrow: 1,
     padding: 18,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingBottom: 120,
   },
 
   star: {
@@ -227,6 +362,80 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(251, 191, 36, 0.18)',
     borderRadius: 18,
     padding: 26,
+  },
+
+  fieldLabel: {
+    width: '100%',
+    maxWidth: 360,
+    color: '#f8fafc',
+    fontSize: 18,
+    fontWeight: '800',
+    marginTop: 6,
+    marginBottom: 8,
+  },
+
+  dateRow: {
+    width: '100%',
+    maxWidth: 360,
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 4,
+  },
+
+  dateHelp: {
+    width: '100%',
+    maxWidth: 360,
+    color: '#94a3b8',
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 6,
+    marginBottom: 10,
+  },
+
+  dateField: {
+    flex: 1,
+  },
+
+  dateLabel: {
+    color: '#cbd5e1',
+    fontSize: 14,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+
+  dateInput: {
+    flex: 1,
+    backgroundColor: '#1e293b',
+    color: 'white',
+    paddingVertical: 12,
+    paddingHorizontal: 4,
+    textAlign: 'center',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+
+  dateInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    overflow: 'hidden',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#334155',
+    backgroundColor: '#1e293b',
+  },
+
+  dateStep: {
+    width: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    backgroundColor: '#334155',
+  },
+
+  dateStepText: {
+    color: 'white',
+    fontSize: 20,
+    fontWeight: '900',
   },
 
   omMark: {
