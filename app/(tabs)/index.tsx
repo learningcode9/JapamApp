@@ -314,9 +314,15 @@ export default function JapamMain() {
     if (savedUserId) {
       const remoteTodayTotal = await fetchTodayTotalFromSupabase(savedUserId, savedUserName);
       const cloudTotal = await fetchUserTotalFromSupabase(savedUserId);
+      const safeCloudTotal = Math.max(0, Math.floor(Number(cloudTotal) || 0));
+      const safeRemoteTotal = Math.max(0, Math.floor(Number(remoteTodayTotal) || 0));
+      const partialFromCloud =
+        remoteTodayTotal !== null && safeCloudTotal > safeRemoteTotal
+          ? safeCloudTotal - safeRemoteTotal
+          : 0;
       const finalTotal = remoteTodayTotal !== null
-        ? Math.max(0, Math.floor(Number(remoteTodayTotal) || 0))
-        : Math.max(0, Math.floor(Number(cloudTotal) || 0));
+        ? safeRemoteTotal + (partialFromCloud > 0 && partialFromCloud < 108 ? partialFromCloud : 0)
+        : safeCloudTotal;
   
       await restoreTotal(finalTotal, { userId: savedUserId });
       totalRef.current = finalTotal;
@@ -1030,14 +1036,16 @@ export default function JapamMain() {
 
   const performLogout = async () => {
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    const currentUserName = await AsyncStorage.getItem(USER_NAME_KEY);
     if (currentUserId) {
       await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, currentUserId), String(totalRef.current));
+      await saveUserTotalToSupabase(currentUserId, currentUserName || userName || 'User', totalRef.current);
       await saveTimerStateToSupabase(currentUserId, {
-        seconds,
-        isRunning,
-        targetSeconds,
-        minutesInput,
-        loopTimer,
+        seconds: 0,
+        isRunning: false,
+        targetSeconds: 60,
+        minutesInput: '1',
+        loopTimer: false,
       });
     }
 
