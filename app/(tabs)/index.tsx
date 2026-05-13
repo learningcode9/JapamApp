@@ -1073,16 +1073,30 @@ export default function JapamMain() {
     setShowUserModal(false);
 
     await AsyncStorage.removeItem(USER_NAME_KEY);
-    await AsyncStorage.removeItem(USER_ID_KEY);
-    await AsyncStorage.multiRemove([
-      TOTAL_KEY,
-      COUNT_KEY,
-      MALAS_KEY,
-      LAST_TOTAL_KEY,
-    ]);
-    await restoreTotal(0, { userId: null });
-    setTimeout(() => { suppressTimerSaveRef.current = false; }, 0);
-  };
+await AsyncStorage.removeItem(USER_ID_KEY);
+
+if (currentUserId) {
+  await AsyncStorage.multiRemove([
+    getUserStorageKey(TOTAL_KEY, currentUserId),
+    getUserStorageKey(COUNT_KEY, currentUserId),
+    getUserStorageKey(MALAS_KEY, currentUserId),
+  ]);
+}
+
+await AsyncStorage.multiRemove([
+  TOTAL_KEY,
+  COUNT_KEY,
+  MALAS_KEY,
+  LAST_TOTAL_KEY,
+]);
+
+totalRef.current = 0;
+setTotal(0);
+setCount(0);
+setMalas(0);
+
+await restoreTotal(0, { userId: null });
+setTimeout(() => { suppressTimerSaveRef.current = false; }, 0);
 
   const handleLogout = () => {
     if (Platform.OS === 'web') {
