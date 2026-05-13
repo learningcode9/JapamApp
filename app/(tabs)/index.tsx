@@ -3,7 +3,6 @@ import * as Google from 'expo-auth-session/providers/google';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -313,43 +312,33 @@ export default function JapamMain() {
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
     const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
     const localTodayTotal = await getLocalTodayTotal(savedUserId);
-
+  
+    let finalTotal = localTodayTotal;
+  
     if (savedUserId) {
       const cloudTotal = await fetchUserTotalFromSupabase(savedUserId);
-      const remoteTodayTotal = await fetchTodayTotalFromSupabase(savedUserId, savedUserName);
-      const finalTotal = remoteTodayTotal !== null
-        ? remoteTodayTotal
-        : cloudTotal !== null
-          ? Math.max(cloudTotal, localTodayTotal)
-          : localTodayTotal;
-          if (finalTotal === 0 && totalRef.current > 0) {
-            setHasRestoredTotal(true);
-            return;
-          
-          }
-
-      await restoreTotal(finalTotal, { userId: savedUserId });
-      totalRef.current = finalTotal;
-      setHasRestoredTotal(true);
-      return;
+  
+      const remoteTodayTotal = await fetchTodayTotalFromSupabase(
+        savedUserId,
+        savedUserName
+      );
+  
+      finalTotal = Math.max(
+        localTodayTotal,
+        Number(cloudTotal) || 0,
+        Number(remoteTodayTotal) || 0,
+        totalRef.current || 0
+      );
     }
-
-    await restoreTotal(localTodayTotal, { userId: savedUserId });
+  
+    await restoreTotal(finalTotal, { userId: savedUserId });
+    totalRef.current = finalTotal;
     setHasRestoredTotal(true);
-  }, [fetchTodayTotalFromSupabase, getLocalTodayTotal, restoreTotal]);
-
-  useFocusEffect(
-    useCallback(() => {
-      const loadSettingsAndRestoreToday = async () => {
-        const savedSound = await AsyncStorage.getItem(SOUND_ENABLED_KEY);
-        const savedVibration = await AsyncStorage.getItem(VIBRATION_ENABLED_KEY);
-        setSoundEnabled(savedSound !== 'false');
-        setVibrationEnabled(savedVibration !== 'false');
-        await restoreTodayTotal();
-      };
-      void loadSettingsAndRestoreToday();
-    }, [restoreTodayTotal])
-  );
+  }, [
+    fetchTodayTotalFromSupabase,
+    getLocalTodayTotal,
+    restoreTotal,
+  ]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
@@ -664,7 +653,9 @@ export default function JapamMain() {
 
         await AsyncStorage.setItem(USER_NAME_KEY, googleName);
         await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
+
         await loadJapamNameFromSupabase(googleUserId);
+        await restoreTodayTotal();
         await restoreHistoryFromSupabase(googleUserId);
         await restoreTimerForUser(googleUserId);
       } catch (error) {
