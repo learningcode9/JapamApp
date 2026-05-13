@@ -1074,6 +1074,12 @@ export default function JapamMain() {
 
     await AsyncStorage.removeItem(USER_NAME_KEY);
     await AsyncStorage.removeItem(USER_ID_KEY);
+    await AsyncStorage.multiRemove([
+      TOTAL_KEY,
+      COUNT_KEY,
+      MALAS_KEY,
+      LAST_TOTAL_KEY,
+    ]);
     await restoreTotal(0, { userId: null });
     setTimeout(() => { suppressTimerSaveRef.current = false; }, 0);
   };
