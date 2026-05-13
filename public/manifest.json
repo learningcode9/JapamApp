@@ -2,7 +2,7 @@
   "name": "Mantra Japam",
   "short_name": "Mantra Japam",
   "id": "/",
-  "start_url": "/?v=12",
+  "start_url": "/?v=13",
   "scope": "/",
   "display": "standalone",
   "display_override": ["standalone", "fullscreen"],
