@@ -285,7 +285,6 @@ export default function JapamMain() {
     if (!url || !key || !userId) return;
 
     const safeTotal = Math.max(0, Math.floor(Number(totalValue) || 0));
-    if (safeTotal === 0) return;
 
     const response = await fetch(`${url}/rest/v1/japam_user_totals?on_conflict=user_id`, {
       method: 'POST',
@@ -310,10 +309,14 @@ export default function JapamMain() {
 
   const restoreTodayTotal = useCallback(async () => {
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
   
     if (savedUserId) {
+      const remoteTodayTotal = await fetchTodayTotalFromSupabase(savedUserId, savedUserName);
       const cloudTotal = await fetchUserTotalFromSupabase(savedUserId);
-      const finalTotal = Math.max(0, Math.floor(Number(cloudTotal) || 0));
+      const finalTotal = remoteTodayTotal !== null
+        ? Math.max(0, Math.floor(Number(remoteTodayTotal) || 0))
+        : Math.max(0, Math.floor(Number(cloudTotal) || 0));
   
       await restoreTotal(finalTotal, { userId: savedUserId });
       totalRef.current = finalTotal;
@@ -324,7 +327,7 @@ export default function JapamMain() {
     await restoreTotal(0, { userId: null });
     totalRef.current = 0;
     setHasRestoredTotal(true);
-  }, [restoreTotal]);
+  }, [fetchTodayTotalFromSupabase, restoreTotal]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
@@ -1096,6 +1099,7 @@ setMalas(0);
 
 await restoreTotal(0, { userId: null });
 setTimeout(() => { suppressTimerSaveRef.current = false; }, 0);
+  };
 
   const handleLogout = () => {
     if (Platform.OS === 'web') {

@@ -185,24 +185,15 @@ export default function HistoryScreen() {
     let sessions = cleanedSessions.filter((item) => item.userId === currentUserId);
     const remoteSessions = await fetchRemoteSessions(currentUserId, currentUserName);
 
-    if (remoteSessions !== null && remoteSessions.length > 0) {
+    if (remoteSessions !== null) {
       const filteredRemoteSessions = remoteSessions.filter((item) => {
         const dayKey = toDayKey(item.date);
         return dayKey === 'unknown' || dayKey <= todayKey;
       });
 
-      const localTotal = sessions.reduce(
-        (sum, item) => sum + (Number(item.totalCount) || 0),
-        0
-      );
-      const remoteTotal = filteredRemoteSessions.reduce(
-        (sum, item) => sum + (Number(item.totalCount) || 0),
-        0
-      );
-
-      if (remoteTotal >= localTotal) {
-        sessions = filteredRemoteSessions;
-      }
+      sessions = filteredRemoteSessions;
+      const otherUserSessions = cleanedSessions.filter((item) => item.userId !== currentUserId);
+      await AsyncStorage.setItem('history', JSON.stringify([...filteredRemoteSessions, ...otherUserSessions]));
     }
 
     const grouped = new Map<string, DailyRow>();
