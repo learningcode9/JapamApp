@@ -980,7 +980,7 @@ export default function JapamMain() {
             timerStartedAtRef.current = Date.now();
             setSeconds(0);
             setIsRunning(true);
-          }, 2200);
+          }, 4000);
         }
         return next;
       });
