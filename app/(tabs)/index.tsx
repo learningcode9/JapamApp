@@ -752,7 +752,7 @@ export default function JapamMain() {
         sound.stopAsync().catch(console.log);
         sound.unloadAsync().catch(console.log);
         completeSoundRef.current = null;
-      }, 4000);
+      }, 3000);
     } catch (error) {
       console.log('Sound error:', error);
     }
