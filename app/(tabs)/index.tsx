@@ -317,9 +317,11 @@ export default function JapamMain() {
     if (savedUserId) {
       const cloudTotal = await fetchUserTotalFromSupabase(savedUserId);
       const remoteTodayTotal = await fetchTodayTotalFromSupabase(savedUserId, savedUserName);
-      const finalTotal = cloudTotal !== null
-        ? Math.max(cloudTotal, localTodayTotal, remoteTodayTotal || 0)
-        : Math.max(localTodayTotal, remoteTodayTotal || 0);
+      const finalTotal = remoteTodayTotal !== null
+        ? remoteTodayTotal
+        : cloudTotal !== null
+          ? Math.max(cloudTotal, localTodayTotal)
+          : localTodayTotal;
 
       await restoreTotal(finalTotal, { userId: savedUserId });
       setHasRestoredTotal(true);
@@ -590,15 +592,9 @@ export default function JapamMain() {
 
       const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
       const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
-      const sameUserLocalHistory = localHistory.filter((item) => item.userId === googleUserId);
+      const otherUserLocalHistory = localHistory.filter((item) => item.userId !== googleUserId);
 
-      const mergedMap = new Map<string, Session>();
-      [...remoteHistory, ...sameUserLocalHistory].forEach((item) => {
-        const key = `${item.date}-${item.totalCount}-${item.malas}-${item.manual ? 'manual' : 'auto'}`;
-        mergedMap.set(key, item);
-      });
-
-      const mergedHistory = [...mergedMap.values()].sort(
+      const mergedHistory = [...remoteHistory, ...otherUserLocalHistory].sort(
         (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
       );
 
@@ -1192,10 +1188,6 @@ export default function JapamMain() {
           <Text style={styles.metricText}>Total {total}</Text>
         </View>
 
-        <Text style={styles.guidanceText}>
-          Tap OM to count manually. Set a timer to add 1 mala when it ends.
-        </Text>
-
         <Animated.View style={[styles.circleGlow, { transform: [{ scale: omPulseAnim }] }]}>
           <Animated.View
             pointerEvents="none"
@@ -1438,8 +1430,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-evenly',
     alignItems: 'center',
-    marginTop: 4,
-    marginBottom: 8,
+    marginTop: 8,
+    marginBottom: 14,
   },
   metricText: { color: '#e2e8f0', fontSize: isMobile ? 16 : 20, fontWeight: '700', textAlign: 'center' },
   timerRunningText: { fontSize: isMobile ? 26 : 34, color: '#fbbf24', fontWeight: '900' },
@@ -1465,8 +1457,8 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.55,
     shadowRadius: 28,
     elevation: 20,
-    marginTop: 8,
-    marginBottom: 8,
+    marginTop: 10,
+    marginBottom: 12,
   },
   completionGlow: {
     position: 'absolute',
@@ -1499,7 +1491,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.16)',
   },
   undoText: { color: '#f8fafc', fontSize: isMobile ? 15 : 17, fontWeight: '800' },
-  inputLabel: { color: '#cbd5e1', fontSize: isMobile ? 14 : 16, marginTop: 10, marginBottom: 4 },
+  inputLabel: { color: '#cbd5e1', fontSize: isMobile ? 14 : 16, marginTop: 14, marginBottom: 6 },
   input: {
     backgroundColor: '#1e293b',
     color: 'white',
@@ -1517,7 +1509,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   autoRepeatText: { color: '#e2e8f0', fontSize: isMobile ? 15 : 18, fontWeight: '800' },
-  row: { flexDirection: 'row', gap: 12, marginTop: 10, marginBottom: 6 },
+  row: { flexDirection: 'row', gap: 12, marginTop: 14, marginBottom: 10 },
   btn: {
     backgroundColor: '#6366f1',
     paddingVertical: isMobile ? 12 : 14,
@@ -1608,7 +1600,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   loginButtonText: { color: '#ffffff', fontWeight: '900', fontSize: isMobile ? 15 : 16 },
-  timerHint: { color: '#94a3b8', fontSize: isMobile ? 12 : 14, marginTop: 6, textAlign: 'center' },
+  timerHint: { color: '#94a3b8', fontSize: isMobile ? 12 : 14, marginTop: 8, textAlign: 'center' },
   disabledInput: { opacity: 0.55 },
   signingInBanner: {
     position: 'absolute', top: 60, alignSelf: 'center',
@@ -1617,13 +1609,14 @@ const styles = StyleSheet.create({
   },
   signingInText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   omText: {
-    fontSize: isShortMobile ? 60 : isMobile ? 72 : 84,
-    color: '#ffd166',
-    fontWeight: '500',
+    fontSize: isShortMobile ? 74 : isMobile ? 90 : 104,
+    color: '#f8fafc',
+    fontFamily: Platform.select({ web: 'Georgia, Times New Roman, serif', default: undefined }),
+    fontWeight: '900',
     includeFontPadding: false,
-    lineHeight: isShortMobile ? 72 : isMobile ? 88 : 102,
-    textShadowColor: 'rgba(251,191,36,0.8)',
+    lineHeight: isShortMobile ? 90 : isMobile ? 108 : 124,
+    textShadowColor: 'rgba(251,191,36,0.75)',
     textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 22,
+    textShadowRadius: 16,
   },
 });
