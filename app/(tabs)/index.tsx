@@ -451,8 +451,7 @@ export default function JapamMain() {
         setUserName('');
         setIsSigningIn(authPending);
         setShowUserModal(false);
-        const lastTotal = Number((await AsyncStorage.getItem(LAST_TOTAL_KEY)) || '0');
-        await restoreTotal(lastTotal);
+        await restoreTotal(0, { userId: null });
       }
 
       if (savedUserId) {
