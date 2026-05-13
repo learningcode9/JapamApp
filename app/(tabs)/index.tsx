@@ -455,16 +455,16 @@ export default function JapamMain() {
           setLoopTimer(savedTimerLoop);
         }
       } else {
-        const savedTimerSeconds = Number((await AsyncStorage.getItem(TIMER_SECONDS_KEY)) || '0');
-        const savedTimerRunning = (await AsyncStorage.getItem(TIMER_RUNNING_KEY)) === 'true';
-        const savedTimerTarget = Number((await AsyncStorage.getItem(TIMER_TARGET_KEY)) || '60');
-        const savedTimerMinutes= (await AsyncStorage.getItem(TIMER_MINUTES_KEY)) || '0';
-        const savedTimerLoop = (await AsyncStorage.getItem(TIMER_LOOP_KEY)) === 'true';
-        setSeconds(savedTimerSeconds);
-        setIsRunning(savedTimerRunning);
-        setTargetSeconds(savedTimerTarget);
-        setMinutesInput(savedTimerMinutes);
-        setLoopTimer(savedTimerLoop);
+        setSeconds(0);
+        setIsRunning(false);
+        setTargetSeconds(60);
+        setMinutesInput('0');
+        setLoopTimer(false);
+        await AsyncStorage.setItem(TIMER_SECONDS_KEY, '0');
+        await AsyncStorage.setItem(TIMER_RUNNING_KEY, 'false');
+        await AsyncStorage.setItem(TIMER_TARGET_KEY, '60');
+        await AsyncStorage.setItem(TIMER_MINUTES_KEY, '0');
+        await AsyncStorage.setItem(TIMER_LOOP_KEY, 'false');
       }
 
       setHasRestoredTimer(true);
@@ -756,13 +756,15 @@ export default function JapamMain() {
 
   const playCompletionAnimation = useCallback(() => {
     glowAnim.setValue(0);
+    rippleAnim.setValue(0);
+    Animated.timing(rippleAnim, { toValue: 1, duration: 900, useNativeDriver: true }).start();
     Animated.sequence([
       Animated.timing(glowAnim, { toValue: 1, duration: 300, useNativeDriver: false }),
       Animated.timing(glowAnim, { toValue: 0, duration: 300, useNativeDriver: false }),
       Animated.timing(glowAnim, { toValue: 1, duration: 300, useNativeDriver: false }),
       Animated.timing(glowAnim, { toValue: 0, duration: 500, useNativeDriver: false }),
     ]).start();
-  }, [glowAnim]);
+  }, [glowAnim, rippleAnim]);
 
   const completeFeedback = useCallback(async () => {
     playCompletionAnimation();
@@ -946,6 +948,11 @@ export default function JapamMain() {
     }
 
     suppressTimerSaveRef.current = true;
+    await AsyncStorage.setItem(TIMER_SECONDS_KEY, '0');
+    await AsyncStorage.setItem(TIMER_RUNNING_KEY, 'false');
+    await AsyncStorage.setItem(TIMER_TARGET_KEY, '60');
+    await AsyncStorage.setItem(TIMER_MINUTES_KEY, '0');
+    await AsyncStorage.setItem(TIMER_LOOP_KEY, 'false');
     setIsRunning(false);
     setSeconds(0);
     setLoopTimer(false);
@@ -1013,12 +1020,6 @@ export default function JapamMain() {
         {isSigningIn && (
           <View style={styles.signingInBanner}>
             <Text style={styles.signingInText}>Signing in...</Text>
-          </View>
-        )}
-
-        {isRunning && (
-          <View style={styles.runningBanner}>
-            <Text style={styles.runningBannerText}>⏱ Timer running • {formatTime(seconds)}</Text>
           </View>
         )}
 
@@ -1100,6 +1101,26 @@ export default function JapamMain() {
         </View>
 
         <Animated.View style={[styles.circleGlow, { transform: [{ scale: omPulseAnim }] }]}>
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.completionGlow,
+              {
+                opacity: glowAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 0.9],
+                }),
+                transform: [
+                  {
+                    scale: glowAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0.85, 1.18],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          />
           <Animated.View
             pointerEvents="none"
             style={{
@@ -1333,6 +1354,15 @@ const styles = StyleSheet.create({
     elevation: 20,
     marginTop: 8,
     marginBottom: 8,
+  },
+  completionGlow: {
+    position: 'absolute',
+    width: isShortMobile ? 128 : isMobile ? 156 : 184,
+    height: isShortMobile ? 128 : isMobile ? 156 : 184,
+    borderRadius: isShortMobile ? 64 : isMobile ? 78 : 92,
+    backgroundColor: 'rgba(251, 191, 36, 0.18)',
+    borderWidth: 3,
+    borderColor: 'rgba(251, 191, 36, 0.86)',
   },
   circle: {
     width: isShortMobile ? 114 : isMobile ? 140 : 166,
