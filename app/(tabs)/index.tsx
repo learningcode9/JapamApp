@@ -109,7 +109,7 @@ export default function JapamMain() {
   const [seconds, setSeconds] = useState(0);
   const [hasRestoredTotal, setHasRestoredTotal] = useState(false);
   const [hasRestoredTimer, setHasRestoredTimer] = useState(false);
-  const [minutesInput, setMinutesInput] = useState('1');
+  const [minutesInput, setMinutesInput] = useState('0');
   const [targetSeconds, setTargetSeconds] = useState(60);
   const [isRunning, setIsRunning] = useState(false);
   const [loopTimer, setLoopTimer] = useState(false);
@@ -322,8 +322,14 @@ export default function JapamMain() {
         : cloudTotal !== null
           ? Math.max(cloudTotal, localTodayTotal)
           : localTodayTotal;
+          if (finalTotal === 0 && totalRef.current > 0) {
+            setHasRestoredTotal(true);
+            return;
+          
+          }
 
       await restoreTotal(finalTotal, { userId: savedUserId });
+      totalRef.current = finalTotal;
       setHasRestoredTotal(true);
       return;
     }
@@ -811,18 +817,25 @@ export default function JapamMain() {
     }
   }, [userName]);
 
-  const tapFeedback = () => {
+  const tapFeedback = useCallback(async () => {
     if (!vibrationEnabled) return;
-
-    if (Platform.OS === 'ios') {
-      Haptics.impactAsync(
-        Haptics.ImpactFeedbackStyle.Medium
-      ).catch(console.log);
-      return;
+  
+    try {
+      if (Platform.OS === 'ios') {
+        await Haptics.impactAsync(
+          Haptics.ImpactFeedbackStyle.Heavy
+        );
+      } else {
+        Vibration.vibrate(90);
+  
+        Haptics.impactAsync(
+          Haptics.ImpactFeedbackStyle.Heavy
+        ).catch(console.log);
+      }
+    } catch (error) {
+      console.log('Vibration error:', error);
     }
-
-    vibrateDevice(80);
-  };
+  }, [vibrationEnabled]);
 
   const playCompletionAnimation = useCallback(() => {
     glowAnim.setValue(0);
@@ -893,17 +906,23 @@ export default function JapamMain() {
 
   const handleTap = () => {
     if (!requireLogin()) return;
-
+  
     const now = Date.now();
     if (now - lastTapRef.current < 100) return;
     lastTapRef.current = now;
-
+  
+    void tapFeedback();
+  
     rippleAnim.setValue(0);
-    Animated.timing(rippleAnim, { toValue: 1, duration: 700, useNativeDriver: true }).start();
-
+    Animated.timing(rippleAnim, {
+      toValue: 1,
+      duration: 700,
+      useNativeDriver: true,
+    }).start();
+  
     const newTotal = setCountersFromTotal(totalRef.current + 1);
     const newCount = newTotal % 108;
-
+  
     if (newCount === 0) {
       void saveSession(0, 1, 108, newTotal);
       void completeFeedback();
@@ -1224,11 +1243,7 @@ export default function JapamMain() {
           />
           <Pressable
             onPress={handleTap}
-            onPressIn={() => {
-              if (!userName) return;
-              const nextCount = (totalRef.current + 1) % 108;
-              if (nextCount !== 0) tapFeedback();
-            }}
+            
             style={({ pressed }) => [pressed && styles.circlePressed]}
           >
             <LinearGradient
