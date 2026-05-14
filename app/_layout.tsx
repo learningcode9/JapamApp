@@ -46,16 +46,16 @@ export default function RootLayout() {
       if (options?.type) link.type = options.type;
     };
 
-    setMeta('theme-color', '#05010c');
+    setMeta('theme-color', '#f5fafa');
     setMeta('apple-mobile-web-app-capable', 'yes');
     setMeta('apple-mobile-web-app-status-bar-style', 'black-translucent');
     setMeta('apple-mobile-web-app-title', 'Mantra Japam');
-    setLink('manifest', '/manifest-v12.json?v=12');
-    setLink('apple-touch-icon', '/apple-touch-icon.png?v=12', {
+    setLink('manifest', '/manifest.json');
+    setLink('apple-touch-icon', '/apple-touch-icon.png', {
       sizes: '180x180',
       type: 'image/png',
     });
-    setLink('icon', '/favicon-48.png?v=12', {
+    setLink('icon', '/favicon-48.png', {
       sizes: '48x48',
       type: 'image/png',
     });
@@ -66,19 +66,47 @@ export default function RootLayout() {
     }
 
     document.documentElement.style.height = '100%';
-    document.documentElement.style.backgroundColor = '#05010c';
+    document.documentElement.style.backgroundColor = '#f5fafa';
     document.body.style.height = '100%';
     document.body.style.minHeight = '100dvh';
     document.body.style.margin = '0';
-    document.body.style.backgroundColor = '#05010c';
+    document.body.style.backgroundColor = '#f5fafa';
     document.body.style.overflow = 'hidden';
 
     const root = document.getElementById('root');
     if (root) {
       root.style.height = '100dvh';
       root.style.minHeight = '100dvh';
-      root.style.backgroundColor = '#05010c';
+      root.style.backgroundColor = '#f5fafa';
       root.style.overflow = 'hidden';
+    }
+
+    const launchScreen = document.getElementById('launch-screen');
+    if (launchScreen) {
+      window.setTimeout(() => {
+        launchScreen.classList.add('is-hidden');
+        window.setTimeout(() => launchScreen.remove(), 460);
+      }, 180);
+    }
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker
+        .getRegistrations()
+        .then((registrations) => registrations.forEach((registration) => registration.unregister()))
+        .catch(() => {});
+    }
+
+    if ('caches' in window) {
+      caches
+        .keys()
+        .then((keys) =>
+          Promise.all(
+            keys
+              .filter((key) => /japam|expo|workbox|pwa/i.test(key))
+              .map((key) => caches.delete(key))
+          )
+        )
+        .catch(() => {});
     }
   }, []);
 

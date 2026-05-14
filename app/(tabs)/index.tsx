@@ -5,6 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
+import { Ionicons } from '@expo/vector-icons';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
@@ -72,6 +73,17 @@ const isMobile = screenWidth < 500;
 const isShortMobile = isMobile && screenHeight < 760;
 const progressCircleSize = isShortMobile ? 220 : isMobile ? 260 : 300;
 const progressRingSize = progressCircleSize - (isMobile ? 10 : 14);
+const malaBeadPositions = [
+  { left: 10, top: 1 },
+  { left: 15, top: 3 },
+  { left: 19, top: 8 },
+  { left: 19, top: 14 },
+  { left: 15, top: 19 },
+  { left: 9, top: 20 },
+  { left: 4, top: 17 },
+  { left: 1, top: 11 },
+  { left: 3, top: 5 },
+];
 const shellMinHeight =
   isMobile
     ? Platform.OS === 'web'
@@ -890,7 +902,11 @@ export default function JapamMain() {
       return false;
     }
 
-    navigator.vibrate?.(duration);
+    if (typeof navigator.vibrate !== 'function') {
+      return false;
+    }
+
+    navigator.vibrate(duration);
     return true;
   }, [vibrationEnabled]);
 
@@ -1318,7 +1334,6 @@ setTimeout(() => { suppressTimerSaveRef.current = false; }, 0);
               setShowTimerSheet(true);
             }}
           >
-            <Text style={styles.sessionChipIcon}>◷</Text>
             <Text style={styles.sessionChipText}>
               {hasSelectedTimer ? `Timer: ${minutesInput} min` : 'Select timer for Japam'}
             </Text>
@@ -1327,19 +1342,32 @@ setTimeout(() => { suppressTimerSaveRef.current = false; }, 0);
 
           <View style={styles.statsCard}>
             <View style={styles.statColumn}>
-              <Text style={styles.statIcon}>◌</Text>
+              <View style={styles.malaIcon} accessibilityElementsHidden>
+                {malaBeadPositions.map((position, index) => (
+                  <View
+                    key={index}
+                    style={[
+                      styles.malaBead,
+                      {
+                        left: position.left,
+                        top: position.top,
+                      },
+                    ]}
+                  />
+                ))}
+              </View>
               <Text style={styles.statValue}>{malas}</Text>
               <Text style={styles.statLabel}>Malas today</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statColumn}>
-              <Text style={styles.statIcon}>•</Text>
+              <Ionicons name="flame-outline" style={styles.statIcon} />
               <Text style={styles.statValue}>{dayStreak}</Text>
               <Text style={styles.statLabel}>Day streak</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statColumn}>
-              <Text style={styles.statIcon}>◎</Text>
+              <Ionicons name="radio-button-on-outline" style={styles.statIcon} />
               <Text style={styles.statValue}>{total}</Text>
               <Text style={styles.statLabel}>Today count</Text>
             </View>
@@ -1756,6 +1784,9 @@ const styles = StyleSheet.create({
   softPressed: {
     transform: [{ scale: 0.96 }],
     opacity: 0.86,
+    ...(Platform.OS === 'web'
+      ? ({ transition: 'transform 180ms ease, opacity 180ms ease' } as any)
+      : {}),
   },
   headerRow: {
     width: '100%',
@@ -1850,6 +1881,9 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 10 },
     elevation: 8,
     zIndex: 30,
+    ...(Platform.OS === 'web'
+      ? ({ animation: 'fadeIn 180ms ease', backdropFilter: 'blur(12px)' } as any)
+      : {}),
   },
   userMenuItem: { paddingVertical: 12, paddingHorizontal: 18, alignItems: 'center' },
   userMenuText: { color: '#12383c', fontSize: 14, fontWeight: '800' },
@@ -1932,6 +1966,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(15,143,135,0.14)',
     padding: isMobile ? 12 : 14,
+    ...(Platform.OS === 'web'
+      ? ({ transition: 'background 360ms ease, transform 220ms ease, opacity 220ms ease' } as any)
+      : {}),
   },
   progressInner: {
     width: '100%',
@@ -2063,6 +2100,9 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 10 },
     elevation: 8,
     marginBottom: isMobile ? 16 : 26,
+    ...(Platform.OS === 'web'
+      ? ({ transition: 'transform 180ms ease, opacity 180ms ease, box-shadow 220ms ease' } as any)
+      : {}),
   },
   primaryActionPressed: {
     transform: [{ scale: 0.98 }],
@@ -2077,7 +2117,7 @@ const styles = StyleSheet.create({
     minHeight: isShortMobile ? 46 : 50,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 11,
+    gap: 8,
     borderRadius: 999,
     backgroundColor: 'rgba(255,255,255,0.74)',
     borderWidth: 1,
@@ -2090,11 +2130,6 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 8 },
     elevation: 5,
-  },
-  sessionChipIcon: {
-    color: '#0F8F87',
-    fontSize: isMobile ? 21 : 22,
-    fontWeight: '900',
   },
   sessionChipText: {
     color: '#063B3B',
@@ -2216,8 +2251,19 @@ const styles = StyleSheet.create({
   statIcon: {
     color: '#0F8F87',
     fontSize: 24,
-    fontWeight: '900',
     marginBottom: 6,
+  },
+  malaIcon: {
+    width: 24,
+    height: 24,
+    marginBottom: 6,
+  },
+  malaBead: {
+    position: 'absolute',
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#0F8F87',
   },
   statValue: {
     color: '#12383c',
@@ -2255,6 +2301,9 @@ const styles = StyleSheet.create({
     shadowRadius: 28,
     shadowOffset: { width: 0, height: -8 },
     elevation: 20,
+    ...(Platform.OS === 'web'
+      ? ({ backdropFilter: 'blur(18px)', animation: 'sheetIn 260ms ease' } as any)
+      : {}),
   },
   sheetHandle: {
     width: 52,

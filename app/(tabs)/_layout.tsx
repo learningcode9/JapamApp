@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
-import { Dimensions, Platform } from 'react-native';
+import { Dimensions, Platform, StyleSheet, Text } from 'react-native';
 
 const screenWidth = Dimensions.get('window').width;
 const isMobile = screenWidth < 500;
@@ -27,6 +27,19 @@ const fixedWebTabBarStyle =
         width: isMobile ? undefined : desktopTabWidth,
         zIndex: 999,
       };
+
+const tabLabel =
+  (label: string) =>
+  function TabBarLabel({ color, focused }: { color: string; focused: boolean }) {
+    return (
+      <Text
+        numberOfLines={1}
+        style={[styles.tabLabel, focused && styles.tabLabelActive, { color }]}
+      >
+        {label}
+      </Text>
+    );
+  };
 
 export default function TabLayout() {
   return (
@@ -63,24 +76,13 @@ export default function TabLayout() {
           justifyContent: 'center',
         },
         tabBarActiveBackgroundColor: 'rgba(15, 143, 135, 0.12)',
-        tabBarLabelStyle: {
-          fontSize: 14,
-          fontWeight: '600',
-          lineHeight: 17,
-          marginTop: 4,
-        },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
           title: 'Home',
-          tabBarLabelStyle: {
-            fontSize: 14,
-            fontWeight: '700',
-            lineHeight: 17,
-            marginTop: 4,
-          },
+          tabBarLabel: tabLabel('Home'),
           tabBarIcon: ({ color, focused }) => (
             <Ionicons name="home-outline" size={focused ? 30 : 28} color={color} />
           ),
@@ -92,6 +94,7 @@ export default function TabLayout() {
   options={{
     href: null,
     title: 'Manual',
+    tabBarLabel: tabLabel('Manual'),
     tabBarIcon: ({ color, focused }) => (
       <Ionicons name="create-outline" size={focused ? 30 : 28} color={color} />
     ),
@@ -102,6 +105,7 @@ export default function TabLayout() {
   name="history"
   options={{
     title: 'History',
+    tabBarLabel: tabLabel('History'),
     tabBarIcon: ({ color, focused }) => (
       <Ionicons
         name="document-text-outline"
@@ -116,6 +120,7 @@ export default function TabLayout() {
   name="faq"
   options={{
     title: 'Learn',
+    tabBarLabel: tabLabel('Learn'),
     tabBarIcon: ({ color, focused }) => (
       <Ionicons name="book-outline" size={focused ? 30 : 28} color={color} />
     ),
@@ -126,6 +131,7 @@ export default function TabLayout() {
   name="settings"
   options={{
     title: 'Settings',
+    tabBarLabel: tabLabel('Settings'),
     tabBarIcon: ({ color, focused }) => (
       <Ionicons name="sparkles-outline" size={focused ? 30 : 28} color={color} />
     ),
@@ -134,3 +140,15 @@ export default function TabLayout() {
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  tabLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    lineHeight: 17,
+    marginTop: 4,
+  },
+  tabLabelActive: {
+    fontWeight: '700',
+  },
+});
