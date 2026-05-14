@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Google from 'expo-auth-session/providers/google';
 import { Audio } from 'expo-av';
@@ -5,7 +6,6 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
-import { Ionicons } from '@expo/vector-icons';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
@@ -193,7 +193,8 @@ export default function JapamMain() {
   const deferredInstallPromptRef = useRef<any>(null);
   const rippleAnim = useRef(new Animated.Value(0)).current;
   const isSavingSessionRef = useRef(false);
-  const completeSoundRef = useRef<Audio.Sound | null>(null);
+  const normalCompleteSoundRef = useRef<Audio.Sound | null>(null);
+  const finalCompleteSoundRef = useRef<Audio.Sound | null>(null);
   const lastSavedSessionRef = useRef('');
   const lastTapRef = useRef(0);
 
@@ -561,6 +562,46 @@ export default function JapamMain() {
     timerRef.current = { seconds, isRunning, targetSeconds, minutesInput, loopTimer };
   }, [seconds, isRunning, targetSeconds, minutesInput, loopTimer]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    const preloadSounds = async () => {
+      try {
+        const [normalSound, finalSound] = await Promise.all([
+          Audio.Sound.createAsync(require('../../assets/soft_tibetan_bowl.wav'), {
+            shouldPlay: false,
+            volume: 0.45,
+          }),
+          Audio.Sound.createAsync(require('../../assets/soft_tibetan_bowl_final.wav'), {
+            shouldPlay: false,
+            volume: 0.5,
+          }),
+        ]);
+
+        if (!isMounted) {
+          await normalSound.sound.unloadAsync().catch(console.log);
+          await finalSound.sound.unloadAsync().catch(console.log);
+          return;
+        }
+
+        normalCompleteSoundRef.current = normalSound.sound;
+        finalCompleteSoundRef.current = finalSound.sound;
+      } catch (error) {
+        console.log('Sound preload error:', error);
+      }
+    };
+
+    void preloadSounds();
+
+    return () => {
+      isMounted = false;
+      normalCompleteSoundRef.current?.unloadAsync().catch(console.log);
+      finalCompleteSoundRef.current?.unloadAsync().catch(console.log);
+      normalCompleteSoundRef.current = null;
+      finalCompleteSoundRef.current = null;
+    };
+  }, []);
+
   const saveTimerStateToSupabase = async (userId: string, timerState: {
     seconds: number; isRunning: boolean; targetSeconds: number; minutesInput: string; loopTimer: boolean;
   }) => {
@@ -630,24 +671,11 @@ export default function JapamMain() {
   }, []);
 
   const applyRestoredTimerState = useCallback((timerState: TimerStateRow) => {
-    const savedSeconds = Math.max(0, Math.floor(Number(timerState.seconds) || 0));
     const savedTarget = Math.max(60, Math.floor(Number(timerState.target_seconds) || DEFAULT_TIMER_MINUTES * 60));
-    const savedIsRunning = Boolean(timerState.is_running);
-    const updatedAtMs = timerState.updated_at ? new Date(timerState.updated_at).getTime() : NaN;
-    const elapsedWhileAway =
-      savedIsRunning && Number.isFinite(updatedAtMs)
-        ? Math.max(0, Math.floor((Date.now() - updatedAtMs) / 1000))
-        : 0;
-    const restoredSeconds = savedIsRunning
-      ? Math.min(savedTarget, savedSeconds + elapsedWhileAway)
-      : savedSeconds;
-
-    timerStartedAtRef.current = savedIsRunning
-      ? Date.now() - restoredSeconds * 1000
-      : null;
-
-    setSeconds(restoredSeconds);
-    setIsRunning(savedIsRunning);
+  
+    timerStartedAtRef.current = null;
+    setSeconds(0);
+    setIsRunning(false);
     setTargetSeconds(savedTarget);
     setMinutesInput(timerState.minutes_input || String(Math.max(1, Math.floor(savedTarget / 60))));
     setHasSelectedTimer(true);
@@ -692,8 +720,8 @@ export default function JapamMain() {
           const savedTimerTarget = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_TARGET_KEY, savedUserId))) || String(DEFAULT_TIMER_MINUTES * 60));
           const savedTimerMinutes = (await AsyncStorage.getItem(getUserStorageKey(TIMER_MINUTES_KEY, savedUserId))) || String(DEFAULT_TIMER_MINUTES);
           const savedTimerLoop = (await AsyncStorage.getItem(getUserStorageKey(TIMER_LOOP_KEY, savedUserId))) === 'true';
-          setSeconds(savedTimerSeconds);
-          setIsRunning(savedTimerRunning);
+          setSeconds(0);
+          setIsRunning(false);
           setTargetSeconds(savedTimerTarget);
           setMinutesInput(savedTimerMinutes);
           setHasSelectedTimer(true);
@@ -725,7 +753,8 @@ export default function JapamMain() {
       if (dbTotalSaveTimeoutRef.current) {
         clearTimeout(dbTotalSaveTimeoutRef.current);
       }
-      completeSoundRef.current?.unloadAsync().catch(console.log);
+      normalCompleteSoundRef.current?.unloadAsync().catch(console.log);
+      finalCompleteSoundRef.current?.unloadAsync().catch(console.log);
       clearTimerHandles();
     };
   }, [clearTimerHandles]);
@@ -940,34 +969,17 @@ export default function JapamMain() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seconds, isRunning, targetSeconds, loopTimer]);
 
-  const playCompleteSound = async () => {
+  const playCompleteSound = async (variant: 'normal' | 'final' = 'normal') => {
     try {
-      if (completeSoundRef.current) {
-        await completeSoundRef.current.unloadAsync().catch(console.log);
-        completeSoundRef.current = null;
-      }
+      const sound = variant === 'final'
+        ? finalCompleteSoundRef.current
+        : normalCompleteSoundRef.current;
 
-      const { sound } = await Audio.Sound.createAsync(
-        require('../../assets/soft_tibetan_bowl.wav'),
-        { shouldPlay: true, volume: 0.55 }
-      );
-      completeSoundRef.current = sound;
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded && status.didJustFinish) {
-          sound.setOnPlaybackStatusUpdate(null);
-          sound.unloadAsync().catch(console.log);
-          if (completeSoundRef.current === sound) {
-            completeSoundRef.current = null;
-          }
-        }
-      });
+      if (!sound) return;
+
+      await sound.stopAsync().catch(() => undefined);
+      await sound.setPositionAsync(0).catch(() => undefined);
       await sound.playAsync();
-      setTimeout(() => {
-        if (completeSoundRef.current !== sound) return;
-        sound.stopAsync().catch(console.log);
-        sound.unloadAsync().catch(console.log);
-        completeSoundRef.current = null;
-      }, 3000);
     } catch (error) {
       console.log('Sound error:', error);
     }
@@ -1025,16 +1037,20 @@ export default function JapamMain() {
     }
   }, [userName]);
 
-  const webVibrate = useCallback((duration: number) => {
-    if (!vibrationEnabled || Platform.OS !== 'web' || typeof navigator === 'undefined') {
+  const webVibrate = useCallback((pattern: number | number[]) => {
+    if (
+      !vibrationEnabled ||
+      Platform.OS !== 'web' ||
+      typeof navigator === 'undefined'
+    ) {
       return false;
     }
-
+  
     if (typeof navigator.vibrate !== 'function') {
       return false;
     }
-
-    navigator.vibrate(duration);
+  
+    navigator.vibrate(pattern);
     return true;
   }, [vibrationEnabled]);
 
@@ -1042,7 +1058,7 @@ export default function JapamMain() {
     if (!vibrationEnabled) return;
   
     try {
-      if (webVibrate(20)) {
+      if (webVibrate(35)) {
         return;
       }
 
@@ -1053,7 +1069,7 @@ export default function JapamMain() {
         return;
       }
   
-      Vibration.vibrate(20);
+      Vibration.vibrate(35);
   
       if (Platform.OS !== 'web') {
         await Haptics.impactAsync(
@@ -1077,20 +1093,21 @@ export default function JapamMain() {
     ]).start();
   }, [glowAnim, rippleAnim]);
 
-  const completeFeedback = useCallback(async () => {
+  const completeFeedback = useCallback(async (variant: 'normal' | 'final' = 'normal') => {
     playCompletionAnimation();
   
     if (soundEnabled && repetitionSoundEnabled) {
-      await playCompleteSound();
+      await playCompleteSound(variant);
     }
   
     if (!vibrationEnabled) return;
   
     try {
-      if (webVibrate(120)) {
+      if (Platform.OS === 'web') {
+        webVibrate([200, 80, 200]);
         return;
       }
-
+  
       if (Platform.OS === 'ios') {
         await Haptics.notificationAsync(
           Haptics.NotificationFeedbackType.Success
@@ -1105,7 +1122,7 @@ export default function JapamMain() {
         return;
       }
   
-      Vibration.vibrate(120);
+      Vibration.vibrate([200, 80, 200]);
     } catch (error) {
       console.log('Completion vibration error:', error);
     }
@@ -1163,7 +1180,7 @@ export default function JapamMain() {
   
     if (newCount === 0) {
       void saveSession(0, 1, 108, newTotal);
-      void completeFeedback();
+      void completeFeedback('final');
     } else {
       void tapFeedback();
     }
@@ -1232,7 +1249,7 @@ export default function JapamMain() {
     const nextTotal = currentTotal + 108;
     setCountersFromTotal(nextTotal);
     void saveSession(targetSeconds, 1, 108, nextTotal);
-    void completeFeedback();
+    void completeFeedback('normal');
 
     clearTimerHandles();
     timerStartedAtRef.current = null;
@@ -1268,7 +1285,7 @@ export default function JapamMain() {
         setIsRunning(true);
         startTimerInterval();
         isCompletingRef.current = false;
-      }, 150);
+      }, 1700);
     } else {
       setSeconds(0);
       setIsRunning(false);
@@ -1290,7 +1307,7 @@ export default function JapamMain() {
       await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, currentUserId), String(totalRef.current));
       await saveUserTotalToSupabase(currentUserId, currentUserName || userName || 'User', totalRef.current);
       await saveTimerStateToSupabase(currentUserId, {
-        seconds: logoutSeconds,
+        seconds: 0,
         isRunning: false,
         targetSeconds,
         minutesInput,
@@ -1304,6 +1321,10 @@ export default function JapamMain() {
     }
 
     timerStartedAtRef.current = null;
+    timerStartedAtRef.current = null;
+    clearTimerHandles();
+    setSeconds(0);
+    setIsRunning(false);
     suppressTimerSaveRef.current = true;
     await AsyncStorage.setItem(TIMER_SECONDS_KEY, '0');
     await AsyncStorage.setItem(TIMER_RUNNING_KEY, 'false');

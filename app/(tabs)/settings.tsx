@@ -133,36 +133,41 @@ export default function SettingsScreen() {
       return;
     }
 
-    setIsSubmittingFeedback(true);
-
     const appVersion = Constants.expoConfig?.version || Constants.manifest2?.extra?.expoClient?.version || '1.0.0';
     const deviceInfo =
       Platform.OS === 'web'
         ? `Web / ${typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown'}`
         : `${Platform.OS} / ${String(Platform.Version)}`;
     const timestamp = new Date().toISOString();
+    const payload = {
+      app_user_name: name,
+      app_user_email: email,
+      feedback_type: feedbackType,
+      message,
+      app_version: appVersion,
+      device_info: deviceInfo,
+      timestamp,
+      admin_email: 'learningcode9@gmail.com',
+      email_subject: 'New Japam App Feedback',
+      source: 'Japam App',
+    };
 
     try {
+      setIsSubmittingFeedback(true);
+      console.log('Submitting feedback:', { url: FEEDBACK_WEBHOOK_URL, payload });
+
+      const isWeb = Platform.OS === 'web';
       const response = await fetch(FEEDBACK_WEBHOOK_URL, {
         method: 'POST',
+        mode: isWeb ? 'no-cors' : 'cors',
+        credentials: 'omit',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': isWeb ? 'text/plain;charset=UTF-8' : 'application/json',
         },
-        body: JSON.stringify({
-          app_user_name: name,
-          app_user_email: email,
-          feedback_type: feedbackType,
-          message,
-          app_version: appVersion,
-          device_info: deviceInfo,
-          timestamp,
-          admin_email: 'learningcode9@gmail.com',
-          email_subject: 'New Japam App Feedback',
-          source: 'Japam App',
-        }),
+        body: JSON.stringify(payload),
       });
 
-      if (!response.ok) {
+      if (!isWeb && !response.ok) {
         throw new Error(`Feedback request failed (${response.status})`);
       }
 
@@ -170,7 +175,7 @@ export default function SettingsScreen() {
       Alert.alert('Thank you for your feedback.', 'We have received your message.');
     } catch (error) {
       console.log('Feedback submit error:', error);
-      Alert.alert('Unable to send feedback', 'Please try again in a moment.');
+      Alert.alert('Feedback could not be sent. Please try again.');
     } finally {
       setIsSubmittingFeedback(false);
     }

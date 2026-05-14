@@ -9,6 +9,7 @@ import {
     Alert,
     DeviceEventEmitter,
     Platform,
+    Modal,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -201,6 +202,7 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
 
 export default function HistoryScreen() {
   const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
+  const [deleteTarget, setDeleteTarget] = useState<DailyRow | null>(null);
 
   const saveUserTotalToSupabase = useCallback(
     async (userId: string, totalValue: number) => {
@@ -338,35 +340,8 @@ export default function HistoryScreen() {
   }, [saveUserTotalToSupabase]);
 
   const handleDeleteDay = useCallback((row: DailyRow) => {
-    const ask = async () => {
-      const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
-      if (!currentUserId) return;
-
-      const raw = await AsyncStorage.getItem(HISTORY_KEY);
-      const allSessions = parseHistory(raw);
-
-      const keptSessions = allSessions.filter((item) => {
-        if (item.userId !== currentUserId) return true;
-        return toDayKey(item.date) !== row.dateKey;
-      });
-
-      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(keptSessions));
-      await deleteDayFromSupabase(currentUserId, row.dateKey);
-      await refreshHomeStatsFromLocalHistory(currentUserId);
-      await loadHistory();
-
-      Alert.alert('Done', 'History deleted');
-    };
-
-    Alert.alert(
-      'Delete this history?',
-      'This action cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: () => void ask() },
-      ]
-    );
-  }, [deleteDayFromSupabase, loadHistory, refreshHomeStatsFromLocalHistory]);
+    setDeleteTarget(row);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -519,6 +494,48 @@ export default function HistoryScreen() {
           ))
         )}
       </View>
+
+      <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}>
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmCard}>
+            <Text style={styles.confirmTitle}>Delete this history?</Text>
+            <Text style={styles.confirmText}>This action cannot be undone.</Text>
+            <View style={styles.confirmActions}>
+              <Pressable style={styles.confirmCancel} onPress={() => setDeleteTarget(null)}>
+                <Text style={styles.confirmCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={styles.confirmDelete}
+                onPress={async () => {
+                  const target = deleteTarget;
+                  setDeleteTarget(null);
+                  if (!target) return;
+                  await (async () => {
+                    const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+                    if (!currentUserId) return;
+
+                    const raw = await AsyncStorage.getItem(HISTORY_KEY);
+                    const allSessions = parseHistory(raw);
+
+                    const keptSessions = allSessions.filter((item) => {
+                      if (item.userId !== currentUserId) return true;
+                      return toDayKey(item.date) !== target.dateKey;
+                    });
+
+                    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(keptSessions));
+                    await deleteDayFromSupabase(currentUserId, target.dateKey);
+                    await refreshHomeStatsFromLocalHistory(currentUserId);
+                    await loadHistory();
+                    Alert.alert('Done', 'History deleted');
+                  })();
+                }}
+              >
+                <Text style={styles.confirmDeleteText}>Delete</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
     </LinearGradient>
   );
@@ -653,6 +670,82 @@ const styles = StyleSheet.create({
   deleteIconBtnPressed: {
     opacity: 0.8,
     transform: [{ scale: 0.96 }],
+  },
+
+  confirmOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(2, 6, 23, 0.34)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+  },
+
+  confirmCard: {
+    width: '100%',
+    maxWidth: 340,
+    backgroundColor: 'rgba(255, 255, 255, 0.97)',
+    borderRadius: 24,
+    paddingHorizontal: 18,
+    paddingTop: 20,
+    paddingBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(15, 118, 110, 0.12)',
+    shadowColor: '#0f766e',
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 10,
+  },
+
+  confirmTitle: {
+    color: '#12383c',
+    fontSize: 21,
+    fontWeight: '800',
+    marginBottom: 6,
+    textAlign: 'center',
+  },
+
+  confirmText: {
+    color: '#547071',
+    fontSize: 16,
+    lineHeight: 22,
+    marginBottom: 18,
+    textAlign: 'center',
+  },
+
+  confirmActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+
+  confirmCancel: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#edf7f4',
+  },
+
+  confirmCancelText: {
+    color: '#12383c',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+
+  confirmDelete: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(185, 28, 28, 0.08)',
+  },
+
+  confirmDeleteText: {
+    color: '#b91c1c',
+    fontSize: 15,
+    fontWeight: '800',
   },
 
   dateCell: {
