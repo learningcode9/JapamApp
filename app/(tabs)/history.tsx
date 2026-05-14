@@ -3,6 +3,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import * as Sharing from 'expo-sharing';
+import { Ionicons } from '@expo/vector-icons';
 import React, { useCallback, useMemo, useState } from 'react';
 import {
     Alert,
@@ -499,12 +500,19 @@ export default function HistoryScreen() {
               <Text style={styles.tableCell}>{row.malas}</Text>
               <Text style={styles.tableCell}>{row.totalCount}</Text>
               <Text style={styles.tableCell}>{row.accumulated}</Text>
-              <Pressable
-                style={styles.deleteBtn}
-                onPress={() => handleDeleteDay(row)}
-              >
-                <Text style={styles.deleteBtnText}>Delete</Text>
-              </Pressable>
+              <View style={styles.rowActionCell}>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.deleteIconBtn,
+                    pressed && styles.deleteIconBtnPressed,
+                  ]}
+                  onPress={() => handleDeleteDay(row)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Delete history for ${row.dateLabel}`}
+                >
+                  <Ionicons name="trash-outline" size={16} color="#b91c1c" />
+                </Pressable>
+              </View>
             </View>
           ))
         )}
@@ -618,20 +626,26 @@ const styles = StyleSheet.create({
     color: '#12383c',
     fontSize: 18,
     paddingVertical: 14,
-    paddingHorizontal: 10,
+    paddingHorizontal: 8,
     fontWeight: '700',
   },
-  deleteBtn: {
-    marginRight: 10,
-    backgroundColor: 'rgba(220, 38, 38, 0.1)',
-    borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
+  rowActionCell: {
+    width: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingRight: 10,
   },
-  deleteBtnText: {
-    color: '#b91c1c',
-    fontSize: 13,
-    fontWeight: '700',
+  deleteIconBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(220, 38, 38, 0.08)',
+  },
+  deleteIconBtnPressed: {
+    opacity: 0.72,
+    transform: [{ scale: 0.96 }],
   },
 
   dateCell: {
