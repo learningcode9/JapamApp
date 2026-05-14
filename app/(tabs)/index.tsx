@@ -948,8 +948,8 @@ export default function JapamMain() {
       }
 
       const { sound } = await Audio.Sound.createAsync(
-        require('../../assets/om_complete.mp3'),
-        { shouldPlay: true, volume: 1.0 }
+        require('../../assets/soft_tibetan_bowl.wav'),
+        { shouldPlay: true, volume: 0.55 }
       );
       completeSoundRef.current = sound;
       sound.setOnPlaybackStatusUpdate((status) => {

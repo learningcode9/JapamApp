@@ -81,8 +81,8 @@ export default function SettingsScreen() {
 
     try {
       const { sound } = await Audio.Sound.createAsync(
-        require('../../assets/om_complete.mp3'),
-        { shouldPlay: true, volume: 0.75 }
+        require('../../assets/soft_tibetan_bowl.wav'),
+        { shouldPlay: true, volume: 0.55 }
       );
 
       sound.setOnPlaybackStatusUpdate((status) => {
