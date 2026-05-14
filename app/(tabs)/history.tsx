@@ -239,16 +239,20 @@ export default function HistoryScreen() {
   );
 
   const deleteDayFromSupabase = useCallback(
-    async (userId: string, dayKey: string) => {
+    async (userId: string, dayKey: string): Promise<boolean> => {
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-      if (!url || !key || !userId) return;
+      if (!url || !key || !userId) return false;
 
-      const dayStart = `${dayKey}T00:00:00.000Z`;
-      const dayEndDate = new Date(`${dayKey}T00:00:00.000Z`);
-      dayEndDate.setUTCDate(dayEndDate.getUTCDate() + 1);
-      const dayEnd = dayEndDate.toISOString();
+      const [year, month, day] = dayKey.split('-').map(Number);
+      const localStart = new Date(year, month - 1, day, 0, 0, 0, 0);
+      const localEnd = new Date(year, month - 1, day + 1, 0, 0, 0, 0);
+      const dayStart = localStart.toISOString();
+      const dayEnd = localEnd.toISOString();
       const encodedUserId = encodeURIComponent(userId);
+
+      console.log('Deleting day:', dayKey);
+      console.log('Delete range:', dayStart, dayEnd);
 
       const query = new URLSearchParams({
         user_id: `eq.${encodedUserId}`,
@@ -264,9 +268,14 @@ export default function HistoryScreen() {
         },
       });
 
+      console.log('Delete response:', response.status);
+
       if (!response.ok) {
         console.log('Supabase delete error:', await response.text());
+        return false;
       }
+
+      return true;
     },
     []
   );
@@ -510,24 +519,27 @@ export default function HistoryScreen() {
                   const target = deleteTarget;
                   setDeleteTarget(null);
                   if (!target) return;
-                  await (async () => {
-                    const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
-                    if (!currentUserId) return;
+                  const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+                  if (!currentUserId) return;
 
-                    const raw = await AsyncStorage.getItem(HISTORY_KEY);
-                    const allSessions = parseHistory(raw);
+                  const deleted = await deleteDayFromSupabase(currentUserId, target.dateKey);
+                  if (!deleted) {
+                    Alert.alert('Delete failed. Please try again.');
+                    return;
+                  }
 
-                    const keptSessions = allSessions.filter((item) => {
-                      if (item.userId !== currentUserId) return true;
-                      return toDayKey(item.date) !== target.dateKey;
-                    });
+                  const raw = await AsyncStorage.getItem(HISTORY_KEY);
+                  const allSessions = parseHistory(raw);
 
-                    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(keptSessions));
-                    await deleteDayFromSupabase(currentUserId, target.dateKey);
-                    await refreshHomeStatsFromLocalHistory(currentUserId);
-                    await loadHistory();
-                    Alert.alert('Done', 'History deleted');
-                  })();
+                  const keptSessions = allSessions.filter((item) => {
+                    if (item.userId !== currentUserId) return true;
+                    return toDayKey(item.date) !== target.dateKey;
+                  });
+
+                  await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(keptSessions));
+                  await refreshHomeStatsFromLocalHistory(currentUserId);
+                  await loadHistory();
+                  Alert.alert('History deleted');
                 }}
               >
                 <Text style={styles.confirmDeleteText}>Delete</Text>

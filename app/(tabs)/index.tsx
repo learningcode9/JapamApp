@@ -1191,33 +1191,35 @@ export default function JapamMain() {
     const mins = Math.max(1, Math.floor(Number(minutesInput) || 1));
     const nextTargetSeconds = mins * 60;
     const targetChanged = nextTargetSeconds !== targetSeconds;
-    const nextSeconds = targetChanged || seconds >= nextTargetSeconds ? 0 : seconds;
+    const isResumeFromPause = !isRunning && seconds > 0 && !targetChanged;
+    const nextSeconds = isResumeFromPause ? seconds : 0;
 
     clearTimerHandles();
     isCompletingRef.current = false;
-    completedLoopMalasRef.current = 0;
+    if (!isResumeFromPause) {
+      completedLoopMalasRef.current = 0;
+      setAutoCompletedMalas(0);
+    }
     timerStartedAtRef.current = Date.now() - nextSeconds * 1000;
     timerRef.current = { seconds: nextSeconds, isRunning: true, targetSeconds: nextTargetSeconds, minutesInput: String(mins), loopTimer };
     setMinutesInput(String(mins));
     setHasSelectedTimer(true);
     setTargetSeconds(nextTargetSeconds);
     setSeconds(nextSeconds);
-    setAutoCompletedMalas(0);
     setIsRunning(true);
     startTimerInterval();
   };
 
   const handlePause = () => {
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
     timerStartedAtRef.current = null;
-    clearTimerHandles();
     setIsRunning(false);
-    void (async () => {
-      const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-      if (!savedUserId) return;
-      await saveTimerStateToSupabase(savedUserId, { seconds, isRunning: false, targetSeconds, minutesInput, loopTimer });
-    })();
+    // CRITICAL: Do NOT call setSeconds(0) or clear selectedDuration
   };
-
+  
   const applySessionMinutes = (minutes: number) => {
     const safeMinutes = Math.max(1, Math.floor(Number(minutes) || 1));
 
@@ -1542,7 +1544,11 @@ setTimeout(() => { suppressTimerSaveRef.current = false; }, 0);
             onPress={isRunning ? handlePause : handleStart}
           >
             <Text style={styles.primaryActionText}>
-              {isRunning ? `Pause Japam · ${formatTime(seconds)}` : '▶ Start Japam'}
+              {isRunning
+                ? `Pause Timer · ${formatTime(seconds)}`
+                : seconds > 0
+                  ? `Resume Japam · ${formatTime(seconds)}`
+                  : '▶ Start Japam'}
             </Text>
           </Pressable>
 

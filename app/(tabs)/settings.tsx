@@ -115,6 +115,7 @@ export default function SettingsScreen() {
 
   const submitFeedback = async () => {
     if (isSubmittingFeedback) return;
+    console.log('Feedback submit pressed');
 
     const name = feedbackName.trim() || userName.trim() || 'Anonymous';
     const email = feedbackEmail.trim();
@@ -154,6 +155,7 @@ export default function SettingsScreen() {
 
     try {
       setIsSubmittingFeedback(true);
+      console.log('Sending feedback...');
       console.log('Submitting feedback:', { url: FEEDBACK_WEBHOOK_URL, payload });
 
       const isWeb = Platform.OS === 'web';
@@ -167,6 +169,8 @@ export default function SettingsScreen() {
         body: JSON.stringify(payload),
       });
 
+      console.log('Feedback response:', response.status);
+
       if (!isWeb && !response.ok) {
         throw new Error(`Feedback request failed (${response.status})`);
       }
@@ -174,6 +178,7 @@ export default function SettingsScreen() {
       resetFeedbackForm();
       Alert.alert('Thank you for your feedback.', 'We have received your message.');
     } catch (error) {
+      console.log('Feedback error:', error);
       console.log('Feedback submit error:', error);
       Alert.alert('Feedback could not be sent. Please try again.');
     } finally {
