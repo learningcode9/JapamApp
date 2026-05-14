@@ -34,6 +34,11 @@ export default function SettingsScreen() {
   const [feedbackType, setFeedbackType] = useState<'Bug' | 'Suggestion' | 'Other'>('Bug');
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
+  const resetFeedbackForm = () => {
+    setFeedbackMessage('');
+    setFeedbackType('Bug');
+    setShowFeedbackModal(false);
+  };
 
   useFocusEffect(
     useCallback(() => {
@@ -161,9 +166,7 @@ export default function SettingsScreen() {
         throw new Error(`Feedback request failed (${response.status})`);
       }
 
-      setShowFeedbackModal(false);
-      setFeedbackMessage('');
-      setFeedbackType('Bug');
+      resetFeedbackForm();
       Alert.alert('Thank you for your feedback.', 'We have received your message.');
     } catch (error) {
       console.log('Feedback submit error:', error);
@@ -423,7 +426,7 @@ export default function SettingsScreen() {
             <View style={styles.feedbackActions}>
               <Pressable
                 style={styles.feedbackCancel}
-                onPress={() => setShowFeedbackModal(false)}
+                onPress={resetFeedbackForm}
                 disabled={isSubmittingFeedback}
               >
                 <Text style={styles.feedbackCancelText}>Cancel</Text>
