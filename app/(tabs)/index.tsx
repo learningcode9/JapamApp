@@ -574,17 +574,17 @@ export default function JapamMain() {
           staysActiveInBackground: true,
           playsInSilentModeIOS: true,
           allowsRecordingIOS: false,
-          shouldDuckAndroid: true,
+          shouldDuckAndroid: false,
         });
 
         const [normalSound, finalSound] = await Promise.all([
           Audio.Sound.createAsync(require('../../assets/soft_tibetan_bowl.wav'), {
             shouldPlay: false,
-            volume: 0.65,
+            volume: 0.8,
           }),
           Audio.Sound.createAsync(require('../../assets/soft_tibetan_bowl_final.wav'), {
             shouldPlay: false,
-            volume: 0.7,
+            volume: 0.85,
           }),
         ]);
 
@@ -1505,7 +1505,7 @@ setTimeout(() => { suppressTimerSaveRef.current = false; }, 0);
           )}
 
           <View style={styles.topControls}>
-            <Text style={styles.welcomeText}>Welcome back</Text>
+            <Text style={styles.welcomeText}>Welcome</Text>
 
             <Pressable
               style={({ pressed }) => [styles.accountButton, pressed && styles.softPressed]}
