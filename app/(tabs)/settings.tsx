@@ -1,22 +1,23 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Audio } from 'expo-av';
+import Constants from 'expo-constants';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Alert, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
+const USER_EMAIL_KEY = 'userEmail';
 const TIMER_SECONDS_KEY = 'timerSeconds';
 const TIMER_RUNNING_KEY = 'timerRunning';
 const TIMER_TARGET_KEY = 'timerTarget';
 const TIMER_MINUTES_KEY = 'timerMinutes';
 const TIMER_LOOP_KEY = 'timerLoop';
-const FEEDBACK_FORM_URL =
-  'https://docs.google.com/forms/d/e/1FAIpQLScYFBZqgour0aN3hFFjW2hrOAkc9vVFdN0-1NPXdouZZRsHfQ/viewform?usp=publish-editor';
+const FEEDBACK_WEBHOOK_URL = process.env.EXPO_PUBLIC_FEEDBACK_WEBHOOK_URL || '';
 
 const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
 
@@ -27,6 +28,12 @@ export default function SettingsScreen() {
   const [userId, setUserId] = useState<string | null>(null);
   const [userName, setUserName] = useState('');
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [feedbackName, setFeedbackName] = useState('');
+  const [feedbackEmail, setFeedbackEmail] = useState('');
+  const [feedbackType, setFeedbackType] = useState<'Bug' | 'Suggestion' | 'Other'>('Bug');
+  const [feedbackMessage, setFeedbackMessage] = useState('');
+  const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -36,6 +43,7 @@ export default function SettingsScreen() {
       const savedVibration = await AsyncStorage.getItem(VIBRATION_ENABLED_KEY);
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
       const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+      const savedUserEmail = await AsyncStorage.getItem(USER_EMAIL_KEY);
 
       setRepetitionSoundEnabled(
         savedRepetitionSound === null
@@ -45,6 +53,8 @@ export default function SettingsScreen() {
       setVibrationEnabled(savedVibration !== 'false');
       setUserId(savedUserId);
       setUserName(savedUserName || '');
+      setFeedbackName(savedUserName || '');
+      setFeedbackEmail(savedUserEmail || '');
     };
 
     void loadSettings();
@@ -95,21 +105,72 @@ export default function SettingsScreen() {
   };
 
   const openFeedbackForm = async () => {
-    if (!FEEDBACK_FORM_URL) {
+    setShowFeedbackModal(true);
+  };
+
+  const submitFeedback = async () => {
+    if (isSubmittingFeedback) return;
+
+    const name = feedbackName.trim() || userName.trim() || 'Anonymous';
+    const email = feedbackEmail.trim();
+    const message = feedbackMessage.trim();
+
+    if (!message) {
+      Alert.alert('Add a message', 'Please write a short message before sending feedback.');
+      return;
+    }
+
+    if (!FEEDBACK_WEBHOOK_URL) {
       Alert.alert(
-        'Feedback form needed',
-        'Please add your Google Form link in Settings.'
+        'Feedback not configured',
+        'Please set EXPO_PUBLIC_FEEDBACK_WEBHOOK_URL to your Google Apps Script webhook.'
       );
       return;
     }
 
-    const canOpen = await Linking.canOpenURL(FEEDBACK_FORM_URL);
-    if (!canOpen) {
-      Alert.alert('Unable to open form', 'Please try again later.');
-      return;
-    }
+    setIsSubmittingFeedback(true);
 
-    await Linking.openURL(FEEDBACK_FORM_URL);
+    const appVersion = Constants.expoConfig?.version || Constants.manifest2?.extra?.expoClient?.version || '1.0.0';
+    const deviceInfo =
+      Platform.OS === 'web'
+        ? `Web / ${typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown'}`
+        : `${Platform.OS} / ${String(Platform.Version)}`;
+    const timestamp = new Date().toISOString();
+
+    try {
+      const response = await fetch(FEEDBACK_WEBHOOK_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          app_user_name: name,
+          app_user_email: email,
+          feedback_type: feedbackType,
+          message,
+          app_version: appVersion,
+          device_info: deviceInfo,
+          timestamp,
+          admin_email: 'learningcode9@gmail.com',
+          email_subject: 'New Japam App Feedback',
+          source: 'Japam App',
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Feedback request failed (${response.status})`);
+      }
+
+      setShowFeedbackModal(false);
+      setFeedbackMessage('');
+      setFeedbackType('Bug');
+      Alert.alert('Thank you for your feedback.', 'We have received your message.');
+    } catch (error) {
+      console.log('Feedback submit error:', error);
+      Alert.alert('Unable to send feedback', 'Please try again in a moment.');
+    } finally {
+      setIsSubmittingFeedback(false);
+    }
   };
 
   const savePausedTimerState = async (currentUserId: string) => {
@@ -166,6 +227,7 @@ export default function SettingsScreen() {
     }
 
     await AsyncStorage.removeItem(USER_NAME_KEY);
+    await AsyncStorage.removeItem(USER_EMAIL_KEY);
     await AsyncStorage.removeItem(USER_ID_KEY);
     await AsyncStorage.multiRemove([
       TIMER_SECONDS_KEY,
@@ -259,10 +321,10 @@ export default function SettingsScreen() {
         <View style={styles.card}>
           <View style={styles.textBlock}>
             <Text style={styles.label}>Send Feedback</Text>
-            <Text style={styles.description}>Open the Google Form to share bugs or ideas.</Text>
+            <Text style={styles.description}>Share bugs, ideas, or anything that helps make Japam better.</Text>
           </View>
           <Pressable style={styles.compactButton} onPress={openFeedbackForm}>
-            <Text style={styles.compactButtonText}>Open</Text>
+            <Text style={styles.compactButtonText}>Write</Text>
           </Pressable>
         </View>
       </View>
@@ -297,6 +359,88 @@ export default function SettingsScreen() {
           These options will be applied when you return to the Japam screen.
         </Text>
       </View>
+
+      <Modal visible={showFeedbackModal} transparent animationType="fade" onRequestClose={() => setShowFeedbackModal(false)}>
+        <View style={styles.feedbackOverlay}>
+          <View style={styles.feedbackCard}>
+            <Text style={styles.feedbackTitle}>Send feedback</Text>
+            <Text style={styles.feedbackSubtitle}>Your thoughts go straight to our team.</Text>
+
+            <View style={styles.feedbackField}>
+              <Text style={styles.feedbackLabel}>Name</Text>
+              <TextInput
+                style={styles.feedbackInput}
+                value={feedbackName}
+                onChangeText={setFeedbackName}
+                placeholder="Your name"
+                placeholderTextColor="#94a3b8"
+              />
+            </View>
+
+            <View style={styles.feedbackField}>
+              <Text style={styles.feedbackLabel}>Email</Text>
+              <TextInput
+                style={styles.feedbackInput}
+                value={feedbackEmail}
+                onChangeText={setFeedbackEmail}
+                placeholder="you@example.com"
+                placeholderTextColor="#94a3b8"
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+            </View>
+
+            <View style={styles.feedbackField}>
+              <Text style={styles.feedbackLabel}>Feedback type</Text>
+              <View style={styles.feedbackTypeRow}>
+                {(['Bug', 'Suggestion', 'Other'] as const).map((type) => (
+                  <Pressable
+                    key={type}
+                    style={[styles.feedbackTypeChip, feedbackType === type && styles.feedbackTypeChipActive]}
+                    onPress={() => setFeedbackType(type)}
+                  >
+                    <Text style={[styles.feedbackTypeChipText, feedbackType === type && styles.feedbackTypeChipTextActive]}>
+                      {type}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.feedbackField}>
+              <Text style={styles.feedbackLabel}>Message</Text>
+              <TextInput
+                style={[styles.feedbackInput, styles.feedbackMessageInput]}
+                value={feedbackMessage}
+                onChangeText={setFeedbackMessage}
+                placeholder="Tell us what happened or what you'd like to see..."
+                placeholderTextColor="#94a3b8"
+                multiline
+                textAlignVertical="top"
+              />
+            </View>
+
+            <View style={styles.feedbackActions}>
+              <Pressable
+                style={styles.feedbackCancel}
+                onPress={() => setShowFeedbackModal(false)}
+                disabled={isSubmittingFeedback}
+              >
+                <Text style={styles.feedbackCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.feedbackSubmit, isSubmittingFeedback && { opacity: 0.7 }]}
+                onPress={() => void submitFeedback()}
+                disabled={isSubmittingFeedback}
+              >
+                <Text style={styles.feedbackSubmitText}>
+                  {isSubmittingFeedback ? 'Sending...' : 'Send'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={showLogoutConfirm} transparent animationType="fade">
         <View style={styles.confirmOverlay}>
@@ -464,6 +608,139 @@ const styles = StyleSheet.create({
     color: '#547071',
     fontSize: 17,
     lineHeight: 24,
+  },
+
+  feedbackOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(2, 6, 23, 0.36)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+  },
+
+  feedbackCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: 'rgba(255, 255, 255, 0.97)',
+    borderRadius: 24,
+    paddingHorizontal: 18,
+    paddingTop: 20,
+    paddingBottom: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(15, 118, 110, 0.12)',
+    shadowColor: '#0f766e',
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 10,
+  },
+
+  feedbackTitle: {
+    color: '#12383c',
+    fontSize: 22,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+
+  feedbackSubtitle: {
+    color: '#547071',
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
+    marginTop: 6,
+    marginBottom: 16,
+  },
+
+  feedbackField: {
+    marginBottom: 12,
+  },
+
+  feedbackLabel: {
+    color: '#12383c',
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+
+  feedbackInput: {
+    backgroundColor: '#f7fbfa',
+    borderWidth: 1,
+    borderColor: 'rgba(15, 118, 110, 0.14)',
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    color: '#12383c',
+    fontSize: 16,
+  },
+
+  feedbackMessageInput: {
+    minHeight: 112,
+  },
+
+  feedbackTypeRow: {
+    flexDirection: 'row',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+
+  feedbackTypeChip: {
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: '#edf7f4',
+    borderWidth: 1,
+    borderColor: 'rgba(15, 118, 110, 0.10)',
+  },
+
+  feedbackTypeChipActive: {
+    backgroundColor: 'rgba(15, 143, 135, 0.12)',
+    borderColor: 'rgba(15, 143, 135, 0.28)',
+  },
+
+  feedbackTypeChipText: {
+    color: '#547071',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  feedbackTypeChipTextActive: {
+    color: '#0F8F87',
+  },
+
+  feedbackActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+  },
+
+  feedbackCancel: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#edf7f4',
+  },
+
+  feedbackCancelText: {
+    color: '#12383c',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+
+  feedbackSubmit: {
+    flex: 1,
+    minHeight: 46,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0F8F87',
+  },
+
+  feedbackSubmitText: {
+    color: 'white',
+    fontSize: 15,
+    fontWeight: '800',
   },
 
   cardStack: {

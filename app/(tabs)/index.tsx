@@ -56,6 +56,7 @@ const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
 const USER_NAME_KEY = 'userName';
+const USER_EMAIL_KEY = 'userEmail';
 const USER_ID_KEY = 'userId';
 const AUTH_PENDING_KEY = 'authPending';
 const LAST_TOTAL_KEY = 'lastTotal';
@@ -842,6 +843,7 @@ export default function JapamMain() {
 
         const userInfo = await userInfoResponse.json();
         const googleName = userInfo?.given_name || userInfo?.name || userInfo?.email || 'User';
+        const googleEmail = userInfo?.email || '';
         const googleUserId = String(userInfo?.id || '').trim();
 
         if (!googleUserId) { setShowUserModal(true); return; }
@@ -853,6 +855,9 @@ export default function JapamMain() {
         await restoreTotal(0, { userId: null });
         totalRef.current = 0;
         await AsyncStorage.setItem(USER_NAME_KEY, googleName);
+        if (googleEmail) {
+          await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
+        }
         await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
 
         await loadJapamNameFromSupabase(googleUserId);
@@ -1329,6 +1334,7 @@ export default function JapamMain() {
     setShowUserModal(false);
 
     await AsyncStorage.removeItem(USER_NAME_KEY);
+    await AsyncStorage.removeItem(USER_EMAIL_KEY);
 await AsyncStorage.removeItem(USER_ID_KEY);
 
 if (currentUserId) {
