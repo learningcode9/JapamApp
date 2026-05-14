@@ -9,7 +9,6 @@ import {
     Alert,
     DeviceEventEmitter,
     Platform,
-    Modal,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -24,7 +23,6 @@ type Session = {
   duration: number;
   manual?: boolean;
   userId?: string;
-  remoteId?: number | string;
 };
 
 type DailyRow = {
@@ -36,7 +34,6 @@ type DailyRow = {
   duration: number;
   manualCount: number;
   autoCount: number;
-  remoteIds: Array<number | string>;
 };
 
 type RemoteHistoryRow = {
@@ -121,9 +118,6 @@ const buildDailyRows = (sessions: Session[]) => {
 
       if (isManual) existing.manualCount += 1;
       else existing.autoCount += 1;
-      if (item.remoteId !== undefined && item.remoteId !== null) {
-        existing.remoteIds.push(item.remoteId);
-      }
       return;
     }
 
@@ -136,7 +130,6 @@ const buildDailyRows = (sessions: Session[]) => {
       duration,
       manualCount: isManual ? 1 : 0,
       autoCount: isManual ? 0 : 1,
-      remoteIds: item.remoteId !== undefined && item.remoteId !== null ? [item.remoteId] : [],
     });
   });
 
@@ -194,7 +187,6 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
         duration: 0,
         manual: false,
         userId,
-        remoteId: row.id,
       };
     });
     };
@@ -241,43 +233,6 @@ export default function HistoryScreen() {
       if (!response.ok) {
         console.log('Supabase total update error:', await response.text());
       }
-    },
-    []
-  );
-
-  const deleteDayFromSupabase = useCallback(
-    async (userId: string, rowIds: Array<number | string>): Promise<boolean> => {
-      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-      if (!url || !key || !userId || rowIds.length === 0) return false;
-
-      const encodedUserId = encodeURIComponent(userId);
-
-      for (const rowId of rowIds) {
-        const query = new URLSearchParams({
-          user_id: `eq.${encodedUserId}`,
-          id: `eq.${rowId}`,
-        });
-
-        console.log('Deleting row id:', rowId);
-
-        const response = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
-          method: 'DELETE',
-          headers: {
-            apikey: key,
-            Authorization: `Bearer ${key}`,
-          },
-        });
-
-        console.log('Delete response:', response.status);
-
-        if (!response.ok) {
-          console.log('Supabase delete error:', await response.text());
-          return false;
-        }
-      }
-
-      return true;
     },
     []
   );
@@ -349,10 +304,6 @@ export default function HistoryScreen() {
       todayTotal: userTodayTotal,
     });
   }, [saveUserTotalToSupabase]);
-
-  const handleDeleteDay = useCallback((row: DailyRow) => {
-    setDeleteTarget(row);
-  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -486,78 +437,10 @@ export default function HistoryScreen() {
               <Text style={styles.tableCell}>{row.malas}</Text>
               <Text style={styles.tableCell}>{row.totalCount}</Text>
               <Text style={styles.tableCell}>{row.accumulated}</Text>
-              <View style={styles.rowActionCell}>
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.deleteIconBtn,
-                    pressed && styles.deleteIconBtnPressed,
-                  ]}
-                  onPress={() => handleDeleteDay(row)}
-                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                  pressRetentionOffset={{ top: 18, bottom: 18, left: 18, right: 18 }}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Delete history for ${row.dateLabel}`}
-                >
-                  <Ionicons name="trash-outline" size={16} color="#b91c1c" />
-                </Pressable>
-              </View>
             </View>
           ))
         )}
       </View>
-
-      <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}>
-        <View style={styles.confirmOverlay}>
-          <View style={styles.confirmCard}>
-            <Text style={styles.confirmTitle}>Delete this history?</Text>
-            <Text style={styles.confirmText}>This action cannot be undone.</Text>
-            <View style={styles.confirmActions}>
-              <Pressable style={styles.confirmCancel} onPress={() => setDeleteTarget(null)}>
-                <Text style={styles.confirmCancelText}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                style={styles.confirmDelete}
-                onPress={async () => {
-                  const target = deleteTarget;
-                  setDeleteTarget(null);
-                  if (!target) return;
-                  const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
-                  if (!currentUserId) return;
-
-                  const rowIds = target.remoteIds || [];
-                  console.log('Deleting history row ids:', rowIds);
-
-                  const raw = await AsyncStorage.getItem(HISTORY_KEY);
-                  const allSessions = parseHistory(raw);
-
-                  const keptSessions = allSessions.filter((item) => {
-                    if (item.userId !== currentUserId) return true;
-                    if (item.remoteId !== undefined && item.remoteId !== null) {
-                      return !rowIds.includes(item.remoteId);
-                    }
-                    return toDayKey(item.date) !== target.dateKey;
-                  });
-
-                  await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(keptSessions));
-                  await refreshHomeStatsFromLocalHistory(currentUserId);
-
-                  const deleted = await deleteDayFromSupabase(currentUserId, rowIds);
-                  if (!deleted) {
-                    console.log('Supabase delete failed, keeping local delete.');
-                    Alert.alert('Delete failed. Please try again.');
-                    return;
-                  }
-
-                  await loadHistory();
-                  Alert.alert('History deleted');
-                }}
-              >
-                <Text style={styles.confirmDeleteText}>Delete</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </ScrollView>
     </LinearGradient>
   );

@@ -1,10 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Audio } from 'expo-av';
-import Constants from 'expo-constants';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Alert, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Alert, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
@@ -17,8 +16,6 @@ const TIMER_RUNNING_KEY = 'timerRunning';
 const TIMER_TARGET_KEY = 'timerTarget';
 const TIMER_MINUTES_KEY = 'timerMinutes';
 const TIMER_LOOP_KEY = 'timerLoop';
-const FEEDBACK_WEBHOOK_URL = process.env.EXPO_PUBLIC_FEEDBACK_WEBHOOK_URL || '';
-
 const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
 
 export default function SettingsScreen() {
@@ -28,17 +25,6 @@ export default function SettingsScreen() {
   const [userId, setUserId] = useState<string | null>(null);
   const [userName, setUserName] = useState('');
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
-  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
-  const [feedbackName, setFeedbackName] = useState('');
-  const [feedbackEmail, setFeedbackEmail] = useState('');
-  const [feedbackType, setFeedbackType] = useState<'Bug' | 'Suggestion' | 'Other'>('Bug');
-  const [feedbackMessage, setFeedbackMessage] = useState('');
-  const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
-  const resetFeedbackForm = () => {
-    setFeedbackMessage('');
-    setFeedbackType('Bug');
-    setShowFeedbackModal(false);
-  };
 
   useFocusEffect(
     useCallback(() => {
@@ -58,8 +44,6 @@ export default function SettingsScreen() {
       setVibrationEnabled(savedVibration !== 'false');
       setUserId(savedUserId);
       setUserName(savedUserName || '');
-      setFeedbackName(savedUserName || '');
-      setFeedbackEmail(savedUserEmail || '');
     };
 
     void loadSettings();
@@ -107,83 +91,6 @@ export default function SettingsScreen() {
   const toggleVibration = async (value: boolean) => {
     setVibrationEnabled(value);
     await AsyncStorage.setItem(VIBRATION_ENABLED_KEY, String(value));
-  };
-
-  const openFeedbackForm = async () => {
-    setShowFeedbackModal(true);
-  };
-
-  const handleFeedbackSubmit = async () => {
-    if (isSubmittingFeedback) return;
-    console.log('Feedback submit pressed');
-
-    const name = feedbackName.trim() || userName.trim() || 'Anonymous';
-    const email = feedbackEmail.trim();
-    const message = feedbackMessage.trim();
-
-    if (!message) {
-      Alert.alert('Add a message', 'Please write a short message before sending feedback.');
-      return;
-    }
-
-    if (!FEEDBACK_WEBHOOK_URL) {
-      Alert.alert(
-        'Feedback setup is missing.',
-        'Please set EXPO_PUBLIC_FEEDBACK_WEBHOOK_URL to your Google Apps Script webhook.'
-      );
-      return;
-    }
-
-    const appVersion = Constants.expoConfig?.version || Constants.manifest2?.extra?.expoClient?.version || '1.0.0';
-    const deviceInfo =
-      Platform.OS === 'web'
-        ? `Web / ${typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown'}`
-        : `${Platform.OS} / ${String(Platform.Version)}`;
-    const timestamp = new Date().toISOString();
-    const payload = {
-      app_user_name: name,
-      app_user_email: email,
-      feedback_type: feedbackType,
-      message,
-      app_version: appVersion,
-      device_info: deviceInfo,
-      timestamp,
-      admin_email: 'learningcode9@gmail.com',
-      email_subject: 'New Japam App Feedback',
-      source: 'Japam App',
-    };
-
-    try {
-      setIsSubmittingFeedback(true);
-      console.log('Sending feedback...');
-      console.log('Submitting feedback:', { url: FEEDBACK_WEBHOOK_URL, payload });
-
-      const isWeb = Platform.OS === 'web';
-      const response = await fetch(FEEDBACK_WEBHOOK_URL, {
-        method: 'POST',
-        mode: isWeb ? 'no-cors' : 'cors',
-        credentials: 'omit',
-        headers: {
-          'Content-Type': isWeb ? 'text/plain;charset=UTF-8' : 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      console.log('Feedback response:', response.status);
-
-      if (!isWeb && !response.ok) {
-        throw new Error(`Feedback request failed (${response.status})`);
-      }
-
-      resetFeedbackForm();
-      Alert.alert('Thank you for your feedback.', 'We have received your message.');
-    } catch (error) {
-      console.log('Feedback error:', error);
-      console.log('Feedback submit error:', error);
-      Alert.alert('Feedback could not be sent. Please try again.');
-    } finally {
-      setIsSubmittingFeedback(false);
-    }
   };
 
   const savePausedTimerState = async (currentUserId: string) => {
@@ -330,19 +237,6 @@ export default function SettingsScreen() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Feedback</Text>
-        <View style={styles.card}>
-          <View style={styles.textBlock}>
-            <Text style={styles.label}>Send Feedback</Text>
-            <Text style={styles.description}>Share bugs, ideas, or anything that helps make Japam better.</Text>
-          </View>
-          <Pressable style={styles.compactButton} onPress={openFeedbackForm}>
-            <Text style={styles.compactButtonText}>Write</Text>
-          </Pressable>
-        </View>
-      </View>
-
-      <View style={styles.section}>
         <Text style={styles.sectionTitle}>Help / Install App</Text>
         <View style={styles.cardStack}>
           <View style={styles.helpCard}>
@@ -372,91 +266,6 @@ export default function SettingsScreen() {
           These options will be applied when you return to the Japam screen.
         </Text>
       </View>
-
-      <Modal visible={showFeedbackModal} transparent animationType="fade" onRequestClose={() => setShowFeedbackModal(false)}>
-        <View style={styles.feedbackOverlay}>
-          <View style={styles.feedbackCard}>
-            <Text style={styles.feedbackTitle}>Send feedback</Text>
-            <Text style={styles.feedbackSubtitle}>Your thoughts go straight to our team.</Text>
-
-            <View style={styles.feedbackField}>
-              <Text style={styles.feedbackLabel}>Name</Text>
-              <TextInput
-                style={styles.feedbackInput}
-                value={feedbackName}
-                onChangeText={setFeedbackName}
-                placeholder="Your name"
-                placeholderTextColor="#94a3b8"
-              />
-            </View>
-
-            <View style={styles.feedbackField}>
-              <Text style={styles.feedbackLabel}>Email</Text>
-              <TextInput
-                style={styles.feedbackInput}
-                value={feedbackEmail}
-                onChangeText={setFeedbackEmail}
-                placeholder="you@example.com"
-                placeholderTextColor="#94a3b8"
-                keyboardType="email-address"
-                autoCapitalize="none"
-              />
-            </View>
-
-            <View style={styles.feedbackField}>
-              <Text style={styles.feedbackLabel}>Feedback type</Text>
-              <View style={styles.feedbackTypeRow}>
-                {(['Bug', 'Suggestion', 'Other'] as const).map((type) => (
-                  <Pressable
-                    key={type}
-                    style={[styles.feedbackTypeChip, feedbackType === type && styles.feedbackTypeChipActive]}
-                    onPress={() => setFeedbackType(type)}
-                  >
-                    <Text style={[styles.feedbackTypeChipText, feedbackType === type && styles.feedbackTypeChipTextActive]}>
-                      {type}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-            </View>
-
-            <View style={styles.feedbackField}>
-              <Text style={styles.feedbackLabel}>Message</Text>
-              <TextInput
-                style={[styles.feedbackInput, styles.feedbackMessageInput]}
-                value={feedbackMessage}
-                onChangeText={setFeedbackMessage}
-                placeholder="Tell us what happened or what you'd like to see..."
-                placeholderTextColor="#94a3b8"
-                multiline
-                textAlignVertical="top"
-              />
-            </View>
-
-            <View style={styles.feedbackActions}>
-              <Pressable
-                style={styles.feedbackCancel}
-                onPress={resetFeedbackForm}
-                disabled={isSubmittingFeedback}
-              >
-                <Text style={styles.feedbackCancelText}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.feedbackSubmit, isSubmittingFeedback && { opacity: 0.7 }]}
-                onPress={() => {
-                  console.log('SEND PRESSED');
-                  void handleFeedbackSubmit();
-                }}
-                disabled={isSubmittingFeedback}
-              >
-                <Text style={styles.feedbackSubmitText}>
-                  {isSubmittingFeedback ? 'Sending...' : 'Send'}
-                </Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
 
       <Modal visible={showLogoutConfirm} transparent animationType="fade">
         <View style={styles.confirmOverlay}>

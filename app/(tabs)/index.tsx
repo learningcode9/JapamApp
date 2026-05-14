@@ -465,6 +465,9 @@ export default function JapamMain() {
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
   
     if (savedUserId) {
+      const storedTotal = Number((await AsyncStorage.getItem(getUserStorageKey(TOTAL_KEY, savedUserId))) || '0');
+      const storedCount = Number((await AsyncStorage.getItem(getUserStorageKey(COUNT_KEY, savedUserId))) || '0');
+      const storedMalas = Number((await AsyncStorage.getItem(getUserStorageKey(MALAS_KEY, savedUserId))) || '0');
       const remoteTodayTotal = await fetchTodayTotalFromSupabase(savedUserId);
       const localTodayTotal = await getLocalTodayTotalForUser(savedUserId);
       const cloudTotal = await fetchUserTotalFromSupabase(savedUserId);
@@ -472,9 +475,9 @@ export default function JapamMain() {
       const safeRemoteTotal = Math.max(0, Math.floor(Number(remoteTodayTotal) || 0));
       const finalTotal =
         remoteTodayTotal !== null
-          ? Math.max(safeRemoteTotal, localTodayTotal)
-          : Math.max(localTodayTotal, safeCloudTotal);
-  
+          ? Math.max(safeRemoteTotal, localTodayTotal, storedTotal, storedMalas * 108 + storedCount)
+          : Math.max(localTodayTotal, safeCloudTotal, storedTotal, storedMalas * 108 + storedCount);
+
       await restoreTotal(finalTotal, { userId: savedUserId });
       totalRef.current = finalTotal;
       await refreshDayStreak({ userId: savedUserId, todayTotal: finalTotal });
