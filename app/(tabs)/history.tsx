@@ -35,12 +35,20 @@ type DailyRow = {
 };
 
 type RemoteHistoryRow = {
+  id?: number | string;
   created_at?: string;
   malas?: number | string;
   count?: number | string;
 };
 
 const USER_ID_KEY = 'userId';
+const HISTORY_KEY = 'history';
+const TOTAL_KEY = 'totalCount';
+const MALAS_KEY = 'malas';
+const COUNT_KEY = 'count';
+const LAST_TOTAL_KEY = 'lastTotal';
+const HISTORY_SYNC_VERSION_KEY = 'historyStatsSyncVersion';
+const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
 
 const getLocalDateKey = (date = new Date()) => {
   const y = date.getFullYear();
@@ -87,6 +95,57 @@ const parseHistory = (raw: string | null): Session[] => {
   }
 };
 
+const buildDailyRows = (sessions: Session[]) => {
+  const grouped = new Map<string, DailyRow>();
+
+  sessions.forEach((item) => {
+    const dayKey = toDayKey(item.date);
+    const existing = grouped.get(dayKey);
+
+    const itemMalas = Number(item.malas) || 0;
+    const itemTotalCount = Number(item.totalCount) || itemMalas * 108;
+    const malas = itemMalas || Math.floor(itemTotalCount / 108);
+    const totalCount = itemTotalCount;
+    const duration = Number(item.duration) || 0;
+    const isManual = !!item.manual;
+
+    if (existing) {
+      existing.malas += malas;
+      existing.totalCount += totalCount;
+      existing.duration += duration;
+
+      if (isManual) existing.manualCount += 1;
+      else existing.autoCount += 1;
+      return;
+    }
+
+    grouped.set(dayKey, {
+      dateKey: dayKey,
+      dateLabel: toDayLabel(dayKey),
+      malas,
+      totalCount,
+      accumulated: 0,
+      duration,
+      manualCount: isManual ? 1 : 0,
+      autoCount: isManual ? 0 : 1,
+    });
+  });
+
+  const oldestFirstRows = [...grouped.values()].sort((a, b) => {
+    if (a.dateKey === 'unknown') return 1;
+    if (b.dateKey === 'unknown') return -1;
+    return a.dateKey.localeCompare(b.dateKey);
+  });
+
+  let runningTotal = 0;
+  const rowsWithAccumulated = oldestFirstRows.map((row) => {
+    runningTotal += row.totalCount;
+    return { ...row, accumulated: runningTotal };
+  });
+
+  return rowsWithAccumulated.reverse();
+};
+
 const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> => {
   const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
   const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -96,7 +155,7 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
   try {
     const fetchBy = async (field: 'user_id' | 'user_name', value: string) => {
       const query = new URLSearchParams({
-        select: 'created_at,malas,count',
+        select: 'id,created_at,malas,count',
         [field]: `eq.${value}`,
         order: 'created_at.asc',
       });
@@ -141,6 +200,73 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
 export default function HistoryScreen() {
   const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
 
+  const saveUserTotalToSupabase = useCallback(
+    async (userId: string, totalValue: number) => {
+      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      if (!url || !key || !userId) return;
+
+      const safeTotal = Math.max(0, Math.floor(Number(totalValue) || 0));
+      const savedUserName = await AsyncStorage.getItem('userName');
+
+      const response = await fetch(`${url}/rest/v1/japam_user_totals?on_conflict=user_id`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          Prefer: 'resolution=merge-duplicates,return=minimal',
+        },
+        body: JSON.stringify({
+          user_id: userId,
+          user_name: savedUserName || 'User',
+          total_count: safeTotal,
+          malas: Math.floor(safeTotal / 108),
+          count: safeTotal % 108,
+          updated_at: new Date().toISOString(),
+        }),
+      });
+
+      if (!response.ok) {
+        console.log('Supabase total update error:', await response.text());
+      }
+    },
+    []
+  );
+
+  const deleteDayFromSupabase = useCallback(
+    async (userId: string, dayKey: string) => {
+      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      if (!url || !key || !userId) return;
+
+      const dayStart = `${dayKey}T00:00:00.000Z`;
+      const dayEndDate = new Date(`${dayKey}T00:00:00.000Z`);
+      dayEndDate.setUTCDate(dayEndDate.getUTCDate() + 1);
+      const dayEnd = dayEndDate.toISOString();
+      const encodedUserId = encodeURIComponent(userId);
+
+      const query = new URLSearchParams({
+        user_id: `eq.${encodedUserId}`,
+        created_at: `gte.${dayStart}`,
+      });
+      query.append('created_at', `lt.${dayEnd}`);
+
+      const response = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
+        method: 'DELETE',
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+        },
+      });
+
+      if (!response.ok) {
+        console.log('Supabase delete error:', await response.text());
+      }
+    },
+    []
+  );
+
   const loadHistory = useCallback(async () => {
     const todayKey = getLocalDateKey();
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
@@ -175,60 +301,71 @@ export default function HistoryScreen() {
       await AsyncStorage.setItem('history', JSON.stringify([...filteredRemoteSessions, ...otherUserSessions]));
     }
 
-    const grouped = new Map<string, DailyRow>();
-
-    sessions.forEach((item) => {
-      const dayKey = toDayKey(item.date);
-      const existing = grouped.get(dayKey);
-
-      const itemMalas = Number(item.malas) || 0;
-      const itemTotalCount = Number(item.totalCount) || itemMalas * 108;
-      const malas = itemMalas || Math.floor(itemTotalCount / 108);
-      const totalCount = itemTotalCount;
-      const duration = Number(item.duration) || 0;
-      const isManual = !!item.manual;
-
-      if (existing) {
-        existing.malas += malas;
-        existing.totalCount += totalCount;
-        existing.duration += duration;
-
-        if (isManual) existing.manualCount += 1;
-        else existing.autoCount += 1;
-      } else {
-        grouped.set(dayKey, {
-          dateKey: dayKey,
-          dateLabel: toDayLabel(dayKey),
-          malas,
-          totalCount,
-          accumulated: 0,
-          duration,
-          manualCount: isManual ? 1 : 0,
-          autoCount: isManual ? 0 : 1,
-        });
-      }
-    });
-
-    const oldestFirstRows = [...grouped.values()].sort((a, b) => {
-      if (a.dateKey === 'unknown') return 1;
-      if (b.dateKey === 'unknown') return -1;
-
-      return a.dateKey.localeCompare(b.dateKey);
-    });
-
-    let runningTotal = 0;
-
-    const rowsWithAccumulated = oldestFirstRows.map((row) => {
-      runningTotal += row.totalCount;
-
-      return {
-        ...row,
-        accumulated: runningTotal,
-      };
-    });
-
-    setDailyRows(rowsWithAccumulated.reverse());
+    setDailyRows(buildDailyRows(sessions));
   }, []);
+
+  const refreshHomeStatsFromLocalHistory = useCallback(async (currentUserId: string) => {
+    const raw = await AsyncStorage.getItem(HISTORY_KEY);
+    const allSessions = parseHistory(raw);
+    const todayKey = getLocalDateKey();
+
+    const userTodayTotal = allSessions
+      .filter((item) => item.userId === currentUserId && toDayKey(item.date) === todayKey)
+      .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
+
+    const nextMalas = Math.floor(userTodayTotal / 108);
+    const nextCount = userTodayTotal % 108;
+
+    await AsyncStorage.multiSet([
+      [TOTAL_KEY, String(userTodayTotal)],
+      [MALAS_KEY, String(nextMalas)],
+      [COUNT_KEY, String(nextCount)],
+      [LAST_TOTAL_KEY, String(userTodayTotal)],
+      [getUserStorageKey(TOTAL_KEY, currentUserId), String(userTodayTotal)],
+      [getUserStorageKey(MALAS_KEY, currentUserId), String(nextMalas)],
+      [getUserStorageKey(COUNT_KEY, currentUserId), String(nextCount)],
+      [HISTORY_SYNC_VERSION_KEY, String(Date.now())],
+    ]);
+
+    await saveUserTotalToSupabase(currentUserId, userTodayTotal);
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('japam-history-updated', {
+        detail: { userId: currentUserId, todayTotal: userTodayTotal },
+      }));
+    }
+  }, [saveUserTotalToSupabase]);
+
+  const handleDeleteDay = useCallback((row: DailyRow) => {
+    const ask = async () => {
+      const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      if (!currentUserId) return;
+
+      const raw = await AsyncStorage.getItem(HISTORY_KEY);
+      const allSessions = parseHistory(raw);
+
+      const keptSessions = allSessions.filter((item) => {
+        if (item.userId !== currentUserId) return true;
+        return toDayKey(item.date) !== row.dateKey;
+      });
+
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(keptSessions));
+      await deleteDayFromSupabase(currentUserId, row.dateKey);
+      await refreshHomeStatsFromLocalHistory(currentUserId);
+      await loadHistory();
+
+      Alert.alert('Done', 'History deleted');
+    };
+
+    Alert.alert(
+      'Delete this history?',
+      'This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => void ask() },
+      ]
+    );
+  }, [deleteDayFromSupabase, loadHistory, refreshHomeStatsFromLocalHistory]);
 
   useFocusEffect(
     useCallback(() => {
@@ -347,7 +484,7 @@ export default function HistoryScreen() {
 
         {dailyRows.length === 0 ? (
           <View style={styles.emptyRow}>
-            <Text style={styles.emptyText}>No history available</Text>
+            <Text style={styles.emptyText}>No Japam history yet</Text>
           </View>
         ) : (
           dailyRows.map((row, index) => (
@@ -362,6 +499,12 @@ export default function HistoryScreen() {
               <Text style={styles.tableCell}>{row.malas}</Text>
               <Text style={styles.tableCell}>{row.totalCount}</Text>
               <Text style={styles.tableCell}>{row.accumulated}</Text>
+              <Pressable
+                style={styles.deleteBtn}
+                onPress={() => handleDeleteDay(row)}
+              >
+                <Text style={styles.deleteBtnText}>Delete</Text>
+              </Pressable>
             </View>
           ))
         )}
@@ -476,6 +619,18 @@ const styles = StyleSheet.create({
     fontSize: 18,
     paddingVertical: 14,
     paddingHorizontal: 10,
+    fontWeight: '700',
+  },
+  deleteBtn: {
+    marginRight: 10,
+    backgroundColor: 'rgba(220, 38, 38, 0.1)',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  deleteBtnText: {
+    color: '#b91c1c',
+    fontSize: 13,
     fontWeight: '700',
   },
 

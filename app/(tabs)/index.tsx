@@ -58,6 +58,7 @@ const USER_NAME_KEY = 'userName';
 const USER_ID_KEY = 'userId';
 const AUTH_PENDING_KEY = 'authPending';
 const LAST_TOTAL_KEY = 'lastTotal';
+const HISTORY_SYNC_VERSION_KEY = 'historyStatsSyncVersion';
 const AUTH_PENDING_MAX_MS = 2 * 60 * 1000;
 const TIMER_SECONDS_KEY = 'timerSeconds';
 const TIMER_RUNNING_KEY = 'timerRunning';
@@ -116,6 +117,16 @@ const getTodayRange = () => {
   const end = new Date(start);
   end.setDate(end.getDate() + 1);
   return { start: start.toISOString(), end: end.toISOString() };
+};
+
+const parseHistory = (raw: string | null): Session[] => {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 };
 
 const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
@@ -403,21 +414,29 @@ export default function JapamMain() {
     if (!response.ok) console.log('Total save error:', await response.text());
   };
 
+  const getLocalTodayTotalForUser = useCallback(async (userId: string) => {
+    const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
+    const sessions = parseHistory(rawHistory);
+    const todayKey = getLocalDateKey();
+
+    return sessions
+      .filter((item) => item.userId === userId && getLocalDateKey(new Date(item.date)) === todayKey)
+      .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
+  }, []);
+
   const restoreTodayTotal = useCallback(async () => {
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
   
     if (savedUserId) {
       const remoteTodayTotal = await fetchTodayTotalFromSupabase(savedUserId);
+      const localTodayTotal = await getLocalTodayTotalForUser(savedUserId);
       const cloudTotal = await fetchUserTotalFromSupabase(savedUserId);
       const safeCloudTotal = Math.max(0, Math.floor(Number(cloudTotal) || 0));
       const safeRemoteTotal = Math.max(0, Math.floor(Number(remoteTodayTotal) || 0));
-      const partialFromCloud =
-        remoteTodayTotal !== null && safeCloudTotal > safeRemoteTotal
-          ? safeCloudTotal - safeRemoteTotal
-          : 0;
-      const finalTotal = remoteTodayTotal !== null
-        ? safeRemoteTotal + (partialFromCloud > 0 && partialFromCloud < 108 ? partialFromCloud : 0)
-        : safeCloudTotal;
+      const finalTotal =
+        remoteTodayTotal !== null
+          ? Math.max(safeRemoteTotal, localTodayTotal)
+          : Math.max(localTodayTotal, safeCloudTotal);
   
       await restoreTotal(finalTotal, { userId: savedUserId });
       totalRef.current = finalTotal;
@@ -430,12 +449,41 @@ export default function JapamMain() {
     totalRef.current = 0;
     await refreshDayStreak({ userId: null, todayTotal: 0 });
     setHasRestoredTotal(true);
-  }, [fetchTodayTotalFromSupabase, refreshDayStreak, restoreTotal]);
+  }, [fetchTodayTotalFromSupabase, getLocalTodayTotalForUser, refreshDayStreak, restoreTotal]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let mounted = true;
+
+      void (async () => {
+        const marker = await AsyncStorage.getItem(HISTORY_SYNC_VERSION_KEY);
+        if (!mounted || !marker) return;
+        await restoreTodayTotal();
+      })();
+
+      return () => {
+        mounted = false;
+      };
+    }, [restoreTodayTotal])
+  );
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
     document.title = isRunning ? `⏱ ${formatTime(seconds)} — Mantra Japam` : 'Mantra Japam';
   }, [isRunning, seconds]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+
+    const onHistoryUpdated = () => {
+      void restoreTodayTotal();
+    };
+
+    window.addEventListener('japam-history-updated', onHistoryUpdated as EventListener);
+    return () => {
+      window.removeEventListener('japam-history-updated', onHistoryUpdated as EventListener);
+    };
+  }, [restoreTodayTotal]);
 
   useEffect(() => {
     timerRef.current = { seconds, isRunning, targetSeconds, minutesInput, loopTimer };
