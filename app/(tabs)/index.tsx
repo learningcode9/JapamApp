@@ -202,6 +202,18 @@ export default function JapamMain() {
 
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
+  const configureAudio = useCallback(async () => {
+    try {
+      await Audio.setAudioModeAsync({
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: true,
+        shouldDuckAndroid: false,
+      });
+    } catch (error) {
+      console.log('Audio mode error:', error);
+    }
+  }, []);
+
   const clearTimerHandles = useCallback(() => {
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current);
@@ -570,21 +582,16 @@ export default function JapamMain() {
 
     const preloadSounds = async () => {
       try {
-        await Audio.setAudioModeAsync({
-          staysActiveInBackground: true,
-          playsInSilentModeIOS: true,
-          allowsRecordingIOS: false,
-          shouldDuckAndroid: false,
-        });
+        await configureAudio();
 
         const [normalSound, finalSound] = await Promise.all([
-          Audio.Sound.createAsync(require('../../assets/soft_tibetan_bowl.wav'), {
+          Audio.Sound.createAsync(require('../../assets/om_complete.mp3'), {
             shouldPlay: false,
-            volume: 0.8,
+            volume: 0.9,
           }),
-          Audio.Sound.createAsync(require('../../assets/soft_tibetan_bowl_final.wav'), {
+          Audio.Sound.createAsync(require('../../assets/om_complete.mp3'), {
             shouldPlay: false,
-            volume: 0.85,
+            volume: 0.9,
           }),
         ]);
 
@@ -610,7 +617,7 @@ export default function JapamMain() {
       normalCompleteSoundRef.current = null;
       finalCompleteSoundRef.current = null;
     };
-  }, []);
+  }, [configureAudio]);
 
   const saveTimerStateToSupabase = async (userId: string, timerState: {
     seconds: number; isRunning: boolean; targetSeconds: number; minutesInput: string; loopTimer: boolean;
@@ -982,6 +989,7 @@ export default function JapamMain() {
 
   const playCompleteSound = async (variant: 'normal' | 'final' = 'normal') => {
     try {
+      await configureAudio();
       const sound = variant === 'final'
         ? finalCompleteSoundRef.current
         : normalCompleteSoundRef.current;
@@ -990,6 +998,7 @@ export default function JapamMain() {
 
       await sound.stopAsync().catch(() => undefined);
       await sound.setPositionAsync(0).catch(() => undefined);
+      await sound.setVolumeAsync(0.9).catch(() => undefined);
       await sound.playAsync();
       if (variant === 'final') {
         setTimeout(() => {
@@ -1333,7 +1342,7 @@ export default function JapamMain() {
         setIsRunning(true);
         startTimerInterval();
         isCompletingRef.current = false;
-      }, 4500);
+      }, 5000);
     } else {
       setSeconds(0);
       setIsRunning(false);
