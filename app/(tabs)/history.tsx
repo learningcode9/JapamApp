@@ -24,6 +24,7 @@ type Session = {
   duration: number;
   manual?: boolean;
   userId?: string;
+  remoteId?: number | string;
 };
 
 type DailyRow = {
@@ -35,6 +36,7 @@ type DailyRow = {
   duration: number;
   manualCount: number;
   autoCount: number;
+  remoteIds: Array<number | string>;
 };
 
 type RemoteHistoryRow = {
@@ -119,6 +121,9 @@ const buildDailyRows = (sessions: Session[]) => {
 
       if (isManual) existing.manualCount += 1;
       else existing.autoCount += 1;
+      if (item.remoteId !== undefined && item.remoteId !== null) {
+        existing.remoteIds.push(item.remoteId);
+      }
       return;
     }
 
@@ -131,6 +136,7 @@ const buildDailyRows = (sessions: Session[]) => {
       duration,
       manualCount: isManual ? 1 : 0,
       autoCount: isManual ? 0 : 1,
+      remoteIds: item.remoteId !== undefined && item.remoteId !== null ? [item.remoteId] : [],
     });
   });
 
@@ -188,6 +194,7 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
         duration: 0,
         manual: false,
         userId,
+        remoteId: row.id,
       };
     });
     };
@@ -239,40 +246,35 @@ export default function HistoryScreen() {
   );
 
   const deleteDayFromSupabase = useCallback(
-    async (userId: string, dayKey: string): Promise<boolean> => {
+    async (userId: string, rowIds: Array<number | string>): Promise<boolean> => {
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-      if (!url || !key || !userId) return false;
+      if (!url || !key || !userId || rowIds.length === 0) return false;
 
-      const [year, month, day] = dayKey.split('-').map(Number);
-      const localStart = new Date(year, month - 1, day, 0, 0, 0, 0);
-      const localEnd = new Date(year, month - 1, day + 1, 0, 0, 0, 0);
-      const dayStart = localStart.toISOString();
-      const dayEnd = localEnd.toISOString();
       const encodedUserId = encodeURIComponent(userId);
 
-      console.log('Deleting day:', dayKey);
-      console.log('Delete range:', dayStart, dayEnd);
+      for (const rowId of rowIds) {
+        const query = new URLSearchParams({
+          user_id: `eq.${encodedUserId}`,
+          id: `eq.${rowId}`,
+        });
 
-      const query = new URLSearchParams({
-        user_id: `eq.${encodedUserId}`,
-        created_at: `gte.${dayStart}`,
-      });
-      query.append('created_at', `lt.${dayEnd}`);
+        console.log('Deleting row id:', rowId);
 
-      const response = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
-        method: 'DELETE',
-        headers: {
-          apikey: key,
-          Authorization: `Bearer ${key}`,
-        },
-      });
+        const response = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
+          method: 'DELETE',
+          headers: {
+            apikey: key,
+            Authorization: `Bearer ${key}`,
+          },
+        });
 
-      console.log('Delete response:', response.status);
+        console.log('Delete response:', response.status);
 
-      if (!response.ok) {
-        console.log('Supabase delete error:', await response.text());
-        return false;
+        if (!response.ok) {
+          console.log('Supabase delete error:', await response.text());
+          return false;
+        }
       }
 
       return true;
@@ -522,7 +524,10 @@ export default function HistoryScreen() {
                   const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
                   if (!currentUserId) return;
 
-                  const deleted = await deleteDayFromSupabase(currentUserId, target.dateKey);
+                  const rowIds = target.remoteIds || [];
+                  console.log('Deleting history row ids:', rowIds);
+
+                  const deleted = await deleteDayFromSupabase(currentUserId, rowIds);
                   if (!deleted) {
                     Alert.alert('Delete failed. Please try again.');
                     return;
@@ -533,6 +538,9 @@ export default function HistoryScreen() {
 
                   const keptSessions = allSessions.filter((item) => {
                     if (item.userId !== currentUserId) return true;
+                    if (item.remoteId !== undefined && item.remoteId !== null) {
+                      return !rowIds.includes(item.remoteId);
+                    }
                     return toDayKey(item.date) !== target.dateKey;
                   });
 

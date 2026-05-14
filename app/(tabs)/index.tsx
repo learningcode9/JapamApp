@@ -672,9 +672,10 @@ export default function JapamMain() {
 
   const applyRestoredTimerState = useCallback((timerState: TimerStateRow) => {
     const savedTarget = Math.max(60, Math.floor(Number(timerState.target_seconds) || DEFAULT_TIMER_MINUTES * 60));
+    const savedSeconds = Math.max(0, Math.floor(Number(timerState.seconds) || 0));
   
     timerStartedAtRef.current = null;
-    setSeconds(0);
+    setSeconds(savedSeconds);
     setIsRunning(false);
     setTargetSeconds(savedTarget);
     setMinutesInput(timerState.minutes_input || String(Math.max(1, Math.floor(savedTarget / 60))));
@@ -720,7 +721,7 @@ export default function JapamMain() {
           const savedTimerTarget = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_TARGET_KEY, savedUserId))) || String(DEFAULT_TIMER_MINUTES * 60));
           const savedTimerMinutes = (await AsyncStorage.getItem(getUserStorageKey(TIMER_MINUTES_KEY, savedUserId))) || String(DEFAULT_TIMER_MINUTES);
           const savedTimerLoop = (await AsyncStorage.getItem(getUserStorageKey(TIMER_LOOP_KEY, savedUserId))) === 'true';
-          setSeconds(0);
+          setSeconds(Math.max(0, savedTimerSeconds));
           setIsRunning(false);
           setTargetSeconds(savedTimerTarget);
           setMinutesInput(savedTimerMinutes);
@@ -1217,6 +1218,32 @@ export default function JapamMain() {
     }
     timerStartedAtRef.current = null;
     setIsRunning(false);
+    void (async () => {
+      const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      if (!savedUserId) return;
+
+      const pausedSeconds = Math.max(0, Math.floor(seconds));
+      const pausedTarget = Math.max(60, Math.floor(targetSeconds || DEFAULT_TIMER_MINUTES * 60));
+      const pausedMinutes = minutesInput || String(DEFAULT_TIMER_MINUTES);
+
+      await AsyncStorage.setItem(getUserStorageKey(TIMER_SECONDS_KEY, savedUserId), String(pausedSeconds));
+      await AsyncStorage.setItem(getUserStorageKey(TIMER_RUNNING_KEY, savedUserId), 'false');
+      await AsyncStorage.setItem(getUserStorageKey(TIMER_TARGET_KEY, savedUserId), String(pausedTarget));
+      await AsyncStorage.setItem(getUserStorageKey(TIMER_MINUTES_KEY, savedUserId), pausedMinutes);
+      await AsyncStorage.setItem(getUserStorageKey(TIMER_LOOP_KEY, savedUserId), String(loopTimer));
+      await AsyncStorage.setItem(TIMER_SECONDS_KEY, String(pausedSeconds));
+      await AsyncStorage.setItem(TIMER_RUNNING_KEY, 'false');
+      await AsyncStorage.setItem(TIMER_TARGET_KEY, String(pausedTarget));
+      await AsyncStorage.setItem(TIMER_MINUTES_KEY, pausedMinutes);
+      await AsyncStorage.setItem(TIMER_LOOP_KEY, String(loopTimer));
+      await saveTimerStateToSupabase(savedUserId, {
+        seconds: pausedSeconds,
+        isRunning: false,
+        targetSeconds: pausedTarget,
+        minutesInput: pausedMinutes,
+        loopTimer,
+      });
+    })();
     // CRITICAL: Do NOT call setSeconds(0) or clear selectedDuration
   };
   
@@ -1287,7 +1314,7 @@ export default function JapamMain() {
         setIsRunning(true);
         startTimerInterval();
         isCompletingRef.current = false;
-      }, 1700);
+      }, 2000);
     } else {
       setSeconds(0);
       setIsRunning(false);

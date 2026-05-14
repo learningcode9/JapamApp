@@ -113,7 +113,7 @@ export default function SettingsScreen() {
     setShowFeedbackModal(true);
   };
 
-  const submitFeedback = async () => {
+  const handleFeedbackSubmit = async () => {
     if (isSubmittingFeedback) return;
     console.log('Feedback submit pressed');
 
@@ -443,7 +443,7 @@ export default function SettingsScreen() {
               </Pressable>
               <Pressable
                 style={[styles.feedbackSubmit, isSubmittingFeedback && { opacity: 0.7 }]}
-                onPress={() => void submitFeedback()}
+                onPress={() => void handleFeedbackSubmit()}
                 disabled={isSubmittingFeedback}
               >
                 <Text style={styles.feedbackSubmitText}>
