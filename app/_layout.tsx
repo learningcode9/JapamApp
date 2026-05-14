@@ -1,8 +1,10 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import Constants from 'expo-constants';
+import * as Updates from 'expo-updates';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import 'react-native-reanimated';
 
 import { PaperProvider } from 'react-native-paper';
@@ -47,6 +49,7 @@ export default function RootLayout() {
     };
 
     setMeta('theme-color', '#f5fafa');
+    setMeta('app-version', Constants.expoConfig?.version || '1.0.0');
     setMeta('apple-mobile-web-app-capable', 'yes');
     setMeta('apple-mobile-web-app-status-bar-style', 'black-translucent');
     setMeta('apple-mobile-web-app-title', 'Mantra Japam');
@@ -89,25 +92,67 @@ export default function RootLayout() {
       }, 180);
     }
 
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker
-        .getRegistrations()
-        .then((registrations) => registrations.forEach((registration) => registration.unregister()))
-        .catch(() => {});
-    }
+    const versionKey = 'japam-web-version';
+    const currentVersion = Constants.expoConfig?.version || '1.0.0';
+    const storedVersion = window.localStorage.getItem(versionKey);
 
-    if ('caches' in window) {
-      caches
-        .keys()
-        .then((keys) =>
-          Promise.all(
-            keys
-              .filter((key) => /japam|expo|workbox|pwa/i.test(key))
-              .map((key) => caches.delete(key))
-          )
-        )
-        .catch(() => {});
-    }
+    const clearWebCaches = async () => {
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(
+          keys
+            .filter((key) => /japam|expo|workbox|pwa/i.test(key))
+            .map((key) => caches.delete(key))
+        );
+      }
+    };
+
+    const syncWebVersion = async () => {
+      if (!storedVersion) {
+        window.localStorage.setItem(versionKey, currentVersion);
+        return;
+      }
+
+      if (storedVersion !== currentVersion) {
+        await clearWebCaches();
+        window.localStorage.setItem(versionKey, currentVersion);
+        window.location.reload();
+      }
+    };
+
+    void syncWebVersion();
+  }, []);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    if (!Updates.isEnabled) return;
+
+    let mounted = true;
+
+    const checkForNativeUpdate = async () => {
+      try {
+        const update = await Updates.checkForUpdateAsync();
+        if (!mounted || !update.isAvailable) return;
+
+        await Updates.fetchUpdateAsync();
+        await Updates.reloadAsync();
+      } catch (error) {
+        console.log('Update check error:', error);
+      }
+    };
+
+    void checkForNativeUpdate();
+
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void checkForNativeUpdate();
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
   }, []);
 
   return (
