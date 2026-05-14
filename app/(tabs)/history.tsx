@@ -507,6 +507,8 @@ export default function HistoryScreen() {
                     pressed && styles.deleteIconBtnPressed,
                   ]}
                   onPress={() => handleDeleteDay(row)}
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                  pressRetentionOffset={{ top: 18, bottom: 18, left: 18, right: 18 }}
                   accessibilityRole="button"
                   accessibilityLabel={`Delete history for ${row.dateLabel}`}
                 >
@@ -630,21 +632,26 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   rowActionCell: {
-    width: 44,
+    width: 56,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingRight: 10,
+    paddingRight: 8,
+    overflow: 'visible',
+    zIndex: 2,
   },
   deleteIconBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(220, 38, 38, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(185, 28, 28, 0.12)',
+    elevation: 1,
   },
   deleteIconBtnPressed: {
-    opacity: 0.72,
+    opacity: 0.8,
     transform: [{ scale: 0.96 }],
   },
 

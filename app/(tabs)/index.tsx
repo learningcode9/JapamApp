@@ -212,6 +212,21 @@ export default function JapamMain() {
     }
   }, []);
 
+  const startTimerInterval = useCallback(() => {
+    const startAt = timerStartedAtRef.current;
+    if (startAt === null) return;
+
+    clearTimerHandles();
+
+    const tick = () => {
+      if (timerStartedAtRef.current === null) return;
+      setSeconds(Math.floor((Date.now() - timerStartedAtRef.current) / 1000));
+    };
+
+    tick();
+    timerIntervalRef.current = setInterval(tick, 1000);
+  }, [clearTimerHandles]);
+
   const googleRedirectUri =
     Platform.OS === 'web' && typeof window !== 'undefined'
       ? window.location.origin
@@ -904,24 +919,14 @@ export default function JapamMain() {
       timerStartedAtRef.current = Date.now() - timerRef.current.seconds * 1000;
     }
 
-    const tick = () => {
-      if (timerStartedAtRef.current === null) return;
-      setSeconds(Math.floor((Date.now() - timerStartedAtRef.current) / 1000));
-    };
-
-    tick();
-    if (timerIntervalRef.current) {
-      clearInterval(timerIntervalRef.current);
-    }
-
-    timerIntervalRef.current = setInterval(tick, 1000);
+    startTimerInterval();
     return () => {
       if (timerIntervalRef.current) {
         clearInterval(timerIntervalRef.current);
         timerIntervalRef.current = null;
       }
     };
-  }, [clearTimerHandles, isRunning]);
+  }, [clearTimerHandles, isRunning, startTimerInterval]);
 
   useEffect(() => {
     if (!isRunning) return;
@@ -1168,6 +1173,7 @@ export default function JapamMain() {
 
     clearTimerHandles();
     isCompletingRef.current = false;
+    completedLoopMalasRef.current = 0;
     timerStartedAtRef.current = Date.now() - nextSeconds * 1000;
     timerRef.current = { seconds: nextSeconds, isRunning: true, targetSeconds: nextTargetSeconds, minutesInput: String(mins), loopTimer };
     setMinutesInput(String(mins));
@@ -1176,6 +1182,7 @@ export default function JapamMain() {
     setSeconds(nextSeconds);
     setAutoCompletedMalas(0);
     setIsRunning(true);
+    startTimerInterval();
   };
 
   const handlePause = () => {
@@ -1226,49 +1233,43 @@ export default function JapamMain() {
     timerStartedAtRef.current = null;
 
     if (loopTimer) {
-      setAutoCompletedMalas((prev) => {
-        const next = prev + 1;
-        completedLoopMalasRef.current = next;
+      const nextLoopCount = completedLoopMalasRef.current + 1;
+      completedLoopMalasRef.current = nextLoopCount;
+      setAutoCompletedMalas(nextLoopCount);
 
-        if (next >= 5) {
-          setSeconds(0);
-          setIsRunning(false);
-          setLoopTimer(false);
+      if (nextLoopCount >= 5) {
+        setSeconds(0);
+        setIsRunning(false);
+        setLoopTimer(false);
+        isCompletingRef.current = false;
+        return;
+      }
+
+      autoRepeatTimeoutRef.current = setTimeout(() => {
+        if (!timerRef.current.loopTimer || completedLoopMalasRef.current >= 5) {
           isCompletingRef.current = false;
-          return next;
+          return;
         }
 
-        autoRepeatTimeoutRef.current = setTimeout(() => {
-          if (!timerRef.current.loopTimer || completedLoopMalasRef.current >= 5) {
-            isCompletingRef.current = false;
-            return;
-          }
-
-          if (autoRepeatTimeoutRef.current) {
-            clearTimeout(autoRepeatTimeoutRef.current);
-            autoRepeatTimeoutRef.current = null;
-          }
-
-          timerStartedAtRef.current = Date.now();
-          timerRef.current = {
-            seconds: 0,
-            isRunning: true,
-            targetSeconds,
-            minutesInput,
-            loopTimer: true,
-          };
-          setSeconds(0);
-          setIsRunning(true);
-          isCompletingRef.current = false;
-        }, 4000);
-        return next;
-      });
+        timerStartedAtRef.current = Date.now();
+        timerRef.current = {
+          seconds: 0,
+          isRunning: true,
+          targetSeconds,
+          minutesInput,
+          loopTimer: true,
+        };
+        setSeconds(0);
+        setIsRunning(true);
+        startTimerInterval();
+        isCompletingRef.current = false;
+      }, 150);
     } else {
       setSeconds(0);
       setIsRunning(false);
       isCompletingRef.current = false;
     }
-  }, [clearTimerHandles, completeFeedback, loopTimer, minutesInput, saveSession, targetSeconds]);
+  }, [clearTimerHandles, completeFeedback, loopTimer, minutesInput, saveSession, startTimerInterval, targetSeconds]);
 
   const performLogout = async () => {
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
