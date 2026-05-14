@@ -6,6 +6,7 @@ import * as Sharing from 'expo-sharing';
 import React, { useCallback, useMemo, useState } from 'react';
 import {
     Alert,
+    DeviceEventEmitter,
     Platform,
     Pressable,
     ScrollView,
@@ -329,11 +330,10 @@ export default function HistoryScreen() {
 
     await saveUserTotalToSupabase(currentUserId, userTodayTotal);
 
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('japam-history-updated', {
-        detail: { userId: currentUserId, todayTotal: userTodayTotal },
-      }));
-    }
+    DeviceEventEmitter.emit('japam-history-updated', {
+      userId: currentUserId,
+      todayTotal: userTodayTotal,
+    });
   }, [saveUserTotalToSupabase]);
 
   const handleDeleteDay = useCallback((row: DailyRow) => {

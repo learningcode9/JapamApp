@@ -11,6 +11,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
+  DeviceEventEmitter,
   Dimensions,
   ImageBackground,
   Modal,
@@ -169,6 +170,8 @@ export default function JapamMain() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [repetitionSoundEnabled, setRepetitionSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
+  const [installBannerDismissed, setInstallBannerDismissed] = useState(false);
 
   const totalRef = useRef(0);
   const timerRef = useRef({
@@ -182,6 +185,11 @@ export default function JapamMain() {
   const dbTotalSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const timerCloudLastSavedAtRef = useRef(0);
   const timerStartedAtRef = useRef<number | null>(null);
+  const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoRepeatTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isCompletingRef = useRef(false);
+  const completedLoopMalasRef = useRef(0);
+  const deferredInstallPromptRef = useRef<any>(null);
   const rippleAnim = useRef(new Animated.Value(0)).current;
   const isSavingSessionRef = useRef(false);
   const completeSoundRef = useRef<Audio.Sound | null>(null);
@@ -191,6 +199,18 @@ export default function JapamMain() {
   const glowAnim = useRef(new Animated.Value(0)).current;
 
   const formatTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+  const clearTimerHandles = useCallback(() => {
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+
+    if (autoRepeatTimeoutRef.current) {
+      clearTimeout(autoRepeatTimeoutRef.current);
+      autoRepeatTimeoutRef.current = null;
+    }
+  }, []);
 
   const googleRedirectUri =
     Platform.OS === 'web' && typeof window !== 'undefined'
@@ -473,17 +493,53 @@ export default function JapamMain() {
   }, [isRunning, seconds]);
 
   useEffect(() => {
-    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
-
     const onHistoryUpdated = () => {
       void restoreTodayTotal();
     };
 
-    window.addEventListener('japam-history-updated', onHistoryUpdated as EventListener);
+    const subscription = DeviceEventEmitter.addListener('japam-history-updated', onHistoryUpdated);
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.addEventListener('japam-history-updated', onHistoryUpdated as EventListener);
+    }
+
     return () => {
-      window.removeEventListener('japam-history-updated', onHistoryUpdated as EventListener);
+      subscription.remove();
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.removeEventListener('japam-history-updated', onHistoryUpdated as EventListener);
+      }
     };
   }, [restoreTodayTotal]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+
+    const dismissKey = 'install-banner-dismissed-at';
+    const dismissWindowMs = 7 * 24 * 60 * 60 * 1000;
+    const dismissedAt = Number(window.localStorage.getItem(dismissKey) || '0');
+    const recentlyDismissed = dismissedAt > 0 && Date.now() - dismissedAt < dismissWindowMs;
+
+    const onBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      if (recentlyDismissed) return;
+      deferredInstallPromptRef.current = event;
+      setShowInstallBanner(true);
+    };
+
+    const onAppInstalled = () => {
+      deferredInstallPromptRef.current = null;
+      setShowInstallBanner(false);
+      window.localStorage.removeItem(dismissKey);
+    };
+
+    window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt);
+    window.addEventListener('appinstalled', onAppInstalled);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', onAppInstalled);
+    };
+  }, []);
 
   useEffect(() => {
     timerRef.current = { seconds, isRunning, targetSeconds, minutesInput, loopTimer };
@@ -654,8 +710,9 @@ export default function JapamMain() {
         clearTimeout(dbTotalSaveTimeoutRef.current);
       }
       completeSoundRef.current?.unloadAsync().catch(console.log);
+      clearTimerHandles();
     };
-  }, []);
+  }, [clearTimerHandles]);
 
   const loadJapamNameFromSupabase = useCallback(async (googleUserId: string) => {
     try {
@@ -838,7 +895,11 @@ export default function JapamMain() {
   }, [count, malas, total, userName, hasRestoredTotal, refreshDayStreak]);
 
   useEffect(() => {
-    if (!isRunning) return;
+    if (!isRunning) {
+      clearTimerHandles();
+      return;
+    }
+
     if (timerStartedAtRef.current === null) {
       timerStartedAtRef.current = Date.now() - timerRef.current.seconds * 1000;
     }
@@ -849,9 +910,18 @@ export default function JapamMain() {
     };
 
     tick();
-    const interval = setInterval(tick, 1000);
-    return () => clearInterval(interval);
-  }, [isRunning]);
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+    }
+
+    timerIntervalRef.current = setInterval(tick, 1000);
+    return () => {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
+    };
+  }, [clearTimerHandles, isRunning]);
 
   useEffect(() => {
     if (!isRunning) return;
@@ -1096,6 +1166,8 @@ export default function JapamMain() {
     const targetChanged = nextTargetSeconds !== targetSeconds;
     const nextSeconds = targetChanged || seconds >= nextTargetSeconds ? 0 : seconds;
 
+    clearTimerHandles();
+    isCompletingRef.current = false;
     timerStartedAtRef.current = Date.now() - nextSeconds * 1000;
     timerRef.current = { seconds: nextSeconds, isRunning: true, targetSeconds: nextTargetSeconds, minutesInput: String(mins), loopTimer };
     setMinutesInput(String(mins));
@@ -1108,6 +1180,7 @@ export default function JapamMain() {
 
   const handlePause = () => {
     timerStartedAtRef.current = null;
+    clearTimerHandles();
     setIsRunning(false);
     void (async () => {
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
@@ -1124,6 +1197,7 @@ export default function JapamMain() {
       timerStartedAtRef.current = null;
     }
 
+    clearTimerHandles();
     setMinutesInput(String(safeMinutes));
     setHasSelectedTimer(true);
     setTargetSeconds(safeMinutes * 60);
@@ -1139,36 +1213,62 @@ export default function JapamMain() {
   };
 
   const completeTimerSession = useCallback(() => {
+    if (isCompletingRef.current) return;
+    isCompletingRef.current = true;
+
     const currentTotal = totalRef.current;
     const nextTotal = currentTotal + 108;
     setCountersFromTotal(nextTotal);
     void saveSession(targetSeconds, 1, 108, nextTotal);
     void completeFeedback();
 
+    clearTimerHandles();
+    timerStartedAtRef.current = null;
+
     if (loopTimer) {
       setAutoCompletedMalas((prev) => {
         const next = prev + 1;
+        completedLoopMalasRef.current = next;
+
         if (next >= 5) {
-          timerStartedAtRef.current = null;
           setSeconds(0);
           setIsRunning(false);
           setLoopTimer(false);
+          isCompletingRef.current = false;
+          return next;
         }
-        else {
-          setTimeout(() => {
-            timerStartedAtRef.current = Date.now();
-            setSeconds(0);
-            setIsRunning(true);
-          }, 4000);
-        }
+
+        autoRepeatTimeoutRef.current = setTimeout(() => {
+          if (!timerRef.current.loopTimer || completedLoopMalasRef.current >= 5) {
+            isCompletingRef.current = false;
+            return;
+          }
+
+          if (autoRepeatTimeoutRef.current) {
+            clearTimeout(autoRepeatTimeoutRef.current);
+            autoRepeatTimeoutRef.current = null;
+          }
+
+          timerStartedAtRef.current = Date.now();
+          timerRef.current = {
+            seconds: 0,
+            isRunning: true,
+            targetSeconds,
+            minutesInput,
+            loopTimer: true,
+          };
+          setSeconds(0);
+          setIsRunning(true);
+          isCompletingRef.current = false;
+        }, 4000);
         return next;
       });
     } else {
-      timerStartedAtRef.current = null;
       setSeconds(0);
       setIsRunning(false);
+      isCompletingRef.current = false;
     }
-  }, [loopTimer, targetSeconds, saveSession, completeFeedback]);
+  }, [clearTimerHandles, completeFeedback, loopTimer, minutesInput, saveSession, targetSeconds]);
 
   const performLogout = async () => {
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
@@ -1266,6 +1366,33 @@ setTimeout(() => { suppressTimerSaveRef.current = false; }, 0);
     ]);
   };
 
+  const handleInstallApp = async () => {
+    const prompt = deferredInstallPromptRef.current;
+    if (!prompt || typeof prompt.prompt !== 'function') {
+      setShowInstallBanner(false);
+      return;
+    }
+
+    prompt.prompt();
+    try {
+      await prompt.userChoice;
+    } catch {
+      // Ignore prompt cancellation errors.
+    } finally {
+      deferredInstallPromptRef.current = null;
+      setShowInstallBanner(false);
+    }
+  };
+
+  const dismissInstallBanner = () => {
+    setShowInstallBanner(false);
+    setInstallBannerDismissed(true);
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.localStorage.setItem('install-banner-dismissed-at', String(Date.now()));
+    }
+  };
+
   const todayLabel = new Date().toLocaleDateString();
   const progressPercent = Math.min(100, Math.max(0, (count / 108) * 100));
   const progressRingBackground =
@@ -1327,6 +1454,22 @@ setTimeout(() => { suppressTimerSaveRef.current = false; }, 0);
             )}
           </View>
 
+          {showInstallBanner && !installBannerDismissed && (
+            <View style={styles.installBanner}>
+              <View style={styles.installBannerTextWrap}>
+                <Text style={styles.installBannerTitle}>Install this app for a better experience</Text>
+              </View>
+              <View style={styles.installBannerActions}>
+                <Pressable style={styles.installBannerSecondary} onPress={dismissInstallBanner}>
+                  <Text style={styles.installBannerSecondaryText}>Not now</Text>
+                </Pressable>
+                <Pressable style={styles.installBannerPrimary} onPress={() => void handleInstallApp()}>
+                  <Text style={styles.installBannerPrimaryText}>Install App</Text>
+                </Pressable>
+              </View>
+            </View>
+          )}
+
           <Text style={styles.dateText}>Today · {todayLabel}</Text>
 
           <Animated.View style={styles.progressShell}>
@@ -1382,6 +1525,7 @@ setTimeout(() => { suppressTimerSaveRef.current = false; }, 0);
               setShowTimerSheet(true);
             }}
           >
+            <Ionicons name="time-outline" size={21} color="#0F8F87" style={styles.sessionChipIcon} />
             <Text style={styles.sessionChipText}>
               {hasSelectedTimer ? `Timer: ${minutesInput} min` : 'Select timer for Japam'}
             </Text>
@@ -2179,6 +2323,9 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 8 },
     elevation: 5,
   },
+  sessionChipIcon: {
+    marginRight: 2,
+  },
   sessionChipText: {
     color: '#063B3B',
     fontSize: 16,
@@ -2284,6 +2431,64 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 12 },
     elevation: 7,
     marginBottom: isMobile ? 20 : 28,
+  },
+  installBanner: {
+    width: '100%',
+    maxWidth: 380,
+    alignSelf: 'center',
+    marginTop: 8,
+    marginBottom: 18,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.88)',
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.14)',
+    padding: 14,
+    shadowColor: '#0f766e',
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 5,
+  },
+  installBannerTextWrap: {
+    marginBottom: 12,
+  },
+  installBannerTitle: {
+    color: '#063B3B',
+    fontSize: 15,
+    fontWeight: '800',
+    textAlign: 'center',
+    lineHeight: 21,
+  },
+  installBannerActions: {
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'center',
+  },
+  installBannerSecondary: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 999,
+    backgroundColor: 'rgba(95,127,128,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  installBannerSecondaryText: {
+    color: '#063B3B',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  installBannerPrimary: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 999,
+    backgroundColor: '#0F8F87',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  installBannerPrimaryText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '800',
   },
   statColumn: {
     flex: 1,

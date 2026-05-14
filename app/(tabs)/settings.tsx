@@ -3,7 +3,7 @@ import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Alert, Linking, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
@@ -26,6 +26,7 @@ export default function SettingsScreen() {
   const [isPreviewingSound, setIsPreviewingSound] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [userName, setUserName] = useState('');
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -208,8 +209,8 @@ export default function SettingsScreen() {
               <Text style={styles.label}>Signed in</Text>
               <Text style={styles.description}>{userName || 'Google user'}</Text>
             </View>
-            <Pressable style={[styles.compactButton, styles.logoutButton]} onPress={logout}>
-              <Text style={styles.compactButtonText}>Logout</Text>
+            <Pressable style={styles.logoutTextButton} onPress={() => setShowLogoutConfirm(true)}>
+              <Text style={styles.logoutTextButtonText}>Logout</Text>
             </Pressable>
           </View>
         )}
@@ -266,12 +267,55 @@ export default function SettingsScreen() {
         </View>
       </View>
 
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Help / Install App</Text>
+        <View style={styles.cardStack}>
+          <View style={styles.helpCard}>
+            <Text style={styles.helpTitle}>Add to Home Screen</Text>
+            <Text style={styles.helpSubTitle}>iPhone Safari</Text>
+            <Text style={styles.helpStep}>1. Tap Share</Text>
+            <Text style={styles.helpStep}>2. Tap Add to Home Screen</Text>
+            <Text style={styles.helpStep}>3. Tap Add</Text>
+          </View>
+          <View style={styles.helpCard}>
+            <Text style={styles.helpTitle}>Add to Home Screen</Text>
+            <Text style={styles.helpSubTitle}>Android Chrome</Text>
+            <Text style={styles.helpStep}>1. Tap menu ⋮</Text>
+            <Text style={styles.helpStep}>2. Tap Install app</Text>
+            <Text style={styles.helpStep}>3. Confirm Install</Text>
+          </View>
+        </View>
+      </View>
+
       <View style={styles.infoBox}>
         <Text style={styles.infoTitle}>Settings saved automatically</Text>
         <Text style={styles.infoText}>
           These options will be applied when you return to the Japam screen.
         </Text>
       </View>
+
+      <Modal visible={showLogoutConfirm} transparent animationType="fade">
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmCard}>
+            <Text style={styles.confirmTitle}>Logout?</Text>
+            <Text style={styles.confirmText}>Are you sure you want to logout?</Text>
+            <View style={styles.confirmActions}>
+              <Pressable style={styles.confirmCancel} onPress={() => setShowLogoutConfirm(false)}>
+                <Text style={styles.confirmCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={styles.confirmLogout}
+                onPress={async () => {
+                  setShowLogoutConfirm(false);
+                  await logout();
+                }}
+              >
+                <Text style={styles.confirmLogoutText}>Logout</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
     </LinearGradient>
   );
@@ -376,6 +420,21 @@ const styles = StyleSheet.create({
     backgroundColor: '#991b1b',
   },
 
+  logoutTextButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(153, 27, 27, 0.18)',
+    backgroundColor: 'rgba(153, 27, 27, 0.06)',
+  },
+
+  logoutTextButtonText: {
+    color: '#b91c1c',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+
   compactButtonText: {
     color: 'white',
     fontSize: 15,
@@ -401,5 +460,98 @@ const styles = StyleSheet.create({
     color: '#547071',
     fontSize: 17,
     lineHeight: 24,
+  },
+
+  cardStack: {
+    gap: 12,
+  },
+
+  helpCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.54)',
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(15, 118, 110, 0.16)',
+  },
+
+  helpTitle: {
+    color: '#12383c',
+    fontSize: 18,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+
+  helpSubTitle: {
+    color: '#0f8a87',
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 10,
+  },
+
+  helpStep: {
+    color: '#547071',
+    fontSize: 15,
+    lineHeight: 22,
+  },
+
+  confirmOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(2, 6, 23, 0.42)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+
+  confirmCard: {
+    width: '100%',
+    maxWidth: 340,
+    backgroundColor: 'rgba(255, 255, 255, 0.94)',
+    borderRadius: 22,
+    padding: 20,
+  },
+
+  confirmTitle: {
+    color: '#12383c',
+    fontSize: 22,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+
+  confirmText: {
+    color: '#547071',
+    fontSize: 16,
+    marginBottom: 18,
+  },
+
+  confirmActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 12,
+  },
+
+  confirmCancel: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: '#edf7f4',
+  },
+
+  confirmCancelText: {
+    color: '#12383c',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+
+  confirmLogout: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(185, 28, 28, 0.08)',
+  },
+
+  confirmLogoutText: {
+    color: '#b91c1c',
+    fontSize: 15,
+    fontWeight: '800',
   },
 });
