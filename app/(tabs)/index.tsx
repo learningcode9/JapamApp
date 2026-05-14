@@ -567,14 +567,21 @@ export default function JapamMain() {
 
     const preloadSounds = async () => {
       try {
+        await Audio.setAudioModeAsync({
+          staysActiveInBackground: true,
+          playsInSilentModeIOS: true,
+          allowsRecordingIOS: false,
+          shouldDuckAndroid: true,
+        });
+
         const [normalSound, finalSound] = await Promise.all([
           Audio.Sound.createAsync(require('../../assets/soft_tibetan_bowl.wav'), {
             shouldPlay: false,
-            volume: 0.45,
+            volume: 0.65,
           }),
           Audio.Sound.createAsync(require('../../assets/soft_tibetan_bowl_final.wav'), {
             shouldPlay: false,
-            volume: 0.5,
+            volume: 0.7,
           }),
         ]);
 
@@ -981,6 +988,15 @@ export default function JapamMain() {
       await sound.stopAsync().catch(() => undefined);
       await sound.setPositionAsync(0).catch(() => undefined);
       await sound.playAsync();
+      if (variant === 'final') {
+        setTimeout(() => {
+          sound.stopAsync().catch(() => undefined);
+        }, 5500);
+      } else {
+        setTimeout(() => {
+          sound.stopAsync().catch(() => undefined);
+        }, 3500);
+      }
     } catch (error) {
       console.log('Sound error:', error);
     }
@@ -1314,7 +1330,7 @@ export default function JapamMain() {
         setIsRunning(true);
         startTimerInterval();
         isCompletingRef.current = false;
-      }, 2000);
+      }, 4500);
     } else {
       setSeconds(0);
       setIsRunning(false);

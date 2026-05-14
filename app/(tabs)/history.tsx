@@ -527,12 +527,6 @@ export default function HistoryScreen() {
                   const rowIds = target.remoteIds || [];
                   console.log('Deleting history row ids:', rowIds);
 
-                  const deleted = await deleteDayFromSupabase(currentUserId, rowIds);
-                  if (!deleted) {
-                    Alert.alert('Delete failed. Please try again.');
-                    return;
-                  }
-
                   const raw = await AsyncStorage.getItem(HISTORY_KEY);
                   const allSessions = parseHistory(raw);
 
@@ -546,6 +540,14 @@ export default function HistoryScreen() {
 
                   await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(keptSessions));
                   await refreshHomeStatsFromLocalHistory(currentUserId);
+
+                  const deleted = await deleteDayFromSupabase(currentUserId, rowIds);
+                  if (!deleted) {
+                    console.log('Supabase delete failed, keeping local delete.');
+                    Alert.alert('Delete failed. Please try again.');
+                    return;
+                  }
+
                   await loadHistory();
                   Alert.alert('History deleted');
                 }}

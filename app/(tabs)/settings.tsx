@@ -128,7 +128,7 @@ export default function SettingsScreen() {
 
     if (!FEEDBACK_WEBHOOK_URL) {
       Alert.alert(
-        'Feedback not configured',
+        'Feedback setup is missing.',
         'Please set EXPO_PUBLIC_FEEDBACK_WEBHOOK_URL to your Google Apps Script webhook.'
       );
       return;
@@ -443,7 +443,10 @@ export default function SettingsScreen() {
               </Pressable>
               <Pressable
                 style={[styles.feedbackSubmit, isSubmittingFeedback && { opacity: 0.7 }]}
-                onPress={() => void handleFeedbackSubmit()}
+                onPress={() => {
+                  console.log('SEND PRESSED');
+                  void handleFeedbackSubmit();
+                }}
                 disabled={isSubmittingFeedback}
               >
                 <Text style={styles.feedbackSubmitText}>
