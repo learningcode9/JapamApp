@@ -4,7 +4,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import { Ionicons } from '@expo/vector-icons';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     Alert,
     DeviceEventEmitter,
@@ -310,6 +310,25 @@ export default function HistoryScreen() {
       void loadHistory();
     }, [loadHistory])
   );
+
+  useEffect(() => {
+    const onHistoryUpdated = () => {
+      void loadHistory();
+    };
+
+    const subscription = DeviceEventEmitter.addListener('japam-history-updated', onHistoryUpdated);
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.addEventListener('japam-history-updated', onHistoryUpdated as EventListener);
+    }
+
+    return () => {
+      subscription.remove();
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.removeEventListener('japam-history-updated', onHistoryUpdated as EventListener);
+      }
+    };
+  }, [loadHistory]);
 
   const totalMalas = useMemo(
     () => dailyRows.reduce((sum, row) => sum + row.malas, 0),

@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Google from 'expo-auth-session/providers/google';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
+import * as Notifications from 'expo-notifications';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
@@ -11,6 +12,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
+  AppState,
   DeviceEventEmitter,
   Dimensions,
   ImageBackground,
@@ -197,6 +199,7 @@ export default function JapamMain() {
   const finalCompleteSoundRef = useRef<Audio.Sound | null>(null);
   const lastSavedSessionRef = useRef('');
   const lastTapRef = useRef(0);
+  const appStateRef = useRef(AppState.currentState);
 
   const glowAnim = useRef(new Animated.Value(0)).current;
 
@@ -212,6 +215,16 @@ export default function JapamMain() {
     } catch (error) {
       console.log('Audio mode error:', error);
     }
+  }, []);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      appStateRef.current = nextState;
+    });
+
+    return () => {
+      subscription.remove();
+    };
   }, []);
 
   const clearTimerHandles = useCallback(() => {
@@ -1003,16 +1016,61 @@ export default function JapamMain() {
       if (variant === 'final') {
         setTimeout(() => {
           sound.stopAsync().catch(() => undefined);
-        }, 5500);
+        }, 6000);
       } else {
         setTimeout(() => {
           sound.stopAsync().catch(() => undefined);
-        }, 3500);
+        }, 4500);
       }
     } catch (error) {
       console.log('Sound error:', error);
     }
   };
+
+  const notifyCompletionFallback = useCallback(async (variant: 'normal' | 'final') => {
+    try {
+      const title = 'Mantra Japam';
+      const body = variant === 'final'
+        ? '108 malas completed'
+        : 'Mala completed';
+
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        if ('Notification' in window) {
+          if (Notification.permission === 'granted') {
+            new Notification(title, { body });
+            return;
+          }
+
+          if (Notification.permission === 'default') {
+            const permission = await Notification.requestPermission();
+            if (permission === 'granted') {
+              new Notification(title, { body });
+            }
+          }
+        }
+        return;
+      }
+
+      const permission = await Notifications.getPermissionsAsync();
+      let granted = permission.granted;
+      if (!granted) {
+        const requested = await Notifications.requestPermissionsAsync();
+        granted = requested.granted;
+      }
+
+      if (!granted) return;
+
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title,
+          body,
+        },
+        trigger: null,
+      });
+    } catch (error) {
+      console.log('Completion notification error:', error);
+    }
+  }, []);
 
   const saveSession = useCallback(async (
     duration: number, sessionMalas: number, sessionTotal: number, accumulatedTotal: number
@@ -1041,6 +1099,14 @@ export default function JapamMain() {
       };
 
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([session, ...history]));
+      await AsyncStorage.setItem(HISTORY_SYNC_VERSION_KEY, String(Date.now()));
+      DeviceEventEmitter.emit('japam-history-updated', {
+        userId: userId || 'guest',
+        todayTotal: accumulatedTotal,
+      });
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('japam-history-updated'));
+      }
       if (!userId) return;
 
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -1128,6 +1194,12 @@ export default function JapamMain() {
     if (soundEnabled && repetitionSoundEnabled) {
       await playCompleteSound(variant);
     }
+
+    const shouldNotify = appStateRef.current !== 'active'
+      || (Platform.OS === 'web' && typeof document !== 'undefined' && document.hidden);
+    if (shouldNotify) {
+      void notifyCompletionFallback(variant);
+    }
   
     if (!vibrationEnabled) return;
   
@@ -1155,7 +1227,7 @@ export default function JapamMain() {
     } catch (error) {
       console.log('Completion vibration error:', error);
     }
-  }, [playCompletionAnimation, repetitionSoundEnabled, soundEnabled, vibrationEnabled, webVibrate]);
+  }, [notifyCompletionFallback, playCompletionAnimation, repetitionSoundEnabled, soundEnabled, vibrationEnabled, webVibrate]);
 
   const setCountersFromTotal = (nextTotal: number) => {
     const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
