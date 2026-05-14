@@ -273,16 +273,20 @@ export default function SettingsScreen() {
           <View style={styles.helpCard}>
             <Text style={styles.helpTitle}>Add to Home Screen</Text>
             <Text style={styles.helpSubTitle}>iPhone Safari</Text>
-            <Text style={styles.helpStep}>1. Tap Share</Text>
-            <Text style={styles.helpStep}>2. Tap Add to Home Screen</Text>
-            <Text style={styles.helpStep}>3. Tap Add</Text>
+            <View style={styles.helpSteps}>
+              <Text style={styles.helpStep}>1. Tap Share</Text>
+              <Text style={styles.helpStep}>2. Tap Add to Home Screen</Text>
+              <Text style={styles.helpStep}>3. Tap Add</Text>
+            </View>
           </View>
           <View style={styles.helpCard}>
             <Text style={styles.helpTitle}>Add to Home Screen</Text>
             <Text style={styles.helpSubTitle}>Android Chrome</Text>
-            <Text style={styles.helpStep}>1. Tap menu ⋮</Text>
-            <Text style={styles.helpStep}>2. Tap Install app</Text>
-            <Text style={styles.helpStep}>3. Confirm Install</Text>
+            <View style={styles.helpSteps}>
+              <Text style={styles.helpStep}>1. Tap menu ⋮</Text>
+              <Text style={styles.helpStep}>2. Tap Install app</Text>
+              <Text style={styles.helpStep}>3. Confirm Install</Text>
+            </View>
           </View>
         </View>
       </View>
@@ -467,11 +471,16 @@ const styles = StyleSheet.create({
   },
 
   helpCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.54)',
+    backgroundColor: 'rgba(255, 255, 255, 0.66)',
     borderRadius: 20,
     padding: 16,
     borderWidth: 1,
-    borderColor: 'rgba(15, 118, 110, 0.16)',
+    borderColor: 'rgba(15, 118, 110, 0.12)',
+    shadowColor: '#0f766e',
+    shadowOpacity: 0.04,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
   },
 
   helpTitle: {
@@ -488,6 +497,10 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
 
+  helpSteps: {
+    gap: 4,
+  },
+
   helpStep: {
     color: '#547071',
     fontSize: 15,
@@ -496,44 +509,60 @@ const styles = StyleSheet.create({
 
   confirmOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(2, 6, 23, 0.42)',
+    backgroundColor: 'rgba(2, 6, 23, 0.34)',
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: 18,
   },
 
   confirmCard: {
     width: '100%',
-    maxWidth: 340,
-    backgroundColor: 'rgba(255, 255, 255, 0.94)',
-    borderRadius: 22,
-    padding: 20,
+    maxWidth: 336,
+    backgroundColor: 'rgba(255, 255, 255, 0.96)',
+    borderRadius: 24,
+    paddingHorizontal: 18,
+    paddingTop: 20,
+    paddingBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(15, 118, 110, 0.12)',
+    shadowColor: '#0f766e',
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 10,
   },
 
   confirmTitle: {
     color: '#12383c',
-    fontSize: 22,
+    fontSize: 21,
     fontWeight: '800',
     marginBottom: 6,
+    textAlign: 'center',
   },
 
   confirmText: {
     color: '#547071',
     fontSize: 16,
+    lineHeight: 22,
     marginBottom: 18,
+    textAlign: 'center',
   },
 
   confirmActions: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
     gap: 12,
   },
 
   confirmCancel: {
+    flex: 1,
+    minHeight: 46,
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 999,
     backgroundColor: '#edf7f4',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   confirmCancelText: {
@@ -543,10 +572,14 @@ const styles = StyleSheet.create({
   },
 
   confirmLogout: {
+    flex: 1,
+    minHeight: 46,
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 999,
     backgroundColor: 'rgba(185, 28, 28, 0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   confirmLogoutText: {
