@@ -63,6 +63,7 @@ const USER_ID_KEY = 'userId';
 const AUTH_PENDING_KEY = 'authPending';
 const LAST_TOTAL_KEY = 'lastTotal';
 const HISTORY_SYNC_VERSION_KEY = 'historyStatsSyncVersion';
+const NOTIF_PERMISSION_ASKED_KEY = 'notifPermissionAsked';
 const AUTH_PENDING_MAX_MS = 2 * 60 * 1000;
 const TIMER_SECONDS_KEY = 'timerSeconds';
 const TIMER_RUNNING_KEY = 'timerRunning';
@@ -212,6 +213,23 @@ export default function JapamMain() {
       });
     } catch (error) {
       console.log('Audio mode error:', error);
+    }
+  }, []);
+
+  const requestNotificationPermissionOnce = useCallback(async () => {
+    try {
+      if (Platform.OS === 'web') {
+        if (typeof window === 'undefined' || !('Notification' in window)) return;
+        if (Notification.permission !== 'default') return;
+        await Notification.requestPermission();
+        return;
+      }
+      const alreadyAsked = await AsyncStorage.getItem(NOTIF_PERMISSION_ASKED_KEY);
+      if (alreadyAsked) return;
+      const result = await Notifications.requestPermissionsAsync();
+      await AsyncStorage.setItem(NOTIF_PERMISSION_ASKED_KEY, result.granted ? 'granted' : 'denied');
+    } catch (e) {
+      console.log('Notification permission error:', e);
     }
   }, []);
 
@@ -1074,6 +1092,7 @@ export default function JapamMain() {
         await restoreTodayTotal();
         await restoreHistoryFromSupabase(googleUserId);
         await restoreTimerForUser(googleUserId);
+        void requestNotificationPermissionOnce();
       } catch (error) {
         console.log('Google login error:', error);
         setShowUserModal(true);
@@ -1087,6 +1106,7 @@ export default function JapamMain() {
   }, [
     response,
     loadJapamNameFromSupabase,
+    requestNotificationPermissionOnce,
     restoreHistoryFromSupabase,
     restoreTimerForUser,
     restoreTodayTotal,
@@ -1181,30 +1201,14 @@ export default function JapamMain() {
         : 'Your Japam timer is complete';
 
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
-        if ('Notification' in window) {
-          if (Notification.permission === 'granted') {
-            new Notification(title, { body });
-            return;
-          }
-
-          if (Notification.permission === 'default') {
-            const permission = await Notification.requestPermission();
-            if (permission === 'granted') {
-              new Notification(title, { body });
-            }
-          }
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification(title, { body });
         }
         return;
       }
 
       const permission = await Notifications.getPermissionsAsync();
-      let granted = permission.granted;
-      if (!granted) {
-        const requested = await Notifications.requestPermissionsAsync();
-        granted = requested.granted;
-      }
-
-      if (!granted) return;
+      if (!permission.granted) return;
 
       await Notifications.scheduleNotificationAsync({
         content: {
@@ -1439,9 +1443,6 @@ export default function JapamMain() {
 
   const handleStart = () => {
     if (!requireLogin()) return;
-    if (Platform.OS !== 'web') {
-      Notifications.requestPermissionsAsync().catch(console.log);
-    }
     const mins = Math.max(1, Math.floor(Number(minutesInput) || 1));
     const nextTargetSeconds = mins * 60;
     const targetChanged = nextTargetSeconds !== targetSeconds;
