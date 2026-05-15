@@ -3,7 +3,7 @@ import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Alert, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { Alert, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
@@ -25,10 +25,6 @@ export default function SettingsScreen() {
   const [userId, setUserId] = useState<string | null>(null);
   const [userName, setUserName] = useState('');
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
-  const [showFeedback, setShowFeedback] = useState(false);
-  const [feedbackType, setFeedbackType] = useState('');
-  const [feedbackMessage, setFeedbackMessage] = useState('');
-  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -165,48 +161,6 @@ export default function SettingsScreen() {
     Alert.alert('Logged out', 'You have been logged out.');
   };
 
-  const handleFeedbackSubmit = async () => {
-    if (!feedbackMessage.trim()) {
-      Alert.alert('Missing message', 'Please enter your feedback message.');
-      return;
-    }
-    setFeedbackSubmitting(true);
-    try {
-      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-      if (!url || !key) throw new Error('No backend configured');
-
-      const userEmail = await AsyncStorage.getItem(USER_EMAIL_KEY);
-      const response = await fetch(`${url}/rest/v1/feedback`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: key,
-          Authorization: `Bearer ${key}`,
-          Prefer: 'return=minimal',
-        },
-        body: JSON.stringify({
-          user_id: userId || null,
-          user_name: userName || null,
-          user_email: userEmail || null,
-          type: feedbackType || 'Other',
-          message: feedbackMessage.trim(),
-          created_at: new Date().toISOString(),
-        }),
-      });
-      if (!response.ok) throw new Error('Submission failed');
-      Alert.alert('Thank you!', 'Your feedback has been submitted.');
-      setShowFeedback(false);
-      setFeedbackType('');
-      setFeedbackMessage('');
-    } catch (error) {
-      console.log('Feedback submit error:', error);
-      Alert.alert('Error', 'Failed to submit feedback. Please try again.');
-    } finally {
-      setFeedbackSubmitting(false);
-    }
-  };
-
   return (
     <LinearGradient colors={['#e7f5f5', '#c7e2e0', '#eef8f5']} style={styles.container}>
     {[...Array(30)].map((_, i) => (
@@ -306,87 +260,12 @@ export default function SettingsScreen() {
         </View>
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Feedback</Text>
-        <View style={styles.card}>
-          <View style={styles.textBlock}>
-            <Text style={styles.label}>Send Feedback</Text>
-            <Text style={styles.description}>
-              Report a bug, suggest a feature, or share your experience
-            </Text>
-          </View>
-          <Pressable style={styles.compactButton} onPress={() => setShowFeedback(true)}>
-            <Text style={styles.compactButtonText}>Feedback</Text>
-          </Pressable>
-        </View>
-      </View>
-
       <View style={styles.infoBox}>
         <Text style={styles.infoTitle}>Settings saved automatically</Text>
         <Text style={styles.infoText}>
           These options will be applied when you return to the Japam screen.
         </Text>
       </View>
-
-      <Modal visible={showFeedback} transparent animationType="fade">
-        <View style={styles.feedbackOverlay}>
-          <View style={styles.feedbackCard}>
-            <Text style={styles.feedbackTitle}>Send Feedback</Text>
-            <Text style={styles.feedbackSubtitle}>
-              {userName ? `Signed in as ${userName}` : 'Share your thoughts'}
-            </Text>
-
-            <View style={styles.feedbackField}>
-              <Text style={styles.feedbackLabel}>Type</Text>
-              <View style={styles.feedbackTypeRow}>
-                {['Bug Report', 'Suggestion', 'Praise', 'Other'].map((type) => (
-                  <Pressable
-                    key={type}
-                    style={[styles.feedbackTypeChip, feedbackType === type && styles.feedbackTypeChipActive]}
-                    onPress={() => setFeedbackType(type)}
-                  >
-                    <Text style={[styles.feedbackTypeChipText, feedbackType === type && styles.feedbackTypeChipTextActive]}>
-                      {type}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-            </View>
-
-            <View style={styles.feedbackField}>
-              <Text style={styles.feedbackLabel}>Message</Text>
-              <TextInput
-                style={[styles.feedbackInput, styles.feedbackMessageInput]}
-                value={feedbackMessage}
-                onChangeText={setFeedbackMessage}
-                placeholder="Tell us what's on your mind..."
-                placeholderTextColor="#94a3b8"
-                multiline
-                numberOfLines={4}
-                textAlignVertical="top"
-              />
-            </View>
-
-            <View style={styles.feedbackActions}>
-              <Pressable
-                style={styles.feedbackCancel}
-                onPress={() => { setShowFeedback(false); setFeedbackType(''); setFeedbackMessage(''); }}
-              >
-                <Text style={styles.feedbackCancelText}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.feedbackSubmit, feedbackSubmitting && { opacity: 0.7 }]}
-                onPress={() => void handleFeedbackSubmit()}
-                disabled={feedbackSubmitting}
-              >
-                <Text style={styles.feedbackSubmitText}>
-                  {feedbackSubmitting ? 'Sending...' : 'Submit'}
-                </Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
 
       <Modal visible={showLogoutConfirm} transparent animationType="fade">
         <View style={styles.confirmOverlay}>

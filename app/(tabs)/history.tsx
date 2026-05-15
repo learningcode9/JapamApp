@@ -204,40 +204,6 @@ export default function HistoryScreen() {
   const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<DailyRow | null>(null);
 
-  const saveUserTotalToSupabase = useCallback(
-    async (userId: string, totalValue: number) => {
-      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-      if (!url || !key || !userId) return;
-
-      const safeTotal = Math.max(0, Math.floor(Number(totalValue) || 0));
-      const savedUserName = await AsyncStorage.getItem('userName');
-
-      const response = await fetch(`${url}/rest/v1/japam_user_totals?on_conflict=user_id`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: key,
-          Authorization: `Bearer ${key}`,
-          Prefer: 'resolution=merge-duplicates,return=minimal',
-        },
-        body: JSON.stringify({
-          user_id: userId,
-          user_name: savedUserName || 'User',
-          total_count: safeTotal,
-          malas: Math.floor(safeTotal / 108),
-          count: safeTotal % 108,
-          updated_at: new Date().toISOString(),
-        }),
-      });
-
-      if (!response.ok) {
-        console.log('Supabase total update error:', await response.text());
-      }
-    },
-    []
-  );
-
   const loadHistory = useCallback(async () => {
     const todayKey = getLocalDateKey();
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
@@ -275,15 +241,68 @@ export default function HistoryScreen() {
     setDailyRows(buildDailyRows(sessions));
   }, []);
 
-  const refreshHomeStatsFromLocalHistory = useCallback(async (currentUserId: string) => {
+  const handleDelete = useCallback(async (row: DailyRow) => {
+    const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    if (!currentUserId) return;
+
+    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+    // Step 1: Delete from Supabase FIRST — abort if it fails
+    if (url && key) {
+      try {
+        const fetchRes = await fetch(
+          `${url}/rest/v1/japam_history?user_id=eq.${encodeURIComponent(currentUserId)}&select=id,created_at`,
+          { headers: { apikey: key, Authorization: `Bearer ${key}` } }
+        );
+        if (!fetchRes.ok) {
+          Alert.alert('Error', 'Could not reach server. Please try again.');
+          return;
+        }
+        const allRows: { id: string | number; created_at: string }[] = await fetchRes.json();
+        const idsToDelete = allRows
+          .filter((r) => r.created_at && toDayKey(r.created_at) === row.dateKey)
+          .map((r) => r.id);
+
+        if (idsToDelete.length > 0) {
+          const delRes = await fetch(
+            `${url}/rest/v1/japam_history?id=in.(${idsToDelete.join(',')})`,
+            { method: 'DELETE', headers: { apikey: key, Authorization: `Bearer ${key}` } }
+          );
+          if (!delRes.ok) {
+            Alert.alert('Error', 'Failed to delete from server. Please try again.');
+            return;
+          }
+        }
+      } catch {
+        Alert.alert('Error', 'Failed to delete. Please try again.');
+        return;
+      }
+    }
+
+    // Step 2: Delete from local storage
     const raw = await AsyncStorage.getItem(HISTORY_KEY);
     const allSessions = parseHistory(raw);
-    const todayKey = getLocalDateKey();
+    const remaining = allSessions.filter(
+      (item) => !(item.userId === currentUserId && toDayKey(item.date) === row.dateKey)
+    );
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(remaining));
 
-    const userTodayTotal = allSessions
+    // Step 3: Update local state directly (no reload from remote)
+    setDailyRows((prev) => {
+      const newRows = prev.filter((r) => r.dateKey !== row.dateKey);
+      let running = 0;
+      return [...newRows].reverse().map((r) => {
+        running += r.totalCount;
+        return { ...r, accumulated: running };
+      }).reverse();
+    });
+
+    // Step 4: Update home stats via 'japam-stats-updated' (does NOT trigger loadHistory)
+    const todayKey = getLocalDateKey();
+    const userTodayTotal = remaining
       .filter((item) => item.userId === currentUserId && toDayKey(item.date) === todayKey)
       .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
-
     const nextMalas = Math.floor(userTodayTotal / 108);
     const nextCount = userTodayTotal % 108;
 
@@ -298,71 +317,13 @@ export default function HistoryScreen() {
       [HISTORY_SYNC_VERSION_KEY, String(Date.now())],
     ]);
 
-    await saveUserTotalToSupabase(currentUserId, userTodayTotal);
-
-    DeviceEventEmitter.emit('japam-history-updated', {
-      userId: currentUserId,
-      todayTotal: userTodayTotal,
-    });
-  }, [saveUserTotalToSupabase]);
-
-  const handleDelete = useCallback(async (row: DailyRow) => {
-    const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
-    if (!currentUserId) return;
-
-    // Remove from local storage
-    const raw = await AsyncStorage.getItem(HISTORY_KEY);
-    const allSessions = parseHistory(raw);
-    const remaining = allSessions.filter(
-      (item) => !(item.userId === currentUserId && toDayKey(item.date) === row.dateKey)
-    );
-    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(remaining));
-    await AsyncStorage.setItem(HISTORY_SYNC_VERSION_KEY, String(Date.now()));
-
-    // Remove from Supabase (fetch IDs first, then delete by ID)
-    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-    if (url && key) {
-      try {
-        const fetchRes = await fetch(
-          `${url}/rest/v1/japam_history?user_id=eq.${encodeURIComponent(currentUserId)}&select=id,created_at`,
-          { headers: { apikey: key, Authorization: `Bearer ${key}` } }
-        );
-        if (fetchRes.ok) {
-          const allRows: { id: string | number; created_at: string }[] = await fetchRes.json();
-          const idsToDelete = allRows
-            .filter((r) => r.created_at && toDayKey(r.created_at) === row.dateKey)
-            .map((r) => r.id);
-          if (idsToDelete.length > 0) {
-            await fetch(
-              `${url}/rest/v1/japam_history?id=in.(${idsToDelete.join(',')})`,
-              { method: 'DELETE', headers: { apikey: key, Authorization: `Bearer ${key}` } }
-            );
-          }
-        }
-      } catch (error) {
-        console.log('Supabase delete error:', error);
-      }
-    }
-
-    // Update local state with recalculated accumulated values
-    setDailyRows((prev) => {
-      const newRows = prev.filter((r) => r.dateKey !== row.dateKey);
-      let running = 0;
-      return [...newRows].reverse().map((r) => {
-        running += r.totalCount;
-        return { ...r, accumulated: running };
-      }).reverse();
-    });
-
-    // Refresh home stats
-    await refreshHomeStatsFromLocalHistory(currentUserId);
-    DeviceEventEmitter.emit('japam-history-updated', { userId: currentUserId });
+    DeviceEventEmitter.emit('japam-stats-updated', { userId: currentUserId, todayTotal: userTodayTotal });
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      window.dispatchEvent(new Event('japam-history-updated'));
+      window.dispatchEvent(new Event('japam-stats-updated'));
     }
+
     setDeleteTarget(null);
-  }, [refreshHomeStatsFromLocalHistory]);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {

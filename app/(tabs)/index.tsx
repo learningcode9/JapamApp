@@ -199,6 +199,7 @@ export default function JapamMain() {
   const normalCompleteSoundRef = useRef<Audio.Sound | null>(null);
   const finalCompleteSoundRef = useRef<Audio.Sound | null>(null);
   const timerNotifIdRef = useRef<string | null>(null);
+  const userIdRef = useRef<string | null>(null);
   const lastSavedSessionRef = useRef('');
   const lastTapRef = useRef(0);
   const appStateRef = useRef(AppState.currentState);
@@ -224,6 +225,12 @@ export default function JapamMain() {
     try {
       const perm = await Notifications.getPermissionsAsync();
       if (!perm.granted) return;
+      if (timerNotifIdRef.current) {
+        try {
+          await Notifications.dismissNotificationAsync(timerNotifIdRef.current);
+        } catch {}
+        timerNotifIdRef.current = null;
+      }
       const id = await Notifications.scheduleNotificationAsync({
         content: { title: 'Japam Timer', body: 'Timer running' },
         trigger: null,
@@ -237,8 +244,10 @@ export default function JapamMain() {
   const hideTimerNotification = useCallback(async () => {
     if (Platform.OS === 'web') return;
     try {
-      await Notifications.dismissAllNotificationsAsync();
-      timerNotifIdRef.current = null;
+      if (timerNotifIdRef.current) {
+        await Notifications.dismissNotificationAsync(timerNotifIdRef.current);
+        timerNotifIdRef.current = null;
+      }
     } catch (e) {
       console.log('Hide timer notification error:', e);
     }
@@ -621,16 +630,20 @@ export default function JapamMain() {
       void restoreTodayTotal();
     };
 
-    const subscription = DeviceEventEmitter.addListener('japam-history-updated', onHistoryUpdated);
+    const historySubscription = DeviceEventEmitter.addListener('japam-history-updated', onHistoryUpdated);
+    const statsSubscription = DeviceEventEmitter.addListener('japam-stats-updated', onHistoryUpdated);
 
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       window.addEventListener('japam-history-updated', onHistoryUpdated as EventListener);
+      window.addEventListener('japam-stats-updated', onHistoryUpdated as EventListener);
     }
 
     return () => {
-      subscription.remove();
+      historySubscription.remove();
+      statsSubscription.remove();
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.removeEventListener('japam-history-updated', onHistoryUpdated as EventListener);
+        window.removeEventListener('japam-stats-updated', onHistoryUpdated as EventListener);
       }
     };
   }, [restoreTodayTotal]);
@@ -809,6 +822,7 @@ export default function JapamMain() {
       }
 
       if (savedUserName && savedUserId) {
+        userIdRef.current = savedUserId;
         setUserName(savedUserName);
         setShowUserModal(false);
         await restoreTodayTotal();
@@ -832,7 +846,6 @@ export default function JapamMain() {
           applyRestoredTimerState(timerState);
         } else {
           const savedTimerSeconds = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_SECONDS_KEY, savedUserId))) || '0');
-          const savedTimerRunning = (await AsyncStorage.getItem(getUserStorageKey(TIMER_RUNNING_KEY, savedUserId))) === 'true';
           const savedTimerTarget = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_TARGET_KEY, savedUserId))) || String(DEFAULT_TIMER_MINUTES * 60));
           const savedTimerMinutes = (await AsyncStorage.getItem(getUserStorageKey(TIMER_MINUTES_KEY, savedUserId))) || String(DEFAULT_TIMER_MINUTES);
           const savedTimerLoop = (await AsyncStorage.getItem(getUserStorageKey(TIMER_LOOP_KEY, savedUserId))) === 'true';
@@ -1004,6 +1017,7 @@ export default function JapamMain() {
           await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
         }
         await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
+        userIdRef.current = googleUserId;
 
         await loadJapamNameFromSupabase(googleUserId);
         await restoreTodayTotal();
@@ -1185,14 +1199,14 @@ export default function JapamMain() {
 
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([session, ...history]));
       await AsyncStorage.setItem(HISTORY_SYNC_VERSION_KEY, String(Date.now()));
-      DeviceEventEmitter.emit('japam-history-updated', {
-        userId: userId || 'guest',
-        todayTotal: accumulatedTotal,
-      });
-      if (Platform.OS === 'web' && typeof window !== 'undefined') {
-        window.dispatchEvent(new Event('japam-history-updated'));
+
+      if (!userId) {
+        DeviceEventEmitter.emit('japam-history-updated', { userId: 'guest', todayTotal: accumulatedTotal });
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('japam-history-updated'));
+        }
+        return;
       }
-      if (!userId) return;
 
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -1209,6 +1223,14 @@ export default function JapamMain() {
         };
         const savedWithUserId = await postHistory({ user_id: userId, ...baseBody });
         if (!savedWithUserId) await postHistory(baseBody);
+      }
+
+      DeviceEventEmitter.emit('japam-history-updated', {
+        userId,
+        todayTotal: accumulatedTotal,
+      });
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('japam-history-updated'));
       }
     } catch (error) {
       console.log('Supabase save error:', error);
@@ -1326,7 +1348,7 @@ export default function JapamMain() {
       await AsyncStorage.setItem(TOTAL_KEY, String(safeTotal));
       await AsyncStorage.setItem(MALAS_KEY, String(nextMalas));
       await AsyncStorage.setItem(COUNT_KEY, String(nextCount));
-      const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      const savedUserId = userIdRef.current;
       if (savedUserId) {
         const todayKey = getLocalDateKey();
         await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, savedUserId), String(safeTotal));
@@ -1536,6 +1558,7 @@ export default function JapamMain() {
     }
 
     timerStartedAtRef.current = null;
+    userIdRef.current = null;
     clearTimerHandles();
     void hideTimerNotification();
     setSeconds(0);
