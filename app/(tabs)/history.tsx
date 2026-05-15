@@ -3,12 +3,10 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import * as Sharing from 'expo-sharing';
-import { Ionicons } from '@expo/vector-icons';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     Alert,
     DeviceEventEmitter,
-    Modal,
     Platform,
     Pressable,
     ScrollView,
@@ -45,13 +43,6 @@ type RemoteHistoryRow = {
 };
 
 const USER_ID_KEY = 'userId';
-const HISTORY_KEY = 'history';
-const TOTAL_KEY = 'totalCount';
-const MALAS_KEY = 'malas';
-const COUNT_KEY = 'count';
-const LAST_TOTAL_KEY = 'lastTotal';
-const HISTORY_SYNC_VERSION_KEY = 'historyStatsSyncVersion';
-const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
 
 const getLocalDateKey = (date = new Date()) => {
   const y = date.getFullYear();
@@ -202,7 +193,6 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
 
 export default function HistoryScreen() {
   const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
-  const [deleteTarget, setDeleteTarget] = useState<DailyRow | null>(null);
 
   const loadHistory = useCallback(async () => {
     const todayKey = getLocalDateKey();
@@ -239,90 +229,6 @@ export default function HistoryScreen() {
     }
 
     setDailyRows(buildDailyRows(sessions));
-  }, []);
-
-  const handleDelete = useCallback(async (row: DailyRow) => {
-    const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
-    if (!currentUserId) return;
-
-    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-
-    // Step 1: Delete from Supabase FIRST — abort if it fails
-    if (url && key) {
-      try {
-        const fetchRes = await fetch(
-          `${url}/rest/v1/japam_history?user_id=eq.${encodeURIComponent(currentUserId)}&select=id,created_at`,
-          { headers: { apikey: key, Authorization: `Bearer ${key}` } }
-        );
-        if (!fetchRes.ok) {
-          Alert.alert('Error', 'Could not reach server. Please try again.');
-          return;
-        }
-        const allRows: { id: string | number; created_at: string }[] = await fetchRes.json();
-        const idsToDelete = allRows
-          .filter((r) => r.created_at && toDayKey(r.created_at) === row.dateKey)
-          .map((r) => r.id);
-
-        if (idsToDelete.length > 0) {
-          const delRes = await fetch(
-            `${url}/rest/v1/japam_history?id=in.(${idsToDelete.join(',')})`,
-            { method: 'DELETE', headers: { apikey: key, Authorization: `Bearer ${key}` } }
-          );
-          if (!delRes.ok) {
-            Alert.alert('Error', 'Failed to delete from server. Please try again.');
-            return;
-          }
-        }
-      } catch {
-        Alert.alert('Error', 'Failed to delete. Please try again.');
-        return;
-      }
-    }
-
-    // Step 2: Delete from local storage
-    const raw = await AsyncStorage.getItem(HISTORY_KEY);
-    const allSessions = parseHistory(raw);
-    const remaining = allSessions.filter(
-      (item) => !(item.userId === currentUserId && toDayKey(item.date) === row.dateKey)
-    );
-    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(remaining));
-
-    // Step 3: Update local state directly (no reload from remote)
-    setDailyRows((prev) => {
-      const newRows = prev.filter((r) => r.dateKey !== row.dateKey);
-      let running = 0;
-      return [...newRows].reverse().map((r) => {
-        running += r.totalCount;
-        return { ...r, accumulated: running };
-      }).reverse();
-    });
-
-    // Step 4: Update home stats via 'japam-stats-updated' (does NOT trigger loadHistory)
-    const todayKey = getLocalDateKey();
-    const userTodayTotal = remaining
-      .filter((item) => item.userId === currentUserId && toDayKey(item.date) === todayKey)
-      .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
-    const nextMalas = Math.floor(userTodayTotal / 108);
-    const nextCount = userTodayTotal % 108;
-
-    await AsyncStorage.multiSet([
-      [TOTAL_KEY, String(userTodayTotal)],
-      [MALAS_KEY, String(nextMalas)],
-      [COUNT_KEY, String(nextCount)],
-      [LAST_TOTAL_KEY, String(userTodayTotal)],
-      [getUserStorageKey(TOTAL_KEY, currentUserId), String(userTodayTotal)],
-      [getUserStorageKey(MALAS_KEY, currentUserId), String(nextMalas)],
-      [getUserStorageKey(COUNT_KEY, currentUserId), String(nextCount)],
-      [HISTORY_SYNC_VERSION_KEY, String(Date.now())],
-    ]);
-
-    DeviceEventEmitter.emit('japam-stats-updated', { userId: currentUserId, todayTotal: userTodayTotal });
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      window.dispatchEvent(new Event('japam-stats-updated'));
-    }
-
-    setDeleteTarget(null);
   }, []);
 
   useFocusEffect(
@@ -457,7 +363,6 @@ export default function HistoryScreen() {
           <Text style={styles.tableCell}>Malas</Text>
           <Text style={styles.tableCell}>Count</Text>
           <Text style={styles.tableCell}>Accumulated</Text>
-          <View style={styles.rowActionCell} />
         </View>
 
         {dailyRows.length === 0 ? (
@@ -476,42 +381,11 @@ export default function HistoryScreen() {
               <Text style={styles.tableCell}>{row.malas}</Text>
               <Text style={styles.tableCell}>{row.totalCount}</Text>
               <Text style={styles.tableCell}>{row.accumulated}</Text>
-              <View style={styles.rowActionCell}>
-                <Pressable
-                  style={({ pressed }) => [styles.deleteIconBtn, pressed && styles.deleteIconBtnPressed]}
-                  onPress={() => setDeleteTarget(row)}
-                >
-                  <Ionicons name="trash-outline" size={17} color="#b91c1c" />
-                </Pressable>
-              </View>
             </View>
           ))
         )}
       </View>
 
-      <Modal visible={deleteTarget !== null} transparent animationType="fade">
-        <View style={styles.confirmOverlay}>
-          <View style={styles.confirmCard}>
-            <Text style={styles.confirmTitle}>Delete this history?</Text>
-            <Text style={styles.confirmText}>
-              {deleteTarget
-                ? `All entries for ${deleteTarget.dateLabel} will be permanently removed.`
-                : ''}
-            </Text>
-            <View style={styles.confirmActions}>
-              <Pressable style={styles.confirmCancel} onPress={() => setDeleteTarget(null)}>
-                <Text style={styles.confirmCancelText}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                style={styles.confirmDelete}
-                onPress={() => { if (deleteTarget) void handleDelete(deleteTarget); }}
-              >
-                <Text style={styles.confirmDeleteText}>Delete</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </ScrollView>
     </LinearGradient>
   );
@@ -624,106 +498,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     fontWeight: '700',
   },
-  rowActionCell: {
-    width: 56,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingRight: 8,
-    overflow: 'visible',
-    zIndex: 2,
-  },
-  deleteIconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(220, 38, 38, 0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(185, 28, 28, 0.12)',
-    elevation: 1,
-  },
-  deleteIconBtnPressed: {
-    opacity: 0.8,
-    transform: [{ scale: 0.96 }],
-  },
-
-  confirmOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(2, 6, 23, 0.34)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 18,
-  },
-
-  confirmCard: {
-    width: '100%',
-    maxWidth: 340,
-    backgroundColor: 'rgba(255, 255, 255, 0.97)',
-    borderRadius: 24,
-    paddingHorizontal: 18,
-    paddingTop: 20,
-    paddingBottom: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(15, 118, 110, 0.12)',
-    shadowColor: '#0f766e',
-    shadowOpacity: 0.12,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 10,
-  },
-
-  confirmTitle: {
-    color: '#12383c',
-    fontSize: 21,
-    fontWeight: '800',
-    marginBottom: 6,
-    textAlign: 'center',
-  },
-
-  confirmText: {
-    color: '#547071',
-    fontSize: 16,
-    lineHeight: 22,
-    marginBottom: 18,
-    textAlign: 'center',
-  },
-
-  confirmActions: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-
-  confirmCancel: {
-    flex: 1,
-    minHeight: 46,
-    borderRadius: 999,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#edf7f4',
-  },
-
-  confirmCancelText: {
-    color: '#12383c',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-
-  confirmDelete: {
-    flex: 1,
-    minHeight: 46,
-    borderRadius: 999,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(185, 28, 28, 0.08)',
-  },
-
-  confirmDeleteText: {
-    color: '#b91c1c',
-    fontSize: 15,
-    fontWeight: '800',
-  },
-
   dateCell: {
     flex: 1.4,
   },
