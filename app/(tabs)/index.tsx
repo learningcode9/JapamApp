@@ -202,6 +202,8 @@ export default function JapamMain() {
   const userIdRef = useRef<string | null>(null);
   const lastSavedSessionRef = useRef('');
   const lastTapRef = useRef(0);
+  const lastCompletedCycleRef = useRef<number>(0);
+  const startTimerIntervalRef = useRef<() => void>(() => {});
   const appStateRef = useRef(AppState.currentState);
 
   const glowAnim = useRef(new Animated.Value(0)).current;
@@ -221,7 +223,15 @@ export default function JapamMain() {
   }, []);
 
   const showTimerNotification = useCallback(async () => {
-    if (Platform.OS === 'web') return;
+    if (Platform.OS === 'web') {
+      if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+        navigator.mediaSession.metadata = new (window as any).MediaMetadata({
+          title: 'Japam',
+          artist: 'Timer',
+        });
+      }
+      return;
+    }
     try {
       const perm = await Notifications.getPermissionsAsync();
       if (!perm.granted) return;
@@ -232,7 +242,7 @@ export default function JapamMain() {
         timerNotifIdRef.current = null;
       }
       const id = await Notifications.scheduleNotificationAsync({
-        content: { title: 'Japam Timer', body: 'Timer running' },
+        content: { title: 'Japam', body: 'Timer' },
         trigger: null,
       });
       timerNotifIdRef.current = id;
@@ -242,7 +252,12 @@ export default function JapamMain() {
   }, []);
 
   const hideTimerNotification = useCallback(async () => {
-    if (Platform.OS === 'web') return;
+    if (Platform.OS === 'web') {
+      if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+        navigator.mediaSession.metadata = null;
+      }
+      return;
+    }
     try {
       if (timerNotifIdRef.current) {
         await Notifications.dismissNotificationAsync(timerNotifIdRef.current);
@@ -255,7 +270,29 @@ export default function JapamMain() {
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', async (nextState) => {
+      const prevState = appStateRef.current;
       appStateRef.current = nextState;
+
+      // On foreground resume: check whether timer completed while backgrounded
+      if (nextState === 'active' && (prevState === 'background' || prevState === 'inactive')) {
+        const ref = timerRef.current;
+        if (ref.isRunning && timerStartedAtRef.current !== null) {
+          const elapsed = Math.floor((Date.now() - timerStartedAtRef.current) / 1000);
+          if (elapsed >= ref.targetSeconds) {
+            // Timer finished while screen was off — trigger completion exactly once
+            if (!isCompletingRef.current && Date.now() - lastCompletedCycleRef.current > 2000) {
+              setSeconds(elapsed); // triggers the completion useEffect
+            }
+          } else {
+            // Still mid-cycle — update to correct elapsed time and ensure interval is alive
+            setSeconds(elapsed);
+            if (!timerIntervalRef.current) {
+              startTimerIntervalRef.current();
+            }
+          }
+        }
+        return;
+      }
 
       if (nextState !== 'background' && nextState !== 'inactive') return;
 
@@ -332,6 +369,7 @@ export default function JapamMain() {
     tick();
     timerIntervalRef.current = setInterval(tick, 1000);
   }, [clearTimerHandles]);
+  startTimerIntervalRef.current = startTimerInterval;
 
   const googleRedirectUri =
     Platform.OS === 'web' && typeof window !== 'undefined'
@@ -1095,6 +1133,8 @@ export default function JapamMain() {
   useEffect(() => {
     if (!isRunning) return;
     if (seconds < targetSeconds) return;
+    // Guard: prevent duplicate completion if already fired within the last 2 seconds
+    if (Date.now() - lastCompletedCycleRef.current < 2000) return;
     completeTimerSession();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seconds, isRunning, targetSeconds, loopTimer]);
@@ -1297,16 +1337,13 @@ export default function JapamMain() {
 
   const completeFeedback = useCallback(async (variant: 'normal' | 'final' = 'normal') => {
     playCompletionAnimation();
-  
+
     if (soundEnabled && repetitionSoundEnabled) {
       await playCompleteSound(variant);
     }
 
-    const shouldNotify = appStateRef.current !== 'active'
-      || (Platform.OS === 'web' && typeof document !== 'undefined' && document.hidden);
-    if (shouldNotify) {
-      void notifyCompletionFallback(variant);
-    }
+    // Always notify — covers background completion and acts as status feedback
+    void notifyCompletionFallback(variant);
   
     if (!vibrationEnabled) return;
   
@@ -1481,6 +1518,7 @@ export default function JapamMain() {
   const completeTimerSession = useCallback(() => {
     if (isCompletingRef.current) return;
     isCompletingRef.current = true;
+    lastCompletedCycleRef.current = Date.now();
 
     const currentTotal = totalRef.current;
     const nextTotal = currentTotal + 108;
