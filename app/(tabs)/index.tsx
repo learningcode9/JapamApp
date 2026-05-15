@@ -192,6 +192,7 @@ export default function JapamMain() {
   const normalCompleteSoundRef = useRef<Audio.Sound | null>(null);
   const finalCompleteSoundRef = useRef<Audio.Sound | null>(null);
   const timerNotifIdRef = useRef<string | null>(null);
+  const timerNotifUpdateRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const userIdRef = useRef<string | null>(null);
   const lastSavedSessionRef = useRef('');
   const lastTapRef = useRef(0);
@@ -234,37 +235,48 @@ export default function JapamMain() {
   }, []);
 
   const showTimerNotification = useCallback(async () => {
-    if (Platform.OS === 'web') {
-      if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-        navigator.mediaSession.metadata = new (window as any).MediaMetadata({
-          title: 'Japam Timer',
-          artist: 'Timer running',
+    if (Platform.OS === 'web') return;
+
+    const scheduleNotif = async () => {
+      try {
+        const perm = await Notifications.getPermissionsAsync();
+        if (!perm.granted) return;
+
+        if (timerNotifIdRef.current) {
+          try { await Notifications.dismissNotificationAsync(timerNotifIdRef.current); } catch {}
+          timerNotifIdRef.current = null;
+        }
+
+        const elapsed = timerRef.current.seconds;
+        const target = timerRef.current.targetSeconds;
+        const left = Math.max(0, target - elapsed);
+        const mm = String(Math.floor(left / 60)).padStart(2, '0');
+        const ss = String(left % 60).padStart(2, '0');
+
+        const id = await Notifications.scheduleNotificationAsync({
+          content: { title: 'Japam Timer', body: `Time left · ${mm}:${ss}` },
+          trigger: null,
         });
+        timerNotifIdRef.current = id;
+      } catch (e) {
+        console.log('Timer notification error:', e);
       }
-      return;
-    }
-    try {
-      const perm = await Notifications.getPermissionsAsync();
-      if (!perm.granted) return;
-      if (timerNotifIdRef.current) {
-        try {
-          await Notifications.dismissNotificationAsync(timerNotifIdRef.current);
-        } catch {}
-        timerNotifIdRef.current = null;
-      }
-      const id = await Notifications.scheduleNotificationAsync({
-        content: { title: 'Japam Timer', body: 'Timer running' },
-        trigger: null,
-      });
-      timerNotifIdRef.current = id;
-    } catch (e) {
-      console.log('Timer notification error:', e);
-    }
+    };
+
+    await scheduleNotif();
+
+    if (timerNotifUpdateRef.current) clearInterval(timerNotifUpdateRef.current);
+    timerNotifUpdateRef.current = setInterval(scheduleNotif, 15000);
   }, []);
 
   const hideTimerNotification = useCallback(async () => {
     normalCompleteSoundRef.current?.stopAsync().catch(console.log);
     finalCompleteSoundRef.current?.stopAsync().catch(console.log);
+
+    if (timerNotifUpdateRef.current) {
+      clearInterval(timerNotifUpdateRef.current);
+      timerNotifUpdateRef.current = null;
+    }
 
     if (Platform.OS === 'web') {
       if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
@@ -693,6 +705,24 @@ export default function JapamMain() {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
     document.title = isRunning ? `⏱ ${formatTime(seconds)} — Mantra Japam` : 'Mantra Japam';
   }, [isRunning, seconds]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    if (!isRunning) return;
+    const left = Math.max(0, targetSeconds - seconds);
+    const mm = String(Math.floor(left / 60)).padStart(2, '0');
+    const ss = String(left % 60).padStart(2, '0');
+    const artist = `Time left · ${mm}:${ss}`;
+    if (navigator.mediaSession.metadata) {
+      navigator.mediaSession.metadata.artist = artist;
+    } else {
+      navigator.mediaSession.metadata = new (window as any).MediaMetadata({
+        title: 'Japam Timer',
+        artist,
+      });
+    }
+  }, [isRunning, seconds, targetSeconds]);
 
   useEffect(() => {
     const onHistoryUpdated = () => {
