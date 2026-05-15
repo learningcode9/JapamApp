@@ -252,9 +252,13 @@ export default function JapamMain() {
   }, []);
 
   const hideTimerNotification = useCallback(async () => {
+    normalCompleteSoundRef.current?.stopAsync().catch(console.log);
+    finalCompleteSoundRef.current?.stopAsync().catch(console.log);
+
     if (Platform.OS === 'web') {
       if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
         navigator.mediaSession.metadata = null;
+        try { (navigator.mediaSession as any).playbackState = 'none'; } catch {}
       }
       return;
     }
@@ -263,6 +267,7 @@ export default function JapamMain() {
         await Notifications.dismissNotificationAsync(timerNotifIdRef.current);
         timerNotifIdRef.current = null;
       }
+      await Notifications.dismissAllNotificationsAsync();
     } catch (e) {
       console.log('Hide timer notification error:', e);
     }
@@ -1456,10 +1461,7 @@ export default function JapamMain() {
   };
 
   const handlePause = () => {
-    if (timerIntervalRef.current) {
-      clearInterval(timerIntervalRef.current);
-      timerIntervalRef.current = null;
-    }
+    clearTimerHandles();
     timerStartedAtRef.current = null;
     setIsRunning(false);
     void hideTimerNotification();
@@ -1536,14 +1538,23 @@ export default function JapamMain() {
       setAutoCompletedMalas(nextLoopCount);
 
       if (nextLoopCount >= 5) {
+        clearTimerHandles();
+        completedLoopMalasRef.current = 0;
+        setAutoCompletedMalas(0);
         setSeconds(0);
         setIsRunning(false);
-        setLoopTimer(false);
         isCompletingRef.current = false;
         return;
       }
 
+      if (autoRepeatTimeoutRef.current) {
+        clearTimeout(autoRepeatTimeoutRef.current);
+        autoRepeatTimeoutRef.current = null;
+      }
+
       autoRepeatTimeoutRef.current = setTimeout(() => {
+        autoRepeatTimeoutRef.current = null;
+
         if (!timerRef.current.loopTimer || completedLoopMalasRef.current >= 5) {
           isCompletingRef.current = false;
           return;
@@ -1559,6 +1570,7 @@ export default function JapamMain() {
         };
         setSeconds(0);
         setIsRunning(true);
+        void showTimerNotification();
         startTimerInterval();
         isCompletingRef.current = false;
       }, 5000);
@@ -1567,7 +1579,7 @@ export default function JapamMain() {
       setIsRunning(false);
       isCompletingRef.current = false;
     }
-  }, [clearTimerHandles, completeFeedback, hideTimerNotification, loopTimer, minutesInput, saveSession, startTimerInterval, targetSeconds]);
+  }, [clearTimerHandles, completeFeedback, hideTimerNotification, loopTimer, minutesInput, saveSession, showTimerNotification, startTimerInterval, targetSeconds]);
 
   const performLogout = async () => {
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
