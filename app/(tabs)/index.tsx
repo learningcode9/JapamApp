@@ -30,6 +30,18 @@ import {
 
 WebBrowser.maybeCompleteAuthSession();
 
+if (Platform.OS !== 'web') {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: false,
+      shouldShowBanner: false,
+      shouldShowList: true,
+      shouldPlaySound: false,
+      shouldSetBadge: false,
+    }),
+  });
+}
+
 type Session = {
   date: string;
   malas: number;
@@ -234,6 +246,24 @@ export default function JapamMain() {
     }
   }, []);
 
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    void Notifications.setNotificationChannelAsync('japam-timer', {
+      name: 'Timer',
+      importance: Notifications.AndroidImportance.DEFAULT,
+      vibrationPattern: [],
+      enableVibrate: false,
+      showBadge: false,
+    });
+    void Notifications.setNotificationChannelAsync('japam-complete', {
+      name: 'Completion',
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 250],
+      enableVibrate: true,
+      showBadge: false,
+    });
+  }, []);
+
   const showTimerNotification = useCallback(async () => {
     if (Platform.OS === 'web') return;
 
@@ -254,7 +284,11 @@ export default function JapamMain() {
         const ss = String(left % 60).padStart(2, '0');
 
         const id = await Notifications.scheduleNotificationAsync({
-          content: { title: 'Japam Timer', body: `Time left · ${mm}:${ss}` },
+          content: {
+            title: `Time left · ${mm}:${ss}`,
+            body: 'Japam Timer',
+            ...(Platform.OS === 'android' ? { channelId: 'japam-timer' } : {}),
+          },
           trigger: null,
         });
         timerNotifIdRef.current = id;
@@ -1244,6 +1278,7 @@ export default function JapamMain() {
         content: {
           title,
           body,
+          ...(Platform.OS === 'android' ? { channelId: 'japam-complete' } : {}),
         },
         trigger: null,
       });
