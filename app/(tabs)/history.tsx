@@ -226,6 +226,12 @@ export default function HistoryScreen() {
       sessions = filteredRemoteSessions;
       const otherUserSessions = cleanedSessions.filter((item) => item.userId !== currentUserId);
       await AsyncStorage.setItem('history', JSON.stringify([...filteredRemoteSessions, ...otherUserSessions]));
+
+      // Notify Home screen to re-sync stats from the updated local history
+      DeviceEventEmitter.emit('japam-stats-updated');
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('japam-stats-updated'));
+      }
     }
 
     setDailyRows(buildDailyRows(sessions));
