@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "Bash(npx --no-install tsc --noEmit)",
+      "Bash(node_modules/.bin/tsc --noEmit)",
+      "Bash(/Users/sravani/Desktop/JapamApp/node_modules/.bin/tsc --version)"
+    ]
+  }
+}
