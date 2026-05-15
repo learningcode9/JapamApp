@@ -69,6 +69,7 @@ const TIMER_RUNNING_KEY = 'timerRunning';
 const TIMER_TARGET_KEY = 'timerTarget';
 const TIMER_MINUTES_KEY = 'timerMinutes';
 const TIMER_LOOP_KEY = 'timerLoop';
+const TOTAL_DATE_KEY = 'totalDate';
 const DEFAULT_TIMER_MINUTES = 5;
 const SESSION_TIME_OPTIONS = [5, 10, 15];
 
@@ -197,6 +198,7 @@ export default function JapamMain() {
   const isSavingSessionRef = useRef(false);
   const normalCompleteSoundRef = useRef<Audio.Sound | null>(null);
   const finalCompleteSoundRef = useRef<Audio.Sound | null>(null);
+  const timerNotifIdRef = useRef<string | null>(null);
   const lastSavedSessionRef = useRef('');
   const lastTapRef = useRef(0);
   const appStateRef = useRef(AppState.currentState);
@@ -217,14 +219,82 @@ export default function JapamMain() {
     }
   }, []);
 
+  const showTimerNotification = useCallback(async () => {
+    if (Platform.OS === 'web') return;
+    try {
+      const perm = await Notifications.getPermissionsAsync();
+      if (!perm.granted) return;
+      const id = await Notifications.scheduleNotificationAsync({
+        content: { title: 'Japam Timer', body: 'Timer running' },
+        trigger: null,
+      });
+      timerNotifIdRef.current = id;
+    } catch (e) {
+      console.log('Timer notification error:', e);
+    }
+  }, []);
+
+  const hideTimerNotification = useCallback(async () => {
+    if (Platform.OS === 'web') return;
+    try {
+      await Notifications.dismissAllNotificationsAsync();
+      timerNotifIdRef.current = null;
+    } catch (e) {
+      console.log('Hide timer notification error:', e);
+    }
+  }, []);
+
   useEffect(() => {
-    const subscription = AppState.addEventListener('change', (nextState) => {
+    const subscription = AppState.addEventListener('change', async (nextState) => {
       appStateRef.current = nextState;
+
+      if (nextState !== 'background' && nextState !== 'inactive') return;
+
+      const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      if (!savedUserId) return;
+
+      const ref = timerRef.current;
+      const currentSeconds =
+        ref.isRunning && timerStartedAtRef.current !== null
+          ? Math.min(ref.targetSeconds, Math.max(0, Math.floor((Date.now() - timerStartedAtRef.current) / 1000)))
+          : ref.seconds;
+
+      await AsyncStorage.multiSet([
+        [getUserStorageKey(TIMER_SECONDS_KEY, savedUserId), String(currentSeconds)],
+        [TIMER_SECONDS_KEY, String(currentSeconds)],
+        [getUserStorageKey(TIMER_RUNNING_KEY, savedUserId), String(ref.isRunning)],
+        [TIMER_RUNNING_KEY, String(ref.isRunning)],
+      ]);
+
+      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      if (!url || !key) return;
+
+      try {
+        await fetch(`${url}/rest/v1/japam_timer_state?on_conflict=user_id`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: key,
+            Authorization: `Bearer ${key}`,
+            Prefer: 'resolution=merge-duplicates,return=minimal',
+          },
+          body: JSON.stringify({
+            user_id: savedUserId,
+            seconds: currentSeconds,
+            is_running: ref.isRunning,
+            target_seconds: ref.targetSeconds,
+            minutes_input: ref.minutesInput,
+            loop_timer: ref.loopTimer,
+            updated_at: new Date().toISOString(),
+          }),
+        });
+      } catch (e) {
+        console.log('Background timer save error:', e);
+      }
     });
 
-    return () => {
-      subscription.remove();
-    };
+    return () => subscription.remove();
   }, []);
 
   const clearTimerHandles = useCallback(() => {
@@ -488,11 +558,20 @@ export default function JapamMain() {
 
   const restoreTodayTotal = useCallback(async () => {
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-  
+
     if (savedUserId) {
-      const storedTotal = Number((await AsyncStorage.getItem(getUserStorageKey(TOTAL_KEY, savedUserId))) || '0');
-      const storedCount = Number((await AsyncStorage.getItem(getUserStorageKey(COUNT_KEY, savedUserId))) || '0');
-      const storedMalas = Number((await AsyncStorage.getItem(getUserStorageKey(MALAS_KEY, savedUserId))) || '0');
+      const todayKey = getLocalDateKey();
+      const storedTotalDate = await AsyncStorage.getItem(getUserStorageKey(TOTAL_DATE_KEY, savedUserId));
+      const storedTotalFromToday = storedTotalDate === todayKey;
+      const storedTotal = storedTotalFromToday
+        ? Number((await AsyncStorage.getItem(getUserStorageKey(TOTAL_KEY, savedUserId))) || '0')
+        : 0;
+      const storedCount = storedTotalFromToday
+        ? Number((await AsyncStorage.getItem(getUserStorageKey(COUNT_KEY, savedUserId))) || '0')
+        : 0;
+      const storedMalas = storedTotalFromToday
+        ? Number((await AsyncStorage.getItem(getUserStorageKey(MALAS_KEY, savedUserId))) || '0')
+        : 0;
       const remoteTodayTotal = await fetchTodayTotalFromSupabase(savedUserId);
       const localTodayTotal = await getLocalTodayTotalForUser(savedUserId);
       const cloudTotal = await fetchUserTotalFromSupabase(savedUserId);
@@ -744,6 +823,12 @@ export default function JapamMain() {
       if (savedUserId) {
         const timerState = await fetchTimerStateFromSupabase(savedUserId);
         if (timerState) {
+          // Local storage may have more recent seconds if app was killed between cloud saves
+          const localSeconds = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_SECONDS_KEY, savedUserId))) || '0');
+          const cloudSeconds = Number(timerState.seconds || 0);
+          if (localSeconds > cloudSeconds) {
+            timerState.seconds = localSeconds;
+          }
           applyRestoredTimerState(timerState);
         } else {
           const savedTimerSeconds = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_SECONDS_KEY, savedUserId))) || '0');
@@ -1205,25 +1290,22 @@ export default function JapamMain() {
   
     try {
       if (Platform.OS === 'web') {
-        webVibrate([200, 80, 200]);
+        webVibrate([200, 80, 200, 80, 400]);
         return;
       }
-  
+
       if (Platform.OS === 'ios') {
-        await Haptics.notificationAsync(
-          Haptics.NotificationFeedbackType.Success
-        );
-  
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setTimeout(() => {
-          Haptics.notificationAsync(
-            Haptics.NotificationFeedbackType.Warning
-          ).catch(console.log);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(console.log);
         }, 350);
-  
+        setTimeout(() => {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(console.log);
+        }, 700);
         return;
       }
-  
-      Vibration.vibrate([200, 80, 200]);
+
+      Vibration.vibrate([0, 300, 100, 300, 100, 500]);
     } catch (error) {
       console.log('Completion vibration error:', error);
     }
@@ -1246,9 +1328,11 @@ export default function JapamMain() {
       await AsyncStorage.setItem(COUNT_KEY, String(nextCount));
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
       if (savedUserId) {
+        const todayKey = getLocalDateKey();
         await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, savedUserId), String(safeTotal));
         await AsyncStorage.setItem(getUserStorageKey(MALAS_KEY, savedUserId), String(nextMalas));
         await AsyncStorage.setItem(getUserStorageKey(COUNT_KEY, savedUserId), String(nextCount));
+        await AsyncStorage.setItem(getUserStorageKey(TOTAL_DATE_KEY, savedUserId), todayKey);
       }
     })();
 
@@ -1309,6 +1393,7 @@ export default function JapamMain() {
     setSeconds(nextSeconds);
     setIsRunning(true);
     startTimerInterval();
+    void showTimerNotification();
   };
 
   const handlePause = () => {
@@ -1318,6 +1403,7 @@ export default function JapamMain() {
     }
     timerStartedAtRef.current = null;
     setIsRunning(false);
+    void hideTimerNotification();
     void (async () => {
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
       if (!savedUserId) return;
@@ -1379,6 +1465,7 @@ export default function JapamMain() {
     setCountersFromTotal(nextTotal);
     void saveSession(targetSeconds, 1, 108, nextTotal);
     void completeFeedback('normal');
+    void hideTimerNotification();
 
     clearTimerHandles();
     timerStartedAtRef.current = null;
@@ -1420,7 +1507,7 @@ export default function JapamMain() {
       setIsRunning(false);
       isCompletingRef.current = false;
     }
-  }, [clearTimerHandles, completeFeedback, loopTimer, minutesInput, saveSession, startTimerInterval, targetSeconds]);
+  }, [clearTimerHandles, completeFeedback, hideTimerNotification, loopTimer, minutesInput, saveSession, startTimerInterval, targetSeconds]);
 
   const performLogout = async () => {
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
@@ -1433,10 +1520,9 @@ export default function JapamMain() {
         );
 
     if (currentUserId) {
-      await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, currentUserId), String(totalRef.current));
       await saveUserTotalToSupabase(currentUserId, currentUserName || userName || 'User', totalRef.current);
       await saveTimerStateToSupabase(currentUserId, {
-        seconds: 0,
+        seconds: logoutSeconds,
         isRunning: false,
         targetSeconds,
         minutesInput,
@@ -1450,8 +1536,8 @@ export default function JapamMain() {
     }
 
     timerStartedAtRef.current = null;
-    timerStartedAtRef.current = null;
     clearTimerHandles();
+    void hideTimerNotification();
     setSeconds(0);
     setIsRunning(false);
     suppressTimerSaveRef.current = true;
@@ -1485,30 +1571,22 @@ export default function JapamMain() {
 
     await AsyncStorage.removeItem(USER_NAME_KEY);
     await AsyncStorage.removeItem(USER_EMAIL_KEY);
-await AsyncStorage.removeItem(USER_ID_KEY);
+    await AsyncStorage.removeItem(USER_ID_KEY);
 
-if (currentUserId) {
-  await AsyncStorage.multiRemove([
-    getUserStorageKey(TOTAL_KEY, currentUserId),
-    getUserStorageKey(COUNT_KEY, currentUserId),
-    getUserStorageKey(MALAS_KEY, currentUserId),
-  ]);
-}
+    await AsyncStorage.multiRemove([
+      TOTAL_KEY,
+      COUNT_KEY,
+      MALAS_KEY,
+      LAST_TOTAL_KEY,
+    ]);
 
-await AsyncStorage.multiRemove([
-  TOTAL_KEY,
-  COUNT_KEY,
-  MALAS_KEY,
-  LAST_TOTAL_KEY,
-]);
+    totalRef.current = 0;
+    setTotal(0);
+    setCount(0);
+    setMalas(0);
 
-totalRef.current = 0;
-setTotal(0);
-setCount(0);
-setMalas(0);
-
-await restoreTotal(0, { userId: null });
-setTimeout(() => { suppressTimerSaveRef.current = false; }, 0);
+    await restoreTotal(0, { userId: null });
+    setTimeout(() => { suppressTimerSaveRef.current = false; }, 0);
   };
 
   const handleLogout = () => {

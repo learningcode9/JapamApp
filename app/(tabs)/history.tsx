@@ -8,6 +8,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     Alert,
     DeviceEventEmitter,
+    Modal,
     Platform,
     Pressable,
     ScrollView,
@@ -305,6 +306,64 @@ export default function HistoryScreen() {
     });
   }, [saveUserTotalToSupabase]);
 
+  const handleDelete = useCallback(async (row: DailyRow) => {
+    const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    if (!currentUserId) return;
+
+    // Remove from local storage
+    const raw = await AsyncStorage.getItem(HISTORY_KEY);
+    const allSessions = parseHistory(raw);
+    const remaining = allSessions.filter(
+      (item) => !(item.userId === currentUserId && toDayKey(item.date) === row.dateKey)
+    );
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(remaining));
+    await AsyncStorage.setItem(HISTORY_SYNC_VERSION_KEY, String(Date.now()));
+
+    // Remove from Supabase (fetch IDs first, then delete by ID)
+    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    if (url && key) {
+      try {
+        const fetchRes = await fetch(
+          `${url}/rest/v1/japam_history?user_id=eq.${encodeURIComponent(currentUserId)}&select=id,created_at`,
+          { headers: { apikey: key, Authorization: `Bearer ${key}` } }
+        );
+        if (fetchRes.ok) {
+          const allRows: { id: string | number; created_at: string }[] = await fetchRes.json();
+          const idsToDelete = allRows
+            .filter((r) => r.created_at && toDayKey(r.created_at) === row.dateKey)
+            .map((r) => r.id);
+          if (idsToDelete.length > 0) {
+            await fetch(
+              `${url}/rest/v1/japam_history?id=in.(${idsToDelete.join(',')})`,
+              { method: 'DELETE', headers: { apikey: key, Authorization: `Bearer ${key}` } }
+            );
+          }
+        }
+      } catch (error) {
+        console.log('Supabase delete error:', error);
+      }
+    }
+
+    // Update local state with recalculated accumulated values
+    setDailyRows((prev) => {
+      const newRows = prev.filter((r) => r.dateKey !== row.dateKey);
+      let running = 0;
+      return [...newRows].reverse().map((r) => {
+        running += r.totalCount;
+        return { ...r, accumulated: running };
+      }).reverse();
+    });
+
+    // Refresh home stats
+    await refreshHomeStatsFromLocalHistory(currentUserId);
+    DeviceEventEmitter.emit('japam-history-updated', { userId: currentUserId });
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('japam-history-updated'));
+    }
+    setDeleteTarget(null);
+  }, [refreshHomeStatsFromLocalHistory]);
+
   useFocusEffect(
     useCallback(() => {
       void loadHistory();
@@ -437,6 +496,7 @@ export default function HistoryScreen() {
           <Text style={styles.tableCell}>Malas</Text>
           <Text style={styles.tableCell}>Count</Text>
           <Text style={styles.tableCell}>Accumulated</Text>
+          <View style={styles.rowActionCell} />
         </View>
 
         {dailyRows.length === 0 ? (
@@ -452,14 +512,45 @@ export default function HistoryScreen() {
               <Text style={[styles.tableCell, styles.dateCell]}>
                 {row.dateLabel}
               </Text>
-
               <Text style={styles.tableCell}>{row.malas}</Text>
               <Text style={styles.tableCell}>{row.totalCount}</Text>
               <Text style={styles.tableCell}>{row.accumulated}</Text>
+              <View style={styles.rowActionCell}>
+                <Pressable
+                  style={({ pressed }) => [styles.deleteIconBtn, pressed && styles.deleteIconBtnPressed]}
+                  onPress={() => setDeleteTarget(row)}
+                >
+                  <Ionicons name="trash-outline" size={17} color="#b91c1c" />
+                </Pressable>
+              </View>
             </View>
           ))
         )}
       </View>
+
+      <Modal visible={deleteTarget !== null} transparent animationType="fade">
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmCard}>
+            <Text style={styles.confirmTitle}>Delete this history?</Text>
+            <Text style={styles.confirmText}>
+              {deleteTarget
+                ? `All entries for ${deleteTarget.dateLabel} will be permanently removed.`
+                : ''}
+            </Text>
+            <View style={styles.confirmActions}>
+              <Pressable style={styles.confirmCancel} onPress={() => setDeleteTarget(null)}>
+                <Text style={styles.confirmCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={styles.confirmDelete}
+                onPress={() => { if (deleteTarget) void handleDelete(deleteTarget); }}
+              >
+                <Text style={styles.confirmDeleteText}>Delete</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
     </LinearGradient>
   );
