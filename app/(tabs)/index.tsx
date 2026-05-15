@@ -116,14 +116,6 @@ const getPreviousDateKey = (dayKey: string) => {
   return getLocalDateKey(date);
 };
 
-const getTodayRange = () => {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
-  return { start: start.toISOString(), end: end.toISOString() };
-};
-
 const parseHistory = (raw: string | null): Session[] => {
   if (!raw) return [];
   try {
@@ -205,6 +197,7 @@ export default function JapamMain() {
   const lastCompletedCycleRef = useRef<number>(0);
   const startTimerIntervalRef = useRef<() => void>(() => {});
   const appStateRef = useRef(AppState.currentState);
+  const restoreTodayTotalRef = useRef<() => Promise<void>>(async () => {});
 
   const glowAnim = useRef(new Animated.Value(0)).current;
 
@@ -296,6 +289,7 @@ export default function JapamMain() {
             }
           }
         }
+        void restoreTodayTotalRef.current();
         return;
       }
 
@@ -529,59 +523,6 @@ export default function JapamMain() {
     }, [restoreTotal])
   );
 
-  const fetchTodayTotalFromSupabase = useCallback(
-    async (userId: string) => {
-      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-      if (!url || !key || !userId) return null;
-
-      try {
-        const { start, end } = getTodayRange();
-
-        const fetchBy = async (field: 'user_id' | 'user_name', value: string) => {
-          const query = new URLSearchParams({
-            select: 'count',
-            [field]: `eq.${value}`,
-            created_at: `gte.${start}`,
-          });
-          query.append('created_at', `lt.${end}`);
-
-          const result = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
-            headers: { apikey: key, Authorization: `Bearer ${key}` },
-          });
-
-          if (!result.ok) return null;
-          const rows: { count?: number | string }[] = await result.json();
-          return rows.reduce((sum, row) => sum + (Number(row.count) || 0), 0);
-        };
-
-        const byUserId = await fetchBy('user_id', userId);
-        return byUserId;
-      } catch (error) {
-        console.log('Supabase today total error:', error);
-        return null;
-      }
-    },
-    []
-  );
-
-  const fetchUserTotalFromSupabase = async (userId: string) => {
-    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-    if (!url || !key || !userId) return null;
-
-    const encodedUserId = encodeURIComponent(userId);
-    const response = await fetch(
-      `${url}/rest/v1/japam_user_totals?user_id=eq.${encodedUserId}&select=total_count&limit=1`,
-      { headers: { apikey: key, Authorization: `Bearer ${key}` } }
-    );
-
-    if (!response.ok) return null;
-    const rows = await response.json();
-    if (!rows?.[0]) return null;
-    return Number(rows[0].total_count) || 0;
-  };
-
   const saveUserTotalToSupabase = async (userId: string, userNameValue: string | null, totalValue: number) => {
     const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
     const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -625,47 +566,102 @@ export default function JapamMain() {
 
     if (savedUserId) {
       const todayKey = getLocalDateKey();
-      const storedTotalDate = await AsyncStorage.getItem(getUserStorageKey(TOTAL_DATE_KEY, savedUserId));
-      const storedTotalFromToday = storedTotalDate === todayKey;
-      const storedTotal = storedTotalFromToday
-        ? Number((await AsyncStorage.getItem(getUserStorageKey(TOTAL_KEY, savedUserId))) || '0')
-        : 0;
-      const storedCount = storedTotalFromToday
-        ? Number((await AsyncStorage.getItem(getUserStorageKey(COUNT_KEY, savedUserId))) || '0')
-        : 0;
-      const storedMalas = storedTotalFromToday
-        ? Number((await AsyncStorage.getItem(getUserStorageKey(MALAS_KEY, savedUserId))) || '0')
-        : 0;
-      const remoteTodayTotal = await fetchTodayTotalFromSupabase(savedUserId);
-      const localTodayTotal = await getLocalTodayTotalForUser(savedUserId);
-      const cloudTotal = await fetchUserTotalFromSupabase(savedUserId);
-      const safeCloudTotal = Math.max(0, Math.floor(Number(cloudTotal) || 0));
-      const safeRemoteTotal = Math.max(0, Math.floor(Number(remoteTodayTotal) || 0));
-      const finalTotal =
-        remoteTodayTotal !== null
-          ? Math.max(safeRemoteTotal, localTodayTotal, storedTotal, storedMalas * 108 + storedCount)
-          : Math.max(localTodayTotal, safeCloudTotal, storedTotal, storedMalas * 108 + storedCount);
 
-      await restoreTotal(finalTotal, { userId: savedUserId });
-      totalRef.current = finalTotal;
-      await refreshDayStreak({ userId: savedUserId, todayTotal: finalTotal });
+      // Show local data immediately for responsive UI
+      const storedTotalDate = await AsyncStorage.getItem(getUserStorageKey(TOTAL_DATE_KEY, savedUserId));
+      const localStoredTotal =
+        storedTotalDate === todayKey
+          ? Number((await AsyncStorage.getItem(getUserStorageKey(TOTAL_KEY, savedUserId))) || '0')
+          : 0;
+
+      if (localStoredTotal > 0) {
+        await restoreTotal(localStoredTotal, { userId: savedUserId });
+        totalRef.current = localStoredTotal;
+      }
+
+      try {
+        const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+        const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+        let remoteSessions: Session[] | null = null;
+
+        if (url && key) {
+          const encodedUserId = encodeURIComponent(savedUserId);
+          const res = await fetch(
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count&order=created_at.asc`,
+            { headers: { apikey: key, Authorization: `Bearer ${key}` } }
+          );
+          if (res.ok) {
+            const rows: { created_at: string; malas: number | string; count: number | string }[] =
+              await res.json();
+            remoteSessions = rows.map((row) => ({
+              date: row.created_at,
+              malas: Number(row.malas) || 0,
+              totalCount: Number(row.count) || 0,
+              duration: 0,
+              manual: false,
+              userId: savedUserId,
+            }));
+          }
+        }
+
+        if (remoteSessions !== null) {
+          // Supabase is source of truth — sync local history and recalculate
+          const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
+          const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
+          const otherUserSessions = localHistory.filter((s) => s.userId !== savedUserId);
+          const filteredRemote = remoteSessions.filter(
+            (s) => getLocalDateKey(new Date(s.date)) <= todayKey
+          );
+          await AsyncStorage.setItem(
+            HISTORY_KEY,
+            JSON.stringify([...filteredRemote, ...otherUserSessions])
+          );
+
+          const finalTotal = filteredRemote
+            .filter((s) => getLocalDateKey(new Date(s.date)) === todayKey)
+            .reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
+
+          await restoreTotal(finalTotal, { userId: savedUserId });
+          totalRef.current = finalTotal;
+          await refreshDayStreak({ userId: savedUserId, todayTotal: finalTotal });
+        } else {
+          // Supabase unreachable — fall back to local data
+          const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
+          const finalTotal = Math.max(localStoredTotal, localHistoryTotal);
+          await restoreTotal(finalTotal, { userId: savedUserId });
+          totalRef.current = finalTotal;
+          await refreshDayStreak({ userId: savedUserId, todayTotal: finalTotal });
+        }
+      } catch (error) {
+        console.log('Stats sync error, using local data:', error);
+        const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
+        const finalTotal = Math.max(localStoredTotal, localHistoryTotal);
+        await restoreTotal(finalTotal, { userId: savedUserId });
+        totalRef.current = finalTotal;
+        await refreshDayStreak({ userId: savedUserId, todayTotal: finalTotal });
+      }
+
       setHasRestoredTotal(true);
       return;
     }
-  
+
+    // Not logged in
     await restoreTotal(0, { userId: null });
     totalRef.current = 0;
     await refreshDayStreak({ userId: null, todayTotal: 0 });
     setHasRestoredTotal(true);
-  }, [fetchTodayTotalFromSupabase, getLocalTodayTotalForUser, refreshDayStreak, restoreTotal]);
+  }, [getLocalTodayTotalForUser, refreshDayStreak, restoreTotal]);
+
+  useEffect(() => {
+    restoreTodayTotalRef.current = restoreTodayTotal;
+  }, [restoreTodayTotal]);
 
   useFocusEffect(
     useCallback(() => {
       let mounted = true;
 
       void (async () => {
-        const marker = await AsyncStorage.getItem(HISTORY_SYNC_VERSION_KEY);
-        if (!mounted || !marker) return;
+        if (!mounted) return;
         await restoreTodayTotal();
       })();
 
