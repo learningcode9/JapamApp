@@ -226,8 +226,8 @@ export default function JapamMain() {
     if (Platform.OS === 'web') {
       if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
         navigator.mediaSession.metadata = new (window as any).MediaMetadata({
-          title: 'Japam',
-          artist: 'Timer',
+          title: 'Japam Timer',
+          artist: 'Timer running',
         });
       }
       return;
@@ -242,7 +242,7 @@ export default function JapamMain() {
         timerNotifIdRef.current = null;
       }
       const id = await Notifications.scheduleNotificationAsync({
-        content: { title: 'Japam', body: 'Timer' },
+        content: { title: 'Japam Timer', body: 'Timer running' },
         trigger: null,
       });
       timerNotifIdRef.current = id;
@@ -310,11 +310,23 @@ export default function JapamMain() {
           ? Math.min(ref.targetSeconds, Math.max(0, Math.floor((Date.now() - timerStartedAtRef.current) / 1000)))
           : ref.seconds;
 
+      const currentTotal = totalRef.current;
+      const currentMalas = Math.floor(currentTotal / 108);
+      const currentCount = currentTotal % 108;
+      const todayKey = getLocalDateKey();
+
       await AsyncStorage.multiSet([
         [getUserStorageKey(TIMER_SECONDS_KEY, savedUserId), String(currentSeconds)],
         [TIMER_SECONDS_KEY, String(currentSeconds)],
         [getUserStorageKey(TIMER_RUNNING_KEY, savedUserId), String(ref.isRunning)],
         [TIMER_RUNNING_KEY, String(ref.isRunning)],
+        [getUserStorageKey(TOTAL_KEY, savedUserId), String(currentTotal)],
+        [getUserStorageKey(COUNT_KEY, savedUserId), String(currentCount)],
+        [getUserStorageKey(MALAS_KEY, savedUserId), String(currentMalas)],
+        [getUserStorageKey(TOTAL_DATE_KEY, savedUserId), todayKey],
+        [TOTAL_KEY, String(currentTotal)],
+        [COUNT_KEY, String(currentCount)],
+        [MALAS_KEY, String(currentMalas)],
       ]);
 
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -1157,15 +1169,9 @@ export default function JapamMain() {
       await sound.setPositionAsync(0).catch(() => undefined);
       await sound.setVolumeAsync(0.9).catch(() => undefined);
       await sound.playAsync();
-      if (variant === 'final') {
-        setTimeout(() => {
-          sound.stopAsync().catch(() => undefined);
-        }, 6000);
-      } else {
-        setTimeout(() => {
-          sound.stopAsync().catch(() => undefined);
-        }, 4500);
-      }
+      setTimeout(() => {
+        sound.stopAsync().catch(() => undefined);
+      }, variant === 'final' ? 6000 : 5000);
     } catch (error) {
       console.log('Sound error:', error);
     }
@@ -1173,10 +1179,10 @@ export default function JapamMain() {
 
   const notifyCompletionFallback = useCallback(async (variant: 'normal' | 'final') => {
     try {
-      const title = 'Mantra Japam';
+      const title = 'Mala completed';
       const body = variant === 'final'
-        ? '108 malas completed'
-        : 'Mala completed';
+        ? 'Your Japam is complete'
+        : 'Your Japam timer is complete';
 
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         if ('Notification' in window) {
@@ -1437,6 +1443,9 @@ export default function JapamMain() {
 
   const handleStart = () => {
     if (!requireLogin()) return;
+    if (Platform.OS !== 'web') {
+      Notifications.requestPermissionsAsync().catch(console.log);
+    }
     const mins = Math.max(1, Math.floor(Number(minutesInput) || 1));
     const nextTargetSeconds = mins * 60;
     const targetChanged = nextTargetSeconds !== targetSeconds;
@@ -1573,7 +1582,7 @@ export default function JapamMain() {
         void showTimerNotification();
         startTimerInterval();
         isCompletingRef.current = false;
-      }, 5000);
+      }, 4000);
     } else {
       setSeconds(0);
       setIsRunning(false);

@@ -3,7 +3,7 @@ import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Alert, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Alert, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
@@ -24,7 +24,12 @@ export default function SettingsScreen() {
   const [isPreviewingSound, setIsPreviewingSound] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [userName, setUserName] = useState('');
+  const [userEmail, setUserEmail] = useState('');
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [feedbackType, setFeedbackType] = useState('General');
+  const [feedbackMessage, setFeedbackMessage] = useState('');
+  const [isSendingFeedback, setIsSendingFeedback] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -44,6 +49,7 @@ export default function SettingsScreen() {
       setVibrationEnabled(savedVibration !== 'false');
       setUserId(savedUserId);
       setUserName(savedUserName || '');
+      setUserEmail(savedUserEmail || '');
     };
 
     void loadSettings();
@@ -144,6 +150,37 @@ export default function SettingsScreen() {
     const currentUserId = userId || (await AsyncStorage.getItem(USER_ID_KEY));
     if (currentUserId) {
       await savePausedTimerState(currentUserId);
+
+      // Save latest count to Supabase before clearing session
+      try {
+        const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+        const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+        if (url && key) {
+          const storedTotal = Number((await AsyncStorage.getItem(getUserStorageKey('totalCount', currentUserId))) || '0');
+          const storedName = await AsyncStorage.getItem(USER_NAME_KEY);
+          if (storedTotal > 0) {
+            await fetch(`${url}/rest/v1/japam_user_totals?on_conflict=user_id`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                apikey: key,
+                Authorization: `Bearer ${key}`,
+                Prefer: 'resolution=merge-duplicates,return=minimal',
+              },
+              body: JSON.stringify({
+                user_id: currentUserId,
+                user_name: storedName || 'User',
+                total_count: storedTotal,
+                malas: Math.floor(storedTotal / 108),
+                count: storedTotal % 108,
+                updated_at: new Date().toISOString(),
+              }),
+            });
+          }
+        }
+      } catch (e) {
+        console.log('Logout total save error:', e);
+      }
     }
 
     await AsyncStorage.removeItem(USER_NAME_KEY);
@@ -158,7 +195,61 @@ export default function SettingsScreen() {
     ]);
     setUserId(null);
     setUserName('');
+    setUserEmail('');
     Alert.alert('Logged out', 'You have been logged out.');
+  };
+
+  const sendFeedback = async () => {
+    if (!feedbackMessage.trim()) {
+      Alert.alert('Empty message', 'Please write a message before sending.');
+      return;
+    }
+
+    setIsSendingFeedback(true);
+    try {
+      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      if (!url || !key) throw new Error('Supabase not configured');
+
+      const currentUserId = userId || (await AsyncStorage.getItem(USER_ID_KEY));
+      const currentUserName = userName || (await AsyncStorage.getItem(USER_NAME_KEY)) || null;
+      const currentUserEmail = userEmail || (await AsyncStorage.getItem(USER_EMAIL_KEY)) || null;
+
+      const res = await fetch(`${url}/rest/v1/feedback`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          Prefer: 'return=minimal',
+        },
+        body: JSON.stringify({
+          user_id: currentUserId || null,
+          user_name: currentUserName,
+          user_email: currentUserEmail,
+          feedback_type: feedbackType,
+          message: feedbackMessage.trim(),
+          platform: Platform.OS,
+          created_at: new Date().toISOString(),
+        }),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        console.log('Feedback insert error:', errText);
+        throw new Error(errText || 'Insert failed');
+      }
+
+      setFeedbackMessage('');
+      setFeedbackType('General');
+      setShowFeedbackModal(false);
+      Alert.alert('Thank you for your feedback', 'Your feedback helps improve the app.');
+    } catch (error) {
+      console.log('Send feedback error:', error);
+      Alert.alert('Error', 'Could not send feedback. Please try again.');
+    } finally {
+      setIsSendingFeedback(false);
+    }
   };
 
   return (
@@ -260,12 +351,72 @@ export default function SettingsScreen() {
         </View>
       </View>
 
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Feedback</Text>
+        <View style={styles.card}>
+          <View style={styles.textBlock}>
+            <Text style={styles.label}>Send feedback</Text>
+            <Text style={styles.description}>Report a bug or suggest a feature</Text>
+          </View>
+          <Pressable style={styles.compactButton} onPress={() => setShowFeedbackModal(true)}>
+            <Text style={styles.compactButtonText}>Send</Text>
+          </Pressable>
+        </View>
+      </View>
+
       <View style={styles.infoBox}>
         <Text style={styles.infoTitle}>Settings saved automatically</Text>
         <Text style={styles.infoText}>
           These options will be applied when you return to the Japam screen.
         </Text>
       </View>
+
+      <Modal visible={showFeedbackModal} transparent animationType="fade">
+        <View style={styles.feedbackOverlay}>
+          <View style={styles.feedbackCard}>
+            <Text style={styles.feedbackTitle}>Send Feedback</Text>
+            <Text style={styles.feedbackSubtitle}>Let us know how we can improve</Text>
+
+            <View style={styles.feedbackField}>
+              <Text style={styles.feedbackLabel}>Type</Text>
+              <View style={styles.feedbackTypeRow}>
+                {['General', 'Bug', 'Feature'].map((t) => (
+                  <Pressable
+                    key={t}
+                    style={[styles.feedbackTypeChip, feedbackType === t && styles.feedbackTypeChipActive]}
+                    onPress={() => setFeedbackType(t)}
+                  >
+                    <Text style={[styles.feedbackTypeChipText, feedbackType === t && styles.feedbackTypeChipTextActive]}>{t}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.feedbackField}>
+              <Text style={styles.feedbackLabel}>Message</Text>
+              <TextInput
+                style={[styles.feedbackInput, styles.feedbackMessageInput]}
+                value={feedbackMessage}
+                onChangeText={setFeedbackMessage}
+                placeholder="Describe your feedback..."
+                placeholderTextColor="#7f9798"
+                multiline
+                numberOfLines={4}
+                textAlignVertical="top"
+              />
+            </View>
+
+            <View style={styles.feedbackActions}>
+              <Pressable style={styles.feedbackCancel} onPress={() => { setShowFeedbackModal(false); setFeedbackMessage(''); }}>
+                <Text style={styles.feedbackCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={styles.feedbackSubmit} onPress={() => void sendFeedback()} disabled={isSendingFeedback}>
+                <Text style={styles.feedbackSubmitText}>{isSendingFeedback ? 'Sending...' : 'Send'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={showLogoutConfirm} transparent animationType="fade">
         <View style={styles.confirmOverlay}>
