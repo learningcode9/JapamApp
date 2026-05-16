@@ -1461,19 +1461,25 @@ export default function JapamMain() {
     return true;
   };
 
-  const handleTap = () => {
-    if (!requireLogin()) return;
+  // Complete conditional setup structure for handlers update:
+const handleTap = () => {
+  // Prati tap ki clear click sensation alert feedback 
+  if (Platform.OS !== 'web') {
+    Vibration.vibrate(60); 
+  }
   
-    const now = Date.now();
-    if (now - lastTapRef.current < 100) return;
-    lastTapRef.current = now;
+  // Existing internal functional loop process updates
+  const updatedCount = count + 1;
+  setCount(updatedCount);
   
-    rippleAnim.setValue(0);
-    Animated.timing(rippleAnim, {
-      toValue: 1,
-      duration: 700,
-      useNativeDriver: true,
-    }).start();
+  // Loop execution updates check for 108 limit context
+  if (updatedCount >= 108) {
+    if (Platform.OS !== 'web') {
+      // 0ms wait, 800ms vibration, 250ms gap, 1000ms strong finish vibration trigger
+      Vibration.vibrate([0, 800, 250, 1000]);
+    }
+  }
+};
   
     const newTotal = setCountersFromTotal(totalRef.current + 1);
     const newCount = newTotal % 108;
@@ -1753,6 +1759,12 @@ export default function JapamMain() {
     }
   };
 
+  useEffect(() => {
+    if (count === 108 && Platform.OS !== 'web') {
+      Vibration.vibrate([0, 800, 200, 1000]);
+    }
+  }, [count]);
+
   const todayLabel = new Date().toLocaleDateString();
   const progressPercent = Math.min(100, Math.max(0, (count / 108) * 100));
   const progressRingBackground =
@@ -1854,7 +1866,10 @@ export default function JapamMain() {
               ]}
             />
             <Pressable
-              onPress={handleTap}
+              onPress={() => {
+                if (Platform.OS !== 'web') Vibration.vibrate(60);
+                handleTap();
+              }}
               style={({ pressed }) => [
                 styles.progressPressable,
                 pressed && styles.progressPressed,
@@ -1871,7 +1886,10 @@ export default function JapamMain() {
 
           <Pressable
             style={({ pressed }) => [styles.primaryAction, pressed && styles.primaryActionPressed]}
-            onPress={isRunning ? handlePause : handleStart}
+            onPress={() => {
+              if (Platform.OS !== 'web') Vibration.vibrate(50);
+              if (isRunning) handlePause(); else handleStart();
+            }}
           >
             <Text style={styles.primaryActionText}>
               {isRunning
