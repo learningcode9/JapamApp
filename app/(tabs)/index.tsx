@@ -229,6 +229,21 @@ export default function JapamMain() {
     }
   }, []);
 
+  const playTactileClick = async () => {
+    try {
+      await Audio.setAudioModeAsync({
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true,
+      });
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: 'asset:/sounds/EffectTick.mp3' },
+        { volume: 1.0, shouldCorrectPitch: false }
+      );
+      await sound.playAsync();
+    } catch {}
+  };
+
   const requestNotificationPermissionOnce = useCallback(async () => {
     try {
       if (Platform.OS === 'web') {
@@ -1762,7 +1777,7 @@ const handleTap = () => {
 
   useEffect(() => {
     if (count === 108 && Platform.OS !== 'web') {
-      Vibration.vibrate([0, 1000, 80, 1200]);
+      Vibration.vibrate([0, 1200, 60, 1500]);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       setTimeout(() => {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
@@ -1871,10 +1886,11 @@ const handleTap = () => {
               ]}
             />
             <Pressable
-              hitSlop={{ top: 25, bottom: 25, left: 25, right: 25 }}
-              pressRetentionOffset={{ top: 30, bottom: 30, left: 30, right: 30 }}
+              hitSlop={{ top: 30, bottom: 30, left: 30, right: 30 }}
+              pressRetentionOffset={{ top: 35, bottom: 35, left: 35, right: 35 }}
               onPress={() => {
-                if (Platform.OS !== 'web') Vibration.vibrate(55);
+                void playTactileClick();
+                if (Platform.OS !== 'web') Vibration.vibrate(60);
                 handleTap();
               }}
               style={({ pressed }) => [
