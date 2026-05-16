@@ -1350,22 +1350,6 @@ export default function JapamMain() {
     }
   }, [userName]);
 
-  const webVibrate = useCallback((pattern: number | number[]) => {
-    if (
-      !vibrationEnabled ||
-      Platform.OS !== 'web' ||
-      typeof navigator === 'undefined'
-    ) {
-      return false;
-    }
-  
-    if (typeof navigator.vibrate !== 'function') {
-      return false;
-    }
-  
-    navigator.vibrate(pattern);
-    return true;
-  }, [vibrationEnabled]);
 
   const tapFeedback = useCallback(async () => {
     if (!vibrationEnabled) {
