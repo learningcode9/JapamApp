@@ -1788,7 +1788,7 @@ const handleTap = () => {
 
   useEffect(() => {
     if (count === 108) {
-      triggerDeepHardwarePulse([0, 1200, 50, 1800]);
+      triggerDeepHardwarePulse([0, 1200, 80, 1500]);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       setTimeout(() => {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
@@ -1897,10 +1897,10 @@ const handleTap = () => {
               ]}
             />
             <Pressable
-              hitSlop={{ top: 35, bottom: 35, left: 35, right: 35 }}
-              pressRetentionOffset={{ top: 40, bottom: 40, left: 40, right: 40 }}
+              hitSlop={{ top: 40, bottom: 40, left: 40, right: 40 }}
+              pressRetentionOffset={{ top: 45, bottom: 45, left: 45, right: 45 }}
               onPress={() => {
-                triggerDeepHardwarePulse(65);
+                triggerDeepHardwarePulse(55);
                 handleTap();
               }}
               style={({ pressed }) => [
