@@ -1761,7 +1761,7 @@ const handleTap = () => {
 
   useEffect(() => {
     if (count === 108 && Platform.OS !== 'web') {
-      Vibration.vibrate([0, 800, 200, 1000]);
+      Vibration.vibrate(1800);
     }
   }, [count]);
 
