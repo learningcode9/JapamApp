@@ -1319,13 +1319,13 @@ export default function JapamMain() {
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([session, ...history]));
       await AsyncStorage.setItem(HISTORY_SYNC_VERSION_KEY, String(Date.now()));
 
-      if (!userId) {
-        DeviceEventEmitter.emit('japam-history-updated', { userId: 'guest', todayTotal: accumulatedTotal });
-        if (Platform.OS === 'web' && typeof window !== 'undefined') {
-          window.dispatchEvent(new Event('japam-history-updated'));
-        }
-        return;
+      // Emit immediately after local save — Home and History update without waiting for Supabase
+      DeviceEventEmitter.emit('japam-history-updated', { userId: userId || 'guest', todayTotal: accumulatedTotal });
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('japam-history-updated'));
       }
+
+      if (!userId) return;
 
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -1342,14 +1342,6 @@ export default function JapamMain() {
         };
         const savedWithUserId = await postHistory({ user_id: userId, ...baseBody });
         if (!savedWithUserId) await postHistory(baseBody);
-      }
-
-      DeviceEventEmitter.emit('japam-history-updated', {
-        userId,
-        todayTotal: accumulatedTotal,
-      });
-      if (Platform.OS === 'web' && typeof window !== 'undefined') {
-        window.dispatchEvent(new Event('japam-history-updated'));
       }
     } catch (error) {
       console.log('Supabase save error:', error);
@@ -1377,26 +1369,17 @@ export default function JapamMain() {
 
   const tapFeedback = useCallback(async () => {
     if (!vibrationEnabled) return;
-  
+    console.log('tap vibration triggered');
+
     try {
-      if (webVibrate(35)) {
+      if (webVibrate(35)) return;
+
+      if (Platform.OS === 'ios') {
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         return;
       }
 
-      if (Platform.OS === 'ios') {
-        await Haptics.impactAsync(
-          Haptics.ImpactFeedbackStyle.Light
-        );
-        return;
-      }
-  
       Vibration.vibrate(35);
-  
-      if (Platform.OS !== 'web') {
-        await Haptics.impactAsync(
-          Haptics.ImpactFeedbackStyle.Light
-        );
-      }
     } catch (error) {
       console.log('Tap vibration error:', error);
     }
@@ -1425,7 +1408,8 @@ export default function JapamMain() {
     void notifyCompletionFallback(variant);
   
     if (!vibrationEnabled) return;
-  
+    console.log('completion vibration triggered');
+
     try {
       if (Platform.OS === 'web') {
         webVibrate([200, 80, 200]);
@@ -1596,8 +1580,11 @@ export default function JapamMain() {
     isCompletingRef.current = true;
     lastCompletedCycleRef.current = Date.now();
 
-    // Save timer session to history without touching the manual count/malas/total
-    void saveSession(targetSeconds, 1, 108, totalRef.current);
+    // Add 108 to total so malas increments on Home; count stays the same (count = total % 108)
+    const currentTotal = totalRef.current;
+    const nextTotal = currentTotal + 108;
+    setCountersFromTotal(nextTotal);
+    void saveSession(targetSeconds, 1, 108, nextTotal);
     void completeFeedback('normal');
     void hideTimerNotification();
 
