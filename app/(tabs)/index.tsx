@@ -306,17 +306,25 @@ export default function JapamMain() {
         const elapsed = timerRef.current.seconds;
         const target = timerRef.current.targetSeconds;
         const left = Math.max(0, target - elapsed);
-        const mm = String(Math.floor(left / 60)).padStart(2, '0');
-        const ss = String(left % 60).padStart(2, '0');
+        const timeString = formatTime(left);
 
         const id = await Notifications.scheduleNotificationAsync({
           content: {
-            title: `Time left · ${mm}:${ss}`,
-            body: 'Japam Timer',
-            ...(Platform.OS === 'android' ? { channelId: 'japam-timer' } : {}),
+            title: `⏱️ ${timeString}`,
+            body: 'Japam Timer Running',
+            sticky: true,
+            vibrate: null,
+            sound: false,
+            ...(Platform.OS === 'android' ? {
+              channelId: 'japam-timer',
+              style: {
+                type: Notifications.AndroidNotificationStyle.BIG_TEXT,
+                text: `CURRENT TIMER:\n▶ ${timeString} MINUTES`,
+              },
+            } : {}),
           },
           trigger: null,
-        });
+        } as any);
         timerNotifIdRef.current = id;
       } catch (e) {
         console.log('Timer notification error:', e);
