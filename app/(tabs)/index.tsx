@@ -1761,7 +1761,7 @@ const handleTap = () => {
 
   useEffect(() => {
     if (count === 108 && Platform.OS !== 'web') {
-      Vibration.vibrate(1800);
+      Vibration.vibrate([0, 1000, 80, 1200]);
     }
   }, [count]);
 
@@ -1866,8 +1866,10 @@ const handleTap = () => {
               ]}
             />
             <Pressable
+              hitSlop={{ top: 25, bottom: 25, left: 25, right: 25 }}
+              pressRetentionOffset={{ top: 30, bottom: 30, left: 30, right: 30 }}
               onPress={() => {
-                if (Platform.OS !== 'web') Vibration.vibrate(60);
+                if (Platform.OS !== 'web') Vibration.vibrate(55);
                 handleTap();
               }}
               style={({ pressed }) => [
