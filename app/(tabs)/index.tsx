@@ -669,7 +669,7 @@ export default function JapamMain() {
         }
 
         if (remoteSessions !== null) {
-          // Supabase is source of truth — sync local history and recalculate
+          // Sync remote history to local for History tab display
           const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
           const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
           const otherUserSessions = localHistory.filter((s) => s.userId !== savedUserId);
@@ -681,28 +681,31 @@ export default function JapamMain() {
             JSON.stringify([...filteredRemote, ...otherUserSessions])
           );
 
-          const finalTotal = filteredRemote
+          // localStoredTotal is the source of truth for manual count (saved on every tap).
+          // Fall back to Supabase history sum only when localStored is 0 (e.g. fresh install).
+          const remoteHistoryTotal = filteredRemote
             .filter((s) => getLocalDateKey(new Date(s.date)) === todayKey)
             .reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
 
-          await restoreTotal(finalTotal, { userId: savedUserId });
-          totalRef.current = finalTotal;
-          await refreshDayStreak({ userId: savedUserId, todayTotal: finalTotal });
+          const safeTotal = localStoredTotal > 0 ? localStoredTotal : remoteHistoryTotal;
+          await restoreTotal(safeTotal, { userId: savedUserId });
+          totalRef.current = safeTotal;
+          await refreshDayStreak({ userId: savedUserId, todayTotal: safeTotal });
         } else {
-          // Supabase unreachable — fall back to local data
+          // Supabase unreachable — use locally saved count (never go below what was tapped)
           const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
-          const finalTotal = Math.max(localStoredTotal, localHistoryTotal);
-          await restoreTotal(finalTotal, { userId: savedUserId });
-          totalRef.current = finalTotal;
-          await refreshDayStreak({ userId: savedUserId, todayTotal: finalTotal });
+          const safeTotal = localStoredTotal > 0 ? localStoredTotal : localHistoryTotal;
+          await restoreTotal(safeTotal, { userId: savedUserId });
+          totalRef.current = safeTotal;
+          await refreshDayStreak({ userId: savedUserId, todayTotal: safeTotal });
         }
       } catch (error) {
         console.log('Stats sync error, using local data:', error);
         const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
-        const finalTotal = Math.max(localStoredTotal, localHistoryTotal);
-        await restoreTotal(finalTotal, { userId: savedUserId });
-        totalRef.current = finalTotal;
-        await refreshDayStreak({ userId: savedUserId, todayTotal: finalTotal });
+        const safeTotal = localStoredTotal > 0 ? localStoredTotal : localHistoryTotal;
+        await restoreTotal(safeTotal, { userId: savedUserId });
+        totalRef.current = safeTotal;
+        await refreshDayStreak({ userId: savedUserId, todayTotal: safeTotal });
       }
 
       setHasRestoredTotal(true);
@@ -1425,7 +1428,7 @@ export default function JapamMain() {
   
     try {
       if (Platform.OS === 'web') {
-        webVibrate([200, 80, 200, 80, 400]);
+        webVibrate([200, 80, 200]);
         return;
       }
 
@@ -1440,7 +1443,7 @@ export default function JapamMain() {
         return;
       }
 
-      Vibration.vibrate([0, 300, 100, 300, 100, 500]);
+      Vibration.vibrate([200, 80, 200]);
     } catch (error) {
       console.log('Completion vibration error:', error);
     }
@@ -1593,10 +1596,8 @@ export default function JapamMain() {
     isCompletingRef.current = true;
     lastCompletedCycleRef.current = Date.now();
 
-    const currentTotal = totalRef.current;
-    const nextTotal = currentTotal + 108;
-    setCountersFromTotal(nextTotal);
-    void saveSession(targetSeconds, 1, 108, nextTotal);
+    // Save timer session to history without touching the manual count/malas/total
+    void saveSession(targetSeconds, 1, 108, totalRef.current);
     void completeFeedback('normal');
     void hideTimerNotification();
 
