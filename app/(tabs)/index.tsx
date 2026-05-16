@@ -1368,22 +1368,32 @@ export default function JapamMain() {
   }, [vibrationEnabled]);
 
   const tapFeedback = useCallback(async () => {
-    if (!vibrationEnabled) return;
+    if (!vibrationEnabled) {
+      console.log('tap vibration skipped: disabled');
+      return;
+    }
     console.log('tap vibration triggered');
 
     try {
-      if (webVibrate(35)) return;
-
-      if (Platform.OS === 'ios') {
-        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      if (Platform.OS === 'web') {
+        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+          navigator.vibrate(100);
+        }
         return;
       }
 
-      Vibration.vibrate(35);
+      // Use expo-haptics on all native platforms (works with new architecture)
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+      // Android: also fire raw Vibration for devices where haptics is too subtle
+      if (Platform.OS === 'android') {
+        Vibration.vibrate(100);
+      }
     } catch (error) {
       console.log('Tap vibration error:', error);
+      try { Vibration.vibrate(100); } catch {}
     }
-  }, [vibrationEnabled, webVibrate]);
+  }, [vibrationEnabled]);
 
   const playCompletionAnimation = useCallback(() => {
     glowAnim.setValue(0);
@@ -1407,12 +1417,17 @@ export default function JapamMain() {
     // Always notify — covers background completion and acts as status feedback
     void notifyCompletionFallback(variant);
   
-    if (!vibrationEnabled) return;
+    if (!vibrationEnabled) {
+      console.log('completion vibration skipped: disabled');
+      return;
+    }
     console.log('completion vibration triggered');
 
     try {
       if (Platform.OS === 'web') {
-        webVibrate([200, 80, 200]);
+        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+          navigator.vibrate([200, 80, 200]);
+        }
         return;
       }
 
@@ -1427,11 +1442,14 @@ export default function JapamMain() {
         return;
       }
 
+      // Android: fire pattern vibration + haptic notification
       Vibration.vibrate([200, 80, 200]);
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
       console.log('Completion vibration error:', error);
+      try { Vibration.vibrate([200, 80, 200]); } catch {}
     }
-  }, [notifyCompletionFallback, playCompletionAnimation, repetitionSoundEnabled, soundEnabled, vibrationEnabled, webVibrate]);
+  }, [notifyCompletionFallback, playCompletionAnimation, repetitionSoundEnabled, soundEnabled, vibrationEnabled]);
 
   const setCountersFromTotal = (nextTotal: number) => {
     const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
