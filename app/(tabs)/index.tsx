@@ -234,6 +234,7 @@ export default function JapamMain() {
         playsInSilentModeIOS: true,
         staysActiveInBackground: true,
         shouldDuckAndroid: false,
+        playThroughEarpieceAndroid: false,
       });
     } catch (error) {
       console.log('Audio mode error:', error);
