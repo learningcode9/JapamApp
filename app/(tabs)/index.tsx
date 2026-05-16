@@ -234,7 +234,6 @@ export default function JapamMain() {
         playsInSilentModeIOS: true,
         staysActiveInBackground: true,
         shouldDuckAndroid: false,
-        playThroughEarpieceAndroid: false,
       });
     } catch (error) {
       console.log('Audio mode error:', error);
@@ -276,9 +275,8 @@ export default function JapamMain() {
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     void Notifications.setNotificationChannelAsync('japam-timer', {
-      name: 'Japam Timer Channel',
-      importance: Notifications.AndroidImportance.HIGH,
-      sound: null,
+      name: 'Timer',
+      importance: Notifications.AndroidImportance.DEFAULT,
       vibrationPattern: [],
       enableVibrate: false,
       showBadge: false,
@@ -308,26 +306,17 @@ export default function JapamMain() {
         const elapsed = timerRef.current.seconds;
         const target = timerRef.current.targetSeconds;
         const left = Math.max(0, target - elapsed);
-        const timeString = formatTime(left);
+        const mm = String(Math.floor(left / 60)).padStart(2, '0');
+        const ss = String(left % 60).padStart(2, '0');
 
         const id = await Notifications.scheduleNotificationAsync({
           content: {
-            title: `⏱️  ${timeString}`,
-            body: 'Japam Timer Running',
-            sticky: true,
-            vibrate: null,
-            sound: false,
-            ...(Platform.OS === 'android' ? {
-              channelId: 'japam-timer',
-              priority: Notifications.AndroidNotificationPriority.HIGH,
-              style: {
-                type: Notifications.AndroidNotificationStyle.BIG_TEXT,
-                text: `CURRENT TIMER:\n▶ ${timeString} MINUTES`,
-              },
-            } : {}),
+            title: `Time left · ${mm}:${ss}`,
+            body: 'Japam Timer',
+            ...(Platform.OS === 'android' ? { channelId: 'japam-timer' } : {}),
           },
           trigger: null,
-        } as any);
+        });
         timerNotifIdRef.current = id;
       } catch (e) {
         console.log('Timer notification error:', e);
@@ -337,7 +326,7 @@ export default function JapamMain() {
     await scheduleNotif();
 
     if (timerNotifUpdateRef.current) clearInterval(timerNotifUpdateRef.current);
-    timerNotifUpdateRef.current = setInterval(scheduleNotif, 10000);
+    timerNotifUpdateRef.current = setInterval(scheduleNotif, 15000);
   }, []);
 
   const hideTimerNotification = useCallback(async () => {
