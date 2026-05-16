@@ -1363,11 +1363,12 @@ export default function JapamMain() {
 
     if (Platform.OS === 'android') {
       Vibration.vibrate(200);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
       return;
     }
 
     // iOS
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
   }, [vibrationEnabled]);
 
   const playCompletionAnimation = useCallback(() => {
@@ -1762,6 +1763,10 @@ const handleTap = () => {
   useEffect(() => {
     if (count === 108 && Platform.OS !== 'web') {
       Vibration.vibrate([0, 1000, 80, 1200]);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      setTimeout(() => {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+      }, 400);
     }
   }, [count]);
 
