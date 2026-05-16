@@ -276,8 +276,9 @@ export default function JapamMain() {
   useEffect(() => {
     if (Platform.OS !== 'android') return;
     void Notifications.setNotificationChannelAsync('japam-timer', {
-      name: 'Timer',
-      importance: Notifications.AndroidImportance.DEFAULT,
+      name: 'Japam Timer Channel',
+      importance: Notifications.AndroidImportance.HIGH,
+      sound: null,
       vibrationPattern: [],
       enableVibrate: false,
       showBadge: false,
@@ -311,13 +312,14 @@ export default function JapamMain() {
 
         const id = await Notifications.scheduleNotificationAsync({
           content: {
-            title: `⏱️ ${timeString}`,
+            title: `⏱️  ${timeString}`,
             body: 'Japam Timer Running',
             sticky: true,
             vibrate: null,
             sound: false,
             ...(Platform.OS === 'android' ? {
               channelId: 'japam-timer',
+              priority: Notifications.AndroidNotificationPriority.HIGH,
               style: {
                 type: Notifications.AndroidNotificationStyle.BIG_TEXT,
                 text: `CURRENT TIMER:\n▶ ${timeString} MINUTES`,
@@ -335,7 +337,7 @@ export default function JapamMain() {
     await scheduleNotif();
 
     if (timerNotifUpdateRef.current) clearInterval(timerNotifUpdateRef.current);
-    timerNotifUpdateRef.current = setInterval(scheduleNotif, 15000);
+    timerNotifUpdateRef.current = setInterval(scheduleNotif, 10000);
   }, []);
 
   const hideTimerNotification = useCallback(async () => {
