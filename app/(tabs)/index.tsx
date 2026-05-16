@@ -60,6 +60,17 @@ type TimerStateRow = {
   updated_at?: string | null;
 };
 
+const triggerDeepHardwarePulse = (durationOrPattern: number | number[]) => {
+  if (Platform.OS === 'web') return;
+  try {
+    if (typeof durationOrPattern === 'number') {
+      Vibration.vibrate(durationOrPattern);
+    } else {
+      Vibration.vibrate(durationOrPattern);
+    }
+  } catch {}
+};
+
 const COUNT_KEY = 'count';
 const MALAS_KEY = 'malas';
 const TOTAL_KEY = 'totalCount';
@@ -1776,8 +1787,8 @@ const handleTap = () => {
   };
 
   useEffect(() => {
-    if (count === 108 && Platform.OS !== 'web') {
-      Vibration.vibrate([0, 1200, 60, 1500]);
+    if (count === 108) {
+      triggerDeepHardwarePulse([0, 1200, 50, 1800]);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       setTimeout(() => {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
@@ -1886,11 +1897,10 @@ const handleTap = () => {
               ]}
             />
             <Pressable
-              hitSlop={{ top: 30, bottom: 30, left: 30, right: 30 }}
-              pressRetentionOffset={{ top: 35, bottom: 35, left: 35, right: 35 }}
+              hitSlop={{ top: 35, bottom: 35, left: 35, right: 35 }}
+              pressRetentionOffset={{ top: 40, bottom: 40, left: 40, right: 40 }}
               onPress={() => {
-                void playTactileClick();
-                if (Platform.OS !== 'web') Vibration.vibrate(60);
+                triggerDeepHardwarePulse(65);
                 handleTap();
               }}
               style={({ pressed }) => [
