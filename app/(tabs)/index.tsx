@@ -1351,32 +1351,23 @@ export default function JapamMain() {
   }, [userName]);
 
 
-  const tapFeedback = useCallback(async () => {
-    if (!vibrationEnabled) {
-      console.log('tap vibration skipped: disabled');
+  const tapFeedback = useCallback(() => {
+    if (!vibrationEnabled) return;
+
+    if (Platform.OS === 'web') {
+      if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+        navigator.vibrate(200);
+      }
       return;
     }
-    console.log('tap vibration triggered');
 
-    try {
-      if (Platform.OS === 'web') {
-        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
-          navigator.vibrate(100);
-        }
-        return;
-      }
-
-      // Use expo-haptics on all native platforms (works with new architecture)
-      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-
-      // Android: also fire raw Vibration for devices where haptics is too subtle
-      if (Platform.OS === 'android') {
-        Vibration.vibrate(100);
-      }
-    } catch (error) {
-      console.log('Tap vibration error:', error);
-      try { Vibration.vibrate(100); } catch {}
+    if (Platform.OS === 'android') {
+      Vibration.vibrate(200);
+      return;
     }
+
+    // iOS
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
   }, [vibrationEnabled]);
 
   const playCompletionAnimation = useCallback(() => {
@@ -1426,12 +1417,12 @@ export default function JapamMain() {
         return;
       }
 
-      // Android: fire pattern vibration + haptic notification
-      Vibration.vibrate([200, 80, 200]);
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      // Android: [0, 200, 80, 200] = start immediately, 200ms on, 80ms off, 200ms on
+      Vibration.vibrate([0, 200, 80, 200]);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     } catch (error) {
       console.log('Completion vibration error:', error);
-      try { Vibration.vibrate([200, 80, 200]); } catch {}
+      try { Vibration.vibrate([0, 200, 80, 200]); } catch {}
     }
   }, [notifyCompletionFallback, playCompletionAnimation, repetitionSoundEnabled, soundEnabled, vibrationEnabled]);
 

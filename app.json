@@ -37,7 +37,8 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundColor": "#f5fafa"
-      }
+      },
+      "permissions": ["android.permission.VIBRATE"]
     },
 
     "web": {
