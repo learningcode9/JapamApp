@@ -54,10 +54,10 @@ export default function TabLayout() {
           borderTopColor: 'rgba(255,255,255,0.78)',
           borderTopWidth: 1,
           borderRadius: 28,
-          height: 84,
-          paddingTop: 8,
-          paddingBottom: 8,
-          paddingHorizontal: 10,
+          height: 74,
+          paddingTop: 6,
+          paddingBottom: 6,
+          paddingHorizontal: 6,
           overflow: 'visible',
           shadowColor: '#0f766e',
           shadowOpacity: 0.14,
@@ -66,12 +66,12 @@ export default function TabLayout() {
           elevation: 16,
         },
         tabBarItemStyle: {
-          borderRadius: 22,
-          marginHorizontal: 2,
+          borderRadius: 20,
+          marginHorizontal: 1,
           marginVertical: 0,
-          minWidth: 72,
-          paddingVertical: 6,
-          paddingHorizontal: 8,
+          minWidth: 58,
+          paddingVertical: 4,
+          paddingHorizontal: 4,
           alignItems: 'center',
           justifyContent: 'center',
         },
@@ -84,7 +84,7 @@ export default function TabLayout() {
           title: 'Home',
           tabBarLabel: tabLabel('Home'),
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name="home-outline" size={focused ? 30 : 28} color={color} />
+            <Ionicons name="home-outline" size={focused ? 27 : 25} color={color} />
           ),
         }}
       />
@@ -94,12 +94,8 @@ export default function TabLayout() {
         options={{
           title: 'Timer',
           tabBarLabel: tabLabel('Timer'),
-          tabBarIcon: ({ focused }) => (
-            <Ionicons
-              name={focused ? 'timer' : 'timer-outline'}
-              size={focused ? 30 : 28}
-              color={focused ? '#E8823A' : '#5f7778'}
-            />
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'timer' : 'timer-outline'} size={focused ? 27 : 25} color={color} />
           ),
         }}
       />
@@ -122,11 +118,7 @@ export default function TabLayout() {
     title: 'History',
     tabBarLabel: tabLabel('History'),
     tabBarIcon: ({ color, focused }) => (
-      <Ionicons
-        name="document-text-outline"
-        size={focused ? 30 : 28}
-        color={color}
-      />
+      <Ionicons name="document-text-outline" size={focused ? 27 : 25} color={color} />
     ),
   }}
 />
@@ -137,7 +129,7 @@ export default function TabLayout() {
     title: 'Learn',
     tabBarLabel: tabLabel('Learn'),
     tabBarIcon: ({ color, focused }) => (
-      <Ionicons name="book-outline" size={focused ? 30 : 28} color={color} />
+      <Ionicons name="book-outline" size={focused ? 27 : 25} color={color} />
     ),
   }}
 />
@@ -148,7 +140,7 @@ export default function TabLayout() {
     title: 'Settings',
     tabBarLabel: tabLabel('Settings'),
     tabBarIcon: ({ color, focused }) => (
-      <Ionicons name="sparkles-outline" size={focused ? 30 : 28} color={color} />
+      <Ionicons name="sparkles-outline" size={focused ? 27 : 25} color={color} />
     ),
   }}
 />
@@ -158,10 +150,10 @@ export default function TabLayout() {
 
 const styles = StyleSheet.create({
   tabLabel: {
-    fontSize: 14,
+    fontSize: 11,
     fontWeight: '600',
-    lineHeight: 17,
-    marginTop: 4,
+    lineHeight: 14,
+    marginTop: 3,
   },
   tabLabelActive: {
     fontWeight: '700',

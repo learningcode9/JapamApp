@@ -1911,36 +1911,6 @@ export default function JapamMain() {
             </Pressable>
           </Animated.View>
 
-          <Pressable
-            style={({ pressed }) => [styles.primaryAction, pressed && styles.primaryActionPressed]}
-            onPress={() => {
-              if (Platform.OS !== 'web') Vibration.vibrate(50);
-              if (isRunning) handlePause(); else handleStart();
-            }}
-          >
-            <Text style={styles.primaryActionText}>
-              {isRunning
-                ? `Pause Timer · ${formatTime(seconds)}`
-                : seconds > 0
-                  ? `Resume Japam · ${formatTime(seconds)}`
-                  : '▶ Start Japam'}
-            </Text>
-          </Pressable>
-
-          <Pressable
-            style={({ pressed }) => [styles.sessionChip, pressed && styles.softPressed]}
-            onPress={() => {
-              setShowCustomTimerInput(false);
-              setShowTimerSheet(true);
-            }}
-          >
-            <Ionicons name="time-outline" size={21} color="#0F8F87" style={styles.sessionChipIcon} />
-            <Text style={styles.sessionChipText}>
-              {hasSelectedTimer ? `Timer: ${minutesInput} min` : 'Select timer for Japam'}
-            </Text>
-            <Text style={styles.sessionChipArrow}>›</Text>
-          </Pressable>
-
           <View style={styles.statsCard}>
             <View style={styles.statColumn}>
               <View style={styles.malaIcon} accessibilityElementsHidden>
@@ -1974,101 +1944,6 @@ export default function JapamMain() {
             </View>
           </View>
         </View>
-
-        <Modal visible={showTimerSheet} transparent animationType="slide">
-          <View style={styles.sheetOverlay}>
-            <Pressable style={styles.sheetBackdrop} onPress={() => setShowTimerSheet(false)} />
-            <View style={styles.sessionSheet}>
-              <View style={styles.sheetHandle} />
-              {showCustomTimerInput ? (
-                <>
-                  <Text style={styles.sheetTitle}>Custom timer</Text>
-                  <Text style={styles.sheetSubtitle}>Enter your own practice length</Text>
-
-                  <View style={styles.customTimerPanel}>
-                    <TextInput
-                      style={styles.customTimerInput}
-                      value={customMinutesInput}
-                      onChangeText={setCustomMinutesInput}
-                      placeholder="Minutes"
-                      placeholderTextColor="#7f9798"
-                      keyboardType="numeric"
-                      autoFocus
-                    />
-                    <Pressable style={styles.customApplyButton} onPress={applyCustomSessionMinutes}>
-                      <Text style={styles.customApplyText}>Set</Text>
-                    </Pressable>
-                  </View>
-
-                  <Pressable
-                    style={styles.cancelSheetButton}
-                    onPress={() => setShowCustomTimerInput(false)}
-                  >
-                    <Text style={styles.cancelSheetText}>Back</Text>
-                  </Pressable>
-                </>
-              ) : (
-                <>
-                  <Text style={styles.sheetTitle}>Select timer for Japam</Text>
-                  <Text style={styles.sheetSubtitle}>Choose how long you want to practice</Text>
-
-                  {SESSION_TIME_OPTIONS.map((minutes) => {
-                    const isSelected = Number(minutesInput) === minutes;
-
-                    return (
-                      <Pressable
-                        key={minutes}
-                        style={({ pressed }) => [
-                          styles.timeOption,
-                          isSelected && styles.timeOptionSelected,
-                          pressed && styles.softPressed,
-                        ]}
-                        onPress={() => applySessionMinutes(minutes)}
-                      >
-                        <Text style={styles.timeOptionIcon}>◷</Text>
-                        <Text style={styles.timeOptionText}>{minutes} min</Text>
-                        <View style={[styles.optionRadio, isSelected && styles.optionRadioSelected]}>
-                          {isSelected && <Text style={styles.optionCheck}>✓</Text>}
-                        </View>
-                      </Pressable>
-                    );
-                  })}
-
-                  <Pressable
-                    style={({ pressed }) => [styles.timeOption, pressed && styles.softPressed]}
-                    onPress={() => setShowCustomTimerInput(true)}
-                  >
-                    <Text style={styles.timeOptionIcon}>✎</Text>
-                    <Text style={styles.timeOptionText}>Custom</Text>
-                    <Text style={styles.sessionChipArrow}>›</Text>
-                  </Pressable>
-
-                  <View style={styles.sheetAutoRepeatRow}>
-                    <View style={styles.sheetAutoRepeatCopy}>
-                      <Text style={styles.sheetAutoRepeatTitle}>Auto repeat</Text>
-                      <Text style={styles.sheetAutoRepeatDescription}>
-                        Repeat up to 5 malas automatically
-                      </Text>
-                    </View>
-                    <Switch
-                      value={loopTimer}
-                      onValueChange={(value) => {
-                        setLoopTimer(value);
-                        setAutoCompletedMalas(0);
-                        if (!value) {
-                          setIsRunning(false);
-                          setSeconds(0);
-                        }
-                      }}
-                      trackColor={{ false: '#c8d8d5', true: '#9fd6d0' }}
-                      thumbColor={loopTimer ? '#0F8F87' : '#ffffff'}
-                    />
-                  </View>
-                </>
-              )}
-            </View>
-          </View>
-        </Modal>
 
         <Modal visible={showUserModal && !isSigningIn} transparent animationType="fade">
           <View style={styles.modalOverlay}>

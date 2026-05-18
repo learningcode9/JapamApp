@@ -11,22 +11,26 @@ import {
   DeviceEventEmitter,
   Dimensions,
   ImageBackground,
+  Keyboard,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   Vibration,
   View,
 } from 'react-native';
+import * as Haptics2 from 'expo-haptics';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 const isMobile = screenWidth < 768;
-const CIRCLE_SIZE = isMobile ? 260 : 300;
-const PRIMARY = '#E8823A';
+const CIRCLE_SIZE = isMobile ? 256 : 296;
+const TEAL = '#0F8F87';
+const TEAL_DARK = '#0f766e';
 
-const DURATIONS = [1, 3, 5, 10, 15, 30];
-const LOOP_OPTIONS = [1, 3, 5, 9, 11, 27];
+const STD_DURATIONS = [3, 5, 10, 15];
+const LOOP_OPTIONS = [1, 3, 5, 10];
 
 const T_DURATION_KEY = 'timerTab_duration';
 const T_LOOPS_KEY = 'timerTab_loops';
@@ -68,10 +72,13 @@ export default function TimerScreen() {
   const [isRunning, setIsRunning] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
+  const [showCustomInput, setShowCustomInput] = useState(false);
+  const [customText, setCustomText] = useState('');
 
   const targetSeconds = selectedDuration * 60;
   const timeLeft = Math.max(0, targetSeconds - seconds);
   const isPaused = !isRunning && seconds > 0 && seconds < targetSeconds;
+  const isCustomDuration = !STD_DURATIONS.includes(selectedDuration);
 
   const secondsRef = useRef(0);
   const isRunningRef = useRef(false);
@@ -146,7 +153,6 @@ export default function TimerScreen() {
     return () => { soundRef.current?.unloadAsync().catch(() => {}); soundRef.current = null; };
   }, []);
 
-  // Restore timer state on mount
   useEffect(() => {
     void (async () => {
       try {
@@ -164,18 +170,14 @@ export default function TimerScreen() {
         const savedTarget = Number(target) || 0;
         const savedDur = Number(dur) || 0;
         const savedLoops = Number(loops) || 0;
-        if (DURATIONS.includes(savedDur)) {
-          setSelectedDuration(savedDur); selectedDurationRef.current = savedDur;
-        } else if (savedTarget > 0) {
+        if (savedDur > 0) { setSelectedDuration(savedDur); selectedDurationRef.current = savedDur; }
+        else if (savedTarget > 0) {
           const mins = Math.round(savedTarget / 60);
-          if (DURATIONS.includes(mins)) { setSelectedDuration(mins); selectedDurationRef.current = mins; }
+          setSelectedDuration(mins); selectedDurationRef.current = mins;
         }
-        if (LOOP_OPTIONS.includes(savedLoops)) {
-          setSelectedLoops(savedLoops); selectedLoopsRef.current = savedLoops;
-        }
+        if (LOOP_OPTIONS.includes(savedLoops)) { setSelectedLoops(savedLoops); selectedLoopsRef.current = savedLoops; }
         if (savedSec > 0 && savedTarget > 0 && savedSec < savedTarget) {
           setSeconds(savedSec); secondsRef.current = savedSec;
-          // Restore paused — user must press Resume
         }
       } catch {}
     })();
@@ -278,15 +280,12 @@ export default function TimerScreen() {
   const handleComplete = useCallback(async () => {
     if (isCompletingRef.current) return;
     isCompletingRef.current = true;
-
     clearTimerInterval();
-    setIsRunning(false);
-    isRunningRef.current = false;
+    setIsRunning(false); isRunningRef.current = false;
     await hideNotification();
 
     const newDone = completedLoopsRef.current + 1;
-    setCompletedLoops(newDone);
-    completedLoopsRef.current = newDone;
+    setCompletedLoops(newDone); completedLoopsRef.current = newDone;
     const isFinal = newDone >= selectedLoopsRef.current;
 
     if (soundEnabledRef.current) {
@@ -299,8 +298,8 @@ export default function TimerScreen() {
 
     if (vibrationEnabledRef.current && Platform.OS !== 'web') {
       pulse([0, 1200, 80, 1500]);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-      setTimeout(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {}), 400);
+      Haptics2.notificationAsync(Haptics2.NotificationFeedbackType.Success).catch(() => {});
+      setTimeout(() => Haptics2.notificationAsync(Haptics2.NotificationFeedbackType.Error).catch(() => {}), 400);
     }
 
     if (Platform.OS !== 'web') {
@@ -327,11 +326,9 @@ export default function TimerScreen() {
     } else {
       setTimeout(() => {
         isCompletingRef.current = false;
-        setSeconds(0);
-        secondsRef.current = 0;
+        setSeconds(0); secondsRef.current = 0;
         timerStartedAtRef.current = Date.now();
-        setIsRunning(true);
-        isRunningRef.current = true;
+        setIsRunning(true); isRunningRef.current = true;
         startTimerInterval();
         void showNotification();
         void persistState(true);
@@ -421,25 +418,39 @@ export default function TimerScreen() {
     void AsyncStorage.setItem(T_LOOPS_KEY, String(n));
   };
 
+  const handleCustomSet = () => {
+    const mins = parseInt(customText, 10);
+    if (!mins || mins < 1 || mins > 180) return;
+    handleDurationSelect(mins);
+    setShowCustomInput(false);
+    setCustomText('');
+    Keyboard.dismiss();
+  };
+
   return (
-    <View style={{ flex: 1, backgroundColor: '#FFF3E8' }}>
+    <View style={{ flex: 1, backgroundColor: '#edf7f4' }}>
       <ImageBackground
         source={require('../../assets/images/zen-background.png')}
         style={StyleSheet.absoluteFillObject}
-        imageStyle={{ opacity: 0.18, resizeMode: 'cover' }}
+        imageStyle={{ opacity: 0.28, resizeMode: 'cover' }}
       />
       <LinearGradient
-        colors={['rgba(255,243,232,0.92)', 'rgba(255,228,204,0.88)', 'rgba(245,208,176,0.82)']}
+        colors={['rgba(237,247,244,0.93)', 'rgba(217,238,235,0.88)', 'rgba(248,251,247,0.9)']}
         start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
+        end={{ x: 0, y: 1 }}
         style={StyleSheet.absoluteFillObject}
       />
-      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.container}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.header}>
           <Text style={styles.title}>Timer Japam</Text>
           <Text style={styles.subtitle}>Pick a duration, set loops, breathe.</Text>
         </View>
 
+        {/* Timer circle */}
         <View style={styles.circleWrap}>
           <View style={styles.circleOuter}>
             <View style={styles.circleInner}>
@@ -449,6 +460,7 @@ export default function TimerScreen() {
           </View>
         </View>
 
+        {/* Controls */}
         <View style={styles.controls}>
           <Pressable
             style={({ pressed }) => [styles.startBtn, pressed && { opacity: 0.82 }]}
@@ -463,23 +475,51 @@ export default function TimerScreen() {
             style={({ pressed }) => [styles.resetBtn, pressed && { opacity: 0.65 }]}
             onPress={handleReset}
           >
-            <Ionicons name="refresh-outline" size={22} color={PRIMARY} />
+            <Ionicons name="refresh-outline" size={22} color={TEAL} />
           </Pressable>
         </View>
 
+        {/* Settings card */}
         <View style={styles.card}>
           <Text style={styles.cardLabel}>DURATION</Text>
           <View style={styles.chips}>
-            {DURATIONS.map((d) => (
+            {STD_DURATIONS.map((d) => (
               <Pressable
                 key={d}
-                style={[styles.chip, selectedDuration === d && styles.chipActive, isRunning && styles.chipDisabled]}
-                onPress={() => handleDurationSelect(d)}
+                style={[styles.chip, selectedDuration === d && !isCustomDuration && styles.chipActive, isRunning && styles.chipDisabled]}
+                onPress={() => { handleDurationSelect(d); setShowCustomInput(false); }}
               >
-                <Text style={[styles.chipText, selectedDuration === d && styles.chipTextActive]}>{d}m</Text>
+                <Text style={[styles.chipText, selectedDuration === d && !isCustomDuration && styles.chipTextActive]}>{d}m</Text>
               </Pressable>
             ))}
+            <Pressable
+              style={[styles.chip, isCustomDuration && styles.chipActive, isRunning && styles.chipDisabled]}
+              onPress={() => { if (!isRunning) setShowCustomInput(!showCustomInput); }}
+            >
+              <Text style={[styles.chipText, isCustomDuration && styles.chipTextActive]}>
+                {isCustomDuration ? `${selectedDuration}m` : 'Custom'}
+              </Text>
+            </Pressable>
           </View>
+
+          {showCustomInput && !isRunning && (
+            <View style={styles.customRow}>
+              <TextInput
+                style={styles.customInput}
+                value={customText}
+                onChangeText={setCustomText}
+                placeholder="Enter minutes"
+                placeholderTextColor="#7f9ea0"
+                keyboardType="numeric"
+                returnKeyType="done"
+                onSubmitEditing={handleCustomSet}
+                autoFocus
+              />
+              <Pressable style={styles.customSetBtn} onPress={handleCustomSet}>
+                <Text style={styles.customSetText}>Set</Text>
+              </Pressable>
+            </View>
+          )}
 
           <Text style={[styles.cardLabel, { marginTop: 22 }]}>AUTO-REPEAT MALAS</Text>
           <View style={styles.chips}>
@@ -507,45 +547,45 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     minHeight: screenHeight,
   },
-  header: { alignItems: 'center', marginBottom: 36 },
+  header: { alignItems: 'center', marginBottom: 32 },
   title: {
-    fontSize: isMobile ? 28 : 34,
+    fontSize: isMobile ? 26 : 32,
     fontWeight: '900',
-    color: '#1C1009',
+    color: '#12383c',
     letterSpacing: -0.5,
   },
   subtitle: {
-    fontSize: 15,
-    color: '#7A5C35',
+    fontSize: 14,
+    color: '#4a7c80',
     marginTop: 6,
     textAlign: 'center',
   },
-  circleWrap: { marginBottom: 36 },
+  circleWrap: { marginBottom: 32 },
   circleOuter: {
     width: CIRCLE_SIZE,
     height: CIRCLE_SIZE,
     borderRadius: CIRCLE_SIZE / 2,
-    backgroundColor: 'rgba(255,255,255,0.82)',
-    borderWidth: 20,
-    borderColor: 'rgba(232,130,58,0.2)',
+    backgroundColor: 'rgba(255,255,255,0.72)',
+    borderWidth: 18,
+    borderColor: 'rgba(15,143,135,0.18)',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#E8823A',
-    shadowOpacity: 0.2,
-    shadowRadius: 36,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 14,
+    shadowColor: '#0F8F87',
+    shadowOpacity: 0.16,
+    shadowRadius: 32,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 12,
   },
   circleInner: { alignItems: 'center' },
   timerText: {
-    fontSize: isMobile ? 62 : 74,
+    fontSize: isMobile ? 60 : 72,
     fontWeight: '800',
-    color: PRIMARY,
+    color: TEAL,
     letterSpacing: -2,
   },
   malaText: {
-    fontSize: 15,
-    color: '#7A5C35',
+    fontSize: 14,
+    color: '#4a7c80',
     marginTop: 10,
     fontWeight: '500',
   },
@@ -553,54 +593,55 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14,
-    marginBottom: 32,
+    marginBottom: 28,
   },
   startBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: PRIMARY,
-    paddingVertical: 16,
-    paddingHorizontal: 42,
+    backgroundColor: TEAL,
+    paddingVertical: 15,
+    paddingHorizontal: 40,
     borderRadius: 50,
-    shadowColor: PRIMARY,
-    shadowOpacity: 0.45,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 6 },
+    shadowColor: TEAL,
+    shadowOpacity: 0.38,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 5 },
     elevation: 10,
   },
   startBtnText: {
     color: '#fff',
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '800',
-    letterSpacing: 0.2,
   },
   resetBtn: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     borderWidth: 2,
-    borderColor: PRIMARY,
+    borderColor: TEAL,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.78)',
+    backgroundColor: 'rgba(255,255,255,0.72)',
   },
   card: {
     width: '100%',
     maxWidth: 460,
-    backgroundColor: 'rgba(255,255,255,0.88)',
-    borderRadius: 24,
-    padding: 24,
-    shadowColor: '#000',
+    backgroundColor: 'rgba(255,255,255,0.78)',
+    borderRadius: 22,
+    padding: 22,
+    shadowColor: '#0a3a3c',
     shadowOpacity: 0.07,
-    shadowRadius: 20,
+    shadowRadius: 18,
     shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
+    elevation: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.9)',
   },
   cardLabel: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
-    color: '#9A7040',
-    letterSpacing: 1,
+    color: '#4a8c90',
+    letterSpacing: 1.2,
     marginBottom: 14,
   },
   chips: {
@@ -609,27 +650,55 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   chip: {
-    paddingVertical: 10,
+    paddingVertical: 9,
     paddingHorizontal: 18,
     borderRadius: 50,
     borderWidth: 1.5,
-    borderColor: 'rgba(0,0,0,0.12)',
-    backgroundColor: 'rgba(255,255,255,0.9)',
+    borderColor: 'rgba(15,143,135,0.22)',
+    backgroundColor: 'rgba(255,255,255,0.85)',
   },
   chipActive: {
-    backgroundColor: PRIMARY,
-    borderColor: PRIMARY,
+    backgroundColor: TEAL,
+    borderColor: TEAL,
   },
   chipDisabled: {
-    opacity: 0.5,
+    opacity: 0.45,
   },
   chipText: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
-    color: '#5A4030',
+    color: '#2a5c60',
   },
   chipTextActive: {
     color: '#fff',
     fontWeight: '800',
+  },
+  customRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 14,
+    gap: 10,
+  },
+  customInput: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: 'rgba(15,143,135,0.35)',
+    paddingHorizontal: 14,
+    fontSize: 15,
+    color: '#12383c',
+    backgroundColor: 'rgba(255,255,255,0.9)',
+  },
+  customSetBtn: {
+    backgroundColor: TEAL,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+  },
+  customSetText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 14,
   },
 });
