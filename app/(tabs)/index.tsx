@@ -1488,29 +1488,23 @@ export default function JapamMain() {
     return true;
   };
 
-  // Complete conditional setup structure for handlers update:
-const handleTap = () => {
-  // Prati tap ki clear click sensation alert feedback 
-  if (Platform.OS !== 'web') {
-    Vibration.vibrate(60); 
-  }
-  
-  // Existing internal functional loop process updates
-  const updatedCount = count + 1;
-  setCount(updatedCount);
-  
-  // Loop execution updates check for 108 limit context
-  if (updatedCount >= 108) {
-    if (Platform.OS !== 'web') {
-      // 0ms wait, 800ms vibration, 250ms gap, 1000ms strong finish vibration trigger
-      Vibration.vibrate([0, 800, 250, 1000]);
-    }
-  }
-};
-  
+  const handleTap = () => {
+    if (!requireLogin()) return;
+
+    const now = Date.now();
+    if (now - lastTapRef.current < 100) return;
+    lastTapRef.current = now;
+
+    rippleAnim.setValue(0);
+    Animated.timing(rippleAnim, {
+      toValue: 1,
+      duration: 700,
+      useNativeDriver: true,
+    }).start();
+
     const newTotal = setCountersFromTotal(totalRef.current + 1);
     const newCount = newTotal % 108;
-  
+
     if (newCount === 0) {
       void saveSession(0, 1, 108, newTotal);
       void completeFeedback('final');
