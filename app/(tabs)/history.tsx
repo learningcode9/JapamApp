@@ -194,46 +194,120 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
   }
 };
 
+const saveToSupabase = async (
+  userId: string,
+  malas: number,
+  totalCount: number,
+  dateKey: string,
+): Promise<boolean> => {
+  const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+  const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key) return false;
+
+  try {
+    const body = {
+      user_id: userId,
+      malas,
+      count: totalCount,
+      created_at: `${dateKey}T12:00:00.000Z`,
+    };
+    const res = await fetch(`${url}/rest/v1/japam_history`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify(body),
+    });
+    return res.ok;
+  } catch (err) {
+    console.log('Supabase manual entry save error:', err);
+    return false;
+  }
+};
+
 export default function HistoryScreen() {
   const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
   const [showManualModal, setShowManualModal] = useState(false);
   const [manualDate, setManualDate] = useState('');
   const [manualMalas, setManualMalas] = useState('');
+  const [manualChyeali, setManualChyeali] = useState('');
+  const [manualDanni, setManualDanni] = useState('');
+  const [manualBatti, setManualBatti] = useState('');
+  const [manualOther, setManualOther] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   const openManualModal = () => {
     setManualDate(getLocalDateKey());
     setManualMalas('');
+    setManualChyeali('');
+    setManualDanni('');
+    setManualBatti('');
+    setManualOther('');
     setShowManualModal(true);
   };
 
   const saveManualEntry = async () => {
-    const malas = parseInt(manualMalas, 10);
-    if (!manualDate || Number.isNaN(malas) || malas <= 0) {
-      Alert.alert('Invalid input', 'Please enter a valid date and number of malas.');
-      return;
-    }
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
     if (!currentUserId) {
-      Alert.alert('Not signed in', 'Please sign in to save entries.');
+      Alert.alert('Please sign in', 'Please sign in to save history.');
       return;
     }
-    const newSession: Session = {
-      date: manualDate,
-      malas,
-      totalCount: malas * 108,
-      duration: 0,
-      manual: true,
-      userId: currentUserId,
-    };
-    const raw = await AsyncStorage.getItem('history');
-    const existing = parseHistory(raw);
-    await AsyncStorage.setItem('history', JSON.stringify([...existing, newSession]));
-    DeviceEventEmitter.emit('japam-history-updated');
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      window.dispatchEvent(new Event('japam-history-updated'));
+
+    if (!manualDate || !/^\d{4}-\d{2}-\d{2}$/.test(manualDate)) {
+      Alert.alert('Invalid date', 'Please enter a valid date in YYYY-MM-DD format.');
+      return;
     }
-    setShowManualModal(false);
-    void loadHistory();
+
+    const malas = parseInt(manualMalas, 10);
+    if (Number.isNaN(malas) || malas <= 0) {
+      Alert.alert('Invalid malas', 'Please enter a positive number of malas completed.');
+      return;
+    }
+
+    const chyeali = parseInt(manualChyeali, 10) || 0;
+    const danni = parseInt(manualDanni, 10) || 0;
+    const batti = parseInt(manualBatti, 10) || 0;
+    const other = parseInt(manualOther, 10) || 0;
+    const totalCount = malas * 108 + chyeali + danni + batti + other;
+
+    setIsSaving(true);
+    try {
+      const supabaseOk = await saveToSupabase(currentUserId, malas, totalCount, manualDate);
+
+      const newSession: Session = {
+        date: manualDate,
+        malas,
+        totalCount,
+        duration: 0,
+        manual: true,
+        userId: currentUserId,
+      };
+
+      if (!supabaseOk) {
+        // Supabase failed — save locally so data is not lost
+        const raw = await AsyncStorage.getItem('history');
+        const existing = parseHistory(raw);
+        await AsyncStorage.setItem('history', JSON.stringify([...existing, newSession]));
+      }
+
+      setShowManualModal(false);
+      await loadHistory();
+
+      DeviceEventEmitter.emit('japam-stats-updated');
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('japam-stats-updated'));
+      }
+
+      Alert.alert('Saved', 'Manual entry saved.');
+    } catch (err) {
+      console.log('Manual entry save error:', err);
+      Alert.alert('Could not save manual entry', 'Something went wrong. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const loadHistory = useCallback(async () => {
@@ -444,12 +518,56 @@ export default function HistoryScreen() {
               maxLength={4}
             />
 
+            <Text style={styles.modalLabel}>Chyeali (optional)</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={manualChyeali}
+              onChangeText={setManualChyeali}
+              placeholder="0"
+              placeholderTextColor="#8aacae"
+              keyboardType="numeric"
+              maxLength={5}
+            />
+
+            <Text style={styles.modalLabel}>Danni (optional)</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={manualDanni}
+              onChangeText={setManualDanni}
+              placeholder="0"
+              placeholderTextColor="#8aacae"
+              keyboardType="numeric"
+              maxLength={5}
+            />
+
+            <Text style={styles.modalLabel}>Batti (optional)</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={manualBatti}
+              onChangeText={setManualBatti}
+              placeholder="0"
+              placeholderTextColor="#8aacae"
+              keyboardType="numeric"
+              maxLength={5}
+            />
+
+            <Text style={styles.modalLabel}>Other (optional)</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={manualOther}
+              onChangeText={setManualOther}
+              placeholder="0"
+              placeholderTextColor="#8aacae"
+              keyboardType="numeric"
+              maxLength={5}
+            />
+
             <View style={styles.modalActions}>
-              <Pressable style={styles.modalCancel} onPress={() => setShowManualModal(false)}>
+              <Pressable style={styles.modalCancel} onPress={() => setShowManualModal(false)} disabled={isSaving}>
                 <Text style={styles.modalCancelText}>Cancel</Text>
               </Pressable>
-              <Pressable style={styles.modalSave} onPress={saveManualEntry}>
-                <Text style={styles.modalSaveText}>Save</Text>
+              <Pressable style={[styles.modalSave, isSaving && { opacity: 0.6 }]} onPress={saveManualEntry} disabled={isSaving}>
+                <Text style={styles.modalSaveText}>{isSaving ? 'Saving…' : 'Save'}</Text>
               </Pressable>
             </View>
           </View>
