@@ -406,7 +406,7 @@ export default function HistoryScreen() {
           <Text style={styles.exportBtnText}>⬇ Export</Text>
         </Pressable>
         <Pressable style={styles.addBtn} onPress={openManualModal}>
-          <Text style={styles.addBtnText}>+ Add Entry</Text>
+          <Text style={styles.addBtnText}>+ Manual Entry</Text>
         </Pressable>
       </View>
 
