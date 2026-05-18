@@ -123,16 +123,6 @@ export default function TabLayout() {
   }}
 />
 
-<Tabs.Screen
-  name="faq"
-  options={{
-    title: 'Learn',
-    tabBarLabel: tabLabel('Learn'),
-    tabBarIcon: ({ color, focused }) => (
-      <Ionicons name="book-outline" size={focused ? 27 : 25} color={color} />
-    ),
-  }}
-/>
 
 <Tabs.Screen
   name="settings"

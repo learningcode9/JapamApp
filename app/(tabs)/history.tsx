@@ -7,11 +7,14 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     Alert,
     DeviceEventEmitter,
+    KeyboardAvoidingView,
+    Modal,
     Platform,
     Pressable,
     ScrollView,
     StyleSheet,
     Text,
+    TextInput,
     View,
 } from 'react-native';
 
@@ -193,6 +196,45 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
 
 export default function HistoryScreen() {
   const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
+  const [showManualModal, setShowManualModal] = useState(false);
+  const [manualDate, setManualDate] = useState('');
+  const [manualMalas, setManualMalas] = useState('');
+
+  const openManualModal = () => {
+    setManualDate(getLocalDateKey());
+    setManualMalas('');
+    setShowManualModal(true);
+  };
+
+  const saveManualEntry = async () => {
+    const malas = parseInt(manualMalas, 10);
+    if (!manualDate || Number.isNaN(malas) || malas <= 0) {
+      Alert.alert('Invalid input', 'Please enter a valid date and number of malas.');
+      return;
+    }
+    const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    if (!currentUserId) {
+      Alert.alert('Not signed in', 'Please sign in to save entries.');
+      return;
+    }
+    const newSession: Session = {
+      date: manualDate,
+      malas,
+      totalCount: malas * 108,
+      duration: 0,
+      manual: true,
+      userId: currentUserId,
+    };
+    const raw = await AsyncStorage.getItem('history');
+    const existing = parseHistory(raw);
+    await AsyncStorage.setItem('history', JSON.stringify([...existing, newSession]));
+    DeviceEventEmitter.emit('japam-history-updated');
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('japam-history-updated'));
+    }
+    setShowManualModal(false);
+    void loadHistory();
+  };
 
   const loadHistory = useCallback(async () => {
     const todayKey = getLocalDateKey();
@@ -359,9 +401,60 @@ export default function HistoryScreen() {
         <Text style={styles.summaryText}>🔢 Total Count: {totalCount}</Text>
       </View>
 
-      <Pressable style={styles.exportBtn} onPress={exportHistory}>
-      <Text style={styles.exportBtnText}>⬇ Export</Text>
-      </Pressable>
+      <View style={styles.actionRow}>
+        <Pressable style={styles.exportBtn} onPress={exportHistory}>
+          <Text style={styles.exportBtnText}>⬇ Export</Text>
+        </Pressable>
+        <Pressable style={styles.addBtn} onPress={openManualModal}>
+          <Text style={styles.addBtnText}>+ Add Entry</Text>
+        </Pressable>
+      </View>
+
+      <Modal
+        visible={showManualModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowManualModal(false)}
+      >
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Add Manual Entry</Text>
+
+            <Text style={styles.modalLabel}>Date (YYYY-MM-DD)</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={manualDate}
+              onChangeText={setManualDate}
+              placeholder="2025-01-01"
+              placeholderTextColor="#8aacae"
+              maxLength={10}
+            />
+
+            <Text style={styles.modalLabel}>Malas completed</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={manualMalas}
+              onChangeText={setManualMalas}
+              placeholder="e.g. 3"
+              placeholderTextColor="#8aacae"
+              keyboardType="numeric"
+              maxLength={4}
+            />
+
+            <View style={styles.modalActions}>
+              <Pressable style={styles.modalCancel} onPress={() => setShowManualModal(false)}>
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={styles.modalSave} onPress={saveManualEntry}>
+                <Text style={styles.modalSaveText}>Save</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       <View style={styles.tableCard}>
         <View style={[styles.tableRow, styles.tableHeader]}>
@@ -456,18 +549,112 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
+  actionRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 10,
+    marginBottom: 14,
+  },
+
   exportBtn: {
     backgroundColor: '#0f8a87',
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: 999,
-    alignSelf: 'center',
-    marginBottom: 14,
   },
 
   exportBtnText: {
     color: 'white',
     fontSize: 14,
+    fontWeight: '800',
+  },
+
+  addBtn: {
+    backgroundColor: '#2563eb',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+  },
+
+  addBtnText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+
+  modalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 24,
+    width: '100%',
+    maxWidth: 380,
+  },
+
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#102f34',
+    marginBottom: 18,
+    textAlign: 'center',
+  },
+
+  modalLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#365f61',
+    marginBottom: 6,
+    marginTop: 10,
+  },
+
+  modalInput: {
+    borderWidth: 1.5,
+    borderColor: 'rgba(15,118,110,0.3)',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 16,
+    color: '#102f34',
+    backgroundColor: '#f5fafa',
+  },
+
+  modalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 22,
+    justifyContent: 'flex-end',
+  },
+
+  modalCancel: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15,118,110,0.1)',
+  },
+
+  modalCancelText: {
+    color: '#0f766e',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+
+  modalSave: {
+    paddingVertical: 10,
+    paddingHorizontal: 24,
+    borderRadius: 999,
+    backgroundColor: '#0f8a87',
+  },
+
+  modalSaveText: {
+    color: 'white',
+    fontSize: 15,
     fontWeight: '800',
   },
 

@@ -1,7 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
-import * as Haptics from 'expo-haptics';
 import * as Notifications from 'expo-notifications';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
@@ -27,9 +26,8 @@ const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 const isMobile = screenWidth < 768;
 const CIRCLE_SIZE = isMobile ? 256 : 296;
 const TEAL = '#0F8F87';
-const TEAL_DARK = '#0f766e';
 
-const STD_DURATIONS = [3, 5, 10, 15];
+const STD_DURATIONS = [1, 3, 5, 10, 15];
 const LOOP_OPTIONS = [1, 3, 5, 10];
 
 const T_DURATION_KEY = 'timerTab_duration';
