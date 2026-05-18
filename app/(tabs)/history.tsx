@@ -233,20 +233,34 @@ export default function HistoryScreen() {
   const [showManualModal, setShowManualModal] = useState(false);
   const [manualDate, setManualDate] = useState('');
   const [manualMalas, setManualMalas] = useState('');
-  const [manualChyeali, setManualChyeali] = useState('');
-  const [manualDanni, setManualDanni] = useState('');
-  const [manualBatti, setManualBatti] = useState('');
-  const [manualOther, setManualOther] = useState('');
+  const [manualCount, setManualCount] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
   const openManualModal = () => {
     setManualDate(getLocalDateKey());
     setManualMalas('');
-    setManualChyeali('');
-    setManualDanni('');
-    setManualBatti('');
-    setManualOther('');
+    setManualCount('');
     setShowManualModal(true);
+  };
+
+  const onMalasChange = (val: string) => {
+    setManualMalas(val);
+    const n = parseInt(val, 10);
+    if (!Number.isNaN(n) && n >= 0) {
+      setManualCount(String(n * 108));
+    } else if (val === '') {
+      setManualCount('');
+    }
+  };
+
+  const onCountChange = (val: string) => {
+    setManualCount(val);
+    const n = parseInt(val, 10);
+    if (!Number.isNaN(n) && n >= 0) {
+      setManualMalas(String(Math.floor(n / 108)));
+    } else if (val === '') {
+      setManualMalas('');
+    }
   };
 
   const saveManualEntry = async () => {
@@ -261,33 +275,30 @@ export default function HistoryScreen() {
       return;
     }
 
-    const malas = parseInt(manualMalas, 10);
-    if (Number.isNaN(malas) || malas <= 0) {
-      Alert.alert('Invalid malas', 'Please enter a positive number of malas completed.');
+    const malas = parseInt(manualMalas, 10) || 0;
+    const totalCount = parseInt(manualCount, 10) || 0;
+
+    if (malas <= 0 && totalCount <= 0) {
+      Alert.alert('Invalid entry', 'Please enter Total Malas or Total Count.');
       return;
     }
 
-    const chyeali = parseInt(manualChyeali, 10) || 0;
-    const danni = parseInt(manualDanni, 10) || 0;
-    const batti = parseInt(manualBatti, 10) || 0;
-    const other = parseInt(manualOther, 10) || 0;
-    const totalCount = malas * 108 + chyeali + danni + batti + other;
+    const finalMalas = malas > 0 ? malas : Math.floor(totalCount / 108);
+    const finalCount = totalCount > 0 ? totalCount : malas * 108;
 
     setIsSaving(true);
     try {
-      const supabaseOk = await saveToSupabase(currentUserId, malas, totalCount, manualDate);
-
-      const newSession: Session = {
-        date: manualDate,
-        malas,
-        totalCount,
-        duration: 0,
-        manual: true,
-        userId: currentUserId,
-      };
+      const supabaseOk = await saveToSupabase(currentUserId, finalMalas, finalCount, manualDate);
 
       if (!supabaseOk) {
-        // Supabase failed — save locally so data is not lost
+        const newSession: Session = {
+          date: manualDate,
+          malas: finalMalas,
+          totalCount: finalCount,
+          duration: 0,
+          manual: true,
+          userId: currentUserId,
+        };
         const raw = await AsyncStorage.getItem('history');
         const existing = parseHistory(raw);
         await AsyncStorage.setItem('history', JSON.stringify([...existing, newSession]));
@@ -507,59 +518,26 @@ export default function HistoryScreen() {
               maxLength={10}
             />
 
-            <Text style={styles.modalLabel}>Malas completed</Text>
+            <Text style={styles.modalLabel}>Total Malas</Text>
             <TextInput
               style={styles.modalInput}
               value={manualMalas}
-              onChangeText={setManualMalas}
+              onChangeText={onMalasChange}
               placeholder="e.g. 3"
               placeholderTextColor="#8aacae"
               keyboardType="numeric"
-              maxLength={4}
-            />
-
-            <Text style={styles.modalLabel}>Chyeali (optional)</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={manualChyeali}
-              onChangeText={setManualChyeali}
-              placeholder="0"
-              placeholderTextColor="#8aacae"
-              keyboardType="numeric"
               maxLength={5}
             />
 
-            <Text style={styles.modalLabel}>Danni (optional)</Text>
+            <Text style={styles.modalLabel}>Total Count</Text>
             <TextInput
               style={styles.modalInput}
-              value={manualDanni}
-              onChangeText={setManualDanni}
-              placeholder="0"
+              value={manualCount}
+              onChangeText={onCountChange}
+              placeholder="e.g. 324"
               placeholderTextColor="#8aacae"
               keyboardType="numeric"
-              maxLength={5}
-            />
-
-            <Text style={styles.modalLabel}>Batti (optional)</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={manualBatti}
-              onChangeText={setManualBatti}
-              placeholder="0"
-              placeholderTextColor="#8aacae"
-              keyboardType="numeric"
-              maxLength={5}
-            />
-
-            <Text style={styles.modalLabel}>Other (optional)</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={manualOther}
-              onChangeText={setManualOther}
-              placeholder="0"
-              placeholderTextColor="#8aacae"
-              keyboardType="numeric"
-              maxLength={5}
+              maxLength={7}
             />
 
             <View style={styles.modalActions}>
