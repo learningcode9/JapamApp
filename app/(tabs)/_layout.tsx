@@ -89,6 +89,21 @@ export default function TabLayout() {
         }}
       />
 
+      <Tabs.Screen
+        name="timer"
+        options={{
+          title: 'Timer',
+          tabBarLabel: tabLabel('Timer'),
+          tabBarIcon: ({ focused }) => (
+            <Ionicons
+              name={focused ? 'timer' : 'timer-outline'}
+              size={focused ? 30 : 28}
+              color={focused ? '#E8823A' : '#5f7778'}
+            />
+          ),
+        }}
+      />
+
 <Tabs.Screen
   name="manual"
   options={{
