@@ -5,7 +5,7 @@ import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import * as Notifications from 'expo-notifications';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -165,6 +165,7 @@ const isAuthPending = async () => {
 
 export default function JapamMain() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ signin?: string }>();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [count, setCount] = useState(0);
   const [malas, setMalas] = useState(0);
@@ -508,6 +509,12 @@ export default function JapamMain() {
       };
     }, [])
   );
+
+  useEffect(() => {
+    if (params.signin === '1' && !userName && !isSigningIn) {
+      setShowUserModal(true);
+    }
+  }, [isSigningIn, params.signin, userName]);
 
   const restoreTotal = useCallback(
     async (nextTotal: number, options?: { userId?: string | null }) => {

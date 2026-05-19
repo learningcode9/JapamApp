@@ -11,7 +11,6 @@ import {
   Dimensions,
   ImageBackground,
   Keyboard,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -75,7 +74,6 @@ export default function TimerScreen() {
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
   const [showCustomInput, setShowCustomInput] = useState(false);
   const [customText, setCustomText] = useState('');
-  const [showSignInPrompt, setShowSignInPrompt] = useState(false);
 
   const targetSeconds = selectedDuration * 60;
   const timeLeft = Math.max(0, targetSeconds - seconds);
@@ -410,7 +408,7 @@ export default function TimerScreen() {
   const handleStart = useCallback(() => {
     if (isRunning) return;
     if (!userIdRef.current) {
-      setShowSignInPrompt(true);
+      router.push('/?signin=1' as never);
       return;
     }
     isCompletingRef.current = false;
@@ -426,7 +424,7 @@ export default function TimerScreen() {
     startTimerInterval();
     void showNotification();
     void persistState(true);
-  }, [isRunning, persistState, seconds, showNotification, startTimerInterval, targetSeconds]);
+  }, [isRunning, persistState, router, seconds, showNotification, startTimerInterval, targetSeconds]);
 
   const handlePause = useCallback(() => {
     clearTimerInterval();
@@ -578,31 +576,6 @@ export default function TimerScreen() {
         </View>
       </ScrollView>
 
-      <Modal visible={showSignInPrompt} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.signInCard}>
-            <Text style={styles.signInTitle}>Please sign in to start timer</Text>
-            <Text style={styles.signInCopy}>
-              Timer progress and completed malas are saved to your account.
-            </Text>
-            <Pressable
-              style={styles.signInPrimary}
-              onPress={() => {
-                setShowSignInPrompt(false);
-                router.push('/' as never);
-              }}
-            >
-              <Text style={styles.signInPrimaryText}>Sign in</Text>
-            </Pressable>
-            <Pressable
-              style={styles.signInSecondary}
-              onPress={() => setShowSignInPrompt(false)}
-            >
-              <Text style={styles.signInSecondaryText}>Not now</Text>
-            </Pressable>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }
@@ -772,68 +745,5 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '800',
     fontSize: 14,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(6, 32, 34, 0.32)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 24,
-  },
-  signInCard: {
-    width: '100%',
-    maxWidth: 360,
-    borderRadius: 24,
-    backgroundColor: 'rgba(255,255,255,0.96)',
-    borderWidth: 1,
-    borderColor: 'rgba(15,143,135,0.14)',
-    paddingHorizontal: 22,
-    paddingVertical: 24,
-    alignItems: 'center',
-    shadowColor: '#0f766e',
-    shadowOpacity: 0.16,
-    shadowRadius: 24,
-    shadowOffset: { width: 0, height: 12 },
-    elevation: 12,
-  },
-  signInTitle: {
-    color: '#12383c',
-    fontSize: 20,
-    fontWeight: '900',
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  signInCopy: {
-    color: '#4a7c80',
-    fontSize: 14,
-    fontWeight: '600',
-    lineHeight: 20,
-    textAlign: 'center',
-    marginBottom: 20,
-  },
-  signInPrimary: {
-    width: '100%',
-    minHeight: 48,
-    borderRadius: 999,
-    backgroundColor: TEAL,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10,
-  },
-  signInPrimaryText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '900',
-  },
-  signInSecondary: {
-    minHeight: 40,
-    paddingHorizontal: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  signInSecondaryText: {
-    color: '#5f7f80',
-    fontSize: 14,
-    fontWeight: '800',
   },
 });
