@@ -1222,6 +1222,10 @@ export default function JapamMain() {
         }
         await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
         userIdRef.current = googleUserId;
+        DeviceEventEmitter.emit('japam-auth-updated');
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('japam-auth-updated'));
+        }
 
         await loadJapamNameFromSupabase(googleUserId);
         await restoreTodayTotal();
@@ -1770,6 +1774,10 @@ export default function JapamMain() {
     await AsyncStorage.removeItem(USER_NAME_KEY);
     await AsyncStorage.removeItem(USER_EMAIL_KEY);
     await AsyncStorage.removeItem(USER_ID_KEY);
+    DeviceEventEmitter.emit('japam-auth-updated');
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('japam-auth-updated'));
+    }
 
     await AsyncStorage.multiRemove([
       TOTAL_KEY,

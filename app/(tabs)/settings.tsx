@@ -3,7 +3,7 @@ import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Alert, Linking, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Alert, DeviceEventEmitter, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
@@ -163,6 +163,10 @@ export default function SettingsScreen() {
     await AsyncStorage.removeItem(USER_EMAIL_KEY);
     await AsyncStorage.removeItem(USER_ID_KEY);
     await AsyncStorage.multiRemove([TIMER_SECONDS_KEY, TIMER_RUNNING_KEY, TIMER_TARGET_KEY, TIMER_MINUTES_KEY, TIMER_LOOP_KEY]);
+    DeviceEventEmitter.emit('japam-auth-updated');
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('japam-auth-updated'));
+    }
     setUserId(null);
     setUserName('');
     setUserEmail('');
