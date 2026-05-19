@@ -2714,6 +2714,7 @@ const styles = StyleSheet.create({
     shadowRadius: 22,
     shadowOffset: { width: 0, height: 12 },
     elevation: 7,
+    marginTop: isShortMobile ? 14 : isMobile ? 22 : 30,
     marginBottom: isMobile ? 20 : 28,
   },
   installBanner: {
