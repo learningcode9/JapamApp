@@ -709,21 +709,29 @@ export default function JapamMain() {
         }
 
         if (remoteSessions !== null) {
-          // Sync remote history to local for History tab display
+          // Merge remote history with local same-user entries so a just-completed
+          // timer mala is not dropped while Supabase is still catching up.
           const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
           const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
           const otherUserSessions = localHistory.filter((s) => s.userId !== savedUserId);
-          const filteredRemote = remoteSessions.filter(
+          const sameUserLocalSessions = localHistory.filter((s) => s.userId === savedUserId);
+          const mergedMap = new Map<string, Session>();
+          [...remoteSessions, ...sameUserLocalSessions].forEach((session) => {
+            const key = `${session.date}-${session.totalCount}-${session.malas}-${session.duration}-${session.manual ? 'manual' : 'auto'}`;
+            mergedMap.set(key, session);
+          });
+          const filteredUserSessions = [...mergedMap.values()].filter(
             (s) => getLocalDateKey(new Date(s.date)) <= todayKey
           );
+
           await AsyncStorage.setItem(
             HISTORY_KEY,
-            JSON.stringify([...filteredRemote, ...otherUserSessions])
+            JSON.stringify([...filteredUserSessions, ...otherUserSessions])
           );
 
           // localStoredTotal is the source of truth for manual count (saved on every tap).
           // Fall back to Supabase history sum only when localStored is 0 (e.g. fresh install).
-          const remoteHistoryTotal = filteredRemote
+          const remoteHistoryTotal = filteredUserSessions
             .filter((s) => getLocalDateKey(new Date(s.date)) === todayKey)
             .reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
 
