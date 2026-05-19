@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
 import { Dimensions, Platform, StyleSheet, Text } from 'react-native';
-import { FloatingMiniTimer, TimerProvider } from '../../contexts/timer-context';
+import { TimerProvider } from '../../contexts/timer-context';
 
 const screenWidth = Dimensions.get('window').width;
 const isMobile = screenWidth < 500;
@@ -137,7 +137,6 @@ export default function TabLayout() {
           }}
         />
       </Tabs>
-      <FloatingMiniTimer />
     </TimerProvider>
   );
 }

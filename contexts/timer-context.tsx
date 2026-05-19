@@ -194,71 +194,26 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     timerIntervalRef.current = setInterval(tick, 1000);
   }, [clearTimerInterval]);
 
-  const hideNotification = useCallback(async () => {
+  const hideNotification = useCallback(() => {
     if (notifIntervalRef.current) {
       clearInterval(notifIntervalRef.current);
       notifIntervalRef.current = null;
     }
     if (Platform.OS === 'web') {
-      try {
-        if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-          navigator.mediaSession.metadata = new (window as any).MediaMetadata({
-            title: 'Mantra Japam',
-            artist: '',
-            album: '',
-          });
-        }
-        if (
-          typeof navigator !== 'undefined' &&
-          'serviceWorker' in navigator
-        ) {
-          const registration = await navigator.serviceWorker.ready;
-          const existing = await registration.getNotifications?.({ tag: 'japam-timer' });
-          existing?.forEach((notification) => notification.close());
-        }
-      } catch {}
       return;
     }
-    try {
+    void (async () => {
+      try {
       if (notifIdRef.current) {
         await Notifications.dismissNotificationAsync(notifIdRef.current);
         notifIdRef.current = null;
       }
-    } catch {}
+      } catch {}
+    })();
   }, []);
 
-  const showNotification = useCallback(async () => {
-    const left = Math.max(0, selectedDurationRef.current * 60 - secondsRef.current);
-    const malaLabel = getCurrentMalaLabel(completedLoopsRef.current, selectedLoopsRef.current);
-
+  const showNotification = useCallback(() => {
     if (Platform.OS === 'web') {
-      try {
-        if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-          navigator.mediaSession.metadata = new (window as any).MediaMetadata({
-            title: 'Japam Timer',
-            artist: `${malaLabel} · ${formatTimer(left)}`,
-            album: 'Japam Timer running',
-          });
-          navigator.mediaSession.setActionHandler?.('play', null);
-          navigator.mediaSession.setActionHandler?.('pause', null);
-        }
-        if (
-          typeof Notification !== 'undefined' &&
-          Notification.permission === 'granted' &&
-          'serviceWorker' in navigator
-        ) {
-          const registration = await navigator.serviceWorker.ready;
-          const existing = await registration.getNotifications?.({ tag: 'japam-timer' });
-          existing?.forEach((notification) => notification.close());
-          await registration.showNotification('Japam Timer', {
-            body: `${malaLabel} · ${formatTimer(left)}`,
-            tag: 'japam-timer',
-            renotify: false,
-            silent: true,
-            requireInteraction: true,
-          } as NotificationOptions);
-        }
-      } catch {}
       return;
     }
 
@@ -285,7 +240,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         notifIdRef.current = id;
       } catch {}
     };
-    await schedule();
+    void schedule();
     if (notifIntervalRef.current) clearInterval(notifIntervalRef.current);
     notifIntervalRef.current = setInterval(schedule, 5000);
   }, []);
@@ -384,7 +339,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     releaseWakeLock();
     setIsRunning(false);
     isRunningRef.current = false;
-    await hideNotification();
+    hideNotification();
 
     const newDone = completedLoopsRef.current + 1;
     setCompletedLoops(newDone);
@@ -461,7 +416,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     isRunningRef.current = true;
     startTimerInterval();
     void acquireWakeLock();
-    void showNotification();
+    showNotification();
     void persistState(true);
   }, [
     acquireWakeLock,

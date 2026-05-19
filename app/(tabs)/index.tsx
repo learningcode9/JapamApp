@@ -715,9 +715,6 @@ export default function JapamMain() {
           const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
           const otherUserSessions = localHistory.filter((s) => s.userId !== savedUserId);
           const sameUserLocalSessions = localHistory.filter((s) => s.userId === savedUserId);
-          const localTimerHistoryTotal = sameUserLocalSessions
-            .filter((s) => getLocalDateKey(new Date(s.date)) === todayKey && (Number(s.duration) || 0) > 0)
-            .reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
           const mergedMap = new Map<string, Session>();
           [...remoteSessions, ...sameUserLocalSessions].forEach((session) => {
             const key = `${session.date}-${session.totalCount}-${session.malas}`;
@@ -738,11 +735,7 @@ export default function JapamMain() {
             .filter((s) => getLocalDateKey(new Date(s.date)) === todayKey)
             .reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
 
-          const safeTotal = Math.max(
-            localStoredTotal,
-            remoteHistoryTotal,
-            localStoredTotal + localTimerHistoryTotal
-          );
+          const safeTotal = Math.max(localStoredTotal, remoteHistoryTotal);
           if (!preserveManualCount) {
             await restoreTotal(safeTotal, { userId: savedUserId });
             totalRef.current = safeTotal;
@@ -754,12 +747,7 @@ export default function JapamMain() {
         } else {
           // Supabase unreachable — use locally saved count (never go below what was tapped)
           const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
-          const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
-          const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
-          const localTimerHistoryTotal = localHistory
-            .filter((s) => s.userId === savedUserId && getLocalDateKey(new Date(s.date)) === todayKey && (Number(s.duration) || 0) > 0)
-            .reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
-          const safeTotal = Math.max(localStoredTotal, localHistoryTotal, localStoredTotal + localTimerHistoryTotal);
+          const safeTotal = Math.max(localStoredTotal, localHistoryTotal);
           if (!preserveManualCount) {
             await restoreTotal(safeTotal, { userId: savedUserId });
             totalRef.current = safeTotal;
@@ -772,12 +760,7 @@ export default function JapamMain() {
       } catch (error) {
         console.log('Stats sync error, using local data:', error);
         const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
-        const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
-        const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
-        const localTimerHistoryTotal = localHistory
-          .filter((s) => s.userId === savedUserId && getLocalDateKey(new Date(s.date)) === todayKey && (Number(s.duration) || 0) > 0)
-          .reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
-        const safeTotal = Math.max(localStoredTotal, localHistoryTotal, localStoredTotal + localTimerHistoryTotal);
+        const safeTotal = Math.max(localStoredTotal, localHistoryTotal);
         if (!preserveManualCount) {
           await restoreTotal(safeTotal, { userId: savedUserId });
           totalRef.current = safeTotal;
