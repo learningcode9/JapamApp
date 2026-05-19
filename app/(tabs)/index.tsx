@@ -1541,6 +1541,14 @@ export default function JapamMain() {
   };
 
   const openTimerPage = () => {
+    if (!userName) {
+      Alert.alert('Please sign in to start timer', '', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Sign in', onPress: () => setShowUserModal(true) },
+      ]);
+      return;
+    }
+
     router.push('/timer' as never);
   };
 
@@ -2251,13 +2259,13 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     paddingHorizontal: isMobile ? 0 : 24,
     paddingTop: isMobile ? scrollTopPadding : 24,
-    paddingBottom: Platform.OS === 'web' ? ('calc(104px + env(safe-area-inset-bottom))' as any) : 104,
-    minHeight: isMobile ? undefined : shellMinHeight,
+    paddingBottom: scrollBottomPadding,
+    minHeight: shellMinHeight,
   },
   appShell: {
     width: '100%',
     maxWidth: isMobile ? undefined : 460,
-    minHeight: isMobile ? undefined : shellMinHeight,
+    minHeight: shellMinHeight,
     alignItems: 'center',
     overflow: 'hidden',
     position: 'relative',
@@ -2265,7 +2273,7 @@ const styles = StyleSheet.create({
     borderRadius: isMobile ? 0 : 28,
     paddingHorizontal: isMobile ? 22 : 28,
     paddingTop: isShortMobile ? 14 : isMobile ? 20 : 34,
-    paddingBottom: isMobile ? 14 : 104,
+    paddingBottom: isMobile ? 22 : 104,
     shadowColor: '#0f766e',
     shadowOpacity: isMobile ? 0 : 0.16,
     shadowRadius: 28,
@@ -2758,7 +2766,8 @@ const styles = StyleSheet.create({
     marginBottom: isMobile ? 20 : 28,
   },
   timerShortcut: {
-    marginTop: isShortMobile ? 14 : 18,
+    marginTop: isShortMobile ? 8 : 12,
+    marginBottom: isMobile ? 18 : 0,
     minHeight: 48,
     paddingHorizontal: 18,
     borderRadius: 999,

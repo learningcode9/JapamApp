@@ -25,7 +25,8 @@ import * as Haptics2 from 'expo-haptics';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 const isMobile = screenWidth < 768;
-const CIRCLE_SIZE = isMobile ? 256 : 296;
+const isShortMobile = isMobile && screenHeight < 760;
+const CIRCLE_SIZE = isShortMobile ? 210 : isMobile ? 230 : 296;
 const TEAL = '#0F8F87';
 
 const STD_DURATIONS = [1, 3, 5, 10, 15];
@@ -407,7 +408,7 @@ export default function TimerScreen() {
   const handleStart = useCallback(() => {
     if (isRunning) return;
     if (!userIdRef.current) {
-      Alert.alert('Please sign in to save timer progress');
+      Alert.alert('Please sign in to start timer');
       return;
     }
     isCompletingRef.current = false;
@@ -486,7 +487,6 @@ export default function TimerScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.header}>
-          <Text style={styles.title}>Timer Japam</Text>
           <Text style={styles.subtitle}>Pick a duration, set loops, breathe.</Text>
         </View>
 
@@ -561,7 +561,7 @@ export default function TimerScreen() {
             </View>
           )}
 
-          <Text style={[styles.cardLabel, { marginTop: 22 }]}>AUTO-REPEAT MALAS</Text>
+          <Text style={[styles.cardLabel, { marginTop: isShortMobile ? 12 : isMobile ? 14 : 22 }]}>AUTO-REPEAT MALAS</Text>
           <View style={styles.chips}>
             {LOOP_OPTIONS.map((l) => (
               <Pressable
@@ -581,13 +581,15 @@ export default function TimerScreen() {
 
 const styles = StyleSheet.create({
   container: {
-    paddingTop: Platform.OS === 'web' ? 60 : 72,
-    paddingBottom: 140,
-    paddingHorizontal: 24,
+    paddingTop: Platform.OS === 'web'
+      ? (isShortMobile ? 22 : isMobile ? 30 : 60)
+      : (isShortMobile ? 24 : isMobile ? 34 : 72),
+    paddingBottom: isMobile ? 118 : 140,
+    paddingHorizontal: isMobile ? 18 : 24,
     alignItems: 'center',
     minHeight: screenHeight,
   },
-  header: { alignItems: 'center', marginBottom: 32 },
+  header: { alignItems: 'center', marginBottom: isShortMobile ? 14 : isMobile ? 18 : 32 },
   title: {
     fontSize: isMobile ? 26 : 32,
     fontWeight: '900',
@@ -595,18 +597,18 @@ const styles = StyleSheet.create({
     letterSpacing: -0.5,
   },
   subtitle: {
-    fontSize: 14,
+    fontSize: isMobile ? 17 : 18,
     color: '#4a7c80',
-    marginTop: 6,
     textAlign: 'center',
+    fontWeight: '700',
   },
-  circleWrap: { marginBottom: 32 },
+  circleWrap: { marginBottom: isShortMobile ? 16 : isMobile ? 20 : 32 },
   circleOuter: {
     width: CIRCLE_SIZE,
     height: CIRCLE_SIZE,
     borderRadius: CIRCLE_SIZE / 2,
     backgroundColor: 'rgba(255,255,255,0.72)',
-    borderWidth: 18,
+    borderWidth: isMobile ? 14 : 18,
     borderColor: 'rgba(15,143,135,0.18)',
     alignItems: 'center',
     justifyContent: 'center',
@@ -618,29 +620,29 @@ const styles = StyleSheet.create({
   },
   circleInner: { alignItems: 'center' },
   timerText: {
-    fontSize: isMobile ? 60 : 72,
+    fontSize: isShortMobile ? 46 : isMobile ? 52 : 72,
     fontWeight: '800',
     color: TEAL,
     letterSpacing: -2,
   },
   malaText: {
-    fontSize: 14,
+    fontSize: isMobile ? 13 : 14,
     color: '#4a7c80',
-    marginTop: 10,
+    marginTop: isMobile ? 6 : 10,
     fontWeight: '500',
   },
   controls: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
-    marginBottom: 28,
+    gap: isMobile ? 10 : 14,
+    marginBottom: isShortMobile ? 14 : isMobile ? 18 : 28,
   },
   startBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: TEAL,
-    paddingVertical: 15,
-    paddingHorizontal: 40,
+    paddingVertical: isMobile ? 13 : 15,
+    paddingHorizontal: isMobile ? 32 : 40,
     borderRadius: 50,
     shadowColor: TEAL,
     shadowOpacity: 0.38,
@@ -668,7 +670,7 @@ const styles = StyleSheet.create({
     maxWidth: 460,
     backgroundColor: 'rgba(255,255,255,0.78)',
     borderRadius: 22,
-    padding: 22,
+    padding: isShortMobile ? 14 : isMobile ? 16 : 22,
     shadowColor: '#0a3a3c',
     shadowOpacity: 0.07,
     shadowRadius: 18,
@@ -682,16 +684,16 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#4a8c90',
     letterSpacing: 1.2,
-    marginBottom: 14,
+    marginBottom: isMobile ? 10 : 14,
   },
   chips: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10,
+    gap: isMobile ? 8 : 10,
   },
   chip: {
-    paddingVertical: 9,
-    paddingHorizontal: 18,
+    paddingVertical: isMobile ? 8 : 9,
+    paddingHorizontal: isMobile ? 15 : 18,
     borderRadius: 50,
     borderWidth: 1.5,
     borderColor: 'rgba(15,143,135,0.22)',
@@ -705,7 +707,7 @@ const styles = StyleSheet.create({
     opacity: 0.45,
   },
   chipText: {
-    fontSize: 14,
+    fontSize: isMobile ? 13 : 14,
     fontWeight: '600',
     color: '#2a5c60',
   },
@@ -716,12 +718,12 @@ const styles = StyleSheet.create({
   customRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 14,
-    gap: 10,
+    marginTop: 10,
+    gap: 8,
   },
   customInput: {
     flex: 1,
-    height: 44,
+    height: isMobile ? 40 : 44,
     borderRadius: 12,
     borderWidth: 1.5,
     borderColor: 'rgba(15,143,135,0.35)',
