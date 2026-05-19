@@ -43,6 +43,11 @@ const getUserKey = (key: string, uid: string) => `${key}:${uid}`;
 export const formatTimer = (s: number) =>
   `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
+const getCurrentMalaLabel = (completedLoops: number, selectedLoops: number, runningOrPaused = true) => {
+  const activeLoop = Math.min(selectedLoops, completedLoops + (runningOrPaused ? 1 : 0));
+  return `Mala ${activeLoop} / ${selectedLoops}`;
+};
+
 type TimerContextValue = {
   seconds: number;
   selectedDuration: number;
@@ -183,7 +188,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       clearInterval(notifIntervalRef.current);
       notifIntervalRef.current = null;
     }
-    if (Platform.OS === 'web') return;
+    if (Platform.OS === 'web') {
+      try {
+        if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+          navigator.mediaSession.metadata = new (window as any).MediaMetadata({
+            title: 'Mantra Japam',
+            artist: '',
+            album: '',
+          });
+        }
+      } catch {}
+      return;
+    }
     try {
       if (notifIdRef.current) {
         await Notifications.dismissNotificationAsync(notifIdRef.current);
@@ -193,7 +209,24 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const showNotification = useCallback(async () => {
-    if (Platform.OS === 'web') return;
+    const left = Math.max(0, selectedDurationRef.current * 60 - secondsRef.current);
+    const malaLabel = getCurrentMalaLabel(completedLoopsRef.current, selectedLoopsRef.current);
+
+    if (Platform.OS === 'web') {
+      try {
+        if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+          navigator.mediaSession.metadata = new (window as any).MediaMetadata({
+            title: 'Japam Timer',
+            artist: `${malaLabel} · ${formatTimer(left)}`,
+            album: 'Japam Timer running',
+          });
+          navigator.mediaSession.setActionHandler?.('play', null);
+          navigator.mediaSession.setActionHandler?.('pause', null);
+        }
+      } catch {}
+      return;
+    }
+
     const schedule = async () => {
       try {
         const perm = await Notifications.getPermissionsAsync();
@@ -203,10 +236,11 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           notifIdRef.current = null;
         }
         const left = Math.max(0, selectedDurationRef.current * 60 - secondsRef.current);
+        const malaLabel = getCurrentMalaLabel(completedLoopsRef.current, selectedLoopsRef.current);
         const id = await Notifications.scheduleNotificationAsync({
           content: {
-            title: `⏱ ${formatTimer(left)}`,
-            body: 'Japam Timer Running',
+            title: 'Japam Timer',
+            body: `${malaLabel} · ${formatTimer(left)}`,
             sticky: true,
             sound: false,
             ...(Platform.OS === 'android' ? { channelId: 'japam-timer' } : {}),
@@ -218,7 +252,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     };
     await schedule();
     if (notifIntervalRef.current) clearInterval(notifIntervalRef.current);
-    notifIntervalRef.current = setInterval(schedule, 10000);
+    notifIntervalRef.current = setInterval(schedule, 5000);
   }, []);
 
   const saveSession = useCallback(async () => {
@@ -440,7 +474,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     if (Platform.OS !== 'android') return;
     void Notifications.setNotificationChannelAsync('japam-timer', {
       name: 'Japam Timer',
-      importance: Notifications.AndroidImportance.DEFAULT,
+      importance: Notifications.AndroidImportance.HIGH,
       vibrationPattern: [],
       enableVibrate: false,
       showBadge: false,
@@ -553,6 +587,11 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
     document.title = isRunning ? `⏱ ${formatTimer(timeLeft)} — Mantra Japam` : 'Mantra Japam';
   }, [isRunning, timeLeft]);
+
+  useEffect(() => {
+    if (!isRunning) return;
+    void showNotification();
+  }, [completedLoops, isRunning, seconds, showNotification]);
 
   useEffect(() => () => {
     clearTimerInterval();
