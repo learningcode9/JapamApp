@@ -143,7 +143,7 @@ export default function TimerScreen() {
         });
         const { sound } = await Audio.Sound.createAsync(
           require('../../assets/om_complete.mp3'),
-          { shouldPlay: false, isLooping: false, volume: 1.0 }
+          { shouldPlay: false, isLooping: false, volume: 0.85 }
         );
         soundRef.current = sound;
       } catch {}
@@ -249,30 +249,50 @@ export default function TimerScreen() {
     notifIntervalRef.current = setInterval(schedule, 10000);
   }, []);
 
-  const saveSession = useCallback(async (loopsDone: number) => {
+  const saveSession = useCallback(async () => {
     const uid = userIdRef.current;
-    const today = new Date();
-    const dateKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const duration = selectedDurationRef.current * 60;
+
     const session = {
-      id: Date.now(),
-      name: 'Japam',
-      duration: selectedDurationRef.current * 60 * loopsDone,
-      count: loopsDone * 108,
-      malas: loopsDone,
-      total: loopsDone * 108,
-      date: dateKey,
-      time: today.toISOString(),
-      type: 'timer',
+      date: new Date().toISOString(),
+      malas: 1,
+      totalCount: 108,
+      duration,
+      manual: false,
+      userId: uid || undefined,
     };
+
     try {
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
       const history = raw ? JSON.parse(raw) : [];
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([session, ...history]));
+
       DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
+      DeviceEventEmitter.emit('japam-stats-updated');
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.dispatchEvent(new Event('japam-history-updated'));
+        window.dispatchEvent(new Event('japam-stats-updated'));
       }
-    } catch {}
+
+      if (!uid) return;
+      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      if (!url || !key) return;
+
+      const userName = await AsyncStorage.getItem('userName') || '';
+      await fetch(`${url}/rest/v1/japam_history`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          Prefer: 'return=minimal',
+        },
+        body: JSON.stringify({ user_id: uid, user_name: userName, malas: 1, count: 108 }),
+      });
+    } catch (err) {
+      console.log('Timer session save error:', err);
+    }
   }, []);
 
   const handleComplete = useCallback(async () => {
@@ -317,8 +337,10 @@ export default function TimerScreen() {
       } catch {}
     }
 
+    // Save 1 mala for every loop completion, not just the final
+    void saveSession();
+
     if (isFinal) {
-      void saveSession(newDone);
       void persistState(false);
       isCompletingRef.current = false;
     } else {
