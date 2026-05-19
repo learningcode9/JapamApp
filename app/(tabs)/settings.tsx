@@ -1,5 +1,4 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Audio } from 'expo-av';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
@@ -21,7 +20,6 @@ const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
 export default function SettingsScreen() {
   const [repetitionSoundEnabled, setRepetitionSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
-  const [isPreviewingSound, setIsPreviewingSound] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   const [userName, setUserName] = useState('');
   const [userEmail, setUserEmail] = useState('');
@@ -58,31 +56,6 @@ export default function SettingsScreen() {
       [REPETITION_SOUND_ENABLED_KEY, String(value)],
       [SOUND_ENABLED_KEY, String(value)],
     ]);
-  };
-
-  const previewSound = async () => {
-    if (isPreviewingSound) return;
-    setIsPreviewingSound(true);
-    try {
-      const { sound } = await Audio.Sound.createAsync(
-        require('../../assets/soft_tibetan_bowl.wav'),
-        { shouldPlay: true, volume: 0.55 }
-      );
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded && status.didJustFinish) {
-          sound.setOnPlaybackStatusUpdate(null);
-          sound.unloadAsync().catch(console.log);
-          setIsPreviewingSound(false);
-        }
-      });
-      setTimeout(() => {
-        sound.unloadAsync().catch(console.log);
-        setIsPreviewingSound(false);
-      }, 3000);
-    } catch (error) {
-      setIsPreviewingSound(false);
-      Alert.alert('Preview unavailable', 'Unable to play the sound right now.');
-    }
   };
 
   const toggleVibration = async (value: boolean) => {
@@ -210,16 +183,6 @@ export default function SettingsScreen() {
               <Text style={styles.description}>Play a soft chime after each mala completes</Text>
             </View>
             <Switch value={repetitionSoundEnabled} onValueChange={toggleRepetitionSound} />
-          </View>
-
-          <View style={styles.card}>
-            <View style={styles.textBlock}>
-              <Text style={styles.label}>Preview sound</Text>
-              <Text style={styles.description}>Hear the soft chime used after each completed mala</Text>
-            </View>
-            <Pressable style={styles.compactButton} onPress={() => void previewSound()}>
-              <Text style={styles.compactButtonText}>{isPreviewingSound ? 'Playing' : 'Preview'}</Text>
-            </Pressable>
           </View>
 
           <View style={styles.card}>
