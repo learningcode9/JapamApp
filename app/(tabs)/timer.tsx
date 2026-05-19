@@ -6,6 +6,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   AppState,
   DeviceEventEmitter,
   Dimensions,
@@ -253,7 +254,6 @@ export default function TimerScreen() {
     const uid = userIdRef.current;
     const duration = selectedDurationRef.current * 60;
     const now = new Date();
-    const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
     const session = {
       date: now.toISOString(),
@@ -270,24 +270,7 @@ export default function TimerScreen() {
       const history = raw ? JSON.parse(raw) : [];
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([session, ...history]));
 
-      // 2. Increment the user's TOTAL_KEY so Home immediately shows the updated count
-      //    Home's restoreTodayTotal prioritises localStoredTotal; we must keep it in sync.
-      if (uid) {
-        const totalDateKey = getUserKey('totalDate', uid);
-        const totalKey = getUserKey('totalCount', uid);
-        const storedDate = await AsyncStorage.getItem(totalDateKey);
-        const storedTotal = Number(await AsyncStorage.getItem(totalKey)) || 0;
-        const base = storedDate === todayKey ? storedTotal : 0;
-        const newTotal = base + 108;
-        await AsyncStorage.multiSet([
-          [totalDateKey, todayKey],
-          [totalKey, String(newTotal)],
-          ['totalDate', todayKey],
-          ['totalCount', String(newTotal)],
-        ]);
-      }
-
-      // 3. Notify Home and History to refresh
+      // 2. Notify Home and History to refresh
       DeviceEventEmitter.emit('japam-stats-updated');
       DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -295,7 +278,7 @@ export default function TimerScreen() {
         window.dispatchEvent(new Event('japam-history-updated'));
       }
 
-      // 4. Save to Supabase
+      // 3. Save to Supabase
       if (!uid) return;
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -423,6 +406,10 @@ export default function TimerScreen() {
 
   const handleStart = useCallback(() => {
     if (isRunning) return;
+    if (!userIdRef.current) {
+      Alert.alert('Please sign in to save timer progress');
+      return;
+    }
     isCompletingRef.current = false;
     const resume = seconds > 0 && seconds < targetSeconds;
     if (resume) {

@@ -5,7 +5,7 @@ import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import * as Notifications from 'expo-notifications';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -164,6 +164,7 @@ const isAuthPending = async () => {
 };
 
 export default function JapamMain() {
+  const router = useRouter();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [count, setCount] = useState(0);
   const [malas, setMalas] = useState(0);
@@ -651,7 +652,8 @@ export default function JapamMain() {
       .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
   }, []);
 
-  const restoreTodayTotal = useCallback(async () => {
+  const restoreTodayTotal = useCallback(async (options?: { preserveManualCount?: boolean }) => {
+    const preserveManualCount = Boolean(options?.preserveManualCount);
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
 
     if (savedUserId) {
@@ -665,8 +667,13 @@ export default function JapamMain() {
           : 0;
 
       if (localStoredTotal > 0) {
-        await restoreTotal(localStoredTotal, { userId: savedUserId });
-        totalRef.current = localStoredTotal;
+        if (!preserveManualCount) {
+          await restoreTotal(localStoredTotal, { userId: savedUserId });
+          totalRef.current = localStoredTotal;
+        } else {
+          setMalas(Math.floor(localStoredTotal / 108));
+          setTotal(localStoredTotal);
+        }
       }
 
       try {
@@ -714,23 +721,38 @@ export default function JapamMain() {
             .reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
 
           const safeTotal = localStoredTotal > 0 ? localStoredTotal : remoteHistoryTotal;
-          await restoreTotal(safeTotal, { userId: savedUserId });
-          totalRef.current = safeTotal;
+          if (!preserveManualCount) {
+            await restoreTotal(safeTotal, { userId: savedUserId });
+            totalRef.current = safeTotal;
+          } else {
+            setMalas(Math.floor(safeTotal / 108));
+            setTotal(safeTotal);
+          }
           await refreshDayStreak({ userId: savedUserId, todayTotal: safeTotal });
         } else {
           // Supabase unreachable — use locally saved count (never go below what was tapped)
           const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
           const safeTotal = localStoredTotal > 0 ? localStoredTotal : localHistoryTotal;
-          await restoreTotal(safeTotal, { userId: savedUserId });
-          totalRef.current = safeTotal;
+          if (!preserveManualCount) {
+            await restoreTotal(safeTotal, { userId: savedUserId });
+            totalRef.current = safeTotal;
+          } else {
+            setMalas(Math.floor(safeTotal / 108));
+            setTotal(safeTotal);
+          }
           await refreshDayStreak({ userId: savedUserId, todayTotal: safeTotal });
         }
       } catch (error) {
         console.log('Stats sync error, using local data:', error);
         const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
         const safeTotal = localStoredTotal > 0 ? localStoredTotal : localHistoryTotal;
-        await restoreTotal(safeTotal, { userId: savedUserId });
-        totalRef.current = safeTotal;
+        if (!preserveManualCount) {
+          await restoreTotal(safeTotal, { userId: savedUserId });
+          totalRef.current = safeTotal;
+        } else {
+          setMalas(Math.floor(safeTotal / 108));
+          setTotal(safeTotal);
+        }
         await refreshDayStreak({ userId: savedUserId, todayTotal: safeTotal });
       }
 
@@ -739,8 +761,13 @@ export default function JapamMain() {
     }
 
     // Not logged in
-    await restoreTotal(0, { userId: null });
-    totalRef.current = 0;
+    if (!preserveManualCount) {
+      await restoreTotal(0, { userId: null });
+      totalRef.current = 0;
+    } else {
+      setMalas(0);
+      setTotal(0);
+    }
     await refreshDayStreak({ userId: null, todayTotal: 0 });
     setHasRestoredTotal(true);
   }, [getLocalTodayTotalForUser, refreshDayStreak, restoreTotal]);
@@ -789,7 +816,7 @@ export default function JapamMain() {
 
   useEffect(() => {
     const onHistoryUpdated = () => {
-      void restoreTodayTotal();
+      void restoreTodayTotal({ preserveManualCount: true });
     };
 
     const historySubscription = DeviceEventEmitter.addListener('japam-history-updated', onHistoryUpdated);
@@ -1513,6 +1540,10 @@ export default function JapamMain() {
     }
   };
 
+  const openTimerPage = () => {
+    router.push('/timer' as never);
+  };
+
   const handleStart = () => {
     if (!requireLogin()) return;
     const mins = Math.max(1, Math.floor(Number(minutesInput) || 1));
@@ -1943,6 +1974,15 @@ export default function JapamMain() {
               <Text style={styles.statLabel}>Today count</Text>
             </View>
           </View>
+
+          <Pressable
+            onPress={openTimerPage}
+            style={({ pressed }) => [styles.timerShortcut, pressed && styles.timerShortcutPressed]}
+          >
+            <Ionicons name="timer-outline" size={20} color="#0f766e" />
+            <Text style={styles.timerShortcutText}>Start Timer Japam</Text>
+            <Ionicons name="chevron-forward" size={18} color="#0f766e" />
+          </Pressable>
         </View>
 
         <Modal visible={showUserModal && !isSigningIn} transparent animationType="fade">
@@ -2211,7 +2251,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     paddingHorizontal: isMobile ? 0 : 24,
     paddingTop: isMobile ? scrollTopPadding : 24,
-    paddingBottom: scrollBottomPadding,
+    paddingBottom: Platform.OS === 'web' ? ('calc(104px + env(safe-area-inset-bottom))' as any) : 104,
     minHeight: isMobile ? undefined : shellMinHeight,
   },
   appShell: {
@@ -2225,7 +2265,7 @@ const styles = StyleSheet.create({
     borderRadius: isMobile ? 0 : 28,
     paddingHorizontal: isMobile ? 22 : 28,
     paddingTop: isShortMobile ? 14 : isMobile ? 20 : 34,
-    paddingBottom: isMobile ? 20 : 116,
+    paddingBottom: isMobile ? 14 : 104,
     shadowColor: '#0f766e',
     shadowOpacity: isMobile ? 0 : 0.16,
     shadowRadius: 28,
@@ -2716,6 +2756,28 @@ const styles = StyleSheet.create({
     elevation: 7,
     marginTop: isShortMobile ? 14 : isMobile ? 22 : 30,
     marginBottom: isMobile ? 20 : 28,
+  },
+  timerShortcut: {
+    marginTop: isShortMobile ? 14 : 18,
+    minHeight: 48,
+    paddingHorizontal: 18,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.12)',
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  timerShortcutPressed: {
+    transform: [{ scale: 0.98 }],
+    opacity: 0.9,
+  },
+  timerShortcutText: {
+    color: '#063B3B',
+    fontSize: isMobile ? 15 : 16,
+    fontWeight: '800',
   },
   installBanner: {
     width: '100%',
