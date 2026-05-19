@@ -1541,14 +1541,6 @@ export default function JapamMain() {
   };
 
   const openTimerPage = () => {
-    if (!userName) {
-      Alert.alert('Please sign in to start timer', '', [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Sign in', onPress: () => setShowUserModal(true) },
-      ]);
-      return;
-    }
-
     router.push('/timer' as never);
   };
 
@@ -2766,18 +2758,23 @@ const styles = StyleSheet.create({
     marginBottom: isMobile ? 20 : 28,
   },
   timerShortcut: {
-    marginTop: isShortMobile ? 8 : 12,
+    marginTop: isShortMobile ? 14 : 20,
     marginBottom: isMobile ? 18 : 0,
-    minHeight: 48,
-    paddingHorizontal: 18,
+    minHeight: isMobile ? 54 : 56,
+    paddingHorizontal: 22,
     borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.72)',
+    backgroundColor: 'rgba(255,255,255,0.88)',
     borderWidth: 1,
-    borderColor: 'rgba(15,118,110,0.12)',
+    borderColor: 'rgba(15,118,110,0.18)',
     alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 12,
+    shadowColor: '#0f766e',
+    shadowOpacity: 0.14,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 7,
   },
   timerShortcutPressed: {
     transform: [{ scale: 0.98 }],
@@ -2785,8 +2782,8 @@ const styles = StyleSheet.create({
   },
   timerShortcutText: {
     color: '#063B3B',
-    fontSize: isMobile ? 15 : 16,
-    fontWeight: '800',
+    fontSize: isMobile ? 17 : 18,
+    fontWeight: '900',
   },
   installBanner: {
     width: '100%',

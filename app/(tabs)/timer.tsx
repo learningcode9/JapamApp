@@ -3,7 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import * as Notifications from 'expo-notifications';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -26,7 +26,7 @@ import * as Haptics2 from 'expo-haptics';
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 const isMobile = screenWidth < 768;
 const isShortMobile = isMobile && screenHeight < 760;
-const CIRCLE_SIZE = isShortMobile ? 210 : isMobile ? 230 : 296;
+const CIRCLE_SIZE = isShortMobile ? 204 : isMobile ? 224 : 296;
 const TEAL = '#0F8F87';
 
 const STD_DURATIONS = [1, 3, 5, 10, 15];
@@ -65,6 +65,7 @@ if (Platform.OS !== 'web') {
 }
 
 export default function TimerScreen() {
+  const router = useRouter();
   const [seconds, setSeconds] = useState(0);
   const [selectedDuration, setSelectedDuration] = useState(10);
   const [selectedLoops, setSelectedLoops] = useState(1);
@@ -408,7 +409,10 @@ export default function TimerScreen() {
   const handleStart = useCallback(() => {
     if (isRunning) return;
     if (!userIdRef.current) {
-      Alert.alert('Please sign in to start timer');
+      Alert.alert('Please sign in to start timer', '', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Sign in', onPress: () => router.push('/' as never) },
+      ]);
       return;
     }
     isCompletingRef.current = false;
@@ -424,7 +428,7 @@ export default function TimerScreen() {
     startTimerInterval();
     void showNotification();
     void persistState(true);
-  }, [isRunning, seconds, targetSeconds, startTimerInterval, showNotification, persistState]);
+  }, [isRunning, persistState, router, seconds, showNotification, startTimerInterval, targetSeconds]);
 
   const handlePause = useCallback(() => {
     clearTimerInterval();
@@ -582,14 +586,14 @@ export default function TimerScreen() {
 const styles = StyleSheet.create({
   container: {
     paddingTop: Platform.OS === 'web'
-      ? (isShortMobile ? 22 : isMobile ? 30 : 60)
-      : (isShortMobile ? 24 : isMobile ? 34 : 72),
-    paddingBottom: isMobile ? 118 : 140,
+      ? (isShortMobile ? 18 : isMobile ? 26 : 60)
+      : (isShortMobile ? 20 : isMobile ? 30 : 72),
+    paddingBottom: isMobile ? 128 : 140,
     paddingHorizontal: isMobile ? 18 : 24,
     alignItems: 'center',
     minHeight: screenHeight,
   },
-  header: { alignItems: 'center', marginBottom: isShortMobile ? 14 : isMobile ? 18 : 32 },
+  header: { alignItems: 'center', marginBottom: isShortMobile ? 12 : isMobile ? 16 : 32 },
   title: {
     fontSize: isMobile ? 26 : 32,
     fontWeight: '900',
@@ -597,18 +601,18 @@ const styles = StyleSheet.create({
     letterSpacing: -0.5,
   },
   subtitle: {
-    fontSize: isMobile ? 17 : 18,
+    fontSize: isMobile ? 16 : 18,
     color: '#4a7c80',
     textAlign: 'center',
     fontWeight: '700',
   },
-  circleWrap: { marginBottom: isShortMobile ? 16 : isMobile ? 20 : 32 },
+  circleWrap: { marginBottom: isShortMobile ? 14 : isMobile ? 18 : 32 },
   circleOuter: {
     width: CIRCLE_SIZE,
     height: CIRCLE_SIZE,
     borderRadius: CIRCLE_SIZE / 2,
     backgroundColor: 'rgba(255,255,255,0.72)',
-    borderWidth: isMobile ? 14 : 18,
+    borderWidth: isMobile ? 12 : 18,
     borderColor: 'rgba(15,143,135,0.18)',
     alignItems: 'center',
     justifyContent: 'center',
@@ -620,7 +624,7 @@ const styles = StyleSheet.create({
   },
   circleInner: { alignItems: 'center' },
   timerText: {
-    fontSize: isShortMobile ? 46 : isMobile ? 52 : 72,
+    fontSize: isShortMobile ? 44 : isMobile ? 50 : 72,
     fontWeight: '800',
     color: TEAL,
     letterSpacing: -2,
@@ -635,14 +639,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: isMobile ? 10 : 14,
-    marginBottom: isShortMobile ? 14 : isMobile ? 18 : 28,
+    marginBottom: isShortMobile ? 12 : isMobile ? 16 : 28,
   },
   startBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: TEAL,
-    paddingVertical: isMobile ? 13 : 15,
-    paddingHorizontal: isMobile ? 32 : 40,
+    paddingVertical: isShortMobile ? 12 : isMobile ? 13 : 15,
+    paddingHorizontal: isShortMobile ? 28 : isMobile ? 32 : 40,
     borderRadius: 50,
     shadowColor: TEAL,
     shadowOpacity: 0.38,
@@ -656,9 +660,9 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   resetBtn: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    width: isMobile ? 48 : 50,
+    height: isMobile ? 48 : 50,
+    borderRadius: isMobile ? 24 : 25,
     borderWidth: 2,
     borderColor: TEAL,
     alignItems: 'center',
@@ -670,7 +674,8 @@ const styles = StyleSheet.create({
     maxWidth: 460,
     backgroundColor: 'rgba(255,255,255,0.78)',
     borderRadius: 22,
-    padding: isShortMobile ? 14 : isMobile ? 16 : 22,
+    paddingVertical: isShortMobile ? 13 : isMobile ? 15 : 22,
+    paddingHorizontal: isShortMobile ? 13 : isMobile ? 15 : 22,
     shadowColor: '#0a3a3c',
     shadowOpacity: 0.07,
     shadowRadius: 18,
@@ -689,11 +694,12 @@ const styles = StyleSheet.create({
   chips: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: isMobile ? 8 : 10,
+    gap: isMobile ? 9 : 10,
+    justifyContent: 'center',
   },
   chip: {
-    paddingVertical: isMobile ? 8 : 9,
-    paddingHorizontal: isMobile ? 15 : 18,
+    paddingVertical: isShortMobile ? 7 : isMobile ? 8 : 9,
+    paddingHorizontal: isShortMobile ? 13 : isMobile ? 15 : 18,
     borderRadius: 50,
     borderWidth: 1.5,
     borderColor: 'rgba(15,143,135,0.22)',
@@ -707,7 +713,7 @@ const styles = StyleSheet.create({
     opacity: 0.45,
   },
   chipText: {
-    fontSize: isMobile ? 13 : 14,
+    fontSize: isMobile ? 14 : 14,
     fontWeight: '600',
     color: '#2a5c60',
   },
