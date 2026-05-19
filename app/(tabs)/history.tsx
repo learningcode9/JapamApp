@@ -350,9 +350,17 @@ export default function HistoryScreen() {
         return dayKey === 'unknown' || dayKey <= todayKey;
       });
 
-      sessions = filteredRemoteSessions;
+      const localUserSessions = cleanedSessions.filter((item) => item.userId === currentUserId);
+      const mergedMap = new Map<string, Session>();
+      [...filteredRemoteSessions, ...localUserSessions].forEach((session) => {
+        const key = `${session.date}-${session.totalCount}-${session.malas}`;
+        mergedMap.set(key, session);
+      });
+      sessions = [...mergedMap.values()].sort(
+        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+      );
       const otherUserSessions = cleanedSessions.filter((item) => item.userId !== currentUserId);
-      await AsyncStorage.setItem('history', JSON.stringify([...filteredRemoteSessions, ...otherUserSessions]));
+      await AsyncStorage.setItem('history', JSON.stringify([...sessions, ...otherUserSessions]));
 
       // Notify Home screen to re-sync stats from the updated local history
       DeviceEventEmitter.emit('japam-stats-updated');

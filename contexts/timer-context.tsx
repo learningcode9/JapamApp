@@ -35,6 +35,10 @@ const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
+const TOTAL_KEY = 'totalCount';
+const COUNT_KEY = 'count';
+const MALAS_KEY = 'malas';
+const TOTAL_DATE_KEY = 'totalDate';
 
 export const STD_DURATIONS = [1, 3, 5, 10, 15];
 export const LOOP_OPTIONS = [1, 3, 5, 10];
@@ -42,6 +46,13 @@ export const LOOP_OPTIONS = [1, 3, 5, 10];
 const getUserKey = (key: string, uid: string) => `${key}:${uid}`;
 export const formatTimer = (s: number) =>
   `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+
+const getLocalDateKey = (date = new Date()) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
 
 const getCurrentMalaLabel = (completedLoops: number, selectedLoops: number, runningOrPaused = true) => {
   const activeLoop = Math.min(selectedLoops, completedLoops + (runningOrPaused ? 1 : 0));
@@ -197,6 +208,14 @@ export function TimerProvider({ children }: { children: ReactNode }) {
             album: '',
           });
         }
+        if (
+          typeof navigator !== 'undefined' &&
+          'serviceWorker' in navigator
+        ) {
+          const registration = await navigator.serviceWorker.ready;
+          const existing = await registration.getNotifications?.({ tag: 'japam-timer' });
+          existing?.forEach((notification) => notification.close());
+        }
       } catch {}
       return;
     }
@@ -222,6 +241,22 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           });
           navigator.mediaSession.setActionHandler?.('play', null);
           navigator.mediaSession.setActionHandler?.('pause', null);
+        }
+        if (
+          typeof Notification !== 'undefined' &&
+          Notification.permission === 'granted' &&
+          'serviceWorker' in navigator
+        ) {
+          const registration = await navigator.serviceWorker.ready;
+          const existing = await registration.getNotifications?.({ tag: 'japam-timer' });
+          existing?.forEach((notification) => notification.close());
+          await registration.showNotification('Japam Timer', {
+            body: `${malaLabel} · ${formatTimer(left)}`,
+            tag: 'japam-timer',
+            renotify: false,
+            silent: true,
+            requireInteraction: true,
+          } as NotificationOptions);
         }
       } catch {}
       return;
@@ -272,6 +307,28 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
       const history = raw ? JSON.parse(raw) : [];
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([session, ...history]));
+
+      if (uid) {
+        const todayKey = getLocalDateKey(now);
+        const storedTotalDate = await AsyncStorage.getItem(getUserKey(TOTAL_DATE_KEY, uid));
+        const previousTotal =
+          storedTotalDate === todayKey
+            ? Number((await AsyncStorage.getItem(getUserKey(TOTAL_KEY, uid))) || '0')
+            : 0;
+        const nextTotal = previousTotal + 108;
+        const nextMalas = Math.floor(nextTotal / 108);
+        const nextCount = nextTotal % 108;
+        await AsyncStorage.multiSet([
+          [getUserKey(TOTAL_DATE_KEY, uid), todayKey],
+          [getUserKey(TOTAL_KEY, uid), String(nextTotal)],
+          [getUserKey(MALAS_KEY, uid), String(nextMalas)],
+          [getUserKey(COUNT_KEY, uid), String(nextCount)],
+          [TOTAL_DATE_KEY, todayKey],
+          [TOTAL_KEY, String(nextTotal)],
+          [MALAS_KEY, String(nextMalas)],
+          [COUNT_KEY, String(nextCount)],
+        ]);
+      }
 
       DeviceEventEmitter.emit('japam-stats-updated');
       DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
