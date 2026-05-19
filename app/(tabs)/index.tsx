@@ -2412,7 +2412,7 @@ const styles = StyleSheet.create({
     color: '#5F7F80',
     fontSize: isMobile ? 14 : 15,
     fontWeight: '700',
-    marginBottom: isShortMobile ? 14 : isMobile ? 20 : 30,
+    marginBottom: isShortMobile ? 18 : isMobile ? 30 : 40,
   },
   progressShell: {
     width: progressCircleSize,
@@ -2425,7 +2425,7 @@ const styles = StyleSheet.create({
     shadowRadius: 28,
     shadowOffset: { width: 0, height: 16 },
     elevation: 18,
-    marginBottom: isShortMobile ? 18 : isMobile ? 24 : 34,
+    marginBottom: isShortMobile ? 20 : isMobile ? 28 : 38,
   },
   progressPressable: {
     borderRadius: 999,

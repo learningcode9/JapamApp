@@ -252,9 +252,11 @@ export default function TimerScreen() {
   const saveSession = useCallback(async () => {
     const uid = userIdRef.current;
     const duration = selectedDurationRef.current * 60;
+    const now = new Date();
+    const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
     const session = {
-      date: new Date().toISOString(),
+      date: now.toISOString(),
       malas: 1,
       totalCount: 108,
       duration,
@@ -263,22 +265,41 @@ export default function TimerScreen() {
     };
 
     try {
+      // 1. Save to local history
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
       const history = raw ? JSON.parse(raw) : [];
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([session, ...history]));
 
-      DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
-      DeviceEventEmitter.emit('japam-stats-updated');
-      if (Platform.OS === 'web' && typeof window !== 'undefined') {
-        window.dispatchEvent(new Event('japam-history-updated'));
-        window.dispatchEvent(new Event('japam-stats-updated'));
+      // 2. Increment the user's TOTAL_KEY so Home immediately shows the updated count
+      //    Home's restoreTodayTotal prioritises localStoredTotal; we must keep it in sync.
+      if (uid) {
+        const totalDateKey = getUserKey('totalDate', uid);
+        const totalKey = getUserKey('totalCount', uid);
+        const storedDate = await AsyncStorage.getItem(totalDateKey);
+        const storedTotal = Number(await AsyncStorage.getItem(totalKey)) || 0;
+        const base = storedDate === todayKey ? storedTotal : 0;
+        const newTotal = base + 108;
+        await AsyncStorage.multiSet([
+          [totalDateKey, todayKey],
+          [totalKey, String(newTotal)],
+          ['totalDate', todayKey],
+          ['totalCount', String(newTotal)],
+        ]);
       }
 
+      // 3. Notify Home and History to refresh
+      DeviceEventEmitter.emit('japam-stats-updated');
+      DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('japam-stats-updated'));
+        window.dispatchEvent(new Event('japam-history-updated'));
+      }
+
+      // 4. Save to Supabase
       if (!uid) return;
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       if (!url || !key) return;
-
       const userName = await AsyncStorage.getItem('userName') || '';
       await fetch(`${url}/rest/v1/japam_history`, {
         method: 'POST',
@@ -306,14 +327,7 @@ export default function TimerScreen() {
     setCompletedLoops(newDone); completedLoopsRef.current = newDone;
     const isFinal = newDone >= selectedLoopsRef.current;
 
-    if (soundEnabledRef.current) {
-      try {
-        await soundRef.current?.stopAsync().catch(() => {});
-        await soundRef.current?.setPositionAsync(0).catch(() => {});
-        await soundRef.current?.playAsync();
-      } catch {}
-    }
-
+    // Immediate feedback: vibration + notification + save (don't wait for sound)
     if (vibrationEnabledRef.current && Platform.OS !== 'web') {
       pulse([0, 1200, 80, 1500]);
       Haptics2.notificationAsync(Haptics2.NotificationFeedbackType.Success).catch(() => {});
@@ -337,22 +351,41 @@ export default function TimerScreen() {
       } catch {}
     }
 
-    // Save 1 mala for every loop completion, not just the final
     void saveSession();
+
+    // Play Om and wait for it to finish (stop after 3 s to keep it short)
+    if (soundEnabledRef.current) {
+      try {
+        const sound = soundRef.current;
+        if (sound) {
+          await sound.stopAsync().catch(() => {});
+          await sound.setPositionAsync(0).catch(() => {});
+          await sound.playAsync();
+          await new Promise<void>((resolve) => {
+            let done = false;
+            const finish = () => { if (done) return; done = true; sound.setOnPlaybackStatusUpdate(null); resolve(); };
+            const cutoff = setTimeout(async () => { await sound.stopAsync().catch(() => {}); finish(); }, 3000);
+            sound.setOnPlaybackStatusUpdate((status) => {
+              if (status.isLoaded && status.didJustFinish) { clearTimeout(cutoff); finish(); }
+            });
+          });
+        }
+      } catch {}
+    }
 
     if (isFinal) {
       void persistState(false);
       isCompletingRef.current = false;
     } else {
-      setTimeout(() => {
-        isCompletingRef.current = false;
-        setSeconds(0); secondsRef.current = 0;
-        timerStartedAtRef.current = Date.now();
-        setIsRunning(true); isRunningRef.current = true;
-        startTimerInterval();
-        void showNotification();
-        void persistState(true);
-      }, 3000);
+      // 1 s peaceful pause after Om finishes, then start next loop
+      await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+      isCompletingRef.current = false;
+      setSeconds(0); secondsRef.current = 0;
+      timerStartedAtRef.current = Date.now();
+      setIsRunning(true); isRunningRef.current = true;
+      startTimerInterval();
+      void showNotification();
+      void persistState(true);
     }
   }, [clearTimerInterval, hideNotification, persistState, saveSession, showNotification, startTimerInterval]);
 
