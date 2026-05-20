@@ -136,6 +136,17 @@ export default function TabLayout() {
             ),
           }}
         />
+
+        <Tabs.Screen
+          name="faq"
+          options={{
+            title: 'FAQ',
+            tabBarLabel: tabLabel('FAQ'),
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons name={focused ? 'help-circle' : 'help-circle-outline'} size={focused ? 27 : 25} color={color} />
+            ),
+          }}
+        />
       </Tabs>
     </TimerProvider>
   );
