@@ -32,6 +32,8 @@ const T_LOOPS_KEY = 'timerTab_loops';
 const TIMER_SECONDS_KEY = 'timerSeconds';
 const TIMER_RUNNING_KEY = 'timerRunning';
 const TIMER_TARGET_KEY = 'timerTarget';
+const TIMER_PAUSED_KEY = 'timerPaused';
+const TIMER_COMPLETED_LOOPS_KEY = 'timerCompletedLoops';
 const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
 const SOUND_ENABLED_KEY = 'soundEnabled';
@@ -180,10 +182,15 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const persistState = useCallback(async (running: boolean) => {
     const uid = userIdRef.current;
     const tSec = selectedDurationRef.current * 60;
+    const paused = !running && secondsRef.current > 0 && secondsRef.current < tSec;
     const pairs: [string, string][] = [
       [TIMER_SECONDS_KEY, String(secondsRef.current)],
       [TIMER_RUNNING_KEY, String(running)],
       [TIMER_TARGET_KEY, String(tSec)],
+      [TIMER_PAUSED_KEY, String(paused)],
+      [TIMER_COMPLETED_LOOPS_KEY, String(completedLoopsRef.current)],
+      [T_DURATION_KEY, String(selectedDurationRef.current)],
+      [T_LOOPS_KEY, String(selectedLoopsRef.current)],
     ];
     try {
       await AsyncStorage.multiSet(pairs);
@@ -562,16 +569,20 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           uid
             ? (await AsyncStorage.getItem(getUserKey(key, uid))) ?? (await AsyncStorage.getItem(key))
             : AsyncStorage.getItem(key);
-        const [sec, target, dur, loops] = await Promise.all([
+        const [sec, target, dur, loops, paused, completed] = await Promise.all([
           get(TIMER_SECONDS_KEY),
           get(TIMER_TARGET_KEY),
-          AsyncStorage.getItem(T_DURATION_KEY),
-          AsyncStorage.getItem(T_LOOPS_KEY),
+          get(T_DURATION_KEY),
+          get(T_LOOPS_KEY),
+          get(TIMER_PAUSED_KEY),
+          get(TIMER_COMPLETED_LOOPS_KEY),
         ]);
         const savedSec = Number(sec) || 0;
         const savedTarget = Number(target) || 0;
         const savedDur = Number(dur) || 0;
         const savedLoops = Number(loops) || 0;
+        const savedCompletedLoops = Math.max(0, Number(completed) || 0);
+        const savedPaused = paused === 'true';
         if (savedDur > 0) {
           setSelectedDuration(savedDur);
           selectedDurationRef.current = savedDur;
@@ -584,9 +595,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           setSelectedLoops(savedLoops);
           selectedLoopsRef.current = savedLoops;
         }
-        if (savedSec > 0 && savedTarget > 0 && savedSec < savedTarget) {
+        const activeLoopLimit = LOOP_OPTIONS.includes(savedLoops) ? savedLoops : selectedLoopsRef.current;
+        const safeCompletedLoops = Math.min(savedCompletedLoops, Math.max(0, activeLoopLimit - 1));
+        if (safeCompletedLoops > 0) {
+          setCompletedLoops(safeCompletedLoops);
+          completedLoopsRef.current = safeCompletedLoops;
+        }
+        if (savedPaused && savedSec > 0 && savedTarget > 0 && savedSec < savedTarget) {
           setSeconds(savedSec);
           secondsRef.current = savedSec;
+          setIsRunning(false);
+          isRunningRef.current = false;
+          timerStartedAtRef.current = null;
         }
       } catch {}
     })();
