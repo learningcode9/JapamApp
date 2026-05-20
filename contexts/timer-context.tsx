@@ -297,7 +297,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       if (!url || !key) return;
       const userName = await AsyncStorage.getItem('userName') || '';
-      await fetch(`${url}/rest/v1/japam_history`, {
+      const response = await fetch(`${url}/rest/v1/japam_history`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -307,6 +307,27 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         },
         body: JSON.stringify({ user_id: uid, user_name: userName, malas: 1, count: 108 }),
       });
+
+      if (response.ok) {
+        const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
+        const latestHistory = latestRaw ? JSON.parse(latestRaw) : [];
+        const withoutSyncedSession = latestHistory.filter((item: typeof session) => {
+          return !(
+            item.userId === session.userId &&
+            item.date === session.date &&
+            Number(item.malas) === session.malas &&
+            Number(item.totalCount) === session.totalCount &&
+            Number(item.duration) === session.duration
+          );
+        });
+        await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(withoutSyncedSession));
+        DeviceEventEmitter.emit('japam-history-updated', { userId: uid });
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('japam-history-updated'));
+        }
+      } else {
+        console.log('Timer Supabase save error:', await response.text());
+      }
     } catch (err) {
       console.log('Timer session save error:', err);
     }

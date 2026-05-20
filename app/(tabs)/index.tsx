@@ -1403,6 +1403,26 @@ export default function JapamMain() {
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
       if (url && key) {
+        const removeSyncedLocalSession = async () => {
+          const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
+          const latestHistory: Session[] = latestRaw ? JSON.parse(latestRaw) : [];
+          const withoutSyncedSession = latestHistory.filter((item) => {
+            return !(
+              item.userId === session.userId &&
+              item.date === session.date &&
+              Number(item.malas) === session.malas &&
+              Number(item.totalCount) === session.totalCount &&
+              Number(item.duration) === session.duration
+            );
+          });
+          await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(withoutSyncedSession));
+          await AsyncStorage.setItem(HISTORY_SYNC_VERSION_KEY, String(Date.now()));
+          DeviceEventEmitter.emit('japam-history-updated', { userId });
+          if (Platform.OS === 'web' && typeof window !== 'undefined') {
+            window.dispatchEvent(new Event('japam-history-updated'));
+          }
+        };
+
         const baseBody = { user_name: savedUserName || userName, malas: sessionMalas, count: sessionTotal };
         const postHistory = async (body: Record<string, unknown>) => {
           const res = await fetch(`${url}/rest/v1/japam_history`, {
@@ -1413,7 +1433,10 @@ export default function JapamMain() {
           return res.ok;
         };
         const savedWithUserId = await postHistory({ user_id: userId, ...baseBody });
-        if (!savedWithUserId) await postHistory(baseBody);
+        const savedWithoutUserId = savedWithUserId ? false : await postHistory(baseBody);
+        if (savedWithUserId || savedWithoutUserId) {
+          await removeSyncedLocalSession();
+        }
       }
     } catch (error) {
       console.log('Supabase save error:', error);
