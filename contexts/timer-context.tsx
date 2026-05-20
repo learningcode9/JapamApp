@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import * as Notifications from 'expo-notifications';
 import { usePathname, useRouter } from 'expo-router';
 import React, {
@@ -140,13 +141,21 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   useEffect(() => { vibrationEnabledRef.current = vibrationEnabled; }, [vibrationEnabled]);
 
   const releaseWakeLock = useCallback(() => {
+    if (Platform.OS !== 'web') {
+      deactivateKeepAwake();
+      return;
+    }
     if (!wakeLockRef.current) return;
     wakeLockRef.current.release?.().catch?.(() => {});
     wakeLockRef.current = null;
   }, []);
 
   const acquireWakeLock = useCallback(async () => {
-    if (Platform.OS !== 'web' || typeof navigator === 'undefined') return;
+    if (Platform.OS !== 'web') {
+      await activateKeepAwakeAsync().catch(() => {});
+      return;
+    }
+    if (typeof navigator === 'undefined') return;
     try {
       const nav = navigator as Navigator & {
         wakeLock?: { request: (type: 'screen') => Promise<any> };
