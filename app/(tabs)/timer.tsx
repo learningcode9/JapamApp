@@ -1,8 +1,10 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
+  DeviceEventEmitter,
   Dimensions,
   ImageBackground,
   Keyboard,
@@ -26,16 +28,132 @@ const isMobile = screenWidth < 768;
 const isShortMobile = isMobile && screenHeight < 760;
 const CIRCLE_SIZE = isShortMobile ? 204 : isMobile ? 224 : 296;
 const TEAL = '#0F8F87';
+const HISTORY_KEY = 'history';
+const USER_ID_KEY = 'userId';
+const TOTAL_KEY = 'totalCount';
+const TOTAL_DATE_KEY = 'totalDate';
+
+type Session = {
+  date: string;
+  malas: number;
+  totalCount: number;
+  duration: number;
+  manual?: boolean;
+  userId?: string;
+};
+
+const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
+
+const getLocalDateKey = (date = new Date()) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+const getPreviousDateKey = (dayKey: string) => {
+  const date = new Date(`${dayKey}T12:00:00`);
+  date.setDate(date.getDate() - 1);
+  return getLocalDateKey(date);
+};
+
+const parseHistory = (raw: string | null): Session[] => {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
 
 export default function TimerScreen() {
   const router = useRouter();
   const timer = useTimer();
   const [showCustomInput, setShowCustomInput] = useState(false);
   const [customText, setCustomText] = useState('');
+  const [malasToday, setMalasToday] = useState(0);
+  const [todayCount, setTodayCount] = useState(0);
+  const [dayStreak, setDayStreak] = useState(0);
+  const [totalMalas, setTotalMalas] = useState(0);
+
+  const loadStats = useCallback(async () => {
+    const userId = await AsyncStorage.getItem(USER_ID_KEY);
+    const todayKey = getLocalDateKey();
+    const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
+    const history = parseHistory(rawHistory).filter((item) => {
+      if (!userId) return !item.userId;
+      return item.userId === userId;
+    });
+
+    const totalByDay = new Map<string, number>();
+    history.forEach((item) => {
+      const date = new Date(item.date);
+      if (Number.isNaN(date.getTime())) return;
+      const totalCount = Number(item.totalCount) || (Number(item.malas) || 0) * 108;
+      if (totalCount <= 0) return;
+      const dayKey = getLocalDateKey(date);
+      totalByDay.set(dayKey, (totalByDay.get(dayKey) || 0) + totalCount);
+    });
+
+    let storedTodayTotal = 0;
+    if (userId) {
+      const storedDate = await AsyncStorage.getItem(getUserStorageKey(TOTAL_DATE_KEY, userId));
+      if (storedDate === todayKey) {
+        storedTodayTotal = Number((await AsyncStorage.getItem(getUserStorageKey(TOTAL_KEY, userId))) || '0');
+      }
+    } else {
+      const storedDate = await AsyncStorage.getItem(TOTAL_DATE_KEY);
+      if (storedDate === todayKey) {
+        storedTodayTotal = Number((await AsyncStorage.getItem(TOTAL_KEY)) || '0');
+      }
+    }
+
+    const safeTodayTotal = Math.max(storedTodayTotal, totalByDay.get(todayKey) || 0);
+    if (safeTodayTotal > 0) totalByDay.set(todayKey, safeTodayTotal);
+
+    const activeDays = new Set([...totalByDay.entries()].filter(([, total]) => total > 0).map(([day]) => day));
+    let cursor = activeDays.has(todayKey) ? todayKey : getPreviousDateKey(todayKey);
+    let nextStreak = 0;
+    while (activeDays.has(cursor)) {
+      nextStreak += 1;
+      cursor = getPreviousDateKey(cursor);
+    }
+
+    const allTimeTotal = [...totalByDay.values()].reduce((sum, value) => sum + value, 0);
+    setTodayCount(safeTodayTotal);
+    setMalasToday(Math.floor(safeTodayTotal / 108));
+    setDayStreak(nextStreak);
+    setTotalMalas(Math.floor(allTimeTotal / 108));
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadStats();
+    }, [loadStats])
+  );
+
+  useEffect(() => {
+    const refresh = () => void loadStats();
+    const statsSub = DeviceEventEmitter.addListener('japam-stats-updated', refresh);
+    const historySub = DeviceEventEmitter.addListener('japam-history-updated', refresh);
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.addEventListener('japam-stats-updated', refresh);
+      window.addEventListener('japam-history-updated', refresh);
+    }
+    return () => {
+      statsSub.remove();
+      historySub.remove();
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.removeEventListener('japam-stats-updated', refresh);
+        window.removeEventListener('japam-history-updated', refresh);
+      }
+    };
+  }, [loadStats]);
 
   const handleStart = () => {
     if (!timer.canStart) {
-      router.push('/?signin=1' as never);
+      router.push('/tap-japam?signin=1' as never);
       return;
     }
     timer.start();
@@ -177,6 +295,25 @@ export default function TimerScreen() {
             ))}
           </View>
         </View>
+
+        <View style={styles.statsGrid}>
+          <View style={styles.statCard}>
+            <Text style={styles.statValue}>{malasToday}</Text>
+            <Text style={styles.statLabel}>Malas Today</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statValue}>{todayCount}</Text>
+            <Text style={styles.statLabel}>Today Count</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statValue}>{dayStreak}</Text>
+            <Text style={styles.statLabel}>Day Streak</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statValue}>{totalMalas}</Text>
+            <Text style={styles.statLabel}>Total Malas</Text>
+          </View>
+        </View>
       </ScrollView>
     </View>
   );
@@ -276,6 +413,37 @@ const styles = StyleSheet.create({
     elevation: 5,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.9)',
+  },
+  statsGrid: {
+    width: '100%',
+    maxWidth: 460,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: isShortMobile ? 12 : isMobile ? 14 : 22,
+  },
+  statCard: {
+    flexGrow: 1,
+    flexBasis: '47%',
+    backgroundColor: 'rgba(255,255,255,0.72)',
+    borderRadius: 18,
+    paddingVertical: isMobile ? 13 : 16,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(15,143,135,0.14)',
+  },
+  statValue: {
+    color: '#12383c',
+    fontSize: isMobile ? 24 : 28,
+    fontWeight: '900',
+  },
+  statLabel: {
+    color: '#547071',
+    fontSize: isMobile ? 12 : 13,
+    fontWeight: '800',
+    marginTop: 4,
+    textAlign: 'center',
   },
   cardLabel: {
     fontSize: 11,

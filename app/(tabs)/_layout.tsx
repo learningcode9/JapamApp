@@ -83,11 +83,7 @@ export default function TabLayout() {
         <Tabs.Screen
           name="index"
           options={{
-            title: 'Home',
-            tabBarLabel: tabLabel('Home'),
-            tabBarIcon: ({ color, focused }) => (
-              <Ionicons name="home-outline" size={focused ? 27 : 25} color={color} />
-            ),
+            href: null,
           }}
         />
 
@@ -98,6 +94,17 @@ export default function TabLayout() {
             tabBarLabel: tabLabel('Timer'),
             tabBarIcon: ({ color, focused }) => (
               <Ionicons name={focused ? 'timer' : 'timer-outline'} size={focused ? 27 : 25} color={color} />
+            ),
+          }}
+        />
+
+        <Tabs.Screen
+          name="tap-japam"
+          options={{
+            title: 'Tap Japam',
+            tabBarLabel: tabLabel('Tap Japam'),
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons name={focused ? 'radio-button-on' : 'radio-button-on-outline'} size={focused ? 27 : 25} color={color} />
             ),
           }}
         />
@@ -140,11 +147,7 @@ export default function TabLayout() {
         <Tabs.Screen
           name="faq"
           options={{
-            title: 'FAQ',
-            tabBarLabel: tabLabel('FAQ'),
-            tabBarIcon: ({ color, focused }) => (
-              <Ionicons name={focused ? 'help-circle' : 'help-circle-outline'} size={focused ? 27 : 25} color={color} />
-            ),
+            href: null,
           }}
         />
       </Tabs>
