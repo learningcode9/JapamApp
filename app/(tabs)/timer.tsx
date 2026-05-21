@@ -1,6 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
@@ -30,6 +29,7 @@ const CIRCLE_SIZE = isShortMobile ? 204 : isMobile ? 224 : 296;
 const TEAL = '#0F8F87';
 const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
+const USER_NAME_KEY = 'userName';
 const TOTAL_KEY = 'totalCount';
 const TOTAL_DATE_KEY = 'totalDate';
 
@@ -72,10 +72,15 @@ export default function TimerScreen() {
   const timer = useTimer();
   const [showCustomInput, setShowCustomInput] = useState(false);
   const [customText, setCustomText] = useState('');
+  const [userName, setUserName] = useState('');
   const [malasToday, setMalasToday] = useState(0);
   const [todayCount, setTodayCount] = useState(0);
   const [dayStreak, setDayStreak] = useState(0);
   const [totalMalas, setTotalMalas] = useState(0);
+
+  const loadUser = useCallback(async () => {
+    setUserName((await AsyncStorage.getItem(USER_NAME_KEY)) || '');
+  }, []);
 
   const loadStats = useCallback(async () => {
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
@@ -129,27 +134,33 @@ export default function TimerScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      void loadUser();
       void loadStats();
-    }, [loadStats])
+    }, [loadStats, loadUser])
   );
 
   useEffect(() => {
     const refresh = () => void loadStats();
+    const refreshAuth = () => void loadUser();
     const statsSub = DeviceEventEmitter.addListener('japam-stats-updated', refresh);
     const historySub = DeviceEventEmitter.addListener('japam-history-updated', refresh);
+    const authSub = DeviceEventEmitter.addListener('japam-auth-updated', refreshAuth);
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       window.addEventListener('japam-stats-updated', refresh);
       window.addEventListener('japam-history-updated', refresh);
+      window.addEventListener('japam-auth-updated', refreshAuth);
     }
     return () => {
       statsSub.remove();
       historySub.remove();
+      authSub.remove();
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.removeEventListener('japam-stats-updated', refresh);
         window.removeEventListener('japam-history-updated', refresh);
+        window.removeEventListener('japam-auth-updated', refreshAuth);
       }
     };
-  }, [loadStats]);
+  }, [loadStats, loadUser]);
 
   const handleStart = () => {
     if (!timer.canStart) {
@@ -173,145 +184,170 @@ export default function TimerScreen() {
     Keyboard.dismiss();
   };
 
+  const handleAccountPress = () => {
+    if (!userName) {
+      router.push('/tap-japam?signin=1' as never);
+      return;
+    }
+
+    router.push('/settings' as never);
+  };
+
+  const todayLabel = new Date().toLocaleDateString();
+
   return (
-    <View style={{ flex: 1, backgroundColor: '#edf7f4' }}>
-      <ImageBackground
-        source={require('../../assets/images/zen-background.png')}
-        style={StyleSheet.absoluteFillObject}
-        imageStyle={{ opacity: 0.28, resizeMode: 'cover' }}
-      />
-      <LinearGradient
-        colors={['rgba(237,247,244,0.93)', 'rgba(217,238,235,0.88)', 'rgba(248,251,247,0.9)']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0, y: 1 }}
-        style={StyleSheet.absoluteFillObject}
-      />
+    <View style={styles.root}>
       <ScrollView
+        style={styles.scroll}
         contentContainerStyle={styles.container}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.header}>
-          <Text style={styles.subtitle}>Pick a duration, set loops, breathe.</Text>
-        </View>
-
-        <View style={styles.circleWrap}>
-          <View style={styles.circleOuter}>
-            <View style={styles.circleInner}>
-              <Text style={styles.timerText}>{formatTimer(timer.timeLeft)}</Text>
-              <Text style={styles.malaText}>Mala {timer.completedLoops} / {timer.selectedLoops}</Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.controls}>
-          <Pressable
-            style={({ pressed }) => [styles.startBtn, pressed && { opacity: 0.82 }]}
-            onPress={timer.isRunning ? timer.pause : handleStart}
-          >
-            <Ionicons name={timer.isRunning ? 'pause' : 'play'} size={20} color="#fff" style={{ marginRight: 8 }} />
-            <Text style={styles.startBtnText}>
-              {timer.isRunning ? 'Pause' : timer.isPaused ? 'Resume' : 'Start'}
-            </Text>
-          </Pressable>
-          <Pressable
-            style={({ pressed }) => [styles.resetBtn, pressed && { opacity: 0.65 }]}
-            onPress={timer.reset}
-          >
-            <Ionicons name="refresh-outline" size={22} color={TEAL} />
-          </Pressable>
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.cardLabel}>DURATION</Text>
-          <View style={styles.chips}>
-            {STD_DURATIONS.map((d) => (
-              <Pressable
-                key={d}
-                style={[
-                  styles.chip,
-                  timer.selectedDuration === d && !timer.isCustomDuration && styles.chipActive,
-                  timer.isRunning && styles.chipDisabled,
-                ]}
-                onPress={() => handleDurationSelect(d)}
-              >
-                <Text style={[
-                  styles.chipText,
-                  timer.selectedDuration === d && !timer.isCustomDuration && styles.chipTextActive,
-                ]}>
-                  {d}m
-                </Text>
-              </Pressable>
-            ))}
-            <Pressable
-              style={[
-                styles.chip,
-                timer.isCustomDuration && styles.chipActive,
-                timer.isRunning && styles.chipDisabled,
-              ]}
-              onPress={() => {
-                if (!timer.isRunning) setShowCustomInput(!showCustomInput);
-              }}
+        <View style={styles.appShell}>
+          <View pointerEvents="none" style={styles.sceneLayer}>
+            <ImageBackground
+              source={require('../../assets/images/zen-background.png')}
+              resizeMode="cover"
+              style={styles.backgroundImage}
+              imageStyle={styles.backgroundImageStyle}
             >
-              <Text style={[styles.chipText, timer.isCustomDuration && styles.chipTextActive]}>
-                {timer.isCustomDuration ? `${timer.selectedDuration}m` : 'Custom'}
+              <View style={styles.backgroundOverlay} />
+            </ImageBackground>
+          </View>
+
+          <View style={styles.topControls}>
+            <Text style={styles.welcomeText}>Welcome</Text>
+            <Pressable
+              style={({ pressed }) => [styles.accountButton, pressed && styles.softPressed]}
+              onPress={handleAccountPress}
+            >
+              <Text numberOfLines={1} style={styles.accountNameText}>
+                {userName || 'Sign in'}
               </Text>
             </Pressable>
           </View>
 
-          {showCustomInput && !timer.isRunning && (
-            <View style={styles.customRow}>
-              <TextInput
-                style={styles.customInput}
-                value={customText}
-                onChangeText={setCustomText}
-                placeholder="Enter minutes"
-                placeholderTextColor="#7f9ea0"
-                keyboardType="numeric"
-                returnKeyType="done"
-                onSubmitEditing={handleCustomSet}
-                autoFocus
-              />
-              <Pressable style={styles.customSetBtn} onPress={handleCustomSet}>
-                <Text style={styles.customSetText}>Set</Text>
-              </Pressable>
-            </View>
-          )}
+          <Text style={styles.dateText}>Today · {todayLabel}</Text>
+          <Text style={styles.subtitle}>Pick a duration, set loops, breathe.</Text>
 
-          <Text style={[styles.cardLabel, { marginTop: isShortMobile ? 12 : isMobile ? 14 : 22 }]}>AUTO-REPEAT MALAS</Text>
-          <View style={styles.chips}>
-            {LOOP_OPTIONS.map((l) => (
+          <View style={styles.circleWrap}>
+            <View style={styles.circleOuter}>
+              <View style={styles.circleInner}>
+                <Text style={styles.timerText}>{formatTimer(timer.timeLeft)}</Text>
+                <Text style={styles.malaText}>Mala {timer.completedLoops} / {timer.selectedLoops}</Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.controls}>
+            <Pressable
+              style={({ pressed }) => [styles.startBtn, pressed && styles.softPressed]}
+              onPress={timer.isRunning ? timer.pause : handleStart}
+            >
+              <Ionicons name={timer.isRunning ? 'pause' : 'play'} size={20} color="#fff" style={{ marginRight: 8 }} />
+              <Text style={styles.startBtnText}>
+                {timer.isRunning ? 'Pause' : timer.isPaused ? 'Resume' : 'Start'}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.resetBtn, pressed && { opacity: 0.65 }]}
+              onPress={timer.reset}
+            >
+              <Ionicons name="refresh-outline" size={22} color={TEAL} />
+            </Pressable>
+          </View>
+
+          <View style={styles.card}>
+            <Text style={styles.cardLabel}>DURATION</Text>
+            <View style={styles.chips}>
+              {STD_DURATIONS.map((d) => (
+                <Pressable
+                  key={d}
+                  style={[
+                    styles.chip,
+                    timer.selectedDuration === d && !timer.isCustomDuration && styles.chipActive,
+                    timer.isRunning && styles.chipDisabled,
+                  ]}
+                  onPress={() => handleDurationSelect(d)}
+                >
+                  <Text style={[
+                    styles.chipText,
+                    timer.selectedDuration === d && !timer.isCustomDuration && styles.chipTextActive,
+                  ]}>
+                    {d}m
+                  </Text>
+                </Pressable>
+              ))}
               <Pressable
-                key={l}
                 style={[
                   styles.chip,
-                  timer.selectedLoops === l && styles.chipActive,
+                  timer.isCustomDuration && styles.chipActive,
                   timer.isRunning && styles.chipDisabled,
                 ]}
-                onPress={() => timer.selectLoops(l)}
+                onPress={() => {
+                  if (!timer.isRunning) setShowCustomInput(!showCustomInput);
+                }}
               >
-                <Text style={[styles.chipText, timer.selectedLoops === l && styles.chipTextActive]}>{l}</Text>
+                <Text style={[styles.chipText, timer.isCustomDuration && styles.chipTextActive]}>
+                  {timer.isCustomDuration ? `${timer.selectedDuration}m` : 'Custom'}
+                </Text>
               </Pressable>
-            ))}
-          </View>
-        </View>
+            </View>
 
-        <View style={styles.statsGrid}>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{malasToday}</Text>
-            <Text style={styles.statLabel}>Malas Today</Text>
+            {showCustomInput && !timer.isRunning && (
+              <View style={styles.customRow}>
+                <TextInput
+                  style={styles.customInput}
+                  value={customText}
+                  onChangeText={setCustomText}
+                  placeholder="Enter minutes"
+                  placeholderTextColor="#7f9ea0"
+                  keyboardType="numeric"
+                  returnKeyType="done"
+                  onSubmitEditing={handleCustomSet}
+                  autoFocus
+                />
+                <Pressable style={styles.customSetBtn} onPress={handleCustomSet}>
+                  <Text style={styles.customSetText}>Set</Text>
+                </Pressable>
+              </View>
+            )}
+
+            <Text style={[styles.cardLabel, { marginTop: isShortMobile ? 12 : isMobile ? 14 : 22 }]}>AUTO-REPEAT MALAS</Text>
+            <View style={styles.chips}>
+              {LOOP_OPTIONS.map((l) => (
+                <Pressable
+                  key={l}
+                  style={[
+                    styles.chip,
+                    timer.selectedLoops === l && styles.chipActive,
+                    timer.isRunning && styles.chipDisabled,
+                  ]}
+                  onPress={() => timer.selectLoops(l)}
+                >
+                  <Text style={[styles.chipText, timer.selectedLoops === l && styles.chipTextActive]}>{l}</Text>
+                </Pressable>
+              ))}
+            </View>
           </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{todayCount}</Text>
-            <Text style={styles.statLabel}>Today Count</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{dayStreak}</Text>
-            <Text style={styles.statLabel}>Day Streak</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{totalMalas}</Text>
-            <Text style={styles.statLabel}>Total Malas</Text>
+
+          <View style={styles.statsGrid}>
+            <View style={styles.statCard}>
+              <Text style={styles.statValue}>{malasToday}</Text>
+              <Text style={styles.statLabel}>Malas Today</Text>
+            </View>
+            <View style={styles.statCard}>
+              <Text style={styles.statValue}>{todayCount}</Text>
+              <Text style={styles.statLabel}>Today Count</Text>
+            </View>
+            <View style={styles.statCard}>
+              <Text style={styles.statValue}>{dayStreak}</Text>
+              <Text style={styles.statLabel}>Day Streak</Text>
+            </View>
+            <View style={styles.statCard}>
+              <Text style={styles.statValue}>{totalMalas}</Text>
+              <Text style={styles.statLabel}>Total Malas</Text>
+            </View>
           </View>
         </View>
       </ScrollView>
@@ -320,21 +356,120 @@ export default function TimerScreen() {
 }
 
 const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: '#edf7f4',
+  },
+  scroll: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  sceneLayer: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: 'hidden',
+  },
+  backgroundImage: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+  },
+  backgroundImageStyle: {
+    width: '100%',
+    height: '100%',
+    ...(Platform.OS === 'web'
+      ? ({ filter: 'contrast(1.08) saturate(1.04)' } as any)
+      : {}),
+  },
+  backgroundOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(245, 250, 250, 0.45)',
+  },
   container: {
+    flexGrow: isMobile ? 0 : 1,
+    justifyContent: isMobile ? 'flex-start' : 'center',
+    width: '100%',
+    alignSelf: 'center',
     paddingTop: Platform.OS === 'web'
-      ? (isShortMobile ? 18 : isMobile ? 26 : 60)
-      : (isShortMobile ? 20 : isMobile ? 30 : 72),
-    paddingBottom: isMobile ? 112 : 140,
-    paddingHorizontal: isMobile ? 18 : 24,
+      ? (isShortMobile ? 0 : isMobile ? 0 : 24)
+      : (isShortMobile ? 0 : isMobile ? 0 : 24),
+    paddingBottom: isMobile ? 104 : 128,
+    paddingHorizontal: isMobile ? 0 : 24,
     alignItems: 'center',
     minHeight: screenHeight,
   },
-  header: { alignItems: 'center', marginBottom: isShortMobile ? 12 : isMobile ? 16 : 32 },
+  appShell: {
+    width: '100%',
+    maxWidth: isMobile ? undefined : 460,
+    minHeight: isMobile ? screenHeight : Math.min(screenHeight - 48, 900),
+    alignItems: 'center',
+    overflow: 'hidden',
+    position: 'relative',
+    backgroundColor: 'rgba(238, 248, 246, 0.94)',
+    borderRadius: isMobile ? 0 : 28,
+    paddingHorizontal: isMobile ? 22 : 28,
+    paddingTop: isShortMobile ? 14 : isMobile ? 20 : 34,
+    paddingBottom: isMobile ? 28 : 104,
+    shadowColor: '#0f766e',
+    shadowOpacity: isMobile ? 0 : 0.16,
+    shadowRadius: 28,
+    shadowOffset: { width: 0, height: 16 },
+    elevation: isMobile ? 0 : 12,
+  },
+  topControls: {
+    width: '100%',
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: isShortMobile ? 8 : isMobile ? 10 : 18,
+  },
+  welcomeText: {
+    color: '#063B3B',
+    fontSize: isMobile ? 22 : 24,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  accountButton: {
+    position: 'absolute',
+    right: 0,
+    top: 2,
+    minHeight: 40,
+    maxWidth: 128,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.66)',
+    borderWidth: 1,
+    borderColor: 'rgba(15,143,135,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#0f8f87',
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 4,
+  },
+  accountNameText: {
+    color: '#063B3B',
+    fontSize: isMobile ? 14 : 15,
+    fontWeight: '900',
+  },
+  softPressed: {
+    transform: [{ scale: 0.96 }],
+    opacity: 0.86,
+    ...(Platform.OS === 'web'
+      ? ({ transition: 'transform 180ms ease, opacity 180ms ease' } as any)
+      : {}),
+  },
+  dateText: {
+    color: '#5F7F80',
+    fontSize: isMobile ? 14 : 15,
+    fontWeight: '700',
+    marginBottom: isShortMobile ? 8 : isMobile ? 10 : 14,
+  },
   subtitle: {
     fontSize: isMobile ? 16 : 18,
     color: '#4a7c80',
     textAlign: 'center',
     fontWeight: '700',
+    marginBottom: isShortMobile ? 12 : isMobile ? 16 : 26,
   },
   circleWrap: { marginBottom: isShortMobile ? 14 : isMobile ? 18 : 32 },
   circleOuter: {
