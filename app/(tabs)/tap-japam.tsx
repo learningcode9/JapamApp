@@ -1,4 +1,3 @@
-import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Google from 'expo-auth-session/providers/google';
 import { Audio } from 'expo-av';
@@ -101,19 +100,8 @@ const screenWidth = Dimensions.get('window').width;
 const screenHeight = Dimensions.get('window').height;
 const isMobile = screenWidth < 500;
 const isShortMobile = isMobile && screenHeight < 760;
-const progressCircleSize = isShortMobile ? 220 : isMobile ? 260 : 300;
+const progressCircleSize = isShortMobile ? 242 : isMobile ? 292 : 330;
 const progressRingSize = progressCircleSize - (isMobile ? 10 : 14);
-const malaBeadPositions = [
-  { left: 10, top: 1 },
-  { left: 15, top: 3 },
-  { left: 19, top: 8 },
-  { left: 19, top: 14 },
-  { left: 15, top: 19 },
-  { left: 9, top: 20 },
-  { left: 4, top: 17 },
-  { left: 1, top: 11 },
-  { left: 3, top: 5 },
-];
 const shellMinHeight =
   isMobile
     ? Platform.OS === 'web'
@@ -169,7 +157,7 @@ export default function JapamMain() {
   const [count, setCount] = useState(0);
   const [malas, setMalas] = useState(0);
   const [total, setTotal] = useState(0);
-  const [dayStreak, setDayStreak] = useState(0);
+  const [, setDayStreak] = useState(0);
   const [seconds, setSeconds] = useState(0);
   const [hasRestoredTotal, setHasRestoredTotal] = useState(false);
   const [hasRestoredTimer, setHasRestoredTimer] = useState(false);
@@ -191,8 +179,6 @@ export default function JapamMain() {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [repetitionSoundEnabled, setRepetitionSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
-  const [showInstallBanner, setShowInstallBanner] = useState(false);
-  const [installBannerDismissed, setInstallBannerDismissed] = useState(false);
 
   const totalRef = useRef(0);
   const timerRef = useRef({
@@ -210,7 +196,6 @@ export default function JapamMain() {
   const autoRepeatTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isCompletingRef = useRef(false);
   const completedLoopMalasRef = useRef(0);
-  const deferredInstallPromptRef = useRef<any>(null);
   const rippleAnim = useRef(new Animated.Value(0)).current;
   const isSavingSessionRef = useRef(false);
   const normalCompleteSoundRef = useRef<Audio.Sound | null>(null);
@@ -850,36 +835,6 @@ export default function JapamMain() {
       }
     };
   }, [restoreTodayTotal]);
-
-  useEffect(() => {
-    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
-
-    const dismissKey = 'install-banner-dismissed-at';
-    const dismissWindowMs = 7 * 24 * 60 * 60 * 1000;
-    const dismissedAt = Number(window.localStorage.getItem(dismissKey) || '0');
-    const recentlyDismissed = dismissedAt > 0 && Date.now() - dismissedAt < dismissWindowMs;
-
-    const onBeforeInstallPrompt = (event: Event) => {
-      event.preventDefault();
-      if (recentlyDismissed) return;
-      deferredInstallPromptRef.current = event;
-      setShowInstallBanner(true);
-    };
-
-    const onAppInstalled = () => {
-      deferredInstallPromptRef.current = null;
-      setShowInstallBanner(false);
-      window.localStorage.removeItem(dismissKey);
-    };
-
-    window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt);
-    window.addEventListener('appinstalled', onAppInstalled);
-
-    return () => {
-      window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
-      window.removeEventListener('appinstalled', onAppInstalled);
-    };
-  }, []);
 
   useEffect(() => {
     timerRef.current = { seconds, isRunning, targetSeconds, minutesInput, loopTimer };
@@ -1837,33 +1792,6 @@ export default function JapamMain() {
     ]);
   };
 
-  const handleInstallApp = async () => {
-    const prompt = deferredInstallPromptRef.current;
-    if (!prompt || typeof prompt.prompt !== 'function') {
-      setShowInstallBanner(false);
-      return;
-    }
-
-    prompt.prompt();
-    try {
-      await prompt.userChoice;
-    } catch {
-      // Ignore prompt cancellation errors.
-    } finally {
-      deferredInstallPromptRef.current = null;
-      setShowInstallBanner(false);
-    }
-  };
-
-  const dismissInstallBanner = () => {
-    setShowInstallBanner(false);
-    setInstallBannerDismissed(true);
-
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      window.localStorage.setItem('install-banner-dismissed-at', String(Date.now()));
-    }
-  };
-
   const todayLabel = new Date().toLocaleDateString();
   const progressPercent = Math.min(100, Math.max(0, (count / 108) * 100));
   const progressRingBackground =
@@ -1899,49 +1827,7 @@ export default function JapamMain() {
             </View>
           )}
 
-          <View style={styles.topControls}>
-            <Text style={styles.welcomeText}>Welcome</Text>
-
-            <Pressable
-              style={({ pressed }) => [styles.accountButton, pressed && styles.softPressed]}
-              onPress={() => {
-                if (userName) {
-                  setShowUserMenu((prev) => !prev);
-                  return;
-                }
-
-                setShowUserModal(true);
-              }}
-            >
-              <Text style={styles.accountNameText}>{userName || 'Sign in'}</Text>
-            </Pressable>
-
-            {showUserMenu && (
-              <View style={styles.userMenu}>
-                <Pressable style={styles.userMenuItem} onPress={handleLogout}>
-                  <Text style={styles.userMenuText}>Logout</Text>
-                </Pressable>
-              </View>
-            )}
-          </View>
-
-          {showInstallBanner && !installBannerDismissed && (
-            <View style={styles.installBanner}>
-              <View style={styles.installBannerTextWrap}>
-                <Text style={styles.installBannerTitle}>Install this app for a better experience</Text>
-              </View>
-              <View style={styles.installBannerActions}>
-                <Pressable style={styles.installBannerSecondary} onPress={dismissInstallBanner}>
-                  <Text style={styles.installBannerSecondaryText}>Not now</Text>
-                </Pressable>
-                <Pressable style={styles.installBannerPrimary} onPress={() => void handleInstallApp()}>
-                  <Text style={styles.installBannerPrimaryText}>Install App</Text>
-                </Pressable>
-              </View>
-            </View>
-          )}
-
-          <Text style={styles.dateText}>Today · {todayLabel}</Text>
+          <Text style={styles.tapInstruction}>Tap the circle to count Japam</Text>
 
           <Animated.View style={styles.progressShell}>
             <Animated.View
@@ -1985,37 +1871,11 @@ export default function JapamMain() {
             </Pressable>
           </Animated.View>
 
-          <View style={styles.statsCard}>
-            <View style={styles.statColumn}>
-              <View style={styles.malaIcon} accessibilityElementsHidden>
-                {malaBeadPositions.map((position, index) => (
-                  <View
-                    key={index}
-                    style={[
-                      styles.malaBead,
-                      {
-                        left: position.left,
-                        top: position.top,
-                      },
-                    ]}
-                  />
-                ))}
-              </View>
-              <Text style={styles.statValue}>{malas}</Text>
-              <Text style={styles.statLabel}>Malas today</Text>
+          <View style={styles.tapProgressWrap}>
+            <View style={styles.tapProgressTrack}>
+              <View style={[styles.tapProgressFill, { width: `${progressPercent}%` }]} />
             </View>
-            <View style={styles.statDivider} />
-            <View style={styles.statColumn}>
-              <Ionicons name="flame-outline" style={styles.statIcon} />
-              <Text style={styles.statValue}>{dayStreak}</Text>
-              <Text style={styles.statLabel}>Day streak</Text>
-            </View>
-            <View style={styles.statDivider} />
-            <View style={styles.statColumn}>
-              <Ionicons name="radio-button-on-outline" style={styles.statIcon} />
-              <Text style={styles.statValue}>{total}</Text>
-              <Text style={styles.statLabel}>Today count</Text>
-            </View>
+            <Text style={styles.tapProgressText}>{count} / 108</Text>
           </View>
 
         </View>
@@ -2314,6 +2174,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: isShortMobile ? 10 : isMobile ? 16 : 32,
   },
+  tapInstruction: {
+    color: '#365f61',
+    fontSize: isMobile ? 17 : 19,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginTop: isShortMobile ? 8 : isMobile ? 12 : 18,
+    marginBottom: isShortMobile ? 14 : isMobile ? 18 : 24,
+  },
   accountButton: {
     position: 'absolute',
     right: 0,
@@ -2542,6 +2410,32 @@ const styles = StyleSheet.create({
     fontSize: isMobile ? 15 : 17,
     fontWeight: '800',
     marginTop: 2,
+  },
+  tapProgressWrap: {
+    width: '100%',
+    maxWidth: isMobile ? 310 : 360,
+    alignItems: 'center',
+    marginTop: isShortMobile ? -2 : 0,
+  },
+  tapProgressTrack: {
+    width: '100%',
+    height: isMobile ? 10 : 12,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15,118,110,0.14)',
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.62)',
+  },
+  tapProgressFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: '#0F8F87',
+  },
+  tapProgressText: {
+    color: '#365f61',
+    fontSize: isMobile ? 15 : 17,
+    fontWeight: '800',
+    marginTop: 8,
   },
   ringProgressBar: {
     position: 'absolute',
@@ -2772,125 +2666,6 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   autoRepeatText: { color: '#063B3B', fontSize: isMobile ? 15 : 16, fontWeight: '800' },
-  statsCard: {
-    width: '100%',
-    maxWidth: 380,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: 'rgba(255,255,255,0.75)',
-    borderRadius: 28,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.72)',
-    paddingVertical: isShortMobile ? 13 : isMobile ? 17 : 22,
-    paddingHorizontal: isMobile ? 12 : 16,
-    shadowColor: '#0f766e',
-    shadowOpacity: 0.1,
-    shadowRadius: 22,
-    shadowOffset: { width: 0, height: 12 },
-    elevation: 7,
-    marginTop: isShortMobile ? 14 : isMobile ? 22 : 30,
-    marginBottom: isMobile ? 20 : 28,
-  },
-  installBanner: {
-    width: '100%',
-    maxWidth: 380,
-    alignSelf: 'center',
-    marginTop: 8,
-    marginBottom: 18,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.88)',
-    borderWidth: 1,
-    borderColor: 'rgba(15,118,110,0.14)',
-    padding: 14,
-    shadowColor: '#0f766e',
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 5,
-  },
-  installBannerTextWrap: {
-    marginBottom: 12,
-  },
-  installBannerTitle: {
-    color: '#063B3B',
-    fontSize: 15,
-    fontWeight: '800',
-    textAlign: 'center',
-    lineHeight: 21,
-  },
-  installBannerActions: {
-    flexDirection: 'row',
-    gap: 10,
-    justifyContent: 'center',
-  },
-  installBannerSecondary: {
-    flex: 1,
-    minHeight: 44,
-    borderRadius: 999,
-    backgroundColor: 'rgba(95,127,128,0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  installBannerSecondaryText: {
-    color: '#063B3B',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  installBannerPrimary: {
-    flex: 1,
-    minHeight: 44,
-    borderRadius: 999,
-    backgroundColor: '#0F8F87',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  installBannerPrimaryText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  statColumn: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 8,
-  },
-  statDivider: {
-    width: 1,
-    height: isShortMobile ? 46 : isMobile ? 52 : 58,
-    backgroundColor: 'rgba(95,127,128,0.22)',
-  },
-  statIcon: {
-    color: '#0F8F87',
-    fontSize: 24,
-    marginBottom: 6,
-  },
-  malaIcon: {
-    width: 24,
-    height: 24,
-    marginBottom: 6,
-  },
-  malaBead: {
-    position: 'absolute',
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#0F8F87',
-  },
-  statValue: {
-    color: '#12383c',
-    fontSize: isShortMobile ? 28 : isMobile ? 30 : 32,
-    fontWeight: '800',
-    lineHeight: isShortMobile ? 32 : isMobile ? 34 : 36,
-  },
-  statLabel: {
-    color: '#5f7778',
-    fontSize: isMobile ? 14 : 15,
-    fontWeight: '600',
-    textAlign: 'center',
-    marginTop: 4,
-  },
   sheetOverlay: {
     flex: 1,
     justifyContent: 'flex-end',

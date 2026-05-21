@@ -1,12 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import * as Google from 'expo-auth-session/providers/google';
 import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import * as WebBrowser from 'expo-web-browser';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   DeviceEventEmitter,
   Dimensions,
   ImageBackground,
   Keyboard,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -22,6 +25,8 @@ import {
   useTimer,
 } from '../../contexts/timer-context';
 
+WebBrowser.maybeCompleteAuthSession();
+
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 const isMobile = screenWidth < 768;
 const isShortMobile = isMobile && screenHeight < 760;
@@ -30,6 +35,8 @@ const TEAL = '#0F8F87';
 const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
+const USER_EMAIL_KEY = 'userEmail';
+const AUTH_PENDING_KEY = 'authPending';
 const TOTAL_KEY = 'totalCount';
 const TOTAL_DATE_KEY = 'totalDate';
 
@@ -73,10 +80,25 @@ export default function TimerScreen() {
   const [showCustomInput, setShowCustomInput] = useState(false);
   const [customText, setCustomText] = useState('');
   const [userName, setUserName] = useState('');
+  const [showUserModal, setShowUserModal] = useState(false);
+  const [isSigningIn, setIsSigningIn] = useState(false);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
+  const [showInstallHelp, setShowInstallHelp] = useState(false);
   const [malasToday, setMalasToday] = useState(0);
   const [todayCount, setTodayCount] = useState(0);
   const [dayStreak, setDayStreak] = useState(0);
-  const [totalMalas, setTotalMalas] = useState(0);
+  const deferredInstallPromptRef = useRef<any>(null);
+
+  const googleRedirectUri =
+    Platform.OS === 'web' && typeof window !== 'undefined'
+      ? window.location.origin
+      : undefined;
+
+  const [request, response, promptAsync] = Google.useAuthRequest({
+    clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
+    scopes: ['profile', 'email'],
+    redirectUri: googleRedirectUri,
+  });
 
   const loadUser = useCallback(async () => {
     setUserName((await AsyncStorage.getItem(USER_NAME_KEY)) || '');
@@ -125,11 +147,9 @@ export default function TimerScreen() {
       cursor = getPreviousDateKey(cursor);
     }
 
-    const allTimeTotal = [...totalByDay.values()].reduce((sum, value) => sum + value, 0);
     setTodayCount(safeTodayTotal);
     setMalasToday(Math.floor(safeTodayTotal / 108));
     setDayStreak(nextStreak);
-    setTotalMalas(Math.floor(allTimeTotal / 108));
   }, []);
 
   useFocusEffect(
@@ -162,9 +182,109 @@ export default function TimerScreen() {
     };
   }, [loadStats, loadUser]);
 
+  useEffect(() => {
+    const handleGoogleLogin = async () => {
+      if (!response) return;
+
+      if (response.type !== 'success') {
+        setIsSigningIn(false);
+        await AsyncStorage.removeItem(AUTH_PENDING_KEY);
+        const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+        if (!savedUserId) setShowUserModal(true);
+        return;
+      }
+
+      setIsSigningIn(true);
+      setShowUserModal(false);
+
+      const { authentication } = response;
+      const accessToken =
+        authentication?.accessToken ||
+        ('params' in response ? response.params?.access_token : undefined);
+
+      if (!accessToken) {
+        await AsyncStorage.removeItem(AUTH_PENDING_KEY);
+        setIsSigningIn(false);
+        setShowUserModal(true);
+        return;
+      }
+
+      try {
+        const userInfoResponse = await fetch('https://www.googleapis.com/userinfo/v2/me', {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+
+        const userInfo = await userInfoResponse.json();
+        const googleName = userInfo?.given_name || userInfo?.name || userInfo?.email || 'User';
+        const googleEmail = userInfo?.email || '';
+        const googleUserId = String(userInfo?.id || '').trim();
+
+        if (!googleUserId) {
+          setShowUserModal(true);
+          return;
+        }
+
+        await AsyncStorage.setItem(USER_NAME_KEY, googleName);
+        if (googleEmail) {
+          await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
+        }
+        await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
+        setUserName(googleName);
+        setShowUserModal(false);
+        DeviceEventEmitter.emit('japam-auth-updated');
+        DeviceEventEmitter.emit('japam-stats-updated');
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('japam-auth-updated'));
+          window.dispatchEvent(new Event('japam-stats-updated'));
+        }
+        void loadStats();
+      } catch (error) {
+        console.log('Google login error:', error);
+        setShowUserModal(true);
+      } finally {
+        await AsyncStorage.removeItem(AUTH_PENDING_KEY);
+        setIsSigningIn(false);
+      }
+    };
+
+    void handleGoogleLogin();
+  }, [loadStats, response]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+
+    const isStandalone =
+      window.matchMedia?.('(display-mode: standalone)').matches ||
+      (window.navigator as any).standalone === true;
+    if (!isStandalone) {
+      setShowInstallBanner(true);
+    }
+
+    const onBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      deferredInstallPromptRef.current = event;
+      setShowInstallHelp(false);
+      setShowInstallBanner(true);
+    };
+
+    const onAppInstalled = () => {
+      deferredInstallPromptRef.current = null;
+      setShowInstallBanner(false);
+      setShowInstallHelp(false);
+    };
+
+    window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt);
+    window.addEventListener('appinstalled', onAppInstalled);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', onAppInstalled);
+    };
+  }, []);
+
   const handleStart = () => {
     if (!timer.canStart) {
-      router.push('/tap-japam?signin=1' as never);
+      setShowUserModal(true);
       return;
     }
     timer.start();
@@ -186,11 +306,29 @@ export default function TimerScreen() {
 
   const handleAccountPress = () => {
     if (!userName) {
-      router.push('/tap-japam?signin=1' as never);
+      setShowUserModal(true);
       return;
     }
 
     router.push('/settings' as never);
+  };
+
+  const handleInstallNow = async () => {
+    const prompt = deferredInstallPromptRef.current;
+    if (!prompt || typeof prompt.prompt !== 'function') {
+      setShowInstallHelp(true);
+      return;
+    }
+
+    prompt.prompt();
+    try {
+      await prompt.userChoice;
+    } catch {
+      // Ignore prompt cancellation errors.
+    } finally {
+      deferredInstallPromptRef.current = null;
+      setShowInstallBanner(false);
+    }
   };
 
   const todayLabel = new Date().toLocaleDateString();
@@ -229,6 +367,23 @@ export default function TimerScreen() {
 
           <Text style={styles.dateText}>Today · {todayLabel}</Text>
           <Text style={styles.subtitle}>Pick a duration, set loops, breathe.</Text>
+
+      {showInstallBanner && (
+            <View style={styles.installBanner}>
+              <Text style={styles.installBannerTitle}>Install this app for a better experience</Text>
+              {showInstallHelp && (
+                <Text style={styles.installBannerHelp}>Tap browser menu ⋮ → Add to Home screen</Text>
+              )}
+              <View style={styles.installBannerActions}>
+                <Pressable style={styles.installBannerPrimary} onPress={() => void handleInstallNow()}>
+                  <Text style={styles.installBannerPrimaryText}>Install Now</Text>
+                </Pressable>
+                <Pressable style={styles.installBannerSecondary} onPress={() => setShowInstallBanner(false)}>
+                  <Text style={styles.installBannerSecondaryText}>Later</Text>
+                </Pressable>
+              </View>
+            </View>
+          )}
 
           <View style={styles.circleWrap}>
             <View style={styles.circleOuter}>
@@ -344,12 +499,50 @@ export default function TimerScreen() {
               <Text style={styles.statValue}>{dayStreak}</Text>
               <Text style={styles.statLabel}>Day Streak</Text>
             </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statValue}>{totalMalas}</Text>
-              <Text style={styles.statLabel}>Total Malas</Text>
-            </View>
           </View>
         </View>
+
+        <Modal visible={showUserModal && !isSigningIn} transparent animationType="fade">
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Pressable style={styles.modalClose} onPress={() => setShowUserModal(false)}>
+                <Text style={styles.modalCloseText}>×</Text>
+              </Pressable>
+              <View style={styles.modalTopMark}>
+                <View style={styles.modalTopDot} />
+              </View>
+              <Text style={styles.modalTitle}>Sign in to save</Text>
+              <Text style={styles.modalSubtitle}>
+                Sign in with Google to save your Japam history and sync across devices.
+              </Text>
+              <Pressable
+                disabled={!request}
+                style={[styles.modalButton, !request && styles.disabledButton]}
+                onPress={() => {
+                  setIsSigningIn(true);
+                  setShowUserModal(false);
+                  void (async () => {
+                    await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
+                    const result = await promptAsync({ showInRecents: true });
+                    if (result.type !== 'success') {
+                      await AsyncStorage.removeItem(AUTH_PENDING_KEY);
+                      setIsSigningIn(false);
+                      setShowUserModal(true);
+                    }
+                  })();
+                }}
+              >
+                <View style={styles.googleIcon}>
+                  <Text style={styles.googleIconText}>G</Text>
+                </View>
+                <Text style={styles.modalButtonText}>Continue with Google</Text>
+              </Pressable>
+              <Text style={styles.modalFootnote}>
+                Your history stays separate from other users on this device.
+              </Text>
+            </View>
+          </View>
+        </Modal>
       </ScrollView>
     </View>
   );
@@ -559,7 +752,7 @@ const styles = StyleSheet.create({
   },
   statCard: {
     flexGrow: 1,
-    flexBasis: '47%',
+    flexBasis: '30%',
     backgroundColor: 'rgba(255,255,255,0.72)',
     borderRadius: 18,
     paddingVertical: isMobile ? 13 : 16,
@@ -580,6 +773,159 @@ const styles = StyleSheet.create({
     marginTop: 4,
     textAlign: 'center',
   },
+  installBanner: {
+    width: '100%',
+    maxWidth: 380,
+    alignSelf: 'center',
+    marginTop: isShortMobile ? 0 : 4,
+    marginBottom: isShortMobile ? 12 : 16,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.82)',
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.14)',
+    padding: 13,
+    shadowColor: '#0f766e',
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 5,
+  },
+  installBannerTitle: {
+    color: '#063B3B',
+    fontSize: 14,
+    fontWeight: '800',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  installBannerHelp: {
+    color: '#5F7F80',
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginTop: 6,
+    lineHeight: 18,
+  },
+  installBannerActions: {
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'center',
+    marginTop: 11,
+  },
+  installBannerPrimary: {
+    flex: 1,
+    minHeight: 42,
+    borderRadius: 999,
+    backgroundColor: TEAL,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  installBannerPrimaryText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  installBannerSecondary: {
+    flex: 1,
+    minHeight: 42,
+    borderRadius: 999,
+    backgroundColor: 'rgba(95,127,128,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  installBannerSecondaryText: {
+    color: '#063B3B',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(7,32,34,0.52)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: '#f8ffff',
+    borderRadius: 22,
+    paddingHorizontal: 24,
+    paddingTop: 26,
+    paddingBottom: 22,
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.18)',
+    elevation: 12,
+  },
+  modalTopMark: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: '#dbeceb',
+    borderWidth: 1,
+    borderColor: '#0f766e',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    marginBottom: 14,
+  },
+  modalTopDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#0f8a87',
+    shadowColor: '#0f766e',
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+  },
+  modalTitle: {
+    color: '#12383c',
+    fontSize: 26,
+    fontWeight: '900',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  modalSubtitle: {
+    color: '#365f61',
+    fontSize: 15,
+    lineHeight: 22,
+    textAlign: 'center',
+    marginBottom: 22,
+  },
+  modalButton: {
+    backgroundColor: '#f8fafc',
+    minHeight: 52,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    borderWidth: 1,
+    borderColor: '#dbeceb',
+  },
+  disabledButton: { opacity: 0.5 },
+  googleIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'white',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  googleIconText: { color: '#2563eb', fontSize: 16, fontWeight: '900' },
+  modalButtonText: { color: '#0f172a', fontWeight: '900', fontSize: 16 },
+  modalFootnote: {
+    color: '#547071',
+    fontSize: 12,
+    lineHeight: 17,
+    textAlign: 'center',
+    marginTop: 14,
+  },
+  modalClose: { position: 'absolute', right: 14, top: 10, zIndex: 10 },
+  modalCloseText: { color: '#547071', fontSize: 28, fontWeight: '800' },
   cardLabel: {
     fontSize: 11,
     fontWeight: '800',
