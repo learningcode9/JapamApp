@@ -1497,12 +1497,24 @@ export default function JapamMain() {
     try {
       if (Platform.OS === 'web') {
         if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
-          navigator.vibrate([200, 80, 200]);
+          navigator.vibrate(variant === 'final' ? [300, 120, 300, 120, 500] : [200, 80, 200]);
         }
         return;
       }
 
       if (Platform.OS === 'ios') {
+        if (variant === 'final') {
+          triggerDeepHardwarePulse([0, 300, 120, 300, 120, 500]);
+          await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+          setTimeout(() => {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+          }, 320);
+          setTimeout(() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
+          }, 680);
+          return;
+        }
+
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setTimeout(() => {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(console.log);
@@ -1514,11 +1526,11 @@ export default function JapamMain() {
       }
 
       // Android: [0, 200, 80, 200] = start immediately, 200ms on, 80ms off, 200ms on
-      Vibration.vibrate([0, 200, 80, 200]);
+      Vibration.vibrate(variant === 'final' ? [0, 300, 120, 300, 120, 500] : [0, 200, 80, 200]);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     } catch (error) {
       console.log('Completion vibration error:', error);
-      try { Vibration.vibrate([0, 200, 80, 200]); } catch {}
+      try { Vibration.vibrate(variant === 'final' ? [0, 300, 120, 300, 120, 500] : [0, 200, 80, 200]); } catch {}
     }
   }, [notifyCompletionFallback, playCompletionAnimation, repetitionSoundEnabled, soundEnabled, vibrationEnabled]);
 
@@ -1856,16 +1868,6 @@ export default function JapamMain() {
       window.localStorage.setItem('install-banner-dismissed-at', String(Date.now()));
     }
   };
-
-  useEffect(() => {
-    if (count === 108) {
-      triggerDeepHardwarePulse([0, 1200, 80, 1500]);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-      setTimeout(() => {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
-      }, 400);
-    }
-  }, [count]);
 
   const todayLabel = new Date().toLocaleDateString();
   const progressPercent = Math.min(100, Math.max(0, (count / 108) * 100));
