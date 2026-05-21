@@ -92,14 +92,27 @@ const pulse = (pattern: number | number[]) => {
 if (Platform.OS !== 'web') {
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
-      shouldShowAlert: false,
-      shouldShowBanner: false,
+      shouldShowAlert: true,
+      shouldShowBanner: true,
       shouldShowList: true,
-      shouldPlaySound: false,
+      shouldPlaySound: true,
       shouldSetBadge: false,
     }),
   });
 }
+
+const configureAudio = async () => {
+  try {
+    await Audio.setAudioModeAsync({
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: true,
+      shouldDuckAndroid: false,
+      playThroughEarpieceAndroid: false,
+    });
+  } catch (error) {
+    console.log('Audio mode error:', error);
+  }
+};
 
 export function TimerProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -410,10 +423,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
     if (soundEnabledRef.current) {
       try {
+        await configureAudio();
         const sound = soundRef.current;
         if (sound) {
           await sound.stopAsync().catch(() => {});
           await sound.setPositionAsync(0).catch(() => {});
+          await sound.setVolumeAsync(0.95).catch(() => {});
+          await sound.setIsLoopingAsync(false).catch(() => {});
           await sound.playAsync();
           await new Promise<void>((resolve) => {
             let done = false;
@@ -426,7 +442,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
             const cutoff = setTimeout(async () => {
               await sound.stopAsync().catch(() => {});
               finish();
-            }, 3000);
+            }, 5000);
             sound.setOnPlaybackStatusUpdate((status) => {
               if (status.isLoaded && status.didJustFinish) {
                 clearTimeout(cutoff);
@@ -540,15 +556,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void (async () => {
       try {
-        await Audio.setAudioModeAsync({
-          playsInSilentModeIOS: true,
-          staysActiveInBackground: true,
-          shouldDuckAndroid: false,
-          playThroughEarpieceAndroid: false,
-        });
+        await configureAudio();
         const { sound } = await Audio.Sound.createAsync(
           require('../assets/om_complete.mp3'),
-          { shouldPlay: false, isLooping: false, volume: 0.85 }
+          { shouldPlay: false, isLooping: false, volume: 0.95 }
         );
         soundRef.current = sound;
       } catch {}

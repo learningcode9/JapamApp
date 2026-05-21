@@ -185,6 +185,10 @@ export default function SettingsScreen() {
             <Switch value={repetitionSoundEnabled} onValueChange={toggleRepetitionSound} />
           </View>
 
+          <View style={styles.helpNote}>
+            <Text style={styles.helpNoteText}>For reliable completion alerts, please enable notifications.</Text>
+          </View>
+
           <View style={styles.card}>
             <View style={styles.textBlock}>
               <Text style={styles.label}>Vibration</Text>
@@ -275,6 +279,8 @@ const styles = StyleSheet.create({
   logoutTextButton: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(153, 27, 27, 0.18)', backgroundColor: 'rgba(153, 27, 27, 0.06)' },
   logoutTextButtonText: { color: '#b91c1c', fontSize: 15, fontWeight: '800' },
   cardStack: { gap: 12 },
+  helpNote: { backgroundColor: 'rgba(255, 255, 255, 0.5)', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(15, 118, 110, 0.12)' },
+  helpNoteText: { color: '#547071', fontSize: 15, lineHeight: 21, fontWeight: '700' },
   helpCard: { backgroundColor: 'rgba(255, 255, 255, 0.66)', borderRadius: 20, padding: 16, borderWidth: 1, borderColor: 'rgba(15, 118, 110, 0.12)' },
   helpTitle: { color: '#12383c', fontSize: 18, fontWeight: '800', marginBottom: 6 },
   helpSubTitle: { color: '#0f8a87', fontSize: 14, fontWeight: '700', marginBottom: 10 },
