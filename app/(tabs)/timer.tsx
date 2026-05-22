@@ -37,8 +37,6 @@ const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
 const USER_EMAIL_KEY = 'userEmail';
 const AUTH_PENDING_KEY = 'authPending';
-const TOTAL_KEY = 'totalCount';
-const TOTAL_DATE_KEY = 'totalDate';
 
 type Session = {
   date: string;
@@ -48,8 +46,6 @@ type Session = {
   manual?: boolean;
   userId?: string;
 };
-
-const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
 
 const getLocalDateKey = (date = new Date()) => {
   const y = date.getFullYear();
@@ -123,20 +119,7 @@ export default function TimerScreen() {
       totalByDay.set(dayKey, (totalByDay.get(dayKey) || 0) + totalCount);
     });
 
-    let storedTodayTotal = 0;
-    if (userId) {
-      const storedDate = await AsyncStorage.getItem(getUserStorageKey(TOTAL_DATE_KEY, userId));
-      if (storedDate === todayKey) {
-        storedTodayTotal = Number((await AsyncStorage.getItem(getUserStorageKey(TOTAL_KEY, userId))) || '0');
-      }
-    } else {
-      const storedDate = await AsyncStorage.getItem(TOTAL_DATE_KEY);
-      if (storedDate === todayKey) {
-        storedTodayTotal = Number((await AsyncStorage.getItem(TOTAL_KEY)) || '0');
-      }
-    }
-
-    const safeTodayTotal = Math.max(storedTodayTotal, totalByDay.get(todayKey) || 0);
+    const safeTodayTotal = totalByDay.get(todayKey) || 0;
     if (safeTodayTotal > 0) totalByDay.set(todayKey, safeTodayTotal);
 
     const activeDays = new Set([...totalByDay.entries()].filter(([, total]) => total > 0).map(([day]) => day));

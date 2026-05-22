@@ -29,18 +29,6 @@ import {
 
 WebBrowser.maybeCompleteAuthSession();
 
-if (Platform.OS !== 'web') {
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowAlert: false,
-      shouldShowBanner: false,
-      shouldShowList: true,
-      shouldPlaySound: false,
-      shouldSetBadge: false,
-    }),
-  });
-}
-
 type Session = {
   date: string;
   malas: number;
@@ -73,6 +61,10 @@ const triggerDeepHardwarePulse = (durationOrPattern: number | number[]) => {
 const COUNT_KEY = 'count';
 const MALAS_KEY = 'malas';
 const TOTAL_KEY = 'totalCount';
+const MANUAL_COUNT_KEY = 'manualTapCount';
+const MANUAL_MALAS_KEY = 'manualTapMalas';
+const MANUAL_TOTAL_KEY = 'manualTapTotal';
+const MANUAL_TOTAL_DATE_KEY = 'manualTapTotalDate';
 const HISTORY_KEY = 'history';
 const JAPAM_NAME_KEY = 'japamName';
 const LAST_OPEN_DATE_KEY = 'lastOpenDate';
@@ -191,6 +183,8 @@ export default function JapamMain() {
   const suppressTimerSaveRef = useRef(false);
   const dbTotalSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const timerCloudLastSavedAtRef = useRef(0);
+  const localTimerSaveThrottleRef = useRef(0);
+  const lastSavedIsRunningRef = useRef(false);
   const timerStartedAtRef = useRef<number | null>(null);
   const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoRepeatTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -198,8 +192,7 @@ export default function JapamMain() {
   const completedLoopMalasRef = useRef(0);
   const rippleAnim = useRef(new Animated.Value(0)).current;
   const isSavingSessionRef = useRef(false);
-  const normalCompleteSoundRef = useRef<Audio.Sound | null>(null);
-  const finalCompleteSoundRef = useRef<Audio.Sound | null>(null);
+  const completeSoundRef = useRef<Audio.Sound | null>(null);
   const timerNotifIdRef = useRef<string | null>(null);
   const timerNotifUpdateRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const userIdRef = useRef<string | null>(null);
@@ -225,21 +218,6 @@ export default function JapamMain() {
       console.log('Audio mode error:', error);
     }
   }, []);
-
-  const playTactileClick = async () => {
-    try {
-      await Audio.setAudioModeAsync({
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
-      });
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: 'asset:/sounds/EffectTick.mp3' },
-        { volume: 1.0, shouldCorrectPitch: false }
-      );
-      await sound.playAsync();
-    } catch {}
-  };
 
   const requestNotificationPermissionOnce = useCallback(async () => {
     try {
@@ -316,8 +294,7 @@ export default function JapamMain() {
   }, []);
 
   const hideTimerNotification = useCallback(async () => {
-    normalCompleteSoundRef.current?.stopAsync().catch(console.log);
-    finalCompleteSoundRef.current?.stopAsync().catch(console.log);
+    completeSoundRef.current?.stopAsync().catch(console.log);
 
     if (timerNotifUpdateRef.current) {
       clearInterval(timerNotifUpdateRef.current);
@@ -394,9 +371,17 @@ export default function JapamMain() {
         [getUserStorageKey(COUNT_KEY, savedUserId), String(currentCount)],
         [getUserStorageKey(MALAS_KEY, savedUserId), String(currentMalas)],
         [getUserStorageKey(TOTAL_DATE_KEY, savedUserId), todayKey],
+        [getUserStorageKey(MANUAL_TOTAL_KEY, savedUserId), String(currentTotal)],
+        [getUserStorageKey(MANUAL_COUNT_KEY, savedUserId), String(currentCount)],
+        [getUserStorageKey(MANUAL_MALAS_KEY, savedUserId), String(currentMalas)],
+        [getUserStorageKey(MANUAL_TOTAL_DATE_KEY, savedUserId), todayKey],
         [TOTAL_KEY, String(currentTotal)],
         [COUNT_KEY, String(currentCount)],
         [MALAS_KEY, String(currentMalas)],
+        [MANUAL_TOTAL_KEY, String(currentTotal)],
+        [MANUAL_COUNT_KEY, String(currentCount)],
+        [MANUAL_MALAS_KEY, String(currentMalas)],
+        [MANUAL_TOTAL_DATE_KEY, todayKey],
       ]);
 
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -518,11 +503,19 @@ export default function JapamMain() {
       await AsyncStorage.setItem(TOTAL_KEY, String(safeTotal));
       await AsyncStorage.setItem(MALAS_KEY, String(nextMalas));
       await AsyncStorage.setItem(COUNT_KEY, String(nextCount));
+      await AsyncStorage.setItem(MANUAL_TOTAL_KEY, String(safeTotal));
+      await AsyncStorage.setItem(MANUAL_MALAS_KEY, String(nextMalas));
+      await AsyncStorage.setItem(MANUAL_COUNT_KEY, String(nextCount));
+      await AsyncStorage.setItem(MANUAL_TOTAL_DATE_KEY, getLocalDateKey());
 
       if (activeUserId) {
         await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, activeUserId), String(safeTotal));
         await AsyncStorage.setItem(getUserStorageKey(MALAS_KEY, activeUserId), String(nextMalas));
         await AsyncStorage.setItem(getUserStorageKey(COUNT_KEY, activeUserId), String(nextCount));
+        await AsyncStorage.setItem(getUserStorageKey(MANUAL_TOTAL_KEY, activeUserId), String(safeTotal));
+        await AsyncStorage.setItem(getUserStorageKey(MANUAL_MALAS_KEY, activeUserId), String(nextMalas));
+        await AsyncStorage.setItem(getUserStorageKey(MANUAL_COUNT_KEY, activeUserId), String(nextCount));
+        await AsyncStorage.setItem(getUserStorageKey(MANUAL_TOTAL_DATE_KEY, activeUserId), getLocalDateKey());
       }
     },
     []
@@ -555,7 +548,7 @@ export default function JapamMain() {
       });
 
       const todayKey = getLocalDateKey();
-      if ((options?.todayTotal ?? totalRef.current) > 0) {
+      if ((options?.todayTotal ?? 0) > 0) {
         activeDays.add(todayKey);
       }
 
@@ -646,25 +639,30 @@ export default function JapamMain() {
   const restoreTodayTotal = useCallback(async (options?: { preserveManualCount?: boolean }) => {
     const preserveManualCount = Boolean(options?.preserveManualCount);
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    const todayKey = getLocalDateKey();
+
+    const getManualStoredTotal = async (userId: string) => {
+      const manualDate = await AsyncStorage.getItem(getUserStorageKey(MANUAL_TOTAL_DATE_KEY, userId));
+      if (manualDate === todayKey) {
+        return Number((await AsyncStorage.getItem(getUserStorageKey(MANUAL_TOTAL_KEY, userId))) || '0');
+      }
+
+      // Backward compatibility for users who already had manual progress saved
+      // before the dedicated manual storage keys existed.
+      const legacyDate = await AsyncStorage.getItem(getUserStorageKey(TOTAL_DATE_KEY, userId));
+      if (manualDate === null && legacyDate === todayKey) {
+        return Number((await AsyncStorage.getItem(getUserStorageKey(TOTAL_KEY, userId))) || '0');
+      }
+
+      return 0;
+    };
 
     if (savedUserId) {
-      const todayKey = getLocalDateKey();
+      const localStoredTotal = await getManualStoredTotal(savedUserId);
 
-      // Show local data immediately for responsive UI
-      const storedTotalDate = await AsyncStorage.getItem(getUserStorageKey(TOTAL_DATE_KEY, savedUserId));
-      const localStoredTotal =
-        storedTotalDate === todayKey
-          ? Number((await AsyncStorage.getItem(getUserStorageKey(TOTAL_KEY, savedUserId))) || '0')
-          : 0;
-
-      if (localStoredTotal > 0) {
-        if (!preserveManualCount) {
-          await restoreTotal(localStoredTotal, { userId: savedUserId });
-          totalRef.current = localStoredTotal;
-        } else {
-          setMalas(Math.floor(localStoredTotal / 108));
-          setTotal(localStoredTotal);
-        }
+      if (localStoredTotal > 0 && !preserveManualCount) {
+        await restoreTotal(localStoredTotal, { userId: savedUserId });
+        totalRef.current = localStoredTotal;
       }
 
       try {
@@ -713,46 +711,31 @@ export default function JapamMain() {
             JSON.stringify([...filteredUserSessions, ...otherUserSessions])
           );
 
-          // localStoredTotal is the source of truth for manual count (saved on every tap).
-          // Fall back to Supabase history sum only when localStored is 0 (e.g. fresh install).
           const remoteHistoryTotal = filteredUserSessions
             .filter((s) => getLocalDateKey(new Date(s.date)) === todayKey)
             .reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
 
-          const safeTotal = Math.max(localStoredTotal, remoteHistoryTotal);
           if (!preserveManualCount) {
-            await restoreTotal(safeTotal, { userId: savedUserId });
-            totalRef.current = safeTotal;
-          } else {
-            setMalas(Math.floor(safeTotal / 108));
-            setTotal(safeTotal);
+            await restoreTotal(localStoredTotal, { userId: savedUserId });
+            totalRef.current = localStoredTotal;
           }
-          await refreshDayStreak({ userId: savedUserId, todayTotal: safeTotal });
+          await refreshDayStreak({ userId: savedUserId, todayTotal: remoteHistoryTotal });
         } else {
-          // Supabase unreachable — use locally saved count (never go below what was tapped)
           const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
-          const safeTotal = Math.max(localStoredTotal, localHistoryTotal);
           if (!preserveManualCount) {
-            await restoreTotal(safeTotal, { userId: savedUserId });
-            totalRef.current = safeTotal;
-          } else {
-            setMalas(Math.floor(safeTotal / 108));
-            setTotal(safeTotal);
+            await restoreTotal(localStoredTotal, { userId: savedUserId });
+            totalRef.current = localStoredTotal;
           }
-          await refreshDayStreak({ userId: savedUserId, todayTotal: safeTotal });
+          await refreshDayStreak({ userId: savedUserId, todayTotal: localHistoryTotal });
         }
       } catch (error) {
         console.log('Stats sync error, using local data:', error);
         const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
-        const safeTotal = Math.max(localStoredTotal, localHistoryTotal);
         if (!preserveManualCount) {
-          await restoreTotal(safeTotal, { userId: savedUserId });
-          totalRef.current = safeTotal;
-        } else {
-          setMalas(Math.floor(safeTotal / 108));
-          setTotal(safeTotal);
+          await restoreTotal(localStoredTotal, { userId: savedUserId });
+          totalRef.current = localStoredTotal;
         }
-        await refreshDayStreak({ userId: savedUserId, todayTotal: safeTotal });
+        await refreshDayStreak({ userId: savedUserId, todayTotal: localHistoryTotal });
       }
 
       setHasRestoredTotal(true);
@@ -847,25 +830,17 @@ export default function JapamMain() {
       try {
         await configureAudio();
 
-        const [normalSound, finalSound] = await Promise.all([
-          Audio.Sound.createAsync(require('../../assets/om_complete.mp3'), {
-            shouldPlay: false,
-            volume: 0.9,
-          }),
-          Audio.Sound.createAsync(require('../../assets/om_complete.mp3'), {
-            shouldPlay: false,
-            volume: 0.9,
-          }),
-        ]);
+        const { sound: normalSound } = await Audio.Sound.createAsync(
+          require('../../assets/om_complete.mp3'),
+          { shouldPlay: false, volume: 0.9 }
+        );
 
         if (!isMounted) {
-          await normalSound.sound.unloadAsync().catch(console.log);
-          await finalSound.sound.unloadAsync().catch(console.log);
+          await normalSound.unloadAsync().catch(console.log);
           return;
         }
 
-        normalCompleteSoundRef.current = normalSound.sound;
-        finalCompleteSoundRef.current = finalSound.sound;
+        completeSoundRef.current = normalSound;
       } catch (error) {
         console.log('Sound preload error:', error);
       }
@@ -875,10 +850,8 @@ export default function JapamMain() {
 
     return () => {
       isMounted = false;
-      normalCompleteSoundRef.current?.unloadAsync().catch(console.log);
-      finalCompleteSoundRef.current?.unloadAsync().catch(console.log);
-      normalCompleteSoundRef.current = null;
-      finalCompleteSoundRef.current = null;
+      completeSoundRef.current?.unloadAsync().catch(console.log);
+      completeSoundRef.current = null;
     };
   }, [configureAudio]);
 
@@ -911,25 +884,37 @@ export default function JapamMain() {
 
   useEffect(() => {
     if (!hasRestoredTimer || suppressTimerSaveRef.current) return;
+
+    const isRunningChanged = lastSavedIsRunningRef.current !== isRunning;
+    const now = Date.now();
+    if (!isRunningChanged && isRunning && now - localTimerSaveThrottleRef.current < 5000) return;
+
+    lastSavedIsRunningRef.current = isRunning;
+    localTimerSaveThrottleRef.current = now;
+
     void (async () => {
-      await AsyncStorage.setItem(TIMER_SECONDS_KEY, String(seconds));
-      await AsyncStorage.setItem(TIMER_RUNNING_KEY, String(isRunning));
-      await AsyncStorage.setItem(TIMER_TARGET_KEY, String(targetSeconds));
-      await AsyncStorage.setItem(TIMER_MINUTES_KEY, minutesInput);
-      await AsyncStorage.setItem(TIMER_LOOP_KEY, String(loopTimer));
-
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      const pairs: [string, string][] = [
+        [TIMER_SECONDS_KEY, String(seconds)],
+        [TIMER_RUNNING_KEY, String(isRunning)],
+        [TIMER_TARGET_KEY, String(targetSeconds)],
+        [TIMER_MINUTES_KEY, minutesInput],
+        [TIMER_LOOP_KEY, String(loopTimer)],
+      ];
+      if (savedUserId) {
+        pairs.push(
+          [getUserStorageKey(TIMER_SECONDS_KEY, savedUserId), String(seconds)],
+          [getUserStorageKey(TIMER_RUNNING_KEY, savedUserId), String(isRunning)],
+          [getUserStorageKey(TIMER_TARGET_KEY, savedUserId), String(targetSeconds)],
+          [getUserStorageKey(TIMER_MINUTES_KEY, savedUserId), minutesInput],
+          [getUserStorageKey(TIMER_LOOP_KEY, savedUserId), String(loopTimer)],
+        );
+      }
+      await AsyncStorage.multiSet(pairs);
+
       if (!savedUserId) return;
-
-      await AsyncStorage.setItem(getUserStorageKey(TIMER_SECONDS_KEY, savedUserId), String(seconds));
-      await AsyncStorage.setItem(getUserStorageKey(TIMER_RUNNING_KEY, savedUserId), String(isRunning));
-      await AsyncStorage.setItem(getUserStorageKey(TIMER_TARGET_KEY, savedUserId), String(targetSeconds));
-      await AsyncStorage.setItem(getUserStorageKey(TIMER_MINUTES_KEY, savedUserId), minutesInput);
-      await AsyncStorage.setItem(getUserStorageKey(TIMER_LOOP_KEY, savedUserId), String(loopTimer));
-
-      const now = Date.now();
-      if (isRunning && now - timerCloudLastSavedAtRef.current < 10000) return;
-      timerCloudLastSavedAtRef.current = now;
+      if (isRunning && Date.now() - timerCloudLastSavedAtRef.current < 10000) return;
+      timerCloudLastSavedAtRef.current = Date.now();
       await saveTimerStateToSupabase(savedUserId, { seconds, isRunning, targetSeconds, minutesInput, loopTimer });
     })();
   }, [seconds, isRunning, targetSeconds, minutesInput, loopTimer, hasRestoredTimer]);
@@ -1040,8 +1025,7 @@ export default function JapamMain() {
       if (dbTotalSaveTimeoutRef.current) {
         clearTimeout(dbTotalSaveTimeoutRef.current);
       }
-      normalCompleteSoundRef.current?.unloadAsync().catch(console.log);
-      finalCompleteSoundRef.current?.unloadAsync().catch(console.log);
+      completeSoundRef.current?.unloadAsync().catch(console.log);
       clearTimerHandles();
     };
   }, [clearTimerHandles]);
@@ -1214,13 +1198,21 @@ export default function JapamMain() {
       await AsyncStorage.setItem(COUNT_KEY, String(count));
       await AsyncStorage.setItem(MALAS_KEY, String(malas));
       await AsyncStorage.setItem(TOTAL_KEY, String(total));
+      await AsyncStorage.setItem(MANUAL_COUNT_KEY, String(count));
+      await AsyncStorage.setItem(MANUAL_MALAS_KEY, String(malas));
+      await AsyncStorage.setItem(MANUAL_TOTAL_KEY, String(total));
+      await AsyncStorage.setItem(MANUAL_TOTAL_DATE_KEY, getLocalDateKey());
 
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
       if (savedUserId) {
         await AsyncStorage.setItem(getUserStorageKey(COUNT_KEY, savedUserId), String(count));
         await AsyncStorage.setItem(getUserStorageKey(MALAS_KEY, savedUserId), String(malas));
         await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, savedUserId), String(total));
-        await refreshDayStreak({ userId: savedUserId, todayTotal: total });
+        await AsyncStorage.setItem(getUserStorageKey(MANUAL_COUNT_KEY, savedUserId), String(count));
+        await AsyncStorage.setItem(getUserStorageKey(MANUAL_MALAS_KEY, savedUserId), String(malas));
+        await AsyncStorage.setItem(getUserStorageKey(MANUAL_TOTAL_KEY, savedUserId), String(total));
+        await AsyncStorage.setItem(getUserStorageKey(MANUAL_TOTAL_DATE_KEY, savedUserId), getLocalDateKey());
+        await refreshDayStreak({ userId: savedUserId, todayTotal: 0 });
 
         if (dbTotalSaveTimeoutRef.current) {
           clearTimeout(dbTotalSaveTimeoutRef.current);
@@ -1268,9 +1260,7 @@ export default function JapamMain() {
   const playCompleteSound = async (variant: 'normal' | 'final' = 'normal') => {
     try {
       await configureAudio();
-      const sound = variant === 'final'
-        ? finalCompleteSoundRef.current
-        : normalCompleteSoundRef.current;
+      const sound = completeSoundRef.current;
 
       if (!sound) return;
 
@@ -1357,27 +1347,12 @@ export default function JapamMain() {
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
       if (url && key) {
-        const removeSyncedLocalSession = async () => {
-          const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
-          const latestHistory: Session[] = latestRaw ? JSON.parse(latestRaw) : [];
-          const withoutSyncedSession = latestHistory.filter((item) => {
-            return !(
-              item.userId === session.userId &&
-              item.date === session.date &&
-              Number(item.malas) === session.malas &&
-              Number(item.totalCount) === session.totalCount &&
-              Number(item.duration) === session.duration
-            );
-          });
-          await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(withoutSyncedSession));
-          await AsyncStorage.setItem(HISTORY_SYNC_VERSION_KEY, String(Date.now()));
-          DeviceEventEmitter.emit('japam-history-updated', { userId });
-          if (Platform.OS === 'web' && typeof window !== 'undefined') {
-            window.dispatchEvent(new Event('japam-history-updated'));
-          }
+        const baseBody = {
+          user_name: savedUserName || userName,
+          malas: sessionMalas,
+          count: sessionTotal,
+          created_at: session.date,
         };
-
-        const baseBody = { user_name: savedUserName || userName, malas: sessionMalas, count: sessionTotal };
         const postHistory = async (body: Record<string, unknown>) => {
           const res = await fetch(`${url}/rest/v1/japam_history`, {
             method: 'POST',
@@ -1387,10 +1362,7 @@ export default function JapamMain() {
           return res.ok;
         };
         const savedWithUserId = await postHistory({ user_id: userId, ...baseBody });
-        const savedWithoutUserId = savedWithUserId ? false : await postHistory(baseBody);
-        if (savedWithUserId || savedWithoutUserId) {
-          await removeSyncedLocalSession();
-        }
+        if (!savedWithUserId) await postHistory(baseBody);
       }
     } catch (error) {
       console.log('Supabase save error:', error);
@@ -1442,11 +1414,7 @@ export default function JapamMain() {
     // Always notify — covers background completion and acts as status feedback
     void notifyCompletionFallback(variant);
   
-    if (!vibrationEnabled) {
-      console.log('completion vibration skipped: disabled');
-      return;
-    }
-    console.log('completion vibration triggered');
+    if (!vibrationEnabled) return;
 
     try {
       if (Platform.OS === 'web') {
@@ -1510,6 +1478,10 @@ export default function JapamMain() {
         await AsyncStorage.setItem(getUserStorageKey(MALAS_KEY, savedUserId), String(nextMalas));
         await AsyncStorage.setItem(getUserStorageKey(COUNT_KEY, savedUserId), String(nextCount));
         await AsyncStorage.setItem(getUserStorageKey(TOTAL_DATE_KEY, savedUserId), todayKey);
+        await AsyncStorage.setItem(getUserStorageKey(MANUAL_TOTAL_KEY, savedUserId), String(safeTotal));
+        await AsyncStorage.setItem(getUserStorageKey(MANUAL_MALAS_KEY, savedUserId), String(nextMalas));
+        await AsyncStorage.setItem(getUserStorageKey(MANUAL_COUNT_KEY, savedUserId), String(nextCount));
+        await AsyncStorage.setItem(getUserStorageKey(MANUAL_TOTAL_DATE_KEY, savedUserId), todayKey);
       }
     })();
 
@@ -1768,6 +1740,10 @@ export default function JapamMain() {
       TOTAL_KEY,
       COUNT_KEY,
       MALAS_KEY,
+      MANUAL_TOTAL_KEY,
+      MANUAL_COUNT_KEY,
+      MANUAL_MALAS_KEY,
+      MANUAL_TOTAL_DATE_KEY,
       LAST_TOTAL_KEY,
     ]);
 

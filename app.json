@@ -30,7 +30,8 @@
     },
 
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.japamapp.mantrajapam"
     },
 
     "android": {
@@ -38,6 +39,7 @@
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundColor": "#f5fafa"
       },
+      "package": "com.japamapp.mantrajapam",
       "permissions": ["android.permission.VIBRATE"]
     },
 

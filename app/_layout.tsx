@@ -1,5 +1,6 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import Constants from 'expo-constants';
+import * as Notifications from 'expo-notifications';
 import * as Updates from 'expo-updates';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -17,6 +18,25 @@ export const unstable_settings = {
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+    Notifications.setNotificationHandler({
+      handleNotification: async (notification) => {
+        const content = notification.request.content as any;
+        const isCompletion =
+          content.channelId === 'japam-complete' ||
+          String(content.title ?? '').toLowerCase().includes('complete');
+        return {
+          shouldShowAlert: isCompletion,
+          shouldShowBanner: isCompletion,
+          shouldShowList: true,
+          shouldPlaySound: isCompletion,
+          shouldSetBadge: false,
+        };
+      },
+    });
+  }, []);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;

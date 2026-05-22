@@ -30,18 +30,6 @@ import {
 
 WebBrowser.maybeCompleteAuthSession();
 
-if (Platform.OS !== 'web') {
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowAlert: false,
-      shouldShowBanner: false,
-      shouldShowList: true,
-      shouldPlaySound: false,
-      shouldSetBadge: false,
-    }),
-  });
-}
-
 type Session = {
   date: string;
   malas: number;
@@ -193,6 +181,8 @@ export default function JapamMain() {
   const suppressTimerSaveRef = useRef(false);
   const dbTotalSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const timerCloudLastSavedAtRef = useRef(0);
+  const localTimerSaveThrottleRef = useRef(0);
+  const lastSavedIsRunningRef = useRef(false);
   const timerStartedAtRef = useRef<number | null>(null);
   const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoRepeatTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -201,8 +191,7 @@ export default function JapamMain() {
   const deferredInstallPromptRef = useRef<any>(null);
   const rippleAnim = useRef(new Animated.Value(0)).current;
   const isSavingSessionRef = useRef(false);
-  const normalCompleteSoundRef = useRef<Audio.Sound | null>(null);
-  const finalCompleteSoundRef = useRef<Audio.Sound | null>(null);
+  const completeSoundRef = useRef<Audio.Sound | null>(null);
   const timerNotifIdRef = useRef<string | null>(null);
   const timerNotifUpdateRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const userIdRef = useRef<string | null>(null);
@@ -304,8 +293,7 @@ export default function JapamMain() {
   }, []);
 
   const hideTimerNotification = useCallback(async () => {
-    normalCompleteSoundRef.current?.stopAsync().catch(console.log);
-    finalCompleteSoundRef.current?.stopAsync().catch(console.log);
+    completeSoundRef.current?.stopAsync().catch(console.log);
 
     if (timerNotifUpdateRef.current) {
       clearInterval(timerNotifUpdateRef.current);
@@ -537,7 +525,7 @@ export default function JapamMain() {
       });
 
       const todayKey = getLocalDateKey();
-      if ((options?.todayTotal ?? totalRef.current) > 0) {
+      if ((options?.todayTotal ?? 0) > 0) {
         activeDays.add(todayKey);
       }
 
@@ -681,8 +669,6 @@ export default function JapamMain() {
             JSON.stringify([...filteredRemote, ...otherUserSessions])
           );
 
-          // localStoredTotal is the source of truth for manual count (saved on every tap).
-          // Fall back to Supabase history sum only when localStored is 0 (e.g. fresh install).
           const remoteHistoryTotal = filteredRemote
             .filter((s) => getLocalDateKey(new Date(s.date)) === todayKey)
             .reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
@@ -825,25 +811,17 @@ export default function JapamMain() {
       try {
         await configureAudio();
 
-        const [normalSound, finalSound] = await Promise.all([
-          Audio.Sound.createAsync(require('../../assets/om_complete.mp3'), {
-            shouldPlay: false,
-            volume: 0.9,
-          }),
-          Audio.Sound.createAsync(require('../../assets/om_complete.mp3'), {
-            shouldPlay: false,
-            volume: 0.9,
-          }),
-        ]);
+        const { sound: normalSound } = await Audio.Sound.createAsync(
+          require('../../assets/om_complete.mp3'),
+          { shouldPlay: false, volume: 0.9 }
+        );
 
         if (!isMounted) {
-          await normalSound.sound.unloadAsync().catch(console.log);
-          await finalSound.sound.unloadAsync().catch(console.log);
+          await normalSound.unloadAsync().catch(console.log);
           return;
         }
 
-        normalCompleteSoundRef.current = normalSound.sound;
-        finalCompleteSoundRef.current = finalSound.sound;
+        completeSoundRef.current = normalSound;
       } catch (error) {
         console.log('Sound preload error:', error);
       }
@@ -853,10 +831,8 @@ export default function JapamMain() {
 
     return () => {
       isMounted = false;
-      normalCompleteSoundRef.current?.unloadAsync().catch(console.log);
-      finalCompleteSoundRef.current?.unloadAsync().catch(console.log);
-      normalCompleteSoundRef.current = null;
-      finalCompleteSoundRef.current = null;
+      completeSoundRef.current?.unloadAsync().catch(console.log);
+      completeSoundRef.current = null;
     };
   }, [configureAudio]);
 
@@ -889,25 +865,37 @@ export default function JapamMain() {
 
   useEffect(() => {
     if (!hasRestoredTimer || suppressTimerSaveRef.current) return;
+
+    const isRunningChanged = lastSavedIsRunningRef.current !== isRunning;
+    const now = Date.now();
+    if (!isRunningChanged && isRunning && now - localTimerSaveThrottleRef.current < 5000) return;
+
+    lastSavedIsRunningRef.current = isRunning;
+    localTimerSaveThrottleRef.current = now;
+
     void (async () => {
-      await AsyncStorage.setItem(TIMER_SECONDS_KEY, String(seconds));
-      await AsyncStorage.setItem(TIMER_RUNNING_KEY, String(isRunning));
-      await AsyncStorage.setItem(TIMER_TARGET_KEY, String(targetSeconds));
-      await AsyncStorage.setItem(TIMER_MINUTES_KEY, minutesInput);
-      await AsyncStorage.setItem(TIMER_LOOP_KEY, String(loopTimer));
-
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      const pairs: [string, string][] = [
+        [TIMER_SECONDS_KEY, String(seconds)],
+        [TIMER_RUNNING_KEY, String(isRunning)],
+        [TIMER_TARGET_KEY, String(targetSeconds)],
+        [TIMER_MINUTES_KEY, minutesInput],
+        [TIMER_LOOP_KEY, String(loopTimer)],
+      ];
+      if (savedUserId) {
+        pairs.push(
+          [getUserStorageKey(TIMER_SECONDS_KEY, savedUserId), String(seconds)],
+          [getUserStorageKey(TIMER_RUNNING_KEY, savedUserId), String(isRunning)],
+          [getUserStorageKey(TIMER_TARGET_KEY, savedUserId), String(targetSeconds)],
+          [getUserStorageKey(TIMER_MINUTES_KEY, savedUserId), minutesInput],
+          [getUserStorageKey(TIMER_LOOP_KEY, savedUserId), String(loopTimer)],
+        );
+      }
+      await AsyncStorage.multiSet(pairs);
+
       if (!savedUserId) return;
-
-      await AsyncStorage.setItem(getUserStorageKey(TIMER_SECONDS_KEY, savedUserId), String(seconds));
-      await AsyncStorage.setItem(getUserStorageKey(TIMER_RUNNING_KEY, savedUserId), String(isRunning));
-      await AsyncStorage.setItem(getUserStorageKey(TIMER_TARGET_KEY, savedUserId), String(targetSeconds));
-      await AsyncStorage.setItem(getUserStorageKey(TIMER_MINUTES_KEY, savedUserId), minutesInput);
-      await AsyncStorage.setItem(getUserStorageKey(TIMER_LOOP_KEY, savedUserId), String(loopTimer));
-
-      const now = Date.now();
-      if (isRunning && now - timerCloudLastSavedAtRef.current < 10000) return;
-      timerCloudLastSavedAtRef.current = now;
+      if (isRunning && Date.now() - timerCloudLastSavedAtRef.current < 10000) return;
+      timerCloudLastSavedAtRef.current = Date.now();
       await saveTimerStateToSupabase(savedUserId, { seconds, isRunning, targetSeconds, minutesInput, loopTimer });
     })();
   }, [seconds, isRunning, targetSeconds, minutesInput, loopTimer, hasRestoredTimer]);
@@ -1018,8 +1006,7 @@ export default function JapamMain() {
       if (dbTotalSaveTimeoutRef.current) {
         clearTimeout(dbTotalSaveTimeoutRef.current);
       }
-      normalCompleteSoundRef.current?.unloadAsync().catch(console.log);
-      finalCompleteSoundRef.current?.unloadAsync().catch(console.log);
+      completeSoundRef.current?.unloadAsync().catch(console.log);
       clearTimerHandles();
     };
   }, [clearTimerHandles]);
@@ -1242,9 +1229,7 @@ export default function JapamMain() {
   const playCompleteSound = async (variant: 'normal' | 'final' = 'normal') => {
     try {
       await configureAudio();
-      const sound = variant === 'final'
-        ? finalCompleteSoundRef.current
-        : normalCompleteSoundRef.current;
+      const sound = completeSoundRef.current;
 
       if (!sound) return;
 
@@ -1331,7 +1316,12 @@ export default function JapamMain() {
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
       if (url && key) {
-        const baseBody = { user_name: savedUserName || userName, malas: sessionMalas, count: sessionTotal };
+        const baseBody = {
+          user_name: savedUserName || userName,
+          malas: sessionMalas,
+          count: sessionTotal,
+          created_at: session.date,
+        };
         const postHistory = async (body: Record<string, unknown>) => {
           const res = await fetch(`${url}/rest/v1/japam_history`, {
             method: 'POST',
@@ -1392,11 +1382,7 @@ export default function JapamMain() {
     // Always notify — covers background completion and acts as status feedback
     void notifyCompletionFallback(variant);
   
-    if (!vibrationEnabled) {
-      console.log('completion vibration skipped: disabled');
-      return;
-    }
-    console.log('completion vibration triggered');
+    if (!vibrationEnabled) return;
 
     try {
       if (Platform.OS === 'web') {

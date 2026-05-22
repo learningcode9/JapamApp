@@ -38,10 +38,6 @@ const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
-const TOTAL_KEY = 'totalCount';
-const COUNT_KEY = 'count';
-const MALAS_KEY = 'malas';
-const TOTAL_DATE_KEY = 'totalDate';
 
 export const STD_DURATIONS = [1, 3, 5, 10, 15];
 export const LOOP_OPTIONS = [1, 3, 5, 10];
@@ -49,13 +45,6 @@ export const LOOP_OPTIONS = [1, 3, 5, 10];
 const getUserKey = (key: string, uid: string) => `${key}:${uid}`;
 export const formatTimer = (s: number) =>
   `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
-
-const getLocalDateKey = (date = new Date()) => {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-};
 
 const getCurrentMalaLabel = (completedLoops: number, selectedLoops: number, runningOrPaused = true) => {
   const activeLoop = Math.min(selectedLoops, completedLoops + (runningOrPaused ? 1 : 0));
@@ -88,18 +77,6 @@ const pulse = (pattern: number | number[]) => {
     Vibration.vibrate(pattern as any);
   } catch {}
 };
-
-if (Platform.OS !== 'web') {
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowAlert: true,
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-    }),
-  });
-}
 
 const configureAudio = async () => {
   try {
@@ -292,28 +269,6 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       const history = raw ? JSON.parse(raw) : [];
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([session, ...history]));
 
-      if (uid) {
-        const todayKey = getLocalDateKey(now);
-        const storedTotalDate = await AsyncStorage.getItem(getUserKey(TOTAL_DATE_KEY, uid));
-        const previousTotal =
-          storedTotalDate === todayKey
-            ? Number((await AsyncStorage.getItem(getUserKey(TOTAL_KEY, uid))) || '0')
-            : 0;
-        const nextTotal = previousTotal + 108;
-        const nextMalas = Math.floor(nextTotal / 108);
-        const nextCount = nextTotal % 108;
-        await AsyncStorage.multiSet([
-          [getUserKey(TOTAL_DATE_KEY, uid), todayKey],
-          [getUserKey(TOTAL_KEY, uid), String(nextTotal)],
-          [getUserKey(MALAS_KEY, uid), String(nextMalas)],
-          [getUserKey(COUNT_KEY, uid), String(nextCount)],
-          [TOTAL_DATE_KEY, todayKey],
-          [TOTAL_KEY, String(nextTotal)],
-          [MALAS_KEY, String(nextMalas)],
-          [COUNT_KEY, String(nextCount)],
-        ]);
-      }
-
       DeviceEventEmitter.emit('japam-stats-updated');
       DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -334,27 +289,16 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           Authorization: `Bearer ${key}`,
           Prefer: 'return=minimal',
         },
-        body: JSON.stringify({ user_id: uid, user_name: userName, malas: 1, count: 108 }),
+        body: JSON.stringify({
+          user_id: uid,
+          user_name: userName,
+          malas: 1,
+          count: 108,
+          created_at: session.date,
+        }),
       });
 
-      if (response.ok) {
-        const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
-        const latestHistory = latestRaw ? JSON.parse(latestRaw) : [];
-        const withoutSyncedSession = latestHistory.filter((item: typeof session) => {
-          return !(
-            item.userId === session.userId &&
-            item.date === session.date &&
-            Number(item.malas) === session.malas &&
-            Number(item.totalCount) === session.totalCount &&
-            Number(item.duration) === session.duration
-          );
-        });
-        await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(withoutSyncedSession));
-        DeviceEventEmitter.emit('japam-history-updated', { userId: uid });
-        if (Platform.OS === 'web' && typeof window !== 'undefined') {
-          window.dispatchEvent(new Event('japam-history-updated'));
-        }
-      } else {
+      if (!response.ok) {
         console.log('Timer Supabase save error:', await response.text());
       }
     } catch (err) {
