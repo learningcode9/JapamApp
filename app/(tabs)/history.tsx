@@ -124,7 +124,6 @@ const dedupeSessions = (sessions: Session[]) => {
         dayKey,
         totalCount,
         itemMalas,
-        Number(item.duration) || 0,
       ].join(':');
       const existingTimes = nearTimerRows.get(nearKey) || [];
       const time = date.getTime();

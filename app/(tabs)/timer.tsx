@@ -101,7 +101,6 @@ const dedupeHistoryForStats = (history: Session[]) => {
         dayKey,
         totalCount,
         Number(item.malas) || 0,
-        Number(item.duration) || 0,
       ].join(':');
       const existingTimes = nearTimerRows.get(nearKey) || [];
       const time = date.getTime();
