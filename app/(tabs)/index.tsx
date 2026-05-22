@@ -3,9 +3,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Google from 'expo-auth-session/providers/google';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
-import * as Notifications from 'expo-notifications';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import * as Notifications from 'expo-notifications';
+import { useFocusEffect } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -58,17 +58,6 @@ type TimerStateRow = {
   minutes_input?: string | null;
   loop_timer?: boolean;
   updated_at?: string | null;
-};
-
-const triggerDeepHardwarePulse = (durationOrPattern: number | number[]) => {
-  if (Platform.OS === 'web') return;
-  try {
-    if (typeof durationOrPattern === 'number') {
-      Vibration.vibrate(durationOrPattern);
-    } else {
-      Vibration.vibrate(durationOrPattern);
-    }
-  } catch {}
 };
 
 const COUNT_KEY = 'count';
@@ -164,8 +153,6 @@ const isAuthPending = async () => {
 };
 
 export default function JapamMain() {
-  const router = useRouter();
-  const params = useLocalSearchParams<{ signin?: string }>();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [count, setCount] = useState(0);
   const [malas, setMalas] = useState(0);
@@ -241,21 +228,6 @@ export default function JapamMain() {
       console.log('Audio mode error:', error);
     }
   }, []);
-
-  const playTactileClick = async () => {
-    try {
-      await Audio.setAudioModeAsync({
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
-      });
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: 'asset:/sounds/EffectTick.mp3' },
-        { volume: 1.0, shouldCorrectPitch: false }
-      );
-      await sound.playAsync();
-    } catch {}
-  };
 
   const requestNotificationPermissionOnce = useCallback(async () => {
     try {
@@ -510,12 +482,6 @@ export default function JapamMain() {
     }, [])
   );
 
-  useEffect(() => {
-    if (params.signin === '1' && !userName && !isSigningIn) {
-      setShowUserModal(true);
-    }
-  }, [isSigningIn, params.signin, userName]);
-
   const restoreTotal = useCallback(
     async (nextTotal: number, options?: { userId?: string | null }) => {
       const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
@@ -659,8 +625,7 @@ export default function JapamMain() {
       .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
   }, []);
 
-  const restoreTodayTotal = useCallback(async (options?: { preserveManualCount?: boolean }) => {
-    const preserveManualCount = Boolean(options?.preserveManualCount);
+  const restoreTodayTotal = useCallback(async () => {
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
 
     if (savedUserId) {
@@ -674,13 +639,8 @@ export default function JapamMain() {
           : 0;
 
       if (localStoredTotal > 0) {
-        if (!preserveManualCount) {
-          await restoreTotal(localStoredTotal, { userId: savedUserId });
-          totalRef.current = localStoredTotal;
-        } else {
-          setMalas(Math.floor(localStoredTotal / 108));
-          setTotal(localStoredTotal);
-        }
+        await restoreTotal(localStoredTotal, { userId: savedUserId });
+        totalRef.current = localStoredTotal;
       }
 
       try {
@@ -709,65 +669,42 @@ export default function JapamMain() {
         }
 
         if (remoteSessions !== null) {
-          // Merge remote history with local same-user entries so a just-completed
-          // timer mala is not dropped while Supabase is still catching up.
+          // Sync remote history to local for History tab display
           const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
           const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
           const otherUserSessions = localHistory.filter((s) => s.userId !== savedUserId);
-          const sameUserLocalSessions = localHistory.filter((s) => s.userId === savedUserId);
-          const mergedMap = new Map<string, Session>();
-          [...remoteSessions, ...sameUserLocalSessions].forEach((session) => {
-            const key = `${session.date}-${session.totalCount}-${session.malas}`;
-            mergedMap.set(key, session);
-          });
-          const filteredUserSessions = [...mergedMap.values()].filter(
+          const filteredRemote = remoteSessions.filter(
             (s) => getLocalDateKey(new Date(s.date)) <= todayKey
           );
-
           await AsyncStorage.setItem(
             HISTORY_KEY,
-            JSON.stringify([...filteredUserSessions, ...otherUserSessions])
+            JSON.stringify([...filteredRemote, ...otherUserSessions])
           );
 
           // localStoredTotal is the source of truth for manual count (saved on every tap).
           // Fall back to Supabase history sum only when localStored is 0 (e.g. fresh install).
-          const remoteHistoryTotal = filteredUserSessions
+          const remoteHistoryTotal = filteredRemote
             .filter((s) => getLocalDateKey(new Date(s.date)) === todayKey)
             .reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
 
-          const safeTotal = Math.max(localStoredTotal, remoteHistoryTotal);
-          if (!preserveManualCount) {
-            await restoreTotal(safeTotal, { userId: savedUserId });
-            totalRef.current = safeTotal;
-          } else {
-            setMalas(Math.floor(safeTotal / 108));
-            setTotal(safeTotal);
-          }
+          const safeTotal = remoteHistoryTotal;
+          await restoreTotal(safeTotal, { userId: savedUserId });
+          totalRef.current = safeTotal;
           await refreshDayStreak({ userId: savedUserId, todayTotal: safeTotal });
         } else {
           // Supabase unreachable — use locally saved count (never go below what was tapped)
           const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
-          const safeTotal = Math.max(localStoredTotal, localHistoryTotal);
-          if (!preserveManualCount) {
-            await restoreTotal(safeTotal, { userId: savedUserId });
-            totalRef.current = safeTotal;
-          } else {
-            setMalas(Math.floor(safeTotal / 108));
-            setTotal(safeTotal);
-          }
+          const safeTotal = localHistoryTotal;
+          await restoreTotal(safeTotal, { userId: savedUserId });
+          totalRef.current = safeTotal;
           await refreshDayStreak({ userId: savedUserId, todayTotal: safeTotal });
         }
       } catch (error) {
         console.log('Stats sync error, using local data:', error);
         const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
-        const safeTotal = Math.max(localStoredTotal, localHistoryTotal);
-        if (!preserveManualCount) {
-          await restoreTotal(safeTotal, { userId: savedUserId });
-          totalRef.current = safeTotal;
-        } else {
-          setMalas(Math.floor(safeTotal / 108));
-          setTotal(safeTotal);
-        }
+        const safeTotal = localHistoryTotal;
+        await restoreTotal(safeTotal, { userId: savedUserId });
+        totalRef.current = safeTotal;
         await refreshDayStreak({ userId: savedUserId, todayTotal: safeTotal });
       }
 
@@ -776,13 +713,8 @@ export default function JapamMain() {
     }
 
     // Not logged in
-    if (!preserveManualCount) {
-      await restoreTotal(0, { userId: null });
-      totalRef.current = 0;
-    } else {
-      setMalas(0);
-      setTotal(0);
-    }
+    await restoreTotal(0, { userId: null });
+    totalRef.current = 0;
     await refreshDayStreak({ userId: null, todayTotal: 0 });
     setHasRestoredTotal(true);
   }, [getLocalTodayTotalForUser, refreshDayStreak, restoreTotal]);
@@ -831,7 +763,7 @@ export default function JapamMain() {
 
   useEffect(() => {
     const onHistoryUpdated = () => {
-      void restoreTodayTotal({ preserveManualCount: true });
+      void restoreTodayTotal();
     };
 
     const historySubscription = DeviceEventEmitter.addListener('japam-history-updated', onHistoryUpdated);
@@ -1222,10 +1154,6 @@ export default function JapamMain() {
         }
         await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
         userIdRef.current = googleUserId;
-        DeviceEventEmitter.emit('japam-auth-updated');
-        if (Platform.OS === 'web' && typeof window !== 'undefined') {
-          window.dispatchEvent(new Event('japam-auth-updated'));
-        }
 
         await loadJapamNameFromSupabase(googleUserId);
         await restoreTodayTotal();
@@ -1403,26 +1331,6 @@ export default function JapamMain() {
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
       if (url && key) {
-        const removeSyncedLocalSession = async () => {
-          const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
-          const latestHistory: Session[] = latestRaw ? JSON.parse(latestRaw) : [];
-          const withoutSyncedSession = latestHistory.filter((item) => {
-            return !(
-              item.userId === session.userId &&
-              item.date === session.date &&
-              Number(item.malas) === session.malas &&
-              Number(item.totalCount) === session.totalCount &&
-              Number(item.duration) === session.duration
-            );
-          });
-          await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(withoutSyncedSession));
-          await AsyncStorage.setItem(HISTORY_SYNC_VERSION_KEY, String(Date.now()));
-          DeviceEventEmitter.emit('japam-history-updated', { userId });
-          if (Platform.OS === 'web' && typeof window !== 'undefined') {
-            window.dispatchEvent(new Event('japam-history-updated'));
-          }
-        };
-
         const baseBody = { user_name: savedUserName || userName, malas: sessionMalas, count: sessionTotal };
         const postHistory = async (body: Record<string, unknown>) => {
           const res = await fetch(`${url}/rest/v1/japam_history`, {
@@ -1433,10 +1341,7 @@ export default function JapamMain() {
           return res.ok;
         };
         const savedWithUserId = await postHistory({ user_id: userId, ...baseBody });
-        const savedWithoutUserId = savedWithUserId ? false : await postHistory(baseBody);
-        if (savedWithUserId || savedWithoutUserId) {
-          await removeSyncedLocalSession();
-        }
+        if (!savedWithUserId) await postHistory(baseBody);
       }
     } catch (error) {
       console.log('Supabase save error:', error);
@@ -1458,12 +1363,11 @@ export default function JapamMain() {
 
     if (Platform.OS === 'android') {
       Vibration.vibrate(200);
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
       return;
     }
 
     // iOS
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
   }, [vibrationEnabled]);
 
   const playCompletionAnimation = useCallback(() => {
@@ -1497,24 +1401,12 @@ export default function JapamMain() {
     try {
       if (Platform.OS === 'web') {
         if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
-          navigator.vibrate(variant === 'final' ? [300, 120, 300, 120, 500] : [200, 80, 200]);
+          navigator.vibrate([200, 80, 200]);
         }
         return;
       }
 
       if (Platform.OS === 'ios') {
-        if (variant === 'final') {
-          triggerDeepHardwarePulse([0, 300, 120, 300, 120, 500]);
-          await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-          setTimeout(() => {
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-          }, 320);
-          setTimeout(() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
-          }, 680);
-          return;
-        }
-
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setTimeout(() => {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(console.log);
@@ -1526,11 +1418,11 @@ export default function JapamMain() {
       }
 
       // Android: [0, 200, 80, 200] = start immediately, 200ms on, 80ms off, 200ms on
-      Vibration.vibrate(variant === 'final' ? [0, 300, 120, 300, 120, 500] : [0, 200, 80, 200]);
+      Vibration.vibrate([0, 200, 80, 200]);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     } catch (error) {
       console.log('Completion vibration error:', error);
-      try { Vibration.vibrate(variant === 'final' ? [0, 300, 120, 300, 120, 500] : [0, 200, 80, 200]); } catch {}
+      try { Vibration.vibrate([0, 200, 80, 200]); } catch {}
     }
   }, [notifyCompletionFallback, playCompletionAnimation, repetitionSoundEnabled, soundEnabled, vibrationEnabled]);
 
@@ -1571,31 +1463,27 @@ export default function JapamMain() {
 
   const handleTap = () => {
     if (!requireLogin()) return;
-
+  
     const now = Date.now();
     if (now - lastTapRef.current < 100) return;
     lastTapRef.current = now;
-
+  
     rippleAnim.setValue(0);
     Animated.timing(rippleAnim, {
       toValue: 1,
       duration: 700,
       useNativeDriver: true,
     }).start();
-
+  
     const newTotal = setCountersFromTotal(totalRef.current + 1);
     const newCount = newTotal % 108;
-
+  
     if (newCount === 0) {
       void saveSession(0, 1, 108, newTotal);
       void completeFeedback('final');
     } else {
       void tapFeedback();
     }
-  };
-
-  const openTimerPage = () => {
-    router.push('/timer' as never);
   };
 
   const handleStart = () => {
@@ -1809,10 +1697,6 @@ export default function JapamMain() {
     await AsyncStorage.removeItem(USER_NAME_KEY);
     await AsyncStorage.removeItem(USER_EMAIL_KEY);
     await AsyncStorage.removeItem(USER_ID_KEY);
-    DeviceEventEmitter.emit('japam-auth-updated');
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      window.dispatchEvent(new Event('japam-auth-updated'));
-    }
 
     await AsyncStorage.multiRemove([
       TOTAL_KEY,
@@ -1970,12 +1854,7 @@ export default function JapamMain() {
               ]}
             />
             <Pressable
-              hitSlop={{ top: 40, bottom: 40, left: 40, right: 40 }}
-              pressRetentionOffset={{ top: 45, bottom: 45, left: 45, right: 45 }}
-              onPress={() => {
-                triggerDeepHardwarePulse(55);
-                handleTap();
-              }}
+              onPress={handleTap}
               style={({ pressed }) => [
                 styles.progressPressable,
                 pressed && styles.progressPressed,
@@ -1989,6 +1868,33 @@ export default function JapamMain() {
               </View>
             </Pressable>
           </Animated.View>
+
+          <Pressable
+            style={({ pressed }) => [styles.primaryAction, pressed && styles.primaryActionPressed]}
+            onPress={isRunning ? handlePause : handleStart}
+          >
+            <Text style={styles.primaryActionText}>
+              {isRunning
+                ? `Pause Timer · ${formatTime(seconds)}`
+                : seconds > 0
+                  ? `Resume Japam · ${formatTime(seconds)}`
+                  : '▶ Start Japam'}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.sessionChip, pressed && styles.softPressed]}
+            onPress={() => {
+              setShowCustomTimerInput(false);
+              setShowTimerSheet(true);
+            }}
+          >
+            <Ionicons name="time-outline" size={21} color="#0F8F87" style={styles.sessionChipIcon} />
+            <Text style={styles.sessionChipText}>
+              {hasSelectedTimer ? `Timer: ${minutesInput} min` : 'Select timer for Japam'}
+            </Text>
+            <Text style={styles.sessionChipArrow}>›</Text>
+          </Pressable>
 
           <View style={styles.statsCard}>
             <View style={styles.statColumn}>
@@ -2022,16 +1928,102 @@ export default function JapamMain() {
               <Text style={styles.statLabel}>Today count</Text>
             </View>
           </View>
-
-          <Pressable
-            onPress={openTimerPage}
-            style={({ pressed }) => [styles.timerShortcut, pressed && styles.timerShortcutPressed]}
-          >
-            <Ionicons name="timer-outline" size={20} color="#0f766e" />
-            <Text style={styles.timerShortcutText}>Start Timer Japam</Text>
-            <Ionicons name="chevron-forward" size={18} color="#0f766e" />
-          </Pressable>
         </View>
+
+        <Modal visible={showTimerSheet} transparent animationType="slide">
+          <View style={styles.sheetOverlay}>
+            <Pressable style={styles.sheetBackdrop} onPress={() => setShowTimerSheet(false)} />
+            <View style={styles.sessionSheet}>
+              <View style={styles.sheetHandle} />
+              {showCustomTimerInput ? (
+                <>
+                  <Text style={styles.sheetTitle}>Custom timer</Text>
+                  <Text style={styles.sheetSubtitle}>Enter your own practice length</Text>
+
+                  <View style={styles.customTimerPanel}>
+                    <TextInput
+                      style={styles.customTimerInput}
+                      value={customMinutesInput}
+                      onChangeText={setCustomMinutesInput}
+                      placeholder="Minutes"
+                      placeholderTextColor="#7f9798"
+                      keyboardType="numeric"
+                      autoFocus
+                    />
+                    <Pressable style={styles.customApplyButton} onPress={applyCustomSessionMinutes}>
+                      <Text style={styles.customApplyText}>Set</Text>
+                    </Pressable>
+                  </View>
+
+                  <Pressable
+                    style={styles.cancelSheetButton}
+                    onPress={() => setShowCustomTimerInput(false)}
+                  >
+                    <Text style={styles.cancelSheetText}>Back</Text>
+                  </Pressable>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.sheetTitle}>Select timer for Japam</Text>
+                  <Text style={styles.sheetSubtitle}>Choose how long you want to practice</Text>
+
+                  {SESSION_TIME_OPTIONS.map((minutes) => {
+                    const isSelected = Number(minutesInput) === minutes;
+
+                    return (
+                      <Pressable
+                        key={minutes}
+                        style={({ pressed }) => [
+                          styles.timeOption,
+                          isSelected && styles.timeOptionSelected,
+                          pressed && styles.softPressed,
+                        ]}
+                        onPress={() => applySessionMinutes(minutes)}
+                      >
+                        <Text style={styles.timeOptionIcon}>◷</Text>
+                        <Text style={styles.timeOptionText}>{minutes} min</Text>
+                        <View style={[styles.optionRadio, isSelected && styles.optionRadioSelected]}>
+                          {isSelected && <Text style={styles.optionCheck}>✓</Text>}
+                        </View>
+                      </Pressable>
+                    );
+                  })}
+
+                  <Pressable
+                    style={({ pressed }) => [styles.timeOption, pressed && styles.softPressed]}
+                    onPress={() => setShowCustomTimerInput(true)}
+                  >
+                    <Text style={styles.timeOptionIcon}>✎</Text>
+                    <Text style={styles.timeOptionText}>Custom</Text>
+                    <Text style={styles.sessionChipArrow}>›</Text>
+                  </Pressable>
+
+                  <View style={styles.sheetAutoRepeatRow}>
+                    <View style={styles.sheetAutoRepeatCopy}>
+                      <Text style={styles.sheetAutoRepeatTitle}>Auto repeat</Text>
+                      <Text style={styles.sheetAutoRepeatDescription}>
+                        Repeat up to 5 malas automatically
+                      </Text>
+                    </View>
+                    <Switch
+                      value={loopTimer}
+                      onValueChange={(value) => {
+                        setLoopTimer(value);
+                        setAutoCompletedMalas(0);
+                        if (!value) {
+                          setIsRunning(false);
+                          setSeconds(0);
+                        }
+                      }}
+                      trackColor={{ false: '#c8d8d5', true: '#9fd6d0' }}
+                      thumbColor={loopTimer ? '#0F8F87' : '#ffffff'}
+                    />
+                  </View>
+                </>
+              )}
+            </View>
+          </View>
+        </Modal>
 
         <Modal visible={showUserModal && !isSigningIn} transparent animationType="fade">
           <View style={styles.modalOverlay}>
@@ -2300,12 +2292,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: isMobile ? 0 : 24,
     paddingTop: isMobile ? scrollTopPadding : 24,
     paddingBottom: scrollBottomPadding,
-    minHeight: shellMinHeight,
+    minHeight: isMobile ? undefined : shellMinHeight,
   },
   appShell: {
     width: '100%',
     maxWidth: isMobile ? undefined : 460,
-    minHeight: shellMinHeight,
+    minHeight: isMobile ? undefined : shellMinHeight,
     alignItems: 'center',
     overflow: 'hidden',
     position: 'relative',
@@ -2313,7 +2305,7 @@ const styles = StyleSheet.create({
     borderRadius: isMobile ? 0 : 28,
     paddingHorizontal: isMobile ? 22 : 28,
     paddingTop: isShortMobile ? 14 : isMobile ? 20 : 34,
-    paddingBottom: isMobile ? 22 : 104,
+    paddingBottom: isMobile ? 20 : 116,
     shadowColor: '#0f766e',
     shadowOpacity: isMobile ? 0 : 0.16,
     shadowRadius: 28,
@@ -2500,7 +2492,7 @@ const styles = StyleSheet.create({
     color: '#5F7F80',
     fontSize: isMobile ? 14 : 15,
     fontWeight: '700',
-    marginBottom: isShortMobile ? 18 : isMobile ? 30 : 40,
+    marginBottom: isShortMobile ? 14 : isMobile ? 20 : 30,
   },
   progressShell: {
     width: progressCircleSize,
@@ -2513,7 +2505,7 @@ const styles = StyleSheet.create({
     shadowRadius: 28,
     shadowOffset: { width: 0, height: 16 },
     elevation: 18,
-    marginBottom: isShortMobile ? 20 : isMobile ? 28 : 38,
+    marginBottom: isShortMobile ? 18 : isMobile ? 24 : 34,
   },
   progressPressable: {
     borderRadius: 999,
@@ -2802,36 +2794,7 @@ const styles = StyleSheet.create({
     shadowRadius: 22,
     shadowOffset: { width: 0, height: 12 },
     elevation: 7,
-    marginTop: isShortMobile ? 14 : isMobile ? 22 : 30,
     marginBottom: isMobile ? 20 : 28,
-  },
-  timerShortcut: {
-    marginTop: isShortMobile ? 14 : 20,
-    marginBottom: isMobile ? 18 : 0,
-    minHeight: isMobile ? 54 : 56,
-    paddingHorizontal: 22,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.88)',
-    borderWidth: 1,
-    borderColor: 'rgba(15,118,110,0.18)',
-    alignSelf: 'center',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    shadowColor: '#0f766e',
-    shadowOpacity: 0.14,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 7,
-  },
-  timerShortcutPressed: {
-    transform: [{ scale: 0.98 }],
-    opacity: 0.9,
-  },
-  timerShortcutText: {
-    color: '#063B3B',
-    fontSize: isMobile ? 17 : 18,
-    fontWeight: '900',
   },
   installBanner: {
     width: '100%',
