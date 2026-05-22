@@ -92,10 +92,56 @@ const parseHistory = (raw: string | null): Session[] => {
   }
 };
 
+const dedupeSessions = (sessions: Session[]) => {
+  const exactSeen = new Set<string>();
+  const nearTimerRows = new Map<string, number[]>();
+
+  return sessions.filter((item) => {
+    const date = new Date(item.date);
+    if (Number.isNaN(date.getTime())) return false;
+
+    const itemMalas = Number(item.malas) || 0;
+    const totalCount = Number(item.totalCount) || itemMalas * 108;
+    if (totalCount <= 0) return false;
+
+    const dayKey = toDayKey(item.date);
+    const exactKey = [
+      item.userId || 'guest',
+      dayKey,
+      date.toISOString(),
+      totalCount,
+      itemMalas,
+      Number(item.duration) || 0,
+      item.manual ? 'manual' : 'auto',
+    ].join(':');
+
+    if (exactSeen.has(exactKey)) return false;
+    exactSeen.add(exactKey);
+
+    if (!item.manual) {
+      const nearKey = [
+        item.userId || 'guest',
+        dayKey,
+        totalCount,
+        itemMalas,
+        Number(item.duration) || 0,
+      ].join(':');
+      const existingTimes = nearTimerRows.get(nearKey) || [];
+      const time = date.getTime();
+      if (existingTimes.some((existing) => Math.abs(existing - time) < 30000)) {
+        return false;
+      }
+      nearTimerRows.set(nearKey, [...existingTimes, time]);
+    }
+
+    return true;
+  });
+};
+
 const buildDailyRows = (sessions: Session[]) => {
   const grouped = new Map<string, DailyRow>();
 
-  sessions.forEach((item) => {
+  dedupeSessions(sessions).forEach((item) => {
     const dayKey = toDayKey(item.date);
     const existing = grouped.get(dayKey);
 
@@ -341,7 +387,7 @@ export default function HistoryScreen() {
       await AsyncStorage.setItem('history', JSON.stringify(cleanedSessions));
     }
 
-    let sessions = cleanedSessions.filter((item) => item.userId === currentUserId);
+    let sessions = dedupeSessions(cleanedSessions.filter((item) => item.userId === currentUserId));
     const remoteSessions = await fetchRemoteSessions(currentUserId);
 
     if (remoteSessions !== null) {
@@ -356,7 +402,7 @@ export default function HistoryScreen() {
         const key = `${session.date}-${session.totalCount}-${session.malas}`;
         mergedMap.set(key, session);
       });
-      sessions = [...mergedMap.values()].sort(
+      sessions = dedupeSessions([...mergedMap.values()]).sort(
         (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
       );
       const otherUserSessions = cleanedSessions.filter((item) => item.userId !== currentUserId);

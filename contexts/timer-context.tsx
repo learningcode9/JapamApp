@@ -125,6 +125,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const notifIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const soundRef = useRef<Audio.Sound | null>(null);
   const isCompletingRef = useRef(false);
+  const lastSavedSessionRef = useRef<{ key: string; savedAt: number } | null>(null);
   const suppressNextCompletionSoundRef = useRef(false);
   const appStateRef = useRef(AppState.currentState);
   const wakeLockRef = useRef<any>(null);
@@ -365,6 +366,19 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const saveSession = useCallback(async () => {
     const uid = userIdRef.current;
     const duration = selectedDurationRef.current * 60;
+    const sessionKey = [
+      uid || 'guest',
+      duration,
+      completedLoopsRef.current,
+      selectedLoopsRef.current,
+      new Date().toISOString().slice(0, 10),
+    ].join(':');
+    const lastSaved = lastSavedSessionRef.current;
+    if (lastSaved?.key === sessionKey && Date.now() - lastSaved.savedAt < 30000) {
+      return;
+    }
+    lastSavedSessionRef.current = { key: sessionKey, savedAt: Date.now() };
+
     const now = new Date();
     const session = {
       date: now.toISOString(),

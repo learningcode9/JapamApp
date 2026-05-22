@@ -71,7 +71,9 @@ const parseHistory = (raw: string | null): Session[] => {
 };
 
 const dedupeHistoryForStats = (history: Session[]) => {
-  const seen = new Set<string>();
+  const exactSeen = new Set<string>();
+  const nearTimerRows = new Map<string, number[]>();
+
   return history.filter((item) => {
     const date = new Date(item.date);
     if (Number.isNaN(date.getTime())) return false;
@@ -90,8 +92,25 @@ const dedupeHistoryForStats = (history: Session[]) => {
       item.manual ? 'manual' : 'auto',
     ].join(':');
 
-    if (seen.has(key)) return false;
-    seen.add(key);
+    if (exactSeen.has(key)) return false;
+    exactSeen.add(key);
+
+    if (!item.manual) {
+      const nearKey = [
+        item.userId || 'guest',
+        dayKey,
+        totalCount,
+        Number(item.malas) || 0,
+        Number(item.duration) || 0,
+      ].join(':');
+      const existingTimes = nearTimerRows.get(nearKey) || [];
+      const time = date.getTime();
+      if (existingTimes.some((existing) => Math.abs(existing - time) < 30000)) {
+        return false;
+      }
+      nearTimerRows.set(nearKey, [...existingTimes, time]);
+    }
+
     return true;
   });
 };
