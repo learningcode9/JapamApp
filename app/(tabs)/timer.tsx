@@ -80,11 +80,10 @@ const dedupeHistoryForStats = (history: Session[]) => {
     if (totalCount <= 0) return false;
 
     const dayKey = getLocalDateKey(date);
-    const nearTimeBucket = Math.floor(date.getTime() / 15000);
     const key = [
       item.userId || 'guest',
       dayKey,
-      nearTimeBucket,
+      date.toISOString(),
       totalCount,
       Number(item.malas) || 0,
       Number(item.duration) || 0,

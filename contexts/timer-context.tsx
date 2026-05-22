@@ -34,6 +34,7 @@ const TIMER_RUNNING_KEY = 'timerRunning';
 const TIMER_TARGET_KEY = 'timerTarget';
 const TIMER_PAUSED_KEY = 'timerPaused';
 const TIMER_COMPLETED_LOOPS_KEY = 'timerCompletedLoops';
+const TIMER_STARTED_AT_KEY = 'timerStartedAt';
 const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
 const SOUND_ENABLED_KEY = 'soundEnabled';
@@ -176,13 +177,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const persistState = useCallback(async (running: boolean) => {
     const uid = userIdRef.current;
     const tSec = selectedDurationRef.current * 60;
-    const paused = !running && secondsRef.current > 0 && secondsRef.current < tSec;
+    const currentSeconds =
+      running && timerStartedAtRef.current !== null
+        ? Math.max(0, Math.floor((Date.now() - timerStartedAtRef.current) / 1000))
+        : secondsRef.current;
+    const paused = !running && currentSeconds > 0 && currentSeconds < tSec;
     const pairs: [string, string][] = [
-      [TIMER_SECONDS_KEY, String(secondsRef.current)],
+      [TIMER_SECONDS_KEY, String(currentSeconds)],
       [TIMER_RUNNING_KEY, String(running)],
       [TIMER_TARGET_KEY, String(tSec)],
       [TIMER_PAUSED_KEY, String(paused)],
       [TIMER_COMPLETED_LOOPS_KEY, String(completedLoopsRef.current)],
+      [TIMER_STARTED_AT_KEY, running && timerStartedAtRef.current ? String(timerStartedAtRef.current) : ''],
       [T_DURATION_KEY, String(selectedDurationRef.current)],
       [T_LOOPS_KEY, String(selectedLoopsRef.current)],
     ];
@@ -198,7 +204,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     clearTimerInterval();
     const tick = () => {
       if (timerStartedAtRef.current === null) return;
-      setSeconds(Math.floor((Date.now() - timerStartedAtRef.current) / 1000));
+      const elapsed = Math.floor((Date.now() - timerStartedAtRef.current) / 1000);
+      secondsRef.current = elapsed;
+      setSeconds(elapsed);
     };
     tick();
     timerIntervalRef.current = setInterval(tick, 1000);
@@ -626,13 +634,15 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           uid
             ? (await AsyncStorage.getItem(getUserKey(key, uid))) ?? (await AsyncStorage.getItem(key))
             : AsyncStorage.getItem(key);
-        const [sec, target, dur, loops, paused, completed] = await Promise.all([
+        const [sec, target, dur, loops, paused, completed, running, startedAt] = await Promise.all([
           get(TIMER_SECONDS_KEY),
           get(TIMER_TARGET_KEY),
           get(T_DURATION_KEY),
           get(T_LOOPS_KEY),
           get(TIMER_PAUSED_KEY),
           get(TIMER_COMPLETED_LOOPS_KEY),
+          get(TIMER_RUNNING_KEY),
+          get(TIMER_STARTED_AT_KEY),
         ]);
         const savedSec = Number(sec) || 0;
         const savedTarget = Number(target) || 0;
@@ -640,6 +650,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         const savedLoops = Number(loops) || 0;
         const savedCompletedLoops = Math.max(0, Number(completed) || 0);
         const savedPaused = paused === 'true';
+        const savedRunning = running === 'true';
+        const savedStartedAt = Number(startedAt) || 0;
         if (savedDur > 0) {
           setSelectedDuration(savedDur);
           selectedDurationRef.current = savedDur;
@@ -658,9 +670,19 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           setCompletedLoops(safeCompletedLoops);
           completedLoopsRef.current = safeCompletedLoops;
         }
-        if (savedPaused && savedSec > 0 && savedTarget > 0 && savedSec < savedTarget) {
-          setSeconds(savedSec);
-          secondsRef.current = savedSec;
+        const restoredTarget = savedTarget || selectedDurationRef.current * 60;
+        const elapsedSinceSavedStart =
+          savedRunning && savedStartedAt > 0
+            ? Math.max(0, Math.floor((Date.now() - savedStartedAt) / 1000))
+            : savedSec;
+        const restoredSeconds = Math.min(
+          Math.max(0, elapsedSinceSavedStart),
+          Math.max(0, restoredTarget - 1)
+        );
+
+        if ((savedPaused || savedRunning) && restoredSeconds > 0 && restoredTarget > 0) {
+          setSeconds(restoredSeconds);
+          secondsRef.current = restoredSeconds;
           setIsRunning(false);
           isRunningRef.current = false;
           timerStartedAtRef.current = null;
@@ -683,28 +705,54 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
+      if (next !== 'active' && appStateRef.current === 'active') {
+        if (isRunningRef.current && timerStartedAtRef.current !== null) {
+          secondsRef.current = Math.max(0, Math.floor((Date.now() - timerStartedAtRef.current) / 1000));
+        }
+        void persistState(isRunningRef.current);
+      }
+
       if (next === 'active' && appStateRef.current !== 'active' && isRunningRef.current && timerStartedAtRef.current !== null) {
         const elapsed = Math.floor((Date.now() - timerStartedAtRef.current) / 1000);
         if (elapsed >= selectedDurationRef.current * 60) {
           suppressNextCompletionSoundRef.current = true;
         }
+        secondsRef.current = elapsed;
         setSeconds(elapsed);
       }
       appStateRef.current = next;
     });
     return () => sub.remove();
-  }, []);
+  }, [persistState]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
     const onVis = () => {
+      if (document.visibilityState !== 'visible') {
+        if (isRunningRef.current && timerStartedAtRef.current !== null) {
+          secondsRef.current = Math.max(0, Math.floor((Date.now() - timerStartedAtRef.current) / 1000));
+        }
+        void persistState(isRunningRef.current);
+        return;
+      }
+
       if (document.visibilityState === 'visible' && isRunningRef.current) {
         void acquireWakeLock();
       }
     };
+    const onPageHide = () => {
+      if (isRunningRef.current && timerStartedAtRef.current !== null) {
+        secondsRef.current = Math.max(0, Math.floor((Date.now() - timerStartedAtRef.current) / 1000));
+      }
+      void persistState(isRunningRef.current);
+    };
     document.addEventListener('visibilitychange', onVis);
-    return () => document.removeEventListener('visibilitychange', onVis);
-  }, [acquireWakeLock]);
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, [acquireWakeLock, persistState]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
