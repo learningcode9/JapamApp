@@ -1559,10 +1559,9 @@ export default function JapamMain() {
     isCompletingRef.current = true;
     lastCompletedCycleRef.current = Date.now();
 
-    // Add 108 to total so malas increments on Home; count stays the same (count = total % 108)
     const currentTotal = totalRef.current;
     const nextTotal = currentTotal + 108;
-    setCountersFromTotal(nextTotal);
+    totalRef.current = nextTotal;
     void saveSession(targetSeconds, 1, 108, nextTotal);
     void completeFeedback('normal');
     void hideTimerNotification();
