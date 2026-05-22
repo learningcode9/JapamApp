@@ -70,6 +70,33 @@ const parseHistory = (raw: string | null): Session[] => {
   }
 };
 
+const dedupeHistoryForStats = (history: Session[]) => {
+  const seen = new Set<string>();
+  return history.filter((item) => {
+    const date = new Date(item.date);
+    if (Number.isNaN(date.getTime())) return false;
+
+    const totalCount = Number(item.totalCount) || (Number(item.malas) || 0) * 108;
+    if (totalCount <= 0) return false;
+
+    const dayKey = getLocalDateKey(date);
+    const nearTimeBucket = Math.floor(date.getTime() / 15000);
+    const key = [
+      item.userId || 'guest',
+      dayKey,
+      nearTimeBucket,
+      totalCount,
+      Number(item.malas) || 0,
+      Number(item.duration) || 0,
+      item.manual ? 'manual' : 'auto',
+    ].join(':');
+
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
 export default function TimerScreen() {
   const router = useRouter();
   const timer = useTimer();
@@ -104,7 +131,7 @@ export default function TimerScreen() {
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
     const todayKey = getLocalDateKey();
     const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
-    const history = parseHistory(rawHistory).filter((item) => {
+    const history = dedupeHistoryForStats(parseHistory(rawHistory)).filter((item) => {
       if (!userId) return !item.userId;
       return item.userId === userId;
     });

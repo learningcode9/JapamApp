@@ -118,9 +118,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const timerStartedAtRef = useRef<number | null>(null);
   const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const notifIdRef = useRef<string | null>(null);
+  const completionNotifIdRef = useRef<string | null>(null);
+  const webCompletionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const webCompletionNotificationShownRef = useRef(false);
   const notifIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const soundRef = useRef<Audio.Sound | null>(null);
   const isCompletingRef = useRef(false);
+  const suppressNextCompletionSoundRef = useRef(false);
   const appStateRef = useRef(AppState.currentState);
   const wakeLockRef = useRef<any>(null);
 
@@ -217,6 +221,105 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       } catch {}
     })();
   }, []);
+
+  const clearCompletionNotification = useCallback(() => {
+    if (webCompletionTimeoutRef.current) {
+      clearTimeout(webCompletionTimeoutRef.current);
+      webCompletionTimeoutRef.current = null;
+    }
+    webCompletionNotificationShownRef.current = false;
+
+    if (Platform.OS === 'web') return;
+    void (async () => {
+      try {
+        if (completionNotifIdRef.current) {
+          await Notifications.cancelScheduledNotificationAsync(completionNotifIdRef.current);
+          completionNotifIdRef.current = null;
+        }
+      } catch {}
+    })();
+  }, []);
+
+  const requestNotificationPermission = useCallback(async () => {
+    try {
+      if (Platform.OS === 'web') {
+        if (typeof Notification === 'undefined') return false;
+        if (Notification.permission === 'granted') return true;
+        if (Notification.permission === 'denied') return false;
+        return (await Notification.requestPermission()) === 'granted';
+      }
+
+      const current = await Notifications.getPermissionsAsync();
+      if (current.granted) return true;
+      const requested = await Notifications.requestPermissionsAsync();
+      return requested.granted;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const showBrowserCompletionNotification = useCallback((isFinal: boolean) => {
+    if (Platform.OS !== 'web') return;
+    if (typeof Notification === 'undefined') return;
+    if (Notification.permission !== 'granted') return;
+
+    try {
+      new Notification(isFinal ? 'Japam complete' : 'Mala completed', {
+        body: 'Your Japam timer is complete',
+        icon: '/icons/icon-192.png',
+        badge: '/icons/icon-192.png',
+        silent: false,
+      });
+    } catch {}
+  }, []);
+
+  const scheduleCompletionNotification = useCallback((secondsUntilComplete: number) => {
+    const delaySeconds = Math.max(1, Math.ceil(secondsUntilComplete));
+
+    if (webCompletionTimeoutRef.current) {
+      clearTimeout(webCompletionTimeoutRef.current);
+      webCompletionTimeoutRef.current = null;
+    }
+    webCompletionNotificationShownRef.current = false;
+
+    if (Platform.OS === 'web') {
+      if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+      webCompletionTimeoutRef.current = setTimeout(() => {
+        const isHidden =
+          (typeof document !== 'undefined' && document.visibilityState !== 'visible') ||
+          appStateRef.current !== 'active';
+        if (!isHidden || webCompletionNotificationShownRef.current) return;
+        webCompletionNotificationShownRef.current = true;
+        showBrowserCompletionNotification(completedLoopsRef.current + 1 >= selectedLoopsRef.current);
+      }, delaySeconds * 1000);
+      return;
+    }
+
+    void (async () => {
+      try {
+        const perm = await Notifications.getPermissionsAsync();
+        if (!perm.granted) return;
+
+        if (completionNotifIdRef.current) {
+          await Notifications.cancelScheduledNotificationAsync(completionNotifIdRef.current);
+          completionNotifIdRef.current = null;
+        }
+
+        completionNotifIdRef.current = await Notifications.scheduleNotificationAsync({
+          content: {
+            title: 'Mala completed',
+            body: 'Your Japam timer is complete',
+            sound: true,
+            ...(Platform.OS === 'android' ? { channelId: 'japam-complete' } : {}),
+          },
+          trigger: {
+            type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+            seconds: delaySeconds,
+          },
+        });
+      } catch {}
+    })();
+  }, [showBrowserCompletionNotification]);
 
   const showNotification = useCallback(() => {
     if (Platform.OS === 'web') {
@@ -334,6 +437,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     setIsRunning(false);
     isRunningRef.current = false;
     hideNotification();
+    const completedInBackground = appStateRef.current !== 'active';
+    if (!completedInBackground) {
+      clearCompletionNotification();
+    }
 
     const newDone = completedLoopsRef.current + 1;
     setCompletedLoops(newDone);
@@ -346,26 +453,17 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       setTimeout(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {}), 400);
     }
 
-    if (Platform.OS !== 'web') {
-      try {
-        const perm = await Notifications.getPermissionsAsync();
-        if (perm.granted) {
-          await Notifications.scheduleNotificationAsync({
-            content: {
-              title: isFinal ? '🙏 Japam Complete' : '🔔 Mala Complete',
-              body: isFinal ? 'Your japam session is complete.' : 'Starting next mala...',
-              sound: true,
-              ...(Platform.OS === 'android' ? { channelId: 'japam-complete' } : {}),
-            },
-            trigger: null,
-          } as any);
-        }
-      } catch {}
+    if (completedInBackground && !webCompletionNotificationShownRef.current) {
+      webCompletionNotificationShownRef.current = true;
+      showBrowserCompletionNotification(isFinal);
     }
 
     void saveSession();
 
-    if (soundEnabledRef.current) {
+    const shouldPlaySound = soundEnabledRef.current && !suppressNextCompletionSoundRef.current;
+    suppressNextCompletionSoundRef.current = false;
+
+    if (shouldPlaySound) {
       try {
         await configureAudio();
         const sound = soundRef.current;
@@ -414,15 +512,19 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     startTimerInterval();
     void acquireWakeLock();
     showNotification();
+    scheduleCompletionNotification(selectedDurationRef.current * 60);
     void persistState(true);
   }, [
     acquireWakeLock,
     clearTimerInterval,
+    clearCompletionNotification,
     hideNotification,
     persistState,
     releaseWakeLock,
     saveSession,
+    scheduleCompletionNotification,
     showNotification,
+    showBrowserCompletionNotification,
     startTimerInterval,
   ]);
 
@@ -582,7 +684,11 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
       if (next === 'active' && appStateRef.current !== 'active' && isRunningRef.current && timerStartedAtRef.current !== null) {
-        setSeconds(Math.floor((Date.now() - timerStartedAtRef.current) / 1000));
+        const elapsed = Math.floor((Date.now() - timerStartedAtRef.current) / 1000);
+        if (elapsed >= selectedDurationRef.current * 60) {
+          suppressNextCompletionSoundRef.current = true;
+        }
+        setSeconds(elapsed);
       }
       appStateRef.current = next;
     });
@@ -612,12 +718,14 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => () => {
     clearTimerInterval();
+    clearCompletionNotification();
     releaseWakeLock();
     if (notifIntervalRef.current) clearInterval(notifIntervalRef.current);
-  }, [clearTimerInterval, releaseWakeLock]);
+  }, [clearCompletionNotification, clearTimerInterval, releaseWakeLock]);
 
-  const start = useCallback(() => {
+  const start = useCallback(async () => {
     if (!userIdRef.current || isRunning) return;
+    await requestNotificationPermission();
     isCompletingRef.current = false;
     const resume = seconds > 0 && seconds < targetSeconds;
     if (resume) {
@@ -634,8 +742,19 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     startTimerInterval();
     void acquireWakeLock();
     void showNotification();
+    scheduleCompletionNotification(targetSeconds - secondsRef.current);
     void persistState(true);
-  }, [acquireWakeLock, isRunning, persistState, seconds, showNotification, startTimerInterval, targetSeconds]);
+  }, [
+    acquireWakeLock,
+    isRunning,
+    persistState,
+    requestNotificationPermission,
+    scheduleCompletionNotification,
+    seconds,
+    showNotification,
+    startTimerInterval,
+    targetSeconds,
+  ]);
 
   const pause = useCallback(() => {
     clearTimerInterval();
@@ -643,8 +762,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     setIsRunning(false);
     isRunningRef.current = false;
     void hideNotification();
+    clearCompletionNotification();
     void persistState(false);
-  }, [clearTimerInterval, hideNotification, persistState, releaseWakeLock]);
+  }, [clearCompletionNotification, clearTimerInterval, hideNotification, persistState, releaseWakeLock]);
 
   const reset = useCallback(() => {
     clearTimerInterval();
@@ -658,8 +778,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     isCompletingRef.current = false;
     timerStartedAtRef.current = null;
     void hideNotification();
+    clearCompletionNotification();
     void persistState(false);
-  }, [clearTimerInterval, hideNotification, persistState, releaseWakeLock]);
+  }, [clearCompletionNotification, clearTimerInterval, hideNotification, persistState, releaseWakeLock]);
 
   const selectDuration = useCallback((mins: number) => {
     if (isRunningRef.current) return;
