@@ -12,6 +12,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -142,6 +143,11 @@ export default function TimerScreen() {
 
   const loadUser = useCallback(async () => {
     setUserName((await AsyncStorage.getItem(USER_NAME_KEY)) || '');
+  }, []);
+
+  const openSignInModal = useCallback(() => {
+    setIsSigningIn(false);
+    setShowUserModal(true);
   }, []);
 
   const loadStats = useCallback(async () => {
@@ -311,7 +317,7 @@ export default function TimerScreen() {
 
   const handleStart = () => {
     if (!timer.canStart) {
-      setShowUserModal(true);
+      openSignInModal();
       return;
     }
     timer.start();
@@ -333,7 +339,7 @@ export default function TimerScreen() {
 
   const handleAccountPress = () => {
     if (!userName) {
-      setShowUserModal(true);
+      openSignInModal();
       return;
     }
 
@@ -361,7 +367,7 @@ export default function TimerScreen() {
   const todayLabel = new Date().toLocaleDateString();
 
   return (
-    <View style={styles.root}>
+    <SafeAreaView style={styles.root}>
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.container}
@@ -381,7 +387,8 @@ export default function TimerScreen() {
           </View>
 
           <View style={styles.topControls}>
-            <Text style={styles.welcomeText}>Welcome</Text>
+            <View style={styles.headerSideSpacer} />
+            <Text numberOfLines={1} style={styles.welcomeText}>Welcome</Text>
             <Pressable
               style={({ pressed }) => [styles.accountButton, pressed && styles.softPressed]}
               onPress={handleAccountPress}
@@ -529,7 +536,12 @@ export default function TimerScreen() {
           </View>
         </View>
 
-        <Modal visible={showUserModal && !isSigningIn} transparent animationType="fade">
+        <Modal
+          visible={showUserModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowUserModal(false)}
+        >
           <View style={styles.modalOverlay}>
             <View style={styles.modalCard}>
               <Pressable style={styles.modalClose} onPress={() => setShowUserModal(false)}>
@@ -543,15 +555,22 @@ export default function TimerScreen() {
                 Sign in with Google to save your Japam history and sync across devices.
               </Text>
               <Pressable
-                disabled={!request}
-                style={[styles.modalButton, !request && styles.disabledButton]}
+                disabled={!request || isSigningIn}
+                style={[styles.modalButton, (!request || isSigningIn) && styles.disabledButton]}
                 onPress={() => {
                   setIsSigningIn(true);
                   setShowUserModal(false);
                   void (async () => {
-                    await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
-                    const result = await promptAsync({ showInRecents: true });
-                    if (result.type !== 'success') {
+                    try {
+                      await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
+                      const result = await promptAsync({ showInRecents: true });
+                      if (result.type !== 'success') {
+                        await AsyncStorage.removeItem(AUTH_PENDING_KEY);
+                        setIsSigningIn(false);
+                        setShowUserModal(true);
+                      }
+                    } catch (error) {
+                      console.log('Google prompt error:', error);
                       await AsyncStorage.removeItem(AUTH_PENDING_KEY);
                       setIsSigningIn(false);
                       setShowUserModal(true);
@@ -571,7 +590,7 @@ export default function TimerScreen() {
           </View>
         </Modal>
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -605,30 +624,34 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(245, 250, 250, 0.45)',
   },
   container: {
-    flexGrow: isMobile ? 0 : 1,
+    flexGrow: 1,
     justifyContent: isMobile ? 'flex-start' : 'center',
     width: '100%',
     alignSelf: 'center',
     paddingTop: Platform.OS === 'web'
-      ? (isShortMobile ? 0 : isMobile ? 0 : 24)
-      : (isShortMobile ? 0 : isMobile ? 0 : 24),
-    paddingBottom: isMobile ? 104 : 128,
+      ? (isMobile ? ('calc(10px + env(safe-area-inset-top))' as any) : 24)
+      : (isShortMobile ? 8 : isMobile ? 12 : 24),
+    paddingBottom: Platform.OS === 'web'
+      ? (isMobile ? ('calc(136px + env(safe-area-inset-bottom))' as any) : 128)
+      : (isMobile ? 132 : 128),
     paddingHorizontal: isMobile ? 0 : 24,
     alignItems: 'center',
-    minHeight: screenHeight,
+    minHeight: Platform.OS === 'web' ? ('100dvh' as any) : screenHeight,
   },
   appShell: {
     width: '100%',
     maxWidth: isMobile ? undefined : 460,
-    minHeight: isMobile ? screenHeight : Math.min(screenHeight - 48, 900),
+    minHeight: isMobile
+      ? (Platform.OS === 'web' ? ('100dvh' as any) : screenHeight)
+      : Math.min(screenHeight - 48, 900),
     alignItems: 'center',
     overflow: 'hidden',
     position: 'relative',
     backgroundColor: 'rgba(238, 248, 246, 0.94)',
     borderRadius: isMobile ? 0 : 28,
     paddingHorizontal: isMobile ? 22 : 28,
-    paddingTop: isShortMobile ? 14 : isMobile ? 20 : 34,
-    paddingBottom: isMobile ? 28 : 104,
+    paddingTop: isShortMobile ? 16 : isMobile ? 22 : 34,
+    paddingBottom: isShortMobile ? 48 : isMobile ? 56 : 104,
     shadowColor: '#0f766e',
     shadowOpacity: isMobile ? 0 : 0.16,
     shadowRadius: 28,
@@ -638,21 +661,28 @@ const styles = StyleSheet.create({
   topControls: {
     width: '100%',
     minHeight: 48,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: isShortMobile ? 8 : isMobile ? 10 : 18,
+    gap: 10,
+  },
+  headerSideSpacer: {
+    flex: 1,
+    minWidth: 74,
   },
   welcomeText: {
+    flex: 2,
     color: '#063B3B',
-    fontSize: isMobile ? 22 : 24,
+    fontSize: isShortMobile ? 20 : isMobile ? 22 : 24,
     fontWeight: '800',
     letterSpacing: 0,
+    textAlign: 'center',
   },
   accountButton: {
-    position: 'absolute',
-    right: 0,
-    top: 2,
+    flex: 1,
     minHeight: 40,
+    minWidth: 74,
     maxWidth: 128,
     paddingHorizontal: 14,
     borderRadius: 999,
@@ -680,12 +710,12 @@ const styles = StyleSheet.create({
   },
   dateText: {
     color: '#5F7F80',
-    fontSize: isMobile ? 14 : 15,
+    fontSize: isShortMobile ? 13 : isMobile ? 14 : 15,
     fontWeight: '700',
     marginBottom: isShortMobile ? 8 : isMobile ? 10 : 14,
   },
   subtitle: {
-    fontSize: isMobile ? 16 : 18,
+    fontSize: isShortMobile ? 14 : isMobile ? 16 : 18,
     color: '#4a7c80',
     textAlign: 'center',
     fontWeight: '700',
