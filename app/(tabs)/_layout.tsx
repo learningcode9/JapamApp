@@ -1,13 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Tabs } from 'expo-router';
 import { Dimensions, Platform, StyleSheet, Text } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TimerProvider } from '../../contexts/timer-context';
 
 const screenWidth = Dimensions.get('window').width;
 const isMobile = screenWidth < 500;
 const desktopTabWidth = 430;
 const desktopTabLeft = Math.max(0, (screenWidth - desktopTabWidth) / 2);
-const fixedWebTabBarStyle =
+const webTabBarStyle =
   Platform.OS === 'web'
     ? ({
         position: 'fixed',
@@ -20,14 +21,7 @@ const fixedWebTabBarStyle =
         zIndex: 999,
         backdropFilter: 'blur(16px)',
       } as any)
-    : {
-        position: 'absolute' as const,
-        left: isMobile ? 16 : desktopTabLeft,
-        right: isMobile ? 16 : undefined,
-        bottom: isMobile ? 12 : 22,
-        width: isMobile ? undefined : desktopTabWidth,
-        zIndex: 999,
-      };
+    : null;
 
 const tabLabel =
   (label: string) =>
@@ -43,6 +37,21 @@ const tabLabel =
   };
 
 export default function TabLayout() {
+  const insets = useSafeAreaInsets();
+
+  const nativeTabBarStyle = Platform.OS !== 'web'
+    ? {
+        position: 'absolute' as const,
+        left: isMobile ? 16 : desktopTabLeft,
+        right: isMobile ? 16 : undefined,
+        bottom: isMobile ? Math.max(12, insets.bottom + 8) : Math.max(22, insets.bottom + 14),
+        width: isMobile ? undefined : desktopTabWidth,
+        zIndex: 999,
+      }
+    : null;
+
+  const tabBarStyle = Platform.OS === 'web' ? webTabBarStyle : nativeTabBarStyle;
+
   return (
     <TimerProvider>
       <Tabs
@@ -51,7 +60,7 @@ export default function TabLayout() {
           tabBarActiveTintColor: '#0f766e',
           tabBarInactiveTintColor: '#5f7778',
           tabBarStyle: {
-            ...fixedWebTabBarStyle,
+            ...tabBarStyle,
             backgroundColor: 'rgba(255,255,255,0.92)',
             borderTopColor: 'rgba(255,255,255,0.78)',
             borderTopWidth: 1,
