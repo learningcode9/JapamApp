@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 500" width="1024" height="500">
+  <defs>
+    <!-- main background gradient -->
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#edf8f5"/>
+      <stop offset="55%"  stop-color="#d4eeea"/>
+      <stop offset="100%" stop-color="#f0f9f7"/>
+    </linearGradient>
+
+    <!-- glow behind icon -->
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="rgba(15,143,135,0.22)"/>
+      <stop offset="100%" stop-color="rgba(15,143,135,0)"/>
+    </radialGradient>
+
+    <!-- icon shadow -->
+    <filter id="iconShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#0f766e" flood-opacity="0.18"/>
+    </filter>
+
+    <!-- text shadow -->
+    <filter id="textShadow" x="-5%" y="-10%" width="110%" height="130%">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#063b3b" flood-opacity="0.12"/>
+    </filter>
+
+    <!-- clip for icon rounded rect -->
+    <clipPath id="iconClip">
+      <rect x="0" y="0" width="160" height="160" rx="38" ry="38"/>
+    </clipPath>
+  </defs>
+
+  <!-- ─── background ─── -->
+  <rect width="1024" height="500" fill="url(#bg)"/>
+
+  <!-- subtle mountain silhouettes (left) -->
+  <ellipse cx="-40" cy="420" rx="280" ry="200" fill="rgba(91,130,133,0.10)" transform="rotate(-14,-40,420)"/>
+  <ellipse cx="60"  cy="430" rx="200" ry="140" fill="rgba(15,143,135,0.08)" transform="rotate(-8,60,430)"/>
+
+  <!-- subtle mountain silhouettes (right) -->
+  <ellipse cx="1064" cy="430" rx="280" ry="200" fill="rgba(81,137,138,0.09)" transform="rotate(14,1064,430)"/>
+  <ellipse cx="960"  cy="440" rx="200" ry="140" fill="rgba(15,118,110,0.07)" transform="rotate(8,960,440)"/>
+
+  <!-- lake surface band -->
+  <rect x="-40" y="370" width="1104" height="170" rx="0" fill="rgba(178,220,219,0.22)"/>
+  <!-- water shimmer lines -->
+  <rect x="200" y="390" width="300" height="2" rx="99" fill="rgba(255,255,255,0.40)"/>
+  <rect x="560" y="406" width="200" height="2" rx="99" fill="rgba(255,255,255,0.30)"/>
+  <rect x="340" y="420" width="140" height="2" rx="99" fill="rgba(255,255,255,0.25)"/>
+
+  <!-- top-left decorative circle (mala bead feel) -->
+  <circle cx="80"  cy="80"  r="5" fill="rgba(15,143,135,0.20)"/>
+  <circle cx="104" cy="58"  r="4" fill="rgba(15,143,135,0.15)"/>
+  <circle cx="56"  cy="56"  r="3" fill="rgba(15,143,135,0.12)"/>
+
+  <!-- top-right decorative dots -->
+  <circle cx="944" cy="70"  r="5" fill="rgba(15,143,135,0.18)"/>
+  <circle cx="968" cy="92"  r="3" fill="rgba(15,143,135,0.12)"/>
+  <circle cx="920" cy="92"  r="4" fill="rgba(15,143,135,0.10)"/>
+
+  <!-- ─── left side: icon block ─── -->
+  <!-- glow -->
+  <ellipse cx="280" cy="240" rx="140" ry="140" fill="url(#glow)"/>
+
+  <!-- icon container — white card -->
+  <g transform="translate(200,160)" filter="url(#iconShadow)">
+    <rect width="160" height="160" rx="38" ry="38"
+          fill="rgba(255,255,255,0.94)"
+          stroke="rgba(15,143,135,0.18)" stroke-width="1.5"/>
+
+    <!--
+      REPLACE THIS BLOCK with:
+        <image href="../assets/images/icon.png" width="160" height="160" clip-path="url(#iconClip)"/>
+      if you export using Inkscape or a tool that supports linked images.
+
+      The circle + "ॐ" below is a placeholder for tools that don't render external images.
+    -->
+
+    <!-- placeholder: teal circle + Om symbol -->
+    <circle cx="80" cy="80" r="52" fill="#0F8F87"/>
+    <text x="80" y="100" text-anchor="middle"
+          font-family="-apple-system, sans-serif" font-size="52"
+          font-weight="900" fill="rgba(255,255,255,0.92)">ॐ</text>
+  </g>
+
+  <!-- progress ring decoration -->
+  <circle cx="280" cy="240" r="96" fill="none"
+          stroke="rgba(15,143,135,0.14)" stroke-width="6"
+          stroke-dasharray="18 8" stroke-linecap="round"/>
+
+  <!-- ─── right side: text block ─── -->
+  <!-- app name -->
+  <text x="440" y="196"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, sans-serif"
+        font-size="68" font-weight="900" letter-spacing="-1"
+        fill="#063B3B" filter="url(#textShadow)">Mantra Japam</text>
+
+  <!-- tagline -->
+  <text x="442" y="248"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, sans-serif"
+        font-size="26" font-weight="600" letter-spacing="0.01em"
+        fill="#365f61">Peaceful mantra meditation &amp; mala tracking</text>
+
+  <!-- divider line -->
+  <rect x="442" y="274" width="64" height="3" rx="99" fill="#0F8F87" opacity="0.5"/>
+
+  <!-- feature pills row -->
+  <!-- pill 1 -->
+  <rect x="442" y="300" width="136" height="34" rx="17"
+        fill="rgba(15,143,135,0.10)" stroke="rgba(15,143,135,0.22)" stroke-width="1"/>
+  <text x="510" y="322" text-anchor="middle"
+        font-family="-apple-system, sans-serif" font-size="14" font-weight="700"
+        fill="#0F8F87">🔢  Mala Counter</text>
+
+  <!-- pill 2 -->
+  <rect x="590" y="300" width="120" height="34" rx="17"
+        fill="rgba(15,143,135,0.10)" stroke="rgba(15,143,135,0.22)" stroke-width="1"/>
+  <text x="650" y="322" text-anchor="middle"
+        font-family="-apple-system, sans-serif" font-size="14" font-weight="700"
+        fill="#0F8F87">⏱  Japam Timer</text>
+
+  <!-- pill 3 -->
+  <rect x="722" y="300" width="118" height="34" rx="17"
+        fill="rgba(15,143,135,0.10)" stroke="rgba(15,143,135,0.22)" stroke-width="1"/>
+  <text x="781" y="322" text-anchor="middle"
+        font-family="-apple-system, sans-serif" font-size="14" font-weight="700"
+        fill="#0F8F87">🔥  Day Streak</text>
+
+  <!-- sub-tagline -->
+  <text x="442" y="378"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, sans-serif"
+        font-size="16" font-weight="500" letter-spacing="0.01em"
+        fill="rgba(54,95,97,0.70)">Count every repetition. Build every day.</text>
+</svg>
