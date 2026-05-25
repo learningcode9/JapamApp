@@ -5,36 +5,27 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "description": "A mindful mantra counting app for daily Japam practice. Track your malas, set timers, and build a consistent spiritual practice.",
-
     "icon": "./assets/images/icon.png",
-
     "scheme": "japamapp",
-
     "userInterfaceStyle": "automatic",
-
     "newArchEnabled": true,
-
     "runtimeVersion": {
       "policy": "appVersion"
     },
-
     "updates": {
       "enabled": true,
       "checkAutomatically": "ON_LOAD",
       "fallbackToCacheTimeout": 0
     },
-
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#f5fafa"
     },
-
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.japamapp.mantrajapam"
     },
-
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -47,15 +38,16 @@
       "permissions": [
         "android.permission.VIBRATE",
         "android.permission.POST_NOTIFICATIONS",
-        "android.permission.RECEIVE_BOOT_COMPLETED"
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
       ],
       "blockedPermissions": [
         "android.permission.RECORD_AUDIO",
         "android.permission.CAMERA",
         "android.permission.READ_CONTACTS"
-      ]
+      ],
     },
-
     "web": {
       "bundler": "metro",
       "favicon": "./public/favicon-48.png",
@@ -64,7 +56,6 @@
       "themeColor": "#f5fafa",
       "backgroundColor": "#f5fafa"
     },
-
     "plugins": [
       "expo-router",
       [
@@ -75,11 +66,19 @@
           "androidMode": "default",
           "iosDisplayInForeground": true
         }
-      ]
+      ],
+      "@react-native-google-signin/google-signin",
+      "./plugins/withJapamTimerService"
     ],
-
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "17d71629-9516-49b8-8c90-863cc7e47027"
+      }
+    },
+    "owner": "learningcode9"
   }
 }

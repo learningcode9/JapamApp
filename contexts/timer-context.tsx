@@ -5,6 +5,14 @@ import * as Haptics from 'expo-haptics';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import * as Notifications from 'expo-notifications';
 import { usePathname, useRouter } from 'expo-router';
+import {
+  getNativeTimerState,
+  pauseForegroundService,
+  setNativeAppActive,
+  startForegroundService,
+  stopForegroundService,
+} from '../lib/timerForegroundService';
+import { getTimerState, updateTimerState } from '../lib/timerState';
 import React, {
   createContext,
   useCallback,
@@ -218,15 +226,17 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       clearInterval(notifIntervalRef.current);
       notifIntervalRef.current = null;
     }
-    if (Platform.OS === 'web') {
+    if (Platform.OS === 'web') return;
+    if (Platform.OS === 'android') {
+      void stopForegroundService();
       return;
     }
     void (async () => {
       try {
-      if (notifIdRef.current) {
-        await Notifications.dismissNotificationAsync(notifIdRef.current);
-        notifIdRef.current = null;
-      }
+        if (notifIdRef.current) {
+          await Notifications.dismissNotificationAsync(notifIdRef.current);
+          notifIdRef.current = null;
+        }
       } catch {}
     })();
   }, []);
@@ -331,36 +341,41 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   }, [showBrowserCompletionNotification]);
 
   const showNotification = useCallback(() => {
-    if (Platform.OS === 'web') {
+    if (Platform.OS === 'web') return;
+
+    if (Platform.OS === 'android') {
+      // Singleton already has the latest startedAt/durationSeconds/completedLoops/totalLoops.
+      // The background task reads from it directly — no closures needed.
+      void startForegroundService();
       return;
     }
 
+    // iOS: post a regular notification that refreshes every 60 s
     const schedule = async () => {
       try {
         const perm = await Notifications.getPermissionsAsync();
         if (!perm.granted) return;
-        if (notifIdRef.current) {
-          try { await Notifications.dismissNotificationAsync(notifIdRef.current); } catch {}
-          notifIdRef.current = null;
-        }
         const left = Math.max(0, selectedDurationRef.current * 60 - secondsRef.current);
         const malaLabel = getCurrentMalaLabel(completedLoopsRef.current, selectedLoopsRef.current);
         const id = await Notifications.scheduleNotificationAsync({
           content: {
             title: 'Japam Timer',
-            body: `${malaLabel} · ${formatTimer(left)}`,
+            body: `Time left: ${formatTimer(left)} · ${malaLabel}`,
             sticky: true,
             sound: false,
-            ...(Platform.OS === 'android' ? { channelId: 'japam-timer' } : {}),
           },
           trigger: null,
         } as any);
+        const oldId = notifIdRef.current;
         notifIdRef.current = id;
+        if (oldId) {
+          try { await Notifications.dismissNotificationAsync(oldId); } catch {}
+        }
       } catch {}
     };
     void schedule();
     if (notifIntervalRef.current) clearInterval(notifIntervalRef.current);
-    notifIntervalRef.current = setInterval(schedule, 5000);
+    notifIntervalRef.current = setInterval(schedule, 60000);
   }, []);
 
   const saveSession = useCallback(async () => {
@@ -377,7 +392,17 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     if (lastSaved?.key === sessionKey && Date.now() - lastSaved.savedAt < 30000) {
       return;
     }
+    // Also skip if the background task already saved this loop index
+    if (getTimerState().lastSavedCompletedLoops >= completedLoopsRef.current) {
+      console.log('[LoopComplete] Background already saved loop %d, skipping foreground save', completedLoopsRef.current);
+      // Still emit stats events in case the foreground listener missed the background emit
+      DeviceEventEmitter.emit('japam-stats-updated');
+      DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
+      console.log('[StatsRefresh] Events re-emitted from foreground path');
+      return;
+    }
     lastSavedSessionRef.current = { key: sessionKey, savedAt: Date.now() };
+    updateTimerState({ lastSavedCompletedLoops: completedLoopsRef.current });
 
     const now = new Date();
     const session = {
@@ -389,6 +414,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       userId: uid || undefined,
     };
 
+    // Local save + event emission — awaited by completeCycle so stats refresh immediately
     try {
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
       const history = raw ? JSON.parse(raw) : [];
@@ -400,41 +426,49 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         window.dispatchEvent(new Event('japam-stats-updated'));
         window.dispatchEvent(new Event('japam-history-updated'));
       }
-
-      if (!uid) return;
-      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-      if (!url || !key) return;
-      const userName = await AsyncStorage.getItem('userName') || '';
-      const response = await fetch(`${url}/rest/v1/japam_history`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: key,
-          Authorization: `Bearer ${key}`,
-          Prefer: 'return=minimal',
-        },
-        body: JSON.stringify({
-          user_id: uid,
-          user_name: userName,
-          malas: 1,
-          count: 108,
-          created_at: session.date,
-        }),
-      });
-
-      if (!response.ok) {
-        console.log('Timer Supabase save error:', await response.text());
-      }
     } catch (err) {
       console.log('Timer session save error:', err);
+      return;
     }
+
+    // Network sync is fire-and-forget — does not block completeCycle
+    if (!uid) return;
+    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    if (!url || !key) return;
+    void (async () => {
+      try {
+        const userName = await AsyncStorage.getItem('userName') || '';
+        const res = await fetch(`${url}/rest/v1/japam_history`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: key,
+            Authorization: `Bearer ${key}`,
+            Prefer: 'return=minimal',
+          },
+          body: JSON.stringify({
+            user_id: uid,
+            user_name: userName,
+            malas: 1,
+            count: 108,
+            created_at: session.date,
+          }),
+        });
+        if (!res.ok) {
+          console.log('Timer Supabase save error:', await res.text());
+        }
+      } catch (err) {
+        console.log('Timer Supabase sync error:', err);
+      }
+    })();
   }, []);
 
   const refreshAuthState = useCallback(async () => {
     const uid = await AsyncStorage.getItem(USER_ID_KEY) || '';
     userIdRef.current = uid;
     setUserId(uid);
+    updateTimerState({ userId: uid });
 
     if (!uid) {
       clearTimerInterval();
@@ -447,13 +481,22 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       completedLoopsRef.current = 0;
       isCompletingRef.current = false;
       timerStartedAtRef.current = null;
+      updateTimerState({ startedAt: null, completedLoops: 0, isCompleting: false });
       void hideNotification();
     }
   }, [clearTimerInterval, hideNotification, releaseWakeLock]);
 
   const completeCycle = useCallback(async () => {
     if (isCompletingRef.current) return;
+    // Guard: if background task already started handling this loop, skip
+    if (getTimerState().isCompleting) {
+      console.log('[LoopComplete] Background task is handling this loop, foreground deferring');
+      return;
+    }
     isCompletingRef.current = true;
+    updateTimerState({ isCompleting: true }); // block background task from interfering
+    console.log('[LoopComplete] Foreground handling loop completion');
+
     clearTimerInterval();
     releaseWakeLock();
     setIsRunning(false);
@@ -467,7 +510,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     const newDone = completedLoopsRef.current + 1;
     setCompletedLoops(newDone);
     completedLoopsRef.current = newDone;
+    updateTimerState({ completedLoops: newDone });
     const isFinal = newDone >= selectedLoopsRef.current;
+    console.log('[LoopComplete] Foreground: loop %d/%d done, isFinal=%s', newDone, selectedLoopsRef.current, isFinal);
 
     if (vibrationEnabledRef.current && Platform.OS !== 'web') {
       pulse([0, 1200, 80, 1500]);
@@ -480,7 +525,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       showBrowserCompletionNotification(isFinal);
     }
 
-    void saveSession();
+    // Await local write so stats events fire before sound plays
+    await saveSession();
 
     const shouldPlaySound = soundEnabledRef.current && !suppressNextCompletionSoundRef.current;
     suppressNextCompletionSoundRef.current = false;
@@ -519,8 +565,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     }
 
     if (isFinal) {
+      updateTimerState({ isCompleting: false, startedAt: null });
       void persistState(false);
       isCompletingRef.current = false;
+      console.log('[LoopComplete] All loops done in foreground');
       return;
     }
 
@@ -529,6 +577,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     setSeconds(0);
     secondsRef.current = 0;
     timerStartedAtRef.current = Date.now();
+    // Update singleton with new loop's startedAt BEFORE starting background service
+    updateTimerState({
+      startedAt: timerStartedAtRef.current,
+      completedLoops: newDone,
+      isCompleting: false,
+    });
+    console.log('[TimerBG] Foreground starting loop %d at %d', newDone + 1, timerStartedAtRef.current);
     setIsRunning(true);
     isRunningRef.current = true;
     startTimerInterval();
@@ -575,6 +630,12 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       vibrationEnabledRef.current = vib !== 'false';
       userIdRef.current = uid || '';
       setUserId(uid || '');
+      // Keep singleton in sync with loaded preferences
+      updateTimerState({
+        soundEnabled: snd !== 'false',
+        vibrationEnabled: vib !== 'false',
+        userId: uid || '',
+      });
     })();
     return () => { active = false; };
   }, []);
@@ -630,11 +691,15 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           { shouldPlay: false, isLooping: false, volume: 0.95 }
         );
         soundRef.current = sound;
+        // Share the loaded sound object with the background task via singleton
+        updateTimerState({ soundObject: sound as any });
+        console.log('[TimerBG] Om sound loaded and registered in singleton');
       } catch {}
     })();
     return () => {
       soundRef.current?.unloadAsync().catch(() => {});
       soundRef.current = null;
+      updateTimerState({ soundObject: null });
     };
   }, []);
 
@@ -719,25 +784,140 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
+      // ── Going to background ──────────────────────────────────────────────
       if (next !== 'active' && appStateRef.current === 'active') {
-        if (isRunningRef.current && timerStartedAtRef.current !== null) {
-          secondsRef.current = Math.max(0, Math.floor((Date.now() - timerStartedAtRef.current) / 1000));
+        updateTimerState({ appIsActive: false });
+        if (Platform.OS === 'android') {
+          setNativeAppActive(false);
         }
+        if (isRunningRef.current && timerStartedAtRef.current !== null) {
+          const elapsed = Math.max(0, Math.floor((Date.now() - timerStartedAtRef.current) / 1000));
+          secondsRef.current = elapsed;
+          const remaining = selectedDurationRef.current * 60 - elapsed;
+          if (remaining > 1) {
+            scheduleCompletionNotification(remaining);
+          }
+        }
+        soundRef.current?.stopAsync().catch(() => {});
         void persistState(isRunningRef.current);
+        console.log('[TimerBG] App backgrounded, native service taking over');
       }
 
-      if (next === 'active' && appStateRef.current !== 'active' && isRunningRef.current && timerStartedAtRef.current !== null) {
-        const elapsed = Math.floor((Date.now() - timerStartedAtRef.current) / 1000);
-        if (elapsed >= selectedDurationRef.current * 60) {
-          suppressNextCompletionSoundRef.current = true;
+      // ── Returning to foreground ──────────────────────────────────────────
+      if (next === 'active' && appStateRef.current !== 'active') {
+        updateTimerState({ appIsActive: true });
+        if (Platform.OS === 'android') {
+          setNativeAppActive(true);
         }
-        secondsRef.current = elapsed;
-        setSeconds(elapsed);
+
+        const handleResume = async () => {
+          // For Android: sync state from native Kotlin service (authoritative source in background)
+          if (Platform.OS === 'android') {
+            try {
+              const nativeState = await getNativeTimerState();
+              if (nativeState && nativeState.completedLoops > completedLoopsRef.current) {
+                const loopsGained = nativeState.completedLoops - completedLoopsRef.current;
+                console.log('[TimerNative] Foreground resumed: native completed %d loop(s)', loopsGained);
+
+                // Save any loops that were completed in the native service to history
+                const uid = userIdRef.current;
+                for (let i = 0; i < loopsGained; i++) {
+                  const loopNum = completedLoopsRef.current + i + 1;
+                  if (getTimerState().lastSavedCompletedLoops < loopNum) {
+                    updateTimerState({ lastSavedCompletedLoops: loopNum });
+                    // Fire-and-forget local history save for each native-completed loop
+                    const now = new Date();
+                    const session = {
+                      date: now.toISOString(),
+                      malas: 1,
+                      totalCount: 108,
+                      duration: Math.round(nativeState.durationMs / 1000),
+                      manual: false,
+                      userId: uid || undefined,
+                    };
+                    void (async () => {
+                      try {
+                        const raw = await AsyncStorage.getItem('history');
+                        const history = raw ? JSON.parse(raw) : [];
+                        await AsyncStorage.setItem('history', JSON.stringify([session, ...history]));
+                      } catch {}
+                    })();
+                  }
+                }
+
+                setCompletedLoops(nativeState.completedLoops);
+                completedLoopsRef.current = nativeState.completedLoops;
+
+                DeviceEventEmitter.emit('japam-stats-updated');
+                DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
+                console.log('[StatsRefresh] Events re-emitted on foreground resume (native path)');
+
+                const isFinal = nativeState.completedLoops >= selectedLoopsRef.current;
+                if (isFinal || !nativeState.isRunning) {
+                  clearTimerInterval();
+                  releaseWakeLock();
+                  setIsRunning(false);
+                  isRunningRef.current = false;
+                  timerStartedAtRef.current = null;
+                  isCompletingRef.current = false;
+                  return;
+                }
+
+                // Next loop running in native — sync JS to it
+                if (nativeState.startedAt > 0) {
+                  timerStartedAtRef.current = nativeState.startedAt;
+                  const elapsed = Math.floor((Date.now() - nativeState.startedAt) / 1000);
+                  secondsRef.current = elapsed;
+                  setSeconds(elapsed);
+                  startTimerInterval();
+                  console.log('[TimerNative] Synced to loop %d, elapsed=%ds', nativeState.completedLoops + 1, elapsed);
+                }
+                return;
+              }
+            } catch (e) {
+              console.log('[TimerNative] getState error on resume:', e);
+            }
+          }
+
+          // JS singleton fallback (non-Android or if native module unavailable)
+          const bgState = getTimerState();
+          if (bgState.completedLoops > completedLoopsRef.current) {
+            const loopsGained = bgState.completedLoops - completedLoopsRef.current;
+            console.log('[TimerBG] Foreground resumed: background completed %d loop(s)', loopsGained);
+            setCompletedLoops(bgState.completedLoops);
+            completedLoopsRef.current = bgState.completedLoops;
+            DeviceEventEmitter.emit('japam-stats-updated');
+            DeviceEventEmitter.emit('japam-history-updated', { userId: userIdRef.current || 'guest' });
+
+            if (!bgState.startedAt) {
+              clearTimerInterval();
+              releaseWakeLock();
+              setIsRunning(false);
+              isRunningRef.current = false;
+              timerStartedAtRef.current = null;
+              isCompletingRef.current = false;
+            } else {
+              timerStartedAtRef.current = bgState.startedAt;
+              const elapsed = Math.floor((Date.now() - bgState.startedAt) / 1000);
+              secondsRef.current = elapsed;
+              setSeconds(elapsed);
+              startTimerInterval();
+            }
+          } else if (isRunningRef.current && timerStartedAtRef.current !== null) {
+            const elapsed = Math.floor((Date.now() - timerStartedAtRef.current) / 1000);
+            secondsRef.current = elapsed;
+            setSeconds(elapsed);
+            console.log('[TimerBG] Foreground resumed, resynced elapsed=%ds', elapsed);
+          }
+        };
+
+        void handleResume();
       }
+
       appStateRef.current = next;
     });
     return () => sub.remove();
-  }, [persistState]);
+  }, [clearTimerInterval, persistState, releaseWakeLock, scheduleCompletionNotification, startTimerInterval]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
@@ -776,7 +956,11 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isRunning) return;
     void showNotification();
-  }, [completedLoops, isRunning, seconds, showNotification]);
+    // 'seconds' intentionally excluded — including it caused showNotification() to fire every
+    // second, creating a dismiss+recreate storm that made the notification flicker and disappear.
+    // The 60-second interval inside showNotification keeps the time display acceptably fresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [completedLoops, isRunning, showNotification]);
 
   useEffect(() => () => {
     clearTimerInterval();
@@ -799,6 +983,19 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       completedLoopsRef.current = 0;
       timerStartedAtRef.current = Date.now();
     }
+    // Populate singleton BEFORE starting the foreground service so the background
+    // task immediately has the correct startedAt, duration, and loop counts.
+    updateTimerState({
+      startedAt: timerStartedAtRef.current,
+      durationSeconds: selectedDurationRef.current * 60,
+      completedLoops: completedLoopsRef.current,
+      totalLoops: selectedLoopsRef.current,
+      userId: userIdRef.current,
+      isCompleting: false,
+      lastSavedCompletedLoops: 0,
+    });
+    console.log('[TimerBG] Timer started: duration=%ds loops=%d/%d startedAt=%d',
+      selectedDurationRef.current * 60, completedLoopsRef.current, selectedLoopsRef.current, timerStartedAtRef.current);
     setIsRunning(true);
     isRunningRef.current = true;
     startTimerInterval();
@@ -823,9 +1020,16 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     releaseWakeLock();
     setIsRunning(false);
     isRunningRef.current = false;
-    void hideNotification();
+    updateTimerState({ startedAt: null, isCompleting: false });
+    if (Platform.OS === 'android') {
+      // Keep native notification visible but show paused state
+      void pauseForegroundService();
+    } else {
+      void hideNotification();
+    }
     clearCompletionNotification();
     void persistState(false);
+    console.log('[TimerBG] Timer paused');
   }, [clearCompletionNotification, clearTimerInterval, hideNotification, persistState, releaseWakeLock]);
 
   const reset = useCallback(() => {
@@ -839,9 +1043,11 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     completedLoopsRef.current = 0;
     isCompletingRef.current = false;
     timerStartedAtRef.current = null;
+    updateTimerState({ startedAt: null, completedLoops: 0, isCompleting: false, lastSavedCompletedLoops: 0 });
     void hideNotification();
     clearCompletionNotification();
     void persistState(false);
+    console.log('[TimerBG] Timer reset');
   }, [clearCompletionNotification, clearTimerInterval, hideNotification, persistState, releaseWakeLock]);
 
   const selectDuration = useCallback((mins: number) => {
