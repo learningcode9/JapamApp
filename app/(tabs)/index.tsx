@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Google from 'expo-auth-session/providers/google';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -29,6 +30,7 @@ import {
 } from 'react-native';
 
 WebBrowser.maybeCompleteAuthSession();
+
 
 type Session = {
   date: string;
@@ -434,15 +436,10 @@ export default function JapamMain() {
   }, [clearTimerHandles]);
   startTimerIntervalRef.current = startTimerInterval;
 
-  const googleRedirectUri =
-    Platform.OS === 'web' && typeof window !== 'undefined'
-      ? window.location.origin
-      : undefined;
-
   const [request, response, promptAsync] = Google.useAuthRequest({
     clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
     scopes: ['profile', 'email'],
-    redirectUri: googleRedirectUri,
+    redirectUri: Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : undefined,
   });
 
   useFocusEffect(
@@ -1091,7 +1088,65 @@ export default function JapamMain() {
   }, [applyRestoredTimerState, fetchTimerStateFromSupabase]);
 
   useEffect(() => {
+    if (Platform.OS !== 'web') {
+      GoogleSignin.configure({
+        webClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
+      });
+    }
+  }, []);
+
+  const handleNativeGoogleSignIn = useCallback(async () => {
+    setIsSigningIn(true);
+    setShowUserModal(false);
+    try {
+      await GoogleSignin.hasPlayServices();
+      const userInfo = await GoogleSignin.signIn();
+      if (userInfo.type !== 'success') {
+        setIsSigningIn(false);
+        setShowUserModal(true);
+        return;
+      }
+      const { id, name, givenName, email } = userInfo.data.user;
+      const googleName = givenName || name || email || 'User';
+      const googleEmail = email || '';
+      const googleUserId = String(id).trim();
+
+      if (!googleUserId) { setIsSigningIn(false); setShowUserModal(true); return; }
+
+      setHasRestoredTimer(false);
+      setUserName(googleName);
+      setShowUserModal(false);
+      setShowUserMenu(false);
+      await restoreTotal(0, { userId: null });
+      totalRef.current = 0;
+      await AsyncStorage.setItem(USER_NAME_KEY, googleName);
+      if (googleEmail) await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
+      await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
+      userIdRef.current = googleUserId;
+
+      await loadJapamNameFromSupabase(googleUserId);
+      await restoreTodayTotal();
+      await restoreHistoryFromSupabase(googleUserId);
+      await restoreTimerForUser(googleUserId);
+      void requestNotificationPermissionOnce();
+    } catch (error) {
+      console.log('Native Google sign-in error:', error);
+      setShowUserModal(true);
+    } finally {
+      setIsSigningIn(false);
+    }
+  }, [
+    loadJapamNameFromSupabase,
+    requestNotificationPermissionOnce,
+    restoreHistoryFromSupabase,
+    restoreTimerForUser,
+    restoreTodayTotal,
+    restoreTotal,
+  ]);
+
+  useEffect(() => {
     const handleGoogleLogin = async () => {
+      if (Platform.OS !== 'web') return; // native platforms use handleNativeGoogleSignIn
       if (!response) return;
 
       if (response.type !== 'success') {
@@ -2024,20 +2079,26 @@ export default function JapamMain() {
                 Sign in with Google to save your Japam history and sync across devices.
               </Text>
               <Pressable
-                disabled={!request}
-                style={[styles.modalButton, !request && styles.disabledButton]}
+                disabled={Platform.OS === 'web' && !request}
+                style={[styles.modalButton, Platform.OS === 'web' && !request && styles.disabledButton]}
                 onPress={() => {
-                  setIsSigningIn(true);
-                  setShowUserModal(false);
-                  void (async () => {
-                    await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
-                    const result = await promptAsync({ showInRecents: true });
-                    if (result.type !== 'success') {
-                      await AsyncStorage.removeItem(AUTH_PENDING_KEY);
-                      setIsSigningIn(false);
-                      setShowUserModal(true);
-                    }
-                  })();
+                  if (Platform.OS !== 'web') {
+                    void handleNativeGoogleSignIn();
+                  } else {
+                    console.log('SIGNIN PATH:', Platform.OS);
+                    console.log('Using web promptAsync');
+                    setIsSigningIn(true);
+                    setShowUserModal(false);
+                    void (async () => {
+                      await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
+                      const result = await promptAsync({ showInRecents: true });
+                      if (result.type !== 'success') {
+                        await AsyncStorage.removeItem(AUTH_PENDING_KEY);
+                        setIsSigningIn(false);
+                        setShowUserModal(true);
+                      }
+                    })();
+                  }
                 }}
               >
                 <View style={styles.googleIcon}>

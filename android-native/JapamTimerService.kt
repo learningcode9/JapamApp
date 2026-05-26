@@ -10,6 +10,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.os.Build
@@ -141,8 +142,15 @@ class JapamTimerService : Service() {
             saveState()
 
             val remaining = maxOf(durationMs - (System.currentTimeMillis() - startedAt), 0L)
-            startForeground(NOTIF_ID, buildNotification(remaining))
-            Log.d("NativeTimer", "[NativeTimer] foreground notification posted: notifId=$NOTIF_ID remaining=${remaining}ms")
+            // Android 14+ (API 34) requires the service type to be passed to startForeground().
+            // Without it, SecurityException is thrown inside onStartCommand(), crashing the service
+            // silently — the JS promise already resolved at that point.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIF_ID, buildNotification(remaining), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+            } else {
+                startForeground(NOTIF_ID, buildNotification(remaining))
+            }
+            Log.d("NativeTimer", "[NativeTimer] foreground notification posted: notifId=$NOTIF_ID remaining=${remaining}ms api=${Build.VERSION.SDK_INT}")
 
             handler.removeCallbacks(tickRunnable)
             handler.postDelayed(tickRunnable, 1000L)

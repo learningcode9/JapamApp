@@ -33,9 +33,16 @@ const Native: {
   isServiceRunning(): Promise<boolean>;
 } | null = NativeModules.JapamTimerService ?? null;
 
+// Diagnostic: log module availability at import time so we can see it in adb logcat
+console.log('[TimerNative] module =', NativeModules.JapamTimerService);
+
 export const startForegroundService = async (): Promise<void> => {
   if (!Native) {
-    console.warn('[NativeTimer] NativeModules.JapamTimerService is null — module not registered in this build');
+    console.error(
+      '[TimerNative] FATAL: NativeModules.JapamTimerService is null — ' +
+      'module not registered. JapamTimerPackage may not be in MainApplication.kt, ' +
+      'or the package was not copied during prebuild. Foreground service will NOT start.'
+    );
     return;
   }
   const s = getTimerState();
@@ -54,7 +61,7 @@ export const startForegroundService = async (): Promise<void> => {
     );
     console.log('[TimerNative] startTimer OK duration=%ds loops=%d/%d', s.durationSeconds, s.completedLoops, s.totalLoops);
   } catch (e) {
-    console.warn('[TimerNative] startTimer error:', e);
+    console.error('[TimerNative] startTimer FAILED:', e);
   }
 };
 

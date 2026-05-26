@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import * as Google from 'expo-auth-session/providers/google';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
@@ -130,15 +131,10 @@ export default function TimerScreen() {
   const [dayStreak, setDayStreak] = useState(0);
   const deferredInstallPromptRef = useRef<any>(null);
 
-  const googleRedirectUri =
-    Platform.OS === 'web' && typeof window !== 'undefined'
-      ? window.location.origin
-      : undefined;
-
   const [request, response, promptAsync] = Google.useAuthRequest({
     clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
     scopes: ['profile', 'email'],
-    redirectUri: googleRedirectUri,
+    redirectUri: Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : undefined,
   });
 
   const loadUser = useCallback(async () => {
@@ -216,7 +212,52 @@ export default function TimerScreen() {
   }, [loadStats, loadUser]);
 
   useEffect(() => {
+    if (Platform.OS !== 'web') {
+      GoogleSignin.configure({
+        webClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
+      });
+    }
+  }, []);
+
+  const handleNativeGoogleSignIn = useCallback(async () => {
+    console.log('SIGNIN PATH:', Platform.OS);
+    console.log('Using native GoogleSignin');
+    setIsSigningIn(true);
+    setShowUserModal(false);
+    try {
+      await GoogleSignin.hasPlayServices();
+      const userInfo = await GoogleSignin.signIn();
+      if (userInfo.type !== 'success') {
+        setIsSigningIn(false);
+        setShowUserModal(true);
+        return;
+      }
+      const { id, name, givenName, email } = userInfo.data.user;
+      const googleName = givenName || name || email || 'User';
+      const googleEmail = email || '';
+      const googleUserId = String(id).trim();
+
+      if (!googleUserId) { setIsSigningIn(false); setShowUserModal(true); return; }
+
+      await AsyncStorage.setItem(USER_NAME_KEY, googleName);
+      if (googleEmail) await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
+      await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
+      setUserName(googleName);
+      setShowUserModal(false);
+      DeviceEventEmitter.emit('japam-auth-updated');
+      DeviceEventEmitter.emit('japam-stats-updated');
+      void loadStats();
+    } catch (error) {
+      console.log('Native Google sign-in error:', error);
+      setShowUserModal(true);
+    } finally {
+      setIsSigningIn(false);
+    }
+  }, [loadStats]);
+
+  useEffect(() => {
     const handleGoogleLogin = async () => {
+      if (Platform.OS !== 'web') return; // native platforms use handleNativeGoogleSignIn
       if (!response) return;
 
       if (response.type !== 'success') {
@@ -555,27 +596,33 @@ export default function TimerScreen() {
                 Sign in with Google to save your Japam history and sync across devices.
               </Text>
               <Pressable
-                disabled={!request || isSigningIn}
-                style={[styles.modalButton, (!request || isSigningIn) && styles.disabledButton]}
+                disabled={isSigningIn || (Platform.OS === 'web' && !request)}
+                style={[styles.modalButton, (isSigningIn || (Platform.OS === 'web' && !request)) && styles.disabledButton]}
                 onPress={() => {
-                  setIsSigningIn(true);
-                  setShowUserModal(false);
-                  void (async () => {
-                    try {
-                      await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
-                      const result = await promptAsync({ showInRecents: true });
-                      if (result.type !== 'success') {
+                  if (Platform.OS !== 'web') {
+                    void handleNativeGoogleSignIn();
+                  } else {
+                    console.log('SIGNIN PATH:', Platform.OS);
+                    console.log('Using web promptAsync');
+                    setIsSigningIn(true);
+                    setShowUserModal(false);
+                    void (async () => {
+                      try {
+                        await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
+                        const result = await promptAsync({ showInRecents: true });
+                        if (result.type !== 'success') {
+                          await AsyncStorage.removeItem(AUTH_PENDING_KEY);
+                          setIsSigningIn(false);
+                          setShowUserModal(true);
+                        }
+                      } catch (error) {
+                        console.log('Google prompt error:', error);
                         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
                         setIsSigningIn(false);
                         setShowUserModal(true);
                       }
-                    } catch (error) {
-                      console.log('Google prompt error:', error);
-                      await AsyncStorage.removeItem(AUTH_PENDING_KEY);
-                      setIsSigningIn(false);
-                      setShowUserModal(true);
-                    }
-                  })();
+                    })();
+                  }
                 }}
               >
                 <View style={styles.googleIcon}>

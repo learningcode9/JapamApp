@@ -1,8 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
-import React, { useCallback, useState } from 'react';
-import { Alert, DeviceEventEmitter, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Alert, BackHandler, DeviceEventEmitter, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
@@ -24,6 +24,15 @@ export default function SettingsScreen() {
   const [userName, setUserName] = useState('');
   const [userEmail, setUserEmail] = useState('');
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+
+  useEffect(() => {
+    if (!showLogoutConfirm || Platform.OS !== 'android') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      setShowLogoutConfirm(false);
+      return true;
+    });
+    return () => sub.remove();
+  }, [showLogoutConfirm]);
 
   useFocusEffect(
     useCallback(() => {
@@ -245,14 +254,14 @@ export default function SettingsScreen() {
             <View style={styles.confirmCard}>
               <Text style={styles.confirmTitle}>Logout?</Text>
               <Text style={styles.confirmText}>Are you sure you want to logout?</Text>
-              <div style={styles.confirmActions}>
+              <View style={styles.confirmActions}>
                 <Pressable style={styles.confirmCancel} onPress={() => setShowLogoutConfirm(false)}>
                   <Text style={styles.confirmCancelText}>Cancel</Text>
                 </Pressable>
                 <Pressable style={styles.confirmLogout} onPress={async () => { setShowLogoutConfirm(false); await logout(); }}>
                   <Text style={styles.confirmLogoutText}>Logout</Text>
                 </Pressable>
-              </div>
+              </View>
             </View>
           </View>
         </Modal>
