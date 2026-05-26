@@ -47,7 +47,13 @@
       "Bash(echo \"EXIT: $?\")",
       "Bash(grep -E '\\\\.\\(kt|java|json|tsx|ts|js\\)$')",
       "Bash(eas build:view *)",
-      "Bash(eas build:list *)"
+      "Bash(eas build:list *)",
+      "Bash(adb logcat *)",
+      "Bash(kill %1)",
+      "Bash(wait %1)",
+      "Read(//Users/sravani/Library/Android/sdk/platform-tools/**)",
+      "Read(//usr/local/**)",
+      "Bash(echo \"Build started in background, PID=$!\")"
     ]
   }
 }
