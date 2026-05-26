@@ -49,18 +49,43 @@ function patchMainApplication(config) {
 
     if (src.includes('JapamTimerPackage')) return c; // already patched
 
-    // Insert import before the expo ReactNativeHostWrapper import
-    src = src.replace(
-      /(import expo\.modules\.ReactNativeHostWrapper)/,
-      `import ${PKG}.JapamTimerPackage\n$1`
-    );
+    // Insert import — try ReactNativeHostWrapper first, fall back to class declaration
+    if (src.includes('import expo.modules.ReactNativeHostWrapper')) {
+      src = src.replace(
+        /(import expo\.modules\.ReactNativeHostWrapper)/,
+        `import ${PKG}.JapamTimerPackage\n$1`
+      );
+    } else {
+      src = src.replace(
+        /(class MainApplication)/,
+        `import ${PKG}.JapamTimerPackage\n\n$1`
+      );
+    }
 
-    // Add the package after PackageList(this).packages — handles both common patterns
-    src = src.replace(
-      /val packages = PackageList\(this\)\.packages([\s\S]*?)(\n(\s+)return packages)/,
-      (match, middle, returnPart, indent) =>
-        `val packages = PackageList(this).packages${middle}\n${indent}packages.add(JapamTimerPackage())${returnPart}`
-    );
+    // Pattern A: older RN template — val packages = PackageList(this).packages ... return packages
+    const patternA = /val packages = PackageList\(this\)\.packages([\s\S]*?)(\n(\s+)return packages)/;
+    if (patternA.test(src)) {
+      src = src.replace(
+        patternA,
+        (match, middle, returnPart, indent) =>
+          `val packages = PackageList(this).packages${middle}\n${indent}packages.add(JapamTimerPackage())${returnPart}`
+      );
+    } else {
+      // Pattern B: RN 0.76+ / Expo SDK 53+ template — PackageList(this).packages.apply { }
+      // This is the pattern used in production builds that caused the silent registration failure.
+      const patternB = /(PackageList\(this\)\.packages\.apply\s*\{\n)(\s*)/;
+      if (patternB.test(src)) {
+        src = src.replace(
+          patternB,
+          (_, open, indent) => `${open}${indent}add(JapamTimerPackage())\n${indent}`
+        );
+      } else {
+        console.error(
+          '[withJapamTimerService] ERROR: Could not find package registration point in MainApplication.kt. ' +
+          'JapamTimerPackage will NOT be registered and NativeModules.JapamTimerService will be null at runtime.'
+        );
+      }
+    }
 
     c.modResults.contents = src;
     return c;
