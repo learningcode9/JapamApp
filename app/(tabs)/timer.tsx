@@ -680,7 +680,7 @@ const styles = StyleSheet.create({
       : (isShortMobile ? 8 : isMobile ? 12 : 24),
     paddingBottom: Platform.OS === 'web'
       ? (isMobile ? ('calc(136px + env(safe-area-inset-bottom))' as any) : 128)
-      : (isMobile ? 132 : 128),
+      : (isMobile ? 168 : 128),
     paddingHorizontal: isMobile ? 0 : 24,
     alignItems: 'center',
     minHeight: Platform.OS === 'web' ? ('100dvh' as any) : screenHeight,
@@ -698,7 +698,7 @@ const styles = StyleSheet.create({
     borderRadius: isMobile ? 0 : 28,
     paddingHorizontal: isMobile ? 22 : 28,
     paddingTop: isShortMobile ? 16 : isMobile ? 22 : 34,
-    paddingBottom: isShortMobile ? 48 : isMobile ? 56 : 104,
+    paddingBottom: isShortMobile ? 72 : isMobile ? 80 : 104,
     shadowColor: '#0f766e',
     shadowOpacity: isMobile ? 0 : 0.16,
     shadowRadius: 28,

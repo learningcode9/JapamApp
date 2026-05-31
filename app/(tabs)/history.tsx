@@ -610,7 +610,7 @@ export default function HistoryScreen() {
           <Text style={[styles.tableCell, styles.dateCell]}>Date</Text>
           <Text style={styles.tableCell}>Malas</Text>
           <Text style={styles.tableCell}>Count</Text>
-          <Text style={styles.tableCell}>Accumulated</Text>
+          <Text style={styles.tableCell}>Total</Text>
         </View>
 
         {dailyRows.length === 0 ? (

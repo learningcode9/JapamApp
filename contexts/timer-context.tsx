@@ -533,13 +533,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
     if (shouldPlaySound) {
       try {
-        await configureAudio();
         const sound = soundRef.current;
         if (sound) {
           await sound.stopAsync().catch(() => {});
-          await sound.setPositionAsync(0).catch(() => {});
-          await sound.setVolumeAsync(0.95).catch(() => {});
-          await sound.setIsLoopingAsync(false).catch(() => {});
           await sound.playAsync();
           await new Promise<void>((resolve) => {
             let done = false;
@@ -873,6 +869,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
                   console.log('[TimerNative] Synced to loop %d, elapsed=%ds', nativeState.completedLoops + 1, elapsed);
                 }
                 return;
+              } else if (nativeState && nativeState.isRunning && isRunningRef.current) {
+                // Same loop, timer still running — use native startedAt as authoritative source
+                const startedAt = nativeState.startedAt > 0 ? nativeState.startedAt : timerStartedAtRef.current;
+                if (startedAt) {
+                  timerStartedAtRef.current = startedAt;
+                  const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+                  secondsRef.current = elapsed;
+                  setSeconds(elapsed);
+                  startTimerInterval();
+                  console.log('[TimerNative] Foreground resumed same loop, elapsed=%ds', elapsed);
+                }
+                return;
               }
             } catch (e) {
               console.log('[TimerNative] getState error on resume:', e);
@@ -907,6 +915,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
             const elapsed = Math.floor((Date.now() - timerStartedAtRef.current) / 1000);
             secondsRef.current = elapsed;
             setSeconds(elapsed);
+            startTimerInterval();
             console.log('[TimerBG] Foreground resumed, resynced elapsed=%ds', elapsed);
           }
         };

@@ -172,6 +172,6 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
   tabLabelActive: {
-    fontWeight: '700',
+    fontWeight: '800',
   },
 });

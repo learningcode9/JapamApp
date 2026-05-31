@@ -207,29 +207,31 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Help / Install App</Text>
-          <View style={styles.cardStack}>
-            <View style={styles.helpCard}>
-              <Text style={styles.helpTitle}>Add to Home Screen</Text>
-              <Text style={styles.helpSubTitle}>iPhone Safari</Text>
-              <View style={styles.helpSteps}>
-                <Text style={styles.helpStep}>1. Tap Share</Text>
-                <Text style={styles.helpStep}>2. Tap Add to Home Screen</Text>
-                <Text style={styles.helpStep}>3. Tap Add</Text>
+        {Platform.OS !== 'android' && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Help / Install App</Text>
+            <View style={styles.cardStack}>
+              <View style={styles.helpCard}>
+                <Text style={styles.helpTitle}>Add to Home Screen</Text>
+                <Text style={styles.helpSubTitle}>iPhone Safari</Text>
+                <View style={styles.helpSteps}>
+                  <Text style={styles.helpStep}>1. Tap Share</Text>
+                  <Text style={styles.helpStep}>2. Tap Add to Home Screen</Text>
+                  <Text style={styles.helpStep}>3. Tap Add</Text>
+                </View>
               </View>
-            </View>
-            <View style={styles.helpCard}>
-              <Text style={styles.helpTitle}>Add to Home Screen</Text>
-              <Text style={styles.helpSubTitle}>Android Chrome</Text>
-              <View style={styles.helpSteps}>
-                <Text style={styles.helpStep}>1. Tap menu ⋮</Text>
-                <Text style={styles.helpStep}>2. Tap Install app</Text>
-                <Text style={styles.helpStep}>3. Confirm Install</Text>
+              <View style={styles.helpCard}>
+                <Text style={styles.helpTitle}>Add to Home Screen</Text>
+                <Text style={styles.helpSubTitle}>Android Chrome</Text>
+                <View style={styles.helpSteps}>
+                  <Text style={styles.helpStep}>1. Tap menu ⋮</Text>
+                  <Text style={styles.helpStep}>2. Tap Install app</Text>
+                  <Text style={styles.helpStep}>3. Confirm Install</Text>
+                </View>
               </View>
             </View>
           </View>
-        </View>
+        )}
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Feedback</Text>
