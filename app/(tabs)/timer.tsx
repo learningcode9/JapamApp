@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
@@ -418,7 +419,7 @@ export default function TimerScreen() {
         <View style={styles.appShell}>
           <View pointerEvents="none" style={styles.sceneLayer}>
             <ImageBackground
-              source={require('../../assets/images/zen-background.png')}
+              source={ZEN_BACKGROUND}
               resizeMode="cover"
               style={styles.backgroundImage}
               imageStyle={styles.backgroundImageStyle}

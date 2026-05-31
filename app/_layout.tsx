@@ -5,15 +5,12 @@ import * as Updates from 'expo-updates';
 import { Asset } from 'expo-asset';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
-import { AppState, Platform } from 'react-native';
+import { useEffect, useState } from 'react';
+import { AppState, Platform, View } from 'react-native';
 import 'react-native-reanimated';
 import { PaperProvider } from 'react-native-paper';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-
-// Preload the shared background image at module-load time so it is
-// decoded and in memory before Timer or Tap Japam first renders.
-void Asset.loadAsync([require('../assets/images/zen-background.png')]);
+import { ZEN_BACKGROUND } from '@/constants/assets';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -21,6 +18,14 @@ export const unstable_settings = {
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+  const [bgReady, setBgReady] = useState(false);
+
+  useEffect(() => {
+    Asset.fromModule(ZEN_BACKGROUND)
+      .downloadAsync()
+      .then(() => setBgReady(true))
+      .catch(() => setBgReady(true));
+  }, []);
 
   useEffect(() => {
     if (Platform.OS === 'web') return;
@@ -179,14 +184,18 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <PaperProvider>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <Stack>
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-        </Stack>
-        <StatusBar style="auto" />
-      </ThemeProvider>
-    </PaperProvider>
+    <View style={{ flex: 1, backgroundColor: '#edf7f4' }}>
+      {bgReady && (
+        <PaperProvider>
+          <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+            <Stack>
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+            </Stack>
+            <StatusBar style="auto" />
+          </ThemeProvider>
+        </PaperProvider>
+      )}
+    </View>
   );
 }

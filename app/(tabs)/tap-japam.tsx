@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
@@ -1861,7 +1862,7 @@ export default function JapamMain() {
         <View style={styles.appShell}>
           <View pointerEvents="none" style={styles.sceneLayer}>
             <ImageBackground
-              source={require('../../assets/images/zen-background.png')}
+              source={ZEN_BACKGROUND}
               resizeMode="cover"
               style={styles.backgroundImage}
               imageStyle={styles.backgroundImageStyle}
