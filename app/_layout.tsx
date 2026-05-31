@@ -2,15 +2,18 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native
 import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import * as Updates from 'expo-updates';
+import { Asset } from 'expo-asset';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { AppState, Platform } from 'react-native';
 import 'react-native-reanimated';
-
 import { PaperProvider } from 'react-native-paper';
-
 import { useColorScheme } from '@/hooks/use-color-scheme';
+
+// Preload the shared background image at module-load time so it is
+// decoded and in memory before Timer or Tap Japam first renders.
+void Asset.loadAsync([require('../assets/images/zen-background.png')]);
 
 export const unstable_settings = {
   anchor: '(tabs)',

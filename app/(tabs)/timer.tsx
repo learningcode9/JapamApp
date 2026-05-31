@@ -422,6 +422,7 @@ export default function TimerScreen() {
               resizeMode="cover"
               style={styles.backgroundImage}
               imageStyle={styles.backgroundImageStyle}
+              fadeDuration={0}
             >
               <View style={styles.backgroundOverlay} />
             </ImageBackground>
