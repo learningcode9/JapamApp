@@ -188,8 +188,8 @@ export default function SettingsScreen() {
 
           <View style={styles.card}>
             <View style={styles.textBlock}>
-              <Text style={styles.label}>Sound on each repetition</Text>
-              <Text style={styles.description}>Play a soft chime after each mala completes</Text>
+              <Text style={styles.label}>Sound on Mala Completion</Text>
+              <Text style={styles.description}>Play Om chime when each mala completes.</Text>
             </View>
             <Switch value={repetitionSoundEnabled} onValueChange={toggleRepetitionSound} />
           </View>

@@ -342,14 +342,19 @@ class JapamTimerService : Service() {
             return
         }
         try {
+            val called = AtomicBoolean(false)
+            val done = Runnable {
+                if (called.compareAndSet(false, true)) onComplete()
+            }
             mp.seekTo(0)
             mp.setOnCompletionListener {
                 it.setOnCompletionListener(null)
-                onComplete()
+                handler.removeCallbacks(done)
+                done.run()
             }
             mp.start()
-            // Fallback: call onComplete after 6s in case completion listener fires late
-            handler.postDelayed({ onComplete() }, 6_000L)
+            // Fallback: fire onComplete after 6s if completion listener never fires
+            handler.postDelayed(done, 6_000L)
         } catch (_: Exception) {
             onComplete()
         }
