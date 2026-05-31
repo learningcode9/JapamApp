@@ -1552,6 +1552,22 @@ export default function JapamMain() {
     return true;
   };
 
+  const handleResetCount = () => {
+    if (count === 0) return;
+    Alert.alert(
+      'Reset current count?',
+      `${count} tap${count === 1 ? '' : 's'} will be cleared. Completed malas are not affected.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: () => setCountersFromTotal(totalRef.current - count),
+        },
+      ]
+    );
+  };
+
   const handleTap = () => {
     if (!requireLogin()) return;
 
@@ -1910,6 +1926,12 @@ export default function JapamMain() {
             </View>
             <Text style={styles.tapProgressText}>{count} / 108</Text>
           </View>
+
+          {count > 0 && (
+            <Pressable style={styles.resetCountBtn} onPress={handleResetCount}>
+              <Text style={styles.resetCountBtnText}>Reset Count</Text>
+            </Pressable>
+          )}
 
         </View>
 
@@ -2475,6 +2497,20 @@ const styles = StyleSheet.create({
     fontSize: isMobile ? 15 : 17,
     fontWeight: '800',
     marginTop: 8,
+  },
+  resetCountBtn: {
+    marginTop: 14,
+    paddingVertical: 7,
+    paddingHorizontal: 20,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: 'rgba(15,118,110,0.3)',
+    backgroundColor: 'rgba(255,255,255,0.72)',
+  },
+  resetCountBtnText: {
+    color: '#547071',
+    fontSize: 13,
+    fontWeight: '700',
   },
   ringProgressBar: {
     position: 'absolute',
