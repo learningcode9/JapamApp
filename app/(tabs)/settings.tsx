@@ -207,7 +207,7 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        {Platform.OS !== 'android' && (
+        {Platform.OS === 'web' && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Help / Install App</Text>
             <View style={styles.cardStack}>
