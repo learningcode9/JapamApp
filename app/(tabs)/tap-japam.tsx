@@ -2221,8 +2221,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(238, 248, 246, 0.94)',
     borderRadius: isMobile ? 0 : 28,
     paddingHorizontal: isMobile ? 22 : 28,
-    // Keep all vertical spacing inside appShell so the absolute background
-    // layer covers the full scrollable height, matching the Timer page.
+    // Keep vertical spacing inside appShell so the absolute background layer
+    // covers the scrollable page, but reserve only the fixed tab bar space.
     paddingTop: Platform.OS === 'web'
       ? (isMobile
           ? (isShortMobile
@@ -2232,9 +2232,9 @@ const styles = StyleSheet.create({
       : (isShortMobile ? 14 : isMobile ? 20 : 58),
     paddingBottom: Platform.OS === 'web'
       ? (isMobile
-          ? ('calc(147px + env(safe-area-inset-bottom))' as any)
-          : 229)
-      : (isMobile ? 147 : 229),
+          ? ('calc(112px + env(safe-area-inset-bottom))' as any)
+          : 112)
+      : 112,
     shadowColor: '#0f766e',
     shadowOpacity: isMobile ? 0 : 0.16,
     shadowRadius: 28,

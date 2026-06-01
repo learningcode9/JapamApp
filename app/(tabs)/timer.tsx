@@ -693,10 +693,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(238, 248, 246, 0.94)',
     borderRadius: isMobile ? 0 : 28,
     paddingHorizontal: isMobile ? 22 : 28,
-    // Vertical padding relocated from the ScrollView container so the zen
-    // sceneLayer (absoluteFill of appShell) covers the full scrollable area.
-    // Values = old container vertical padding + old appShell vertical padding,
-    // so content position is unchanged.
+    // Keep vertical spacing inside appShell so the absolute background layer
+    // covers the scrollable page, but reserve only the fixed tab bar space.
     paddingTop: Platform.OS === 'web'
       ? (isMobile
           ? (isShortMobile
@@ -706,11 +704,9 @@ const styles = StyleSheet.create({
       : (isShortMobile ? 24 : isMobile ? 34 : 58),
     paddingBottom: Platform.OS === 'web'
       ? (isMobile
-          ? (isShortMobile
-              ? ('calc(208px + env(safe-area-inset-bottom))' as any)
-              : ('calc(216px + env(safe-area-inset-bottom))' as any))
-          : 232)
-      : (isShortMobile ? 240 : isMobile ? 248 : 232),
+          ? ('calc(112px + env(safe-area-inset-bottom))' as any)
+          : 112)
+      : 112,
     shadowColor: '#0f766e',
     shadowOpacity: isMobile ? 0 : 0.16,
     shadowRadius: 28,
