@@ -128,6 +128,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const notifIdRef = useRef<string | null>(null);
   const completionNotifIdRef = useRef<string | null>(null);
+  const webRunningNotificationRef = useRef<Notification | null>(null);
   const webCompletionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const webCompletionNotificationShownRef = useRef(false);
   const notifIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -226,7 +227,23 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       clearInterval(notifIntervalRef.current);
       notifIntervalRef.current = null;
     }
-    if (Platform.OS === 'web') return;
+    if (Platform.OS === 'web') {
+      try {
+        webRunningNotificationRef.current?.close();
+        webRunningNotificationRef.current = null;
+      } catch (error) {
+        console.log('[TimerNotify] Web notification close error:', error);
+      }
+      try {
+        if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+          navigator.mediaSession.metadata = null;
+          navigator.mediaSession.playbackState = 'none';
+        }
+      } catch (error) {
+        console.log('[TimerNotify] Media session clear error:', error);
+      }
+      return;
+    }
     if (Platform.OS === 'android') {
       void stopForegroundService();
       return;
@@ -272,7 +289,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       if (current.granted) return true;
       const requested = await Notifications.requestPermissionsAsync();
       return requested.granted;
-    } catch {
+    } catch (error) {
+      console.log('[TimerNotify] Permission error:', error);
       return false;
     }
   }, []);
@@ -289,7 +307,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         badge: '/icons/icon-192.png',
         silent: false,
       });
-    } catch {}
+    } catch (error) {
+      console.log('[TimerNotify] Completion notification error:', error);
+    }
   }, []);
 
   const scheduleCompletionNotification = useCallback((secondsUntilComplete: number) => {
@@ -341,7 +361,63 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   }, [showBrowserCompletionNotification]);
 
   const showNotification = useCallback(() => {
-    if (Platform.OS === 'web') return;
+    if (Platform.OS === 'web') {
+      const updateWebTimerStatus = () => {
+        const left = Math.max(0, selectedDurationRef.current * 60 - secondsRef.current);
+        const malaLabel = getCurrentMalaLabel(completedLoopsRef.current, selectedLoopsRef.current);
+        const statusText = `${malaLabel} · ${formatTimer(left)}`;
+
+        try {
+          if (
+            typeof navigator !== 'undefined' &&
+            'mediaSession' in navigator &&
+            typeof window !== 'undefined' &&
+            'MediaMetadata' in window
+          ) {
+            navigator.mediaSession.metadata = new window.MediaMetadata({
+              title: 'Japam Timer',
+              artist: statusText,
+              album: 'Mantra Japam',
+              artwork: [
+                { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
+                { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
+              ],
+            });
+            navigator.mediaSession.playbackState = isRunningRef.current ? 'playing' : 'paused';
+          }
+        } catch (error) {
+          console.log('[TimerNotify] Media session update error:', error);
+        }
+
+        try {
+          if (
+            typeof Notification !== 'undefined' &&
+            Notification.permission === 'granted' &&
+            !webRunningNotificationRef.current
+          ) {
+            webRunningNotificationRef.current = new Notification('Japam Timer running', {
+              body: statusText,
+              icon: '/icons/icon-192.png',
+              badge: '/icons/icon-192.png',
+              tag: 'japam-timer-running',
+              silent: true,
+            });
+            webRunningNotificationRef.current.onclick = () => {
+              try {
+                if (typeof window !== 'undefined') window.focus();
+              } catch {}
+            };
+          }
+        } catch (error) {
+          console.log('[TimerNotify] Web running notification error:', error);
+        }
+      };
+
+      updateWebTimerStatus();
+      if (notifIntervalRef.current) clearInterval(notifIntervalRef.current);
+      notifIntervalRef.current = setInterval(updateWebTimerStatus, 15000);
+      return;
+    }
 
     if (Platform.OS === 'android') {
       // Singleton already has the latest startedAt/durationSeconds/completedLoops/totalLoops.
@@ -944,6 +1020,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
       if (document.visibilityState === 'visible' && isRunningRef.current) {
         void acquireWakeLock();
+        void showNotification();
       }
     };
     const onPageHide = () => {
@@ -958,7 +1035,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('pagehide', onPageHide);
     };
-  }, [acquireWakeLock, persistState]);
+  }, [acquireWakeLock, persistState, showNotification]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
@@ -1014,10 +1091,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     void acquireWakeLock();
     if (Platform.OS === 'android') {
       setNativeAppActive(appStateRef.current === 'active');
-      void showNotification();
     }
-    void requestNotificationPermission().then(() => {
+    void showNotification();
+    void requestNotificationPermission().then((granted) => {
       if (!isRunningRef.current) return;
+      if (!granted) {
+        console.log('[TimerNotify] Notification permission not granted; keeping Media Session/foreground timer only.');
+      }
       void showNotification();
       scheduleCompletionNotification(targetSeconds - secondsRef.current);
     });
