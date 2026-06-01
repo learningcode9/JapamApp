@@ -47,6 +47,8 @@ const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
+const WEB_TIMER_AUDIO_SRC =
+  'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==';
 
 export const STD_DURATIONS = [1, 3, 5, 10, 15];
 export const LOOP_OPTIONS = [1, 3, 5, 10];
@@ -129,6 +131,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const notifIdRef = useRef<string | null>(null);
   const completionNotifIdRef = useRef<string | null>(null);
   const webRunningNotificationRef = useRef<Notification | null>(null);
+  const webTimerAudioRef = useRef<HTMLAudioElement | null>(null);
   const webCompletionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const webCompletionNotificationShownRef = useRef(false);
   const notifIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -222,12 +225,51 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     timerIntervalRef.current = setInterval(tick, 1000);
   }, [clearTimerInterval]);
 
+  const startWebTimerAudio = useCallback(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined' || typeof window.Audio === 'undefined') return;
+    try {
+      if (!webTimerAudioRef.current) {
+        const audio = new window.Audio(WEB_TIMER_AUDIO_SRC);
+        audio.loop = true;
+        audio.preload = 'auto';
+        audio.volume = 0.01;
+        audio.setAttribute('playsinline', 'true');
+        webTimerAudioRef.current = audio;
+      }
+
+      const audio = webTimerAudioRef.current;
+      if (!audio.paused) return;
+      audio.currentTime = 0;
+      const playResult = audio.play();
+      if (playResult && typeof playResult.catch === 'function') {
+        playResult.catch((error) => {
+          console.log('[TimerNotify] Web timer audio start error:', error);
+        });
+      }
+    } catch (error) {
+      console.log('[TimerNotify] Web timer audio setup error:', error);
+    }
+  }, []);
+
+  const stopWebTimerAudio = useCallback(() => {
+    if (Platform.OS !== 'web') return;
+    try {
+      const audio = webTimerAudioRef.current;
+      if (!audio) return;
+      audio.pause();
+      audio.currentTime = 0;
+    } catch (error) {
+      console.log('[TimerNotify] Web timer audio stop error:', error);
+    }
+  }, []);
+
   const hideNotification = useCallback(() => {
     if (notifIntervalRef.current) {
       clearInterval(notifIntervalRef.current);
       notifIntervalRef.current = null;
     }
     if (Platform.OS === 'web') {
+      stopWebTimerAudio();
       try {
         webRunningNotificationRef.current?.close();
         webRunningNotificationRef.current = null;
@@ -256,7 +298,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         }
       } catch {}
     })();
-  }, []);
+  }, [stopWebTimerAudio]);
 
   const clearCompletionNotification = useCallback(() => {
     if (webCompletionTimeoutRef.current) {
@@ -362,6 +404,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
   const showNotification = useCallback(() => {
     if (Platform.OS === 'web') {
+      startWebTimerAudio();
       const updateWebTimerStatus = () => {
         const left = Math.max(0, selectedDurationRef.current * 60 - secondsRef.current);
         const malaLabel = getCurrentMalaLabel(completedLoopsRef.current, selectedLoopsRef.current);
@@ -452,7 +495,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     void schedule();
     if (notifIntervalRef.current) clearInterval(notifIntervalRef.current);
     notifIntervalRef.current = setInterval(schedule, 60000);
-  }, []);
+  }, [startWebTimerAudio]);
 
   const saveSession = useCallback(async () => {
     const uid = userIdRef.current;
@@ -1055,8 +1098,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     clearTimerInterval();
     clearCompletionNotification();
     releaseWakeLock();
+    stopWebTimerAudio();
     if (notifIntervalRef.current) clearInterval(notifIntervalRef.current);
-  }, [clearCompletionNotification, clearTimerInterval, releaseWakeLock]);
+  }, [clearCompletionNotification, clearTimerInterval, releaseWakeLock, stopWebTimerAudio]);
 
   const start = useCallback(async () => {
     if (!userIdRef.current || isRunning) return;
