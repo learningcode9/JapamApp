@@ -130,6 +130,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const notifIdRef = useRef<string | null>(null);
   const completionNotifIdRef = useRef<string | null>(null);
   const webRunningNotificationRef = useRef<Notification | null>(null);
+  const webRunningNotificationShownRef = useRef(false);
   const webTimerAudioRef = useRef<HTMLAudioElement | null>(null);
   const webCompletionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const webCompletionNotificationShownRef = useRef(false);
@@ -272,6 +273,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       try {
         webRunningNotificationRef.current?.close();
         webRunningNotificationRef.current = null;
+        webRunningNotificationShownRef.current = false;
       } catch (error) {
         console.log('[TimerNotify] Web notification close error:', error);
       }
@@ -401,7 +403,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     })();
   }, [showBrowserCompletionNotification]);
 
-  const showNotification = useCallback(() => {
+  const showNotification = useCallback((options?: { forceWebNotification?: boolean }) => {
     if (Platform.OS === 'web') {
       startWebTimerAudio();
       const updateWebTimerStatus = () => {
@@ -432,23 +434,47 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         }
 
         try {
-          if (
+          const shouldShowNotification =
             typeof Notification !== 'undefined' &&
             Notification.permission === 'granted' &&
-            !webRunningNotificationRef.current
-          ) {
-            webRunningNotificationRef.current = new Notification('Japam Timer running', {
+            (options?.forceWebNotification || !webRunningNotificationShownRef.current);
+
+          if (shouldShowNotification) {
+            webRunningNotificationRef.current?.close();
+            webRunningNotificationRef.current = null;
+
+            const notificationOptions: NotificationOptions = {
               body: statusText,
               icon: '/icons/icon-192.png',
               badge: '/icons/icon-192.png',
               tag: 'japam-timer-running',
               silent: true,
-            });
-            webRunningNotificationRef.current.onclick = () => {
-              try {
-                if (typeof window !== 'undefined') window.focus();
-              } catch {}
             };
+
+            if (typeof navigator !== 'undefined' && navigator.serviceWorker?.ready) {
+              navigator.serviceWorker.ready
+                .then((registration) =>
+                  registration.showNotification('Japam Timer running', notificationOptions)
+                )
+                .catch((error) => {
+                  console.log('[TimerNotify] Service worker running notification error:', error);
+                  webRunningNotificationRef.current = new Notification('Japam Timer running', notificationOptions);
+                  webRunningNotificationRef.current.onclick = () => {
+                    try {
+                      if (typeof window !== 'undefined') window.focus();
+                    } catch {}
+                  };
+                });
+            } else {
+              webRunningNotificationRef.current = new Notification('Japam Timer running', notificationOptions);
+              webRunningNotificationRef.current.onclick = () => {
+                try {
+                  if (typeof window !== 'undefined') window.focus();
+                } catch {}
+              };
+            }
+
+            webRunningNotificationShownRef.current = true;
           }
         } catch (error) {
           console.log('[TimerNotify] Web running notification error:', error);
@@ -1056,6 +1082,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         if (isRunningRef.current && timerStartedAtRef.current !== null) {
           secondsRef.current = Math.max(0, Math.floor((Date.now() - timerStartedAtRef.current) / 1000));
         }
+        if (isRunningRef.current) {
+          void showNotification({ forceWebNotification: true });
+        }
         void persistState(isRunningRef.current);
         return;
       }
@@ -1068,6 +1097,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     const onPageHide = () => {
       if (isRunningRef.current && timerStartedAtRef.current !== null) {
         secondsRef.current = Math.max(0, Math.floor((Date.now() - timerStartedAtRef.current) / 1000));
+      }
+      if (isRunningRef.current) {
+        void showNotification({ forceWebNotification: true });
       }
       void persistState(isRunningRef.current);
     };
