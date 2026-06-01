@@ -785,6 +785,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         updateTimerState({ appIsActive: false });
         if (Platform.OS === 'android') {
           setNativeAppActive(false);
+          if (isRunningRef.current) {
+            void startForegroundService();
+          }
         }
         if (isRunningRef.current && timerStartedAtRef.current !== null) {
           const elapsed = Math.max(0, Math.floor((Date.now() - timerStartedAtRef.current) / 1000));
@@ -1001,6 +1004,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       userId: userIdRef.current,
       isCompleting: false,
       lastSavedCompletedLoops: 0,
+      appIsActive: appStateRef.current === 'active',
     });
     console.log('[TimerBG] Timer started: duration=%ds loops=%d/%d startedAt=%d',
       selectedDurationRef.current * 60, completedLoopsRef.current, selectedLoopsRef.current, timerStartedAtRef.current);
@@ -1008,6 +1012,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     isRunningRef.current = true;
     startTimerInterval();
     void acquireWakeLock();
+    if (Platform.OS === 'android') {
+      setNativeAppActive(appStateRef.current === 'active');
+      void showNotification();
+    }
     void requestNotificationPermission().then(() => {
       if (!isRunningRef.current) return;
       void showNotification();

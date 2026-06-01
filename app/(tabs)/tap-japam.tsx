@@ -102,12 +102,6 @@ const shellMinHeight =
       ? ('100dvh' as any)
       : screenHeight
     : Math.min(Math.max(screenHeight - 54, 820), 940);
-const scrollTopPadding =
-  Platform.OS === 'web' ? ('env(safe-area-inset-top)' as any) : 0;
-const scrollBottomPadding =
-  Platform.OS === 'web'
-    ? ('calc(125px + env(safe-area-inset-bottom))' as any)
-    : 125;
 
 const getLocalDateKey = (date = new Date()) => {
   const y = date.getFullYear();
@@ -2215,8 +2209,6 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
     paddingHorizontal: isMobile ? 0 : 24,
-    paddingTop: isMobile ? scrollTopPadding : 24,
-    paddingBottom: scrollBottomPadding,
     minHeight: shellMinHeight,
   },
   appShell: {
@@ -2229,8 +2221,20 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(238, 248, 246, 0.94)',
     borderRadius: isMobile ? 0 : 28,
     paddingHorizontal: isMobile ? 22 : 28,
-    paddingTop: isShortMobile ? 14 : isMobile ? 20 : 34,
-    paddingBottom: isMobile ? 22 : 104,
+    // Keep all vertical spacing inside appShell so the absolute background
+    // layer covers the full scrollable height, matching the Timer page.
+    paddingTop: Platform.OS === 'web'
+      ? (isMobile
+          ? (isShortMobile
+              ? ('calc(14px + env(safe-area-inset-top))' as any)
+              : ('calc(20px + env(safe-area-inset-top))' as any))
+          : 58)
+      : (isShortMobile ? 14 : isMobile ? 20 : 58),
+    paddingBottom: Platform.OS === 'web'
+      ? (isMobile
+          ? ('calc(147px + env(safe-area-inset-bottom))' as any)
+          : 229)
+      : (isMobile ? 147 : 229),
     shadowColor: '#0f766e',
     shadowOpacity: isMobile ? 0 : 0.16,
     shadowRadius: 28,
