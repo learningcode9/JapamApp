@@ -980,7 +980,6 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
   const start = useCallback(async () => {
     if (!userIdRef.current || isRunning) return;
-    await requestNotificationPermission();
     isCompletingRef.current = false;
     const resume = seconds > 0 && seconds < targetSeconds;
     if (resume) {
@@ -1009,8 +1008,11 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     isRunningRef.current = true;
     startTimerInterval();
     void acquireWakeLock();
-    void showNotification();
-    scheduleCompletionNotification(targetSeconds - secondsRef.current);
+    void requestNotificationPermission().then(() => {
+      if (!isRunningRef.current) return;
+      void showNotification();
+      scheduleCompletionNotification(targetSeconds - secondsRef.current);
+    });
     void persistState(true);
   }, [
     acquireWakeLock,
