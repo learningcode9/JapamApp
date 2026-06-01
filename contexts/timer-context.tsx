@@ -894,12 +894,33 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           savedRunning && savedStartedAt > 0
             ? Math.max(0, Math.floor((Date.now() - savedStartedAt) / 1000))
             : savedSec;
+        const savedRunningStillActive =
+          savedRunning && savedStartedAt > 0 && restoredTarget > 0 && elapsedSinceSavedStart < restoredTarget;
         const restoredSeconds = Math.min(
           Math.max(0, elapsedSinceSavedStart),
           Math.max(0, restoredTarget - 1)
         );
 
-        if ((savedPaused || savedRunning) && restoredSeconds > 0 && restoredTarget > 0) {
+        if (savedRunningStillActive) {
+          setSeconds(restoredSeconds);
+          secondsRef.current = restoredSeconds;
+          setIsRunning(true);
+          isRunningRef.current = true;
+          timerStartedAtRef.current = savedStartedAt;
+          updateTimerState({
+            startedAt: savedStartedAt,
+            durationSeconds: restoredTarget,
+            completedLoops: safeCompletedLoops,
+            totalLoops: activeLoopLimit,
+            userId: uid,
+            appIsActive: appStateRef.current === 'active',
+          });
+          startTimerInterval();
+          void acquireWakeLock();
+          void showNotification();
+          scheduleCompletionNotification(restoredTarget - restoredSeconds);
+          void persistState(true);
+        } else if ((savedPaused || savedRunning) && restoredSeconds > 0 && restoredTarget > 0) {
           setSeconds(restoredSeconds);
           secondsRef.current = restoredSeconds;
           setIsRunning(false);
@@ -908,13 +929,81 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         }
       } catch {}
     })();
-  }, []);
+  }, [acquireWakeLock, persistState, scheduleCompletionNotification, showNotification, startTimerInterval]);
 
   useEffect(() => {
     if (isRunning && seconds > 0 && seconds >= targetSeconds && !isCompletingRef.current) {
       void completeCycle();
     }
   }, [completeCycle, isRunning, seconds, targetSeconds]);
+
+  const restoreRunningTimerFromStorage = useCallback(async () => {
+    try {
+      const uid = await AsyncStorage.getItem(USER_ID_KEY) || '';
+      const get = async (key: string) =>
+        uid
+          ? (await AsyncStorage.getItem(getUserKey(key, uid))) ?? (await AsyncStorage.getItem(key))
+          : AsyncStorage.getItem(key);
+      const [sec, target, dur, loops, completed, running, startedAt] = await Promise.all([
+        get(TIMER_SECONDS_KEY),
+        get(TIMER_TARGET_KEY),
+        get(T_DURATION_KEY),
+        get(T_LOOPS_KEY),
+        get(TIMER_COMPLETED_LOOPS_KEY),
+        get(TIMER_RUNNING_KEY),
+        get(TIMER_STARTED_AT_KEY),
+      ]);
+
+      const savedRunning = running === 'true';
+      const savedTarget = Number(target) || 0;
+      const savedDuration = Number(dur) || 0;
+      const restoredTarget = savedTarget || savedDuration * 60 || selectedDurationRef.current * 60;
+      const savedStartedAt = Number(startedAt) || 0;
+      const savedSeconds = Number(sec) || 0;
+      if (!savedRunning || restoredTarget <= 0) return false;
+
+      const restoredStartedAt = savedStartedAt > 0
+        ? savedStartedAt
+        : Date.now() - savedSeconds * 1000;
+      const elapsed = Math.max(0, Math.floor((Date.now() - restoredStartedAt) / 1000));
+      if (elapsed >= restoredTarget) return false;
+
+      const savedLoops = Number(loops) || 0;
+      const activeLoopLimit = LOOP_OPTIONS.includes(savedLoops) ? savedLoops : selectedLoopsRef.current;
+      const safeCompletedLoops = Math.min(
+        Math.max(0, Number(completed) || 0),
+        Math.max(0, activeLoopLimit - 1)
+      );
+      const restoredDuration = savedDuration > 0 ? savedDuration : Math.round(restoredTarget / 60);
+
+      setSelectedDuration(restoredDuration);
+      selectedDurationRef.current = restoredDuration;
+      setSelectedLoops(activeLoopLimit);
+      selectedLoopsRef.current = activeLoopLimit;
+      setCompletedLoops(safeCompletedLoops);
+      completedLoopsRef.current = safeCompletedLoops;
+      setSeconds(elapsed);
+      secondsRef.current = elapsed;
+      timerStartedAtRef.current = restoredStartedAt;
+      setIsRunning(true);
+      isRunningRef.current = true;
+      updateTimerState({
+        startedAt: restoredStartedAt,
+        durationSeconds: restoredTarget,
+        completedLoops: safeCompletedLoops,
+        totalLoops: activeLoopLimit,
+        userId: uid,
+        appIsActive: appStateRef.current === 'active',
+      });
+      startTimerInterval();
+      void acquireWakeLock();
+      void persistState(true);
+      return true;
+    } catch (error) {
+      console.log('[TimerBG] Restore running timer error:', error);
+      return false;
+    }
+  }, [acquireWakeLock, persistState, startTimerInterval]);
 
   useEffect(() => {
     if (!isRunning) return;
@@ -1012,11 +1101,14 @@ export function TimerProvider({ children }: { children: ReactNode }) {
                   const elapsed = Math.floor((Date.now() - nativeState.startedAt) / 1000);
                   secondsRef.current = elapsed;
                   setSeconds(elapsed);
+                  setIsRunning(true);
+                  isRunningRef.current = true;
                   startTimerInterval();
+                  void showNotification();
                   console.log('[TimerNative] Synced to loop %d, elapsed=%ds', nativeState.completedLoops + 1, elapsed);
                 }
                 return;
-              } else if (nativeState && nativeState.isRunning && isRunningRef.current) {
+              } else if (nativeState && nativeState.isRunning) {
                 // Same loop, timer still running — use native startedAt as authoritative source
                 const startedAt = nativeState.startedAt > 0 ? nativeState.startedAt : timerStartedAtRef.current;
                 if (startedAt) {
@@ -1024,7 +1116,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
                   const elapsed = Math.floor((Date.now() - startedAt) / 1000);
                   secondsRef.current = elapsed;
                   setSeconds(elapsed);
+                  setIsRunning(true);
+                  isRunningRef.current = true;
                   startTimerInterval();
+                  void showNotification();
                   console.log('[TimerNative] Foreground resumed same loop, elapsed=%ds', elapsed);
                 }
                 return;
@@ -1056,7 +1151,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
               const elapsed = Math.floor((Date.now() - bgState.startedAt) / 1000);
               secondsRef.current = elapsed;
               setSeconds(elapsed);
+              setIsRunning(true);
+              isRunningRef.current = true;
               startTimerInterval();
+              void showNotification();
             }
           } else if (isRunningRef.current && timerStartedAtRef.current !== null) {
             const elapsed = Math.floor((Date.now() - timerStartedAtRef.current) / 1000);
@@ -1064,6 +1162,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
             setSeconds(elapsed);
             startTimerInterval();
             console.log('[TimerBG] Foreground resumed, resynced elapsed=%ds', elapsed);
+          } else {
+            await restoreRunningTimerFromStorage();
           }
         };
 
@@ -1073,7 +1173,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       appStateRef.current = next;
     });
     return () => sub.remove();
-  }, [clearTimerInterval, persistState, releaseWakeLock, scheduleCompletionNotification, startTimerInterval]);
+  }, [clearTimerInterval, persistState, releaseWakeLock, restoreRunningTimerFromStorage, scheduleCompletionNotification, startTimerInterval]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
@@ -1089,9 +1189,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      if (document.visibilityState === 'visible' && isRunningRef.current) {
-        void acquireWakeLock();
-        void showNotification();
+      if (document.visibilityState === 'visible') {
+        if (isRunningRef.current) {
+          void acquireWakeLock();
+          void showNotification();
+          return;
+        }
+        void restoreRunningTimerFromStorage();
       }
     };
     const onPageHide = () => {
@@ -1109,7 +1213,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('pagehide', onPageHide);
     };
-  }, [acquireWakeLock, persistState, showNotification]);
+  }, [acquireWakeLock, persistState, restoreRunningTimerFromStorage, showNotification]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
