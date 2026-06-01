@@ -47,8 +47,7 @@ const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
-const WEB_TIMER_AUDIO_SRC =
-  'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==';
+const WEB_TIMER_AUDIO_SRC = '/silent-timer.wav';
 
 export const STD_DURATIONS = [1, 3, 5, 10, 15];
 export const LOOP_OPTIONS = [1, 3, 5, 10];
@@ -232,7 +231,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         const audio = new window.Audio(WEB_TIMER_AUDIO_SRC);
         audio.loop = true;
         audio.preload = 'auto';
-        audio.volume = 0.01;
+        audio.volume = 0.02;
         audio.setAttribute('playsinline', 'true');
         webTimerAudioRef.current = audio;
       }
