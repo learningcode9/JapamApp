@@ -1555,18 +1555,25 @@ export default function JapamMain() {
 
   const handleResetCount = () => {
     if (count === 0) return;
-    Alert.alert(
-      'Reset current count?',
-      `${count} tap${count === 1 ? '' : 's'} will be cleared. Completed malas are not affected.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Reset',
-          style: 'destructive',
-          onPress: () => setCountersFromTotal(totalRef.current - count),
-        },
-      ]
-    );
+    const title = 'Reset current count?';
+    const message = `${count} tap${count === 1 ? '' : 's'} will be cleared. Completed malas are not affected.`;
+
+    if (Platform.OS === 'web') {
+      // Alert.alert is not interactive in react-native-web; use window.confirm.
+      const confirmed =
+        typeof window !== 'undefined' && window.confirm(`${title}\n\n${message}`);
+      if (confirmed) setCountersFromTotal(totalRef.current - count);
+      return;
+    }
+
+    Alert.alert(title, message, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Reset',
+        style: 'destructive',
+        onPress: () => setCountersFromTotal(totalRef.current - count),
+      },
+    ]);
   };
 
   const handleTap = () => {

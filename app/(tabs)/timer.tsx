@@ -677,12 +677,6 @@ const styles = StyleSheet.create({
     justifyContent: isMobile ? 'flex-start' : 'center',
     width: '100%',
     alignSelf: 'center',
-    paddingTop: Platform.OS === 'web'
-      ? (isMobile ? ('calc(10px + env(safe-area-inset-top))' as any) : 24)
-      : (isShortMobile ? 8 : isMobile ? 12 : 24),
-    paddingBottom: Platform.OS === 'web'
-      ? (isMobile ? ('calc(136px + env(safe-area-inset-bottom))' as any) : 128)
-      : (isMobile ? 168 : 128),
     paddingHorizontal: isMobile ? 0 : 24,
     alignItems: 'center',
     minHeight: Platform.OS === 'web' ? ('100dvh' as any) : screenHeight,
@@ -699,8 +693,24 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(238, 248, 246, 0.94)',
     borderRadius: isMobile ? 0 : 28,
     paddingHorizontal: isMobile ? 22 : 28,
-    paddingTop: isShortMobile ? 16 : isMobile ? 22 : 34,
-    paddingBottom: isShortMobile ? 72 : isMobile ? 80 : 104,
+    // Vertical padding relocated from the ScrollView container so the zen
+    // sceneLayer (absoluteFill of appShell) covers the full scrollable area.
+    // Values = old container vertical padding + old appShell vertical padding,
+    // so content position is unchanged.
+    paddingTop: Platform.OS === 'web'
+      ? (isMobile
+          ? (isShortMobile
+              ? ('calc(26px + env(safe-area-inset-top))' as any)
+              : ('calc(32px + env(safe-area-inset-top))' as any))
+          : 58)
+      : (isShortMobile ? 24 : isMobile ? 34 : 58),
+    paddingBottom: Platform.OS === 'web'
+      ? (isMobile
+          ? (isShortMobile
+              ? ('calc(208px + env(safe-area-inset-bottom))' as any)
+              : ('calc(216px + env(safe-area-inset-bottom))' as any))
+          : 232)
+      : (isShortMobile ? 240 : isMobile ? 248 : 232),
     shadowColor: '#0f766e',
     shadowOpacity: isMobile ? 0 : 0.16,
     shadowRadius: 28,

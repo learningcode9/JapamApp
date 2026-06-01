@@ -167,11 +167,12 @@ export default function TabLayout() {
 const styles = StyleSheet.create({
   tabLabel: {
     fontSize: 11,
-    fontWeight: '600',
+    fontWeight: '700',
     lineHeight: 14,
     marginTop: 3,
   },
   tabLabelActive: {
+    fontSize: 12,
     fontWeight: '800',
   },
 });
