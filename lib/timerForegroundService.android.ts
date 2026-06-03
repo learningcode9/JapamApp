@@ -36,6 +36,16 @@ const Native: {
 // Diagnostic: log module availability at import time so we can see it in adb logcat
 console.log('[TimerNative] module =', NativeModules.JapamTimerService);
 
+// Tracks the startedAt we last issued a native ACTION_START for. showNotification()
+// (and therefore startForegroundService()) is called from many places per session —
+// the initial start(), the [isRunning] refresh effect, the notification-permission
+// callback, the background hand-off, and resume/restore paths. On Android each call
+// re-issues ACTION_START, which resets the native ticker AND native isPaused → the
+// "one Start = two native startTimer calls" desync. Deduping by startedAt means a
+// single user Start (or loop/resume, which each carry a fresh startedAt) issues
+// exactly one native start; redundant refreshes are skipped.
+let lastNativeStartKey = 0;
+
 export const startForegroundService = async (): Promise<void> => {
   if (!Native) {
     console.error(
@@ -47,8 +57,14 @@ export const startForegroundService = async (): Promise<void> => {
   }
   const s = getTimerState();
   const startedAt = s.startedAt ?? Date.now();
-  console.log('[NativeTimer] calling NativeModules.JapamTimerService.startTimer duration=%ds loops=%d/%d',
-    s.durationSeconds, s.completedLoops, s.totalLoops);
+  if (startedAt === lastNativeStartKey) {
+    console.log('[NativeTimer] TIMER_START_SKIPPED_DUPLICATE startedAt=%d duration=%ds loops=%d/%d',
+      startedAt, s.durationSeconds, s.completedLoops, s.totalLoops);
+    return;
+  }
+  lastNativeStartKey = startedAt;
+  console.log('[NativeTimer] NATIVE_START_CALLED startTimer startedAt=%d duration=%ds loops=%d/%d',
+    startedAt, s.durationSeconds, s.completedLoops, s.totalLoops);
   try {
     await Native.startTimer(
       s.durationSeconds,
@@ -75,6 +91,9 @@ export const pauseForegroundService = async (): Promise<void> => {
 };
 
 export const stopForegroundService = async (): Promise<void> => {
+  // Reset the dedup key so the next session (even if it reuses a startedAt value)
+  // always issues a fresh native start.
+  lastNativeStartKey = 0;
   if (!Native) return;
   try {
     await Native.stopTimer();
