@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import { dedupeByCompletionId } from '../../lib/historyStore';
 import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -57,6 +58,19 @@ const getLocalDateKey = (date = new Date()) => {
   return `${y}-${m}-${d}`;
 };
 
+const parseHistoryDate = (rawDate: string) => {
+  if (!rawDate) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+    const [year, month, day] = rawDate.split('-').map(Number);
+    return new Date(year, month - 1, day, 12);
+  }
+
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(rawDate);
+  const normalized = hasTimezone ? rawDate : `${rawDate}Z`;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
 const getPreviousDateKey = (dayKey: string) => {
   const date = new Date(`${dayKey}T12:00:00`);
   date.setDate(date.getDate() - 1);
@@ -73,53 +87,20 @@ const parseHistory = (raw: string | null): Session[] => {
   }
 };
 
-const dedupeHistoryForStats = (history: Session[]) => {
-  const exactSeen = new Set<string>();
-  const nearTimerRows = new Map<string, number[]>();
-
-  return history.filter((item) => {
-    const date = new Date(item.date);
-    if (Number.isNaN(date.getTime())) return false;
-
-    const totalCount = Number(item.totalCount) || (Number(item.malas) || 0) * 108;
-    if (totalCount <= 0) return false;
-
-    const dayKey = getLocalDateKey(date);
-    const key = [
-      item.userId || 'guest',
-      dayKey,
-      date.toISOString(),
-      totalCount,
-      Number(item.malas) || 0,
-      Number(item.duration) || 0,
-      item.manual ? 'manual' : 'auto',
-    ].join(':');
-
-    if (exactSeen.has(key)) return false;
-    exactSeen.add(key);
-
-    if (!item.manual) {
-      const nearKey = [
-        item.userId || 'guest',
-        dayKey,
-        totalCount,
-        Number(item.malas) || 0,
-      ].join(':');
-      const existingTimes = nearTimerRows.get(nearKey) || [];
-      const time = date.getTime();
-      if (existingTimes.some((existing) => Math.abs(existing - time) < 30000)) {
-        return false;
-      }
-      nearTimerRows.set(nearKey, [...existingTimes, time]);
-    }
-
-    return true;
-  });
-};
+// Dedup by stable completionId only (no time-window collapse) so two legitimate malas completed
+// close together are never merged. Drops only invalid/zero-count rows. See lib/historyStore.ts.
+const dedupeHistoryForStats = (history: Session[]): Session[] =>
+  dedupeByCompletionId(history).filter(
+    (item) => item.totalCount > 0 && !Number.isNaN(new Date(item.date).getTime())
+  );
 
 export default function TimerScreen() {
   const router = useRouter();
   const timer = useTimer();
+  const visibleMala = Math.min(
+    Math.max(1, timer.completedLoops + (timer.isRunning || timer.isPaused ? 1 : 0)),
+    timer.selectedLoops
+  );
   const [showCustomInput, setShowCustomInput] = useState(false);
   const [customText, setCustomText] = useState('');
   const [userName, setUserName] = useState('');
@@ -133,7 +114,8 @@ export default function TimerScreen() {
   const deferredInstallPromptRef = useRef<any>(null);
 
   const [request, response, promptAsync] = Google.useAuthRequest({
-    clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
+    webClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
+    androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
     scopes: ['profile', 'email'],
     redirectUri: Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : undefined,
   });
@@ -158,8 +140,8 @@ export default function TimerScreen() {
 
     const totalByDay = new Map<string, number>();
     history.forEach((item) => {
-      const date = new Date(item.date);
-      if (Number.isNaN(date.getTime())) return;
+      const date = parseHistoryDate(item.date);
+      if (!date) return;
       const totalCount = Number(item.totalCount) || (Number(item.malas) || 0) * 108;
       if (totalCount <= 0) return;
       const dayKey = getLocalDateKey(date);
@@ -180,6 +162,12 @@ export default function TimerScreen() {
     setTodayCount(safeTodayTotal);
     setMalasToday(Math.floor(safeTodayTotal / 108));
     setDayStreak(nextStreak);
+    console.log('[TimerStatsDate] deviceLocalTime=%s malasTodayDateKey=%s todayTotal=%d streak=%d',
+      new Date().toString(),
+      todayKey,
+      safeTodayTotal,
+      nextStreak
+    );
   }, []);
 
   useFocusEffect(
@@ -226,14 +214,24 @@ export default function TimerScreen() {
     setIsSigningIn(true);
     setShowUserModal(false);
     try {
-      await GoogleSignin.hasPlayServices();
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
       const userInfo = await GoogleSignin.signIn();
-      if (userInfo.type !== 'success') {
+      const rawUserInfo = userInfo as any;
+      console.log('Native Google sign-in result type:', rawUserInfo?.type || 'raw-user');
+      const googleUser =
+        rawUserInfo?.type
+          ? rawUserInfo.type === 'success'
+            ? rawUserInfo.data?.user
+            : null
+          : rawUserInfo?.user;
+
+      if (!googleUser) {
+        console.log('Native Google sign-in did not return a user.');
         setIsSigningIn(false);
         setShowUserModal(true);
         return;
       }
-      const { id, name, givenName, email } = userInfo.data.user;
+      const { id, name, givenName, email } = googleUser;
       const googleName = givenName || name || email || 'User';
       const googleEmail = email || '';
       const googleUserId = String(id).trim();
@@ -250,15 +248,28 @@ export default function TimerScreen() {
       void loadStats();
     } catch (error) {
       console.log('Native Google sign-in error:', error);
+      const errorCode = (error as { code?: string })?.code;
+      if (errorCode === '10' && request) {
+        console.log('Native Google sign-in failed with DEVELOPER_ERROR; trying AuthSession fallback.');
+        try {
+          await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
+          const result = await promptAsync({ showInRecents: true });
+          if (result.type === 'success') {
+            return;
+          }
+          console.log('AuthSession fallback result:', result.type);
+        } catch (fallbackError) {
+          console.log('AuthSession fallback error:', fallbackError);
+        }
+      }
       setShowUserModal(true);
     } finally {
       setIsSigningIn(false);
     }
-  }, [loadStats]);
+  }, [loadStats, promptAsync, request]);
 
   useEffect(() => {
     const handleGoogleLogin = async () => {
-      if (Platform.OS !== 'web') return; // native platforms use handleNativeGoogleSignIn
       if (!response) return;
 
       if (response.type !== 'success') {
@@ -466,7 +477,7 @@ export default function TimerScreen() {
             <View style={styles.circleOuter}>
               <View style={styles.circleInner}>
                 <Text style={styles.timerText}>{formatTimer(timer.timeLeft)}</Text>
-                <Text style={styles.malaText}>Mala {timer.completedLoops} / {timer.selectedLoops}</Text>
+                <Text style={styles.malaText}>Mala {visibleMala} / {timer.selectedLoops}</Text>
               </View>
             </View>
           </View>

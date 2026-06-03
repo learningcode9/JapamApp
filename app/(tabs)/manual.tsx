@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { appendCompletion, markSynced } from '../../lib/historyStore';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect } from 'expo-router';
 import React, { useState } from 'react';
@@ -103,16 +104,17 @@ if (!userId) {
     const history: Session[] = raw ? JSON.parse(raw) : [];
     const userName = await AsyncStorage.getItem(USER_NAME_KEY);
 
-    const payload: Session = {
+    // Save locally first with a stable completionId + syncStatus (offline-first, dedup-safe).
+    const updatedHistory = appendCompletion(history, {
       date: selectedDateTime,
       malas: malaNum,
       totalCount: totalNum,
       duration: 0,
       manual: true,
-      userId,
-    };
-
-    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([payload, ...history]));
+      userId: userId || undefined,
+    });
+    const newCompletionId = updatedHistory[0].completionId;
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
 
     try {
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -144,6 +146,13 @@ if (!userId) {
             'Saved locally',
             'Your entry was saved on this device, but cloud sync failed.'
           );
+        } else {
+          // Cloud sync succeeded — mark this record synced so it isn't re-uploaded later.
+          try {
+            const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
+            const latest = latestRaw ? JSON.parse(latestRaw) : [];
+            await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, [newCompletionId])));
+          } catch {}
         }
       }
     } catch (error) {

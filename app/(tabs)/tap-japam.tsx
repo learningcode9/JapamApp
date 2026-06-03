@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import { mergeHistories } from '../../lib/historyStore';
 import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
 import { Audio } from 'expo-av';
@@ -1079,11 +1080,10 @@ export default function JapamMain() {
 
       const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
       const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
-      const otherUserLocalHistory = localHistory.filter((item) => item.userId !== googleUserId);
 
-      const mergedHistory = [...remoteHistory, ...otherUserLocalHistory].sort(
-        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-      );
+      // Merge — never overwrite (see lib/historyStore.ts). Keeps all local records, including
+      // unsynced 'pending' malas, and upgrades any the remote confirms to 'synced'.
+      const mergedHistory = mergeHistories(localHistory, remoteHistory);
 
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
       await restoreTodayTotal();

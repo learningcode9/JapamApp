@@ -13,6 +13,7 @@ import {
   stopForegroundService,
 } from '../lib/timerForegroundService';
 import { getTimerState, updateTimerState } from '../lib/timerState';
+import { appendCompletion, getPending, markSynced } from '../lib/historyStore';
 import React, {
   createContext,
   useCallback,
@@ -603,9 +604,98 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     notifIntervalRef.current = setInterval(schedule, 60000);
   }, [startWebTimerAudio]);
 
+  // Diagnostic-only: raw (pre-dedup) snapshot of today's malas/count for this user,
+  // so STATS_SAVE_* logs can show malasTodayBefore/After. Mirrors the totalCount→malas
+  // math used by the stats screen; the displayed value additionally de-dupes, so treat
+  // this as an approximate before/after.
+  const readMalasTodaySnapshot = useCallback(async () => {
+    try {
+      const uid = userIdRef.current;
+      const raw = await AsyncStorage.getItem(HISTORY_KEY);
+      const hist: any[] = raw ? JSON.parse(raw) : [];
+      const todayKey = getLocalDateKey();
+      let count = 0;
+      let entries = 0;
+      for (const item of hist) {
+        const d = new Date(item?.date);
+        if (Number.isNaN(d.getTime()) || getLocalDateKey(d) !== todayKey) continue;
+        const matchesUser = uid ? item.userId === uid : !item.userId;
+        if (!matchesUser) continue;
+        count += Number(item.totalCount) || (Number(item.malas) || 0) * 108;
+        entries += 1;
+      }
+      return { malas: Math.floor(count / 108), count, entries };
+    } catch {
+      return { malas: -1, count: -1, entries: -1 };
+    }
+  }, []);
+
+  // Opportunistic offline-first sync: upload pending (not-yet-synced) records for the signed-in
+  // user. On success mark them synced; on failure (offline) leave them pending to retry later.
+  // Dedup is by completionId, so each record uploads at most once and never double-counts.
+  const syncPendingHistory = useCallback(async () => {
+    const uid = userIdRef.current;
+    if (!uid) return;
+    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    if (!url || !key) return;
+    let history: any[] = [];
+    try {
+      const raw = await AsyncStorage.getItem(HISTORY_KEY);
+      history = raw ? JSON.parse(raw) : [];
+    } catch {
+      return;
+    }
+    const pending = getPending(history).filter((r) => r.userId === uid);
+    if (pending.length === 0) return;
+    const userName = (await AsyncStorage.getItem('userName')) || '';
+    const syncedIds: string[] = [];
+    for (const rec of pending) {
+      try {
+        const res = await fetch(`${url}/rest/v1/japam_history`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: key,
+            Authorization: `Bearer ${key}`,
+            Prefer: 'return=minimal',
+          },
+          body: JSON.stringify({
+            user_id: uid,
+            user_name: userName,
+            malas: rec.malas,
+            count: rec.totalCount,
+            created_at: rec.date,
+          }),
+        });
+        if (res.ok) {
+          syncedIds.push(rec.completionId);
+        } else {
+          console.log('[Stats] STATS_SYNC_FAILED status=%d', res.status);
+        }
+      } catch {
+        // Offline / network error — stop; remaining records stay pending for the next attempt.
+        break;
+      }
+    }
+    if (syncedIds.length > 0) {
+      try {
+        const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
+        const latest = latestRaw ? JSON.parse(latestRaw) : [];
+        await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, syncedIds)));
+        console.log('[Stats] STATS_SYNC_DONE marked=%d synced', syncedIds.length);
+      } catch {}
+    }
+  }, []);
+
   const saveSession = useCallback(async () => {
     const uid = userIdRef.current;
     const duration = selectedDurationRef.current * 60;
+    const before = await readMalasTodaySnapshot();
+    const pausedNow = !isRunningRef.current && secondsRef.current > 0 && secondsRef.current < duration;
+    console.log('[Stats] STATS_SAVE_REQUEST completionSource=JS currentMala=%d targetMalaCount=%d completedLoops=%d isPaused=%s isRunning=%s malasTodayBefore=%d todayCountBefore=%d entriesBefore=%d',
+      completedLoopsRef.current, selectedLoopsRef.current, completedLoopsRef.current,
+      pausedNow, isRunningRef.current, before.malas, before.count, before.entries);
     const sessionKey = [
       uid || 'guest',
       duration,
@@ -615,11 +705,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     ].join(':');
     const lastSaved = lastSavedSessionRef.current;
     if (lastSaved?.key === sessionKey && Date.now() - lastSaved.savedAt < 30000) {
+      console.log('[Stats] STATS_SAVE_SKIPPED reason=recent-duplicate sessionKey=%s malasTodayBefore=%d', sessionKey, before.malas);
       return;
     }
     // Also skip if the background task already saved this loop index
     if (getTimerState().lastSavedCompletedLoops >= completedLoopsRef.current) {
-      console.log('[LoopComplete] Background already saved loop %d, skipping foreground save', completedLoopsRef.current);
+      console.log('[Stats] STATS_SAVE_SKIPPED reason=bg-already-saved loop=%d lastSavedCompletedLoops=%d malasTodayBefore=%d',
+        completedLoopsRef.current, getTimerState().lastSavedCompletedLoops, before.malas);
       // Still emit stats events in case the foreground listener missed the background emit
       DeviceEventEmitter.emit('japam-stats-updated');
       DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
@@ -635,7 +727,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       getLocalDateKey(now),
       now.toISOString()
     );
-    const session = {
+    const completion = {
       date: now.toISOString(),
       malas: 1,
       totalCount: 108,
@@ -644,11 +736,12 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       userId: uid || undefined,
     };
 
-    // Local save + event emission — awaited by completeCycle so stats refresh immediately
+    // Local save FIRST (offline-first) + event emission — awaited by completeCycle so stats
+    // refresh immediately. appendCompletion stamps a stable completionId and syncStatus:'pending'.
     try {
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
       const history = raw ? JSON.parse(raw) : [];
-      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([session, ...history]));
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(appendCompletion(history, completion)));
 
       DeviceEventEmitter.emit('japam-stats-updated');
       DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
@@ -656,43 +749,28 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         window.dispatchEvent(new Event('japam-stats-updated'));
         window.dispatchEvent(new Event('japam-history-updated'));
       }
+      const after = await readMalasTodaySnapshot();
+      console.log('[Stats] STATS_SAVE_ACCEPTED completionSource=JS currentMala=%d targetMalaCount=%d malasTodayAfter=%d todayCountAfter=%d entriesAfter=%d',
+        completedLoopsRef.current, selectedLoopsRef.current, after.malas, after.count, after.entries);
     } catch (err) {
       console.log('Timer session save error:', err);
       return;
     }
 
-    // Network sync is fire-and-forget — does not block completeCycle
-    if (!uid) return;
-    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-    if (!url || !key) return;
-    void (async () => {
-      try {
-        const userName = await AsyncStorage.getItem('userName') || '';
-        const res = await fetch(`${url}/rest/v1/japam_history`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            apikey: key,
-            Authorization: `Bearer ${key}`,
-            Prefer: 'return=minimal',
-          },
-          body: JSON.stringify({
-            user_id: uid,
-            user_name: userName,
-            malas: 1,
-            count: 108,
-            created_at: session.date,
-          }),
-        });
-        if (!res.ok) {
-          console.log('Timer Supabase save error:', await res.text());
-        }
-      } catch (err) {
-        console.log('Timer Supabase sync error:', err);
-      }
-    })();
-  }, []);
+    // Opportunistic sync — uploads all pending records (including this one). Offline-safe:
+    // records stay 'pending' and retry on the next attempt. Never blocks completeCycle.
+    void syncPendingHistory();
+  }, [readMalasTodaySnapshot, syncPendingHistory]);
+
+  // Flush any pending (offline-recorded) malas on launch and whenever the app returns to the
+  // foreground — i.e. opportunistically when connectivity is likely back. No-op when offline.
+  useEffect(() => {
+    void syncPendingHistory();
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') void syncPendingHistory();
+    });
+    return () => sub.remove();
+  }, [syncPendingHistory]);
 
   const refreshAuthState = useCallback(async () => {
     const uid = await AsyncStorage.getItem(USER_ID_KEY) || '';
@@ -787,6 +865,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     updateTimerState({ completedLoops: newDone });
     const isFinal = newDone >= selectedLoopsRef.current;
     console.log('[LoopComplete] Foreground: loop %d/%d done, isFinal=%s source=JS', newDone, selectedLoopsRef.current, isFinal);
+    console.log('[Stats] MALA_COMPLETE completionSource=JS currentMala=%d targetMalaCount=%d isFinal=%s isPaused=%s isRunning=%s',
+      newDone, selectedLoopsRef.current, isFinal, false, isRunningRef.current);
 
     if (vibrationEnabledRef.current && Platform.OS !== 'web') {
       pulse([0, 1200, 80, 1500]);
@@ -1258,7 +1338,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
                       getLocalDateKey(now),
                       now.toISOString()
                     );
-                    const session = {
+                    const completion = {
                       date: now.toISOString(),
                       malas: 1,
                       totalCount: 108,
@@ -1270,9 +1350,17 @@ export function TimerProvider({ children }: { children: ReactNode }) {
                       try {
                         const raw = await AsyncStorage.getItem('history');
                         const history = raw ? JSON.parse(raw) : [];
-                        await AsyncStorage.setItem('history', JSON.stringify([session, ...history]));
+                        // Stamp completionId + syncStatus:'pending' so this native-completed loop
+                        // merges/dedups consistently and gets uploaded opportunistically.
+                        await AsyncStorage.setItem('history', JSON.stringify(appendCompletion(history, completion)));
                       } catch {}
                     })();
+                    console.log('[Stats] MALA_COMPLETE completionSource=NATIVE currentMala=%d targetMalaCount=%d loopNum=%d isPaused=false isRunning=%s',
+                      nativeCompleted, selectedLoopsRef.current, loopNum, nativeState.isRunning);
+                    console.log('[Stats] STATS_SAVE_ACCEPTED completionSource=NATIVE loopNum=%d lastSavedCompletedLoops=%d', loopNum, loopNum);
+                  } else {
+                    console.log('[Stats] STATS_SAVE_SKIPPED reason=bg-already-saved completionSource=NATIVE loopNum=%d lastSavedCompletedLoops=%d',
+                      loopNum, getTimerState().lastSavedCompletedLoops);
                   }
                 }
 

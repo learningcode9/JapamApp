@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { mergeHistories } from '../../lib/historyStore';
 import * as Google from 'expo-auth-session/providers/google';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { Audio } from 'expo-av';
@@ -1066,11 +1067,12 @@ export default function JapamMain() {
 
       const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
       const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
-      const otherUserLocalHistory = localHistory.filter((item) => item.userId !== googleUserId);
 
-      const mergedHistory = [...remoteHistory, ...otherUserLocalHistory].sort(
-        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-      );
+      // Merge — never overwrite. Union by stable completionId; every local record (including
+      // unsynced 'pending' malas recorded offline) is kept, and any that the remote confirms is
+      // upgraded to 'synced'. This replaces the old behavior that discarded the current user's
+      // local entries and could lose unsynced malas on sign-in.
+      const mergedHistory = mergeHistories(localHistory, remoteHistory);
 
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
       await restoreTodayTotal();

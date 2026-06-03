@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { dedupeByCompletionId } from '../../lib/historyStore';
 import * as FileSystem from 'expo-file-system/legacy';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
@@ -55,6 +56,19 @@ const getLocalDateKey = (date = new Date()) => {
   return `${y}-${m}-${d}`;
 };
 
+const parseHistoryDate = (rawDate: string) => {
+  if (!rawDate) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+    const [year, month, day] = rawDate.split('-').map(Number);
+    return new Date(year, month - 1, day, 12);
+  }
+
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(rawDate);
+  const normalized = hasTimezone ? rawDate : `${rawDate}Z`;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
 const toDayKey = (rawDate: string) => {
   if (!rawDate) return 'unknown';
 
@@ -62,8 +76,8 @@ const toDayKey = (rawDate: string) => {
     return rawDate;
   }
 
-  const d = new Date(rawDate);
-  if (Number.isNaN(d.getTime())) return 'unknown';
+  const d = parseHistoryDate(rawDate);
+  if (!d) return 'unknown';
 
   return getLocalDateKey(d);
 };
@@ -92,50 +106,12 @@ const parseHistory = (raw: string | null): Session[] => {
   }
 };
 
-const dedupeSessions = (sessions: Session[]) => {
-  const exactSeen = new Set<string>();
-  const nearTimerRows = new Map<string, number[]>();
-
-  return sessions.filter((item) => {
-    const date = new Date(item.date);
-    if (Number.isNaN(date.getTime())) return false;
-
-    const itemMalas = Number(item.malas) || 0;
-    const totalCount = Number(item.totalCount) || itemMalas * 108;
-    if (totalCount <= 0) return false;
-
-    const dayKey = toDayKey(item.date);
-    const exactKey = [
-      item.userId || 'guest',
-      dayKey,
-      date.toISOString(),
-      totalCount,
-      itemMalas,
-      Number(item.duration) || 0,
-      item.manual ? 'manual' : 'auto',
-    ].join(':');
-
-    if (exactSeen.has(exactKey)) return false;
-    exactSeen.add(exactKey);
-
-    if (!item.manual) {
-      const nearKey = [
-        item.userId || 'guest',
-        dayKey,
-        totalCount,
-        itemMalas,
-      ].join(':');
-      const existingTimes = nearTimerRows.get(nearKey) || [];
-      const time = date.getTime();
-      if (existingTimes.some((existing) => Math.abs(existing - time) < 30000)) {
-        return false;
-      }
-      nearTimerRows.set(nearKey, [...existingTimes, time]);
-    }
-
-    return true;
-  });
-};
+// Dedup by stable completionId only (no time-window collapse). Distinct malas are never merged;
+// only invalid/zero-count rows are dropped. See lib/historyStore.ts.
+const dedupeSessions = (sessions: Session[]): Session[] =>
+  dedupeByCompletionId(sessions).filter(
+    (item) => item.totalCount > 0 && Boolean(parseHistoryDate(item.date))
+  );
 
 const buildDailyRows = (sessions: Session[]) => {
   const grouped = new Map<string, DailyRow>();
@@ -172,6 +148,16 @@ const buildDailyRows = (sessions: Session[]) => {
       autoCount: isManual ? 0 : 1,
     });
   });
+
+  console.log('[HistoryDate] deviceLocalTime=%s todayKey=%s rows=%o',
+    new Date().toString(),
+    getLocalDateKey(),
+    [...grouped.values()].map((row) => ({
+      dateKey: row.dateKey,
+      displayLabel: row.dateLabel,
+      totalCount: row.totalCount,
+    }))
+  );
 
   const oldestFirstRows = [...grouped.values()].sort((a, b) => {
     if (a.dateKey === 'unknown') return 1;
