@@ -25,11 +25,17 @@ export interface HistoryRecord {
   duration: number;
   manual: boolean;
   userId?: string;
+  userName?: string;
+  userEmail?: string;
   completionId: string;
   syncStatus: SyncStatus;
 }
 
-export type RawHistoryRecord = Partial<HistoryRecord> & { date: string };
+export type RawHistoryRecord = Partial<HistoryRecord> & {
+  date: string;
+  user_name?: string;
+  user_email?: string;
+};
 
 /**
  * Deterministic, stable id for a completion. Reconstructable from a Supabase row's
@@ -51,6 +57,8 @@ export const normalizeRecord = (raw: RawHistoryRecord): HistoryRecord => {
   const malas = Number(raw.malas) || 0;
   const totalCount = Number(raw.totalCount) || malas * 108;
   const userId = raw.userId;
+  const userName = raw.userName || raw.user_name || undefined;
+  const userEmail = raw.userEmail || raw.user_email || undefined;
   return {
     date: raw.date,
     malas,
@@ -58,6 +66,8 @@ export const normalizeRecord = (raw: RawHistoryRecord): HistoryRecord => {
     duration: Number(raw.duration) || 0,
     manual: Boolean(raw.manual),
     userId,
+    userName,
+    userEmail,
     completionId: raw.completionId || makeCompletionId(userId, raw.date),
     syncStatus: raw.syncStatus === 'pending' ? 'pending' : 'synced',
   };
@@ -79,6 +89,8 @@ export const appendCompletion = (
     duration: number;
     manual?: boolean;
     userId?: string;
+    userName?: string;
+    userEmail?: string;
   }
 ): HistoryRecord[] => {
   const record: HistoryRecord = {
@@ -88,6 +100,8 @@ export const appendCompletion = (
     duration: Number(completion.duration) || 0,
     manual: Boolean(completion.manual),
     userId: completion.userId,
+    userName: completion.userName,
+    userEmail: completion.userEmail,
     completionId: makeCompletionId(completion.userId, completion.date),
     syncStatus: completion.userId ? 'pending' : 'synced',
   };
@@ -110,7 +124,12 @@ export const dedupeByCompletionId = (records: RawHistoryRecord[]): HistoryRecord
       result.push(raw);
     } else if (raw.syncStatus === 'synced' && result[idx].syncStatus === 'pending') {
       // Upgrade the kept record's status if a duplicate confirms it synced.
-      result[idx] = { ...result[idx], syncStatus: 'synced' };
+      result[idx] = {
+        ...result[idx],
+        userName: result[idx].userName || raw.userName,
+        userEmail: result[idx].userEmail || raw.userEmail,
+        syncStatus: 'synced',
+      };
     }
   }
   return result;
@@ -176,4 +195,19 @@ export const todayCountFor = (
       return matchesUser && toDayKey(r.date) === todayKey && r.totalCount > 0;
     })
     .reduce((sum, r) => sum + r.totalCount, 0);
+};
+
+/**
+ * Single source of truth for a screen's displayed "today" stat. Every screen (Timer, History,
+ * Main/Tap) should derive Malas Today / Total from THIS over the merged local history, so the
+ * numbers always match and update immediately offline (no dependency on Supabase).
+ */
+export const todayStatsFor = (
+  records: RawHistoryRecord[],
+  userId: string | null | undefined,
+  todayKey: string,
+  toDayKey: (dateISO: string) => string
+): { malas: number; totalCount: number } => {
+  const totalCount = todayCountFor(records, userId, todayKey, toDayKey);
+  return { malas: Math.floor(totalCount / 108), totalCount };
 };

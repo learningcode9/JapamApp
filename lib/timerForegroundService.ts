@@ -5,6 +5,7 @@ export const resumeForegroundService = async (): Promise<void> => {};
 export const stopForegroundService = async (): Promise<void> => {};
 export const setNativeAppActive = (_isActive: boolean): void => {};
 export const getNativeTimerState = async (): Promise<{
+  sessionId: string;
   isRunning: boolean;
   isPaused: boolean;
   startedAt: number;

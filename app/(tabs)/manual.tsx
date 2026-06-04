@@ -18,6 +18,16 @@ type Session = {
 const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
+const USER_EMAIL_KEY = 'userEmail';
+
+const getStoredUserMeta = async () => {
+  const [storedName, storedEmail] = await Promise.all([
+    AsyncStorage.getItem(USER_NAME_KEY),
+    AsyncStorage.getItem(USER_EMAIL_KEY),
+  ]);
+  const userName = (storedName || storedEmail || 'Unknown User').trim() || 'Unknown User';
+  return { userName, userEmail: storedEmail || undefined };
+};
 
 export default function ManualEntry() {
   const getLocalDate = () => {
@@ -102,7 +112,7 @@ if (!userId) {
 
     const raw = await AsyncStorage.getItem(HISTORY_KEY);
     const history: Session[] = raw ? JSON.parse(raw) : [];
-    const userName = await AsyncStorage.getItem(USER_NAME_KEY);
+    const { userName, userEmail } = await getStoredUserMeta();
 
     // Save locally first with a stable completionId + syncStatus (offline-first, dedup-safe).
     const updatedHistory = appendCompletion(history, {
@@ -112,6 +122,8 @@ if (!userId) {
       duration: 0,
       manual: true,
       userId: userId || undefined,
+      userName,
+      userEmail,
     });
     const newCompletionId = updatedHistory[0].completionId;
     await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
@@ -121,22 +133,23 @@ if (!userId) {
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
       if (url && key) {
-        const response = await fetch(`${url}/rest/v1/japam_history`, {
+        const response = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             apikey: key,
             Authorization: `Bearer ${key}`,
-            Prefer: 'return=minimal',
+            Prefer: 'return=minimal,resolution=ignore-duplicates',
           },
           body: JSON.stringify({
             user_id: userId,
-            user_name: userName || 'User',
+            user_name: userName,
             malas: malaNum,
             count: totalNum,
             accumulated: totalNum,
             type: 'Manual',
             created_at: selectedDateTime,
+            completion_id: newCompletionId,
           }),
         });
 

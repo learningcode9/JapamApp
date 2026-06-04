@@ -47,6 +47,7 @@ class JapamTimerService : Service() {
         const val EXTRA_VIBRATION = "vibrationEnabled"
         const val EXTRA_USER_ID = "userId"
         const val EXTRA_STARTED_AT = "startedAt"
+        const val EXTRA_SESSION_ID = "sessionId"
 
         @Volatile var isRunning = false
     }
@@ -56,6 +57,7 @@ class JapamTimerService : Service() {
     private var vibrator: Vibrator? = null
 
     private var startedAt: Long = 0L
+    private var sessionId: String = ""
     private var pausedElapsedMs: Long = 0L
     private var durationMs: Long = 0L
     private var completedLoops: Int = 0
@@ -131,6 +133,8 @@ class JapamTimerService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_START) {
+            val nextSessionId = intent.getStringExtra(EXTRA_SESSION_ID) ?: ""
+            val oldSessionId = sessionId
             val durationSec = intent.getIntExtra(EXTRA_DURATION, 600)
             durationMs = durationSec * 1000L
             totalLoops = maxOf(1, intent.getIntExtra(EXTRA_TOTAL, 1))
@@ -139,10 +143,16 @@ class JapamTimerService : Service() {
             vibrationEnabled = intent.getBooleanExtra(EXTRA_VIBRATION, true)
             userId = intent.getStringExtra(EXTRA_USER_ID) ?: ""
             startedAt = intent.getLongExtra(EXTRA_STARTED_AT, System.currentTimeMillis())
+            sessionId = if (nextSessionId.isNotBlank()) nextSessionId else "native-$startedAt"
+            if (oldSessionId != sessionId) {
+                startHeadsUpPosted = false
+            }
             isPaused = false
             pausedElapsedMs = 0L
             isCompleting.set(false)
+            Log.d("NativeTimer", "[NativeTimer] ACTION_START sessionId=$sessionId startedAt=$startedAt duration=${durationSec}s loops=$completedLoops/$totalLoops")
 
+            mediaPlayer?.setOnCompletionListener(null)
             loadSound()
             saveState()
 
@@ -155,7 +165,7 @@ class JapamTimerService : Service() {
             } else {
                 startForeground(NOTIF_ID, buildNotification(remaining))
             }
-            Log.d("NativeTimer", "[NativeTimer] foreground notification posted: notifId=$NOTIF_ID remaining=${remaining}ms api=${Build.VERSION.SDK_INT}")
+            Log.d("NativeTimer", "[NativeTimer] foreground notification posted: sessionId=$sessionId notifId=$NOTIF_ID remaining=${remaining}ms currentMala=${completedLoops + 1}/$totalLoops api=${Build.VERSION.SDK_INT}")
             postTimerStartedHeadsUp(remaining)
 
             handler.removeCallbacks(tickRunnable)
@@ -294,7 +304,7 @@ class JapamTimerService : Service() {
 
         try {
             getSystemService(NotificationManager::class.java).notify(HEADS_UP_NOTIF_ID, notification)
-            Log.d("NativeTimer", "[NativeTimer] timer started heads-up posted: notifId=$HEADS_UP_NOTIF_ID")
+            Log.d("NativeTimer", "[NativeTimer] timer started heads-up posted: sessionId=$sessionId notifId=$HEADS_UP_NOTIF_ID")
         } catch (error: SecurityException) {
             Log.w("NativeTimer", "[NativeTimer] timer started heads-up skipped: permission missing", error)
         } catch (error: Exception) {
@@ -324,7 +334,7 @@ class JapamTimerService : Service() {
 
         try {
             getSystemService(NotificationManager::class.java).notify(COMPLETION_NOTIF_ID, notification)
-            Log.d("NativeTimer", "[COMPLETION_NATIVE] immediate notification posted notifId=$COMPLETION_NOTIF_ID isFinal=$isFinal")
+            Log.d("NativeTimer", "[COMPLETION_NATIVE] immediate notification posted sessionId=$sessionId notifId=$COMPLETION_NOTIF_ID isFinal=$isFinal")
         } catch (error: SecurityException) {
             Log.w("NativeTimer", "[COMPLETION_NATIVE] immediate notification skipped: permission missing", error)
         } catch (error: Exception) {
@@ -361,7 +371,7 @@ class JapamTimerService : Service() {
         if (isAppActive()) {
             Log.d(
                 "NativeTimer",
-                "[COMPLETION_NATIVE] skippedDuplicate=true reason=app-active remainingSeconds=${remainingMs / 1000} currentMala=${completedLoops + 1} targetMalaCount=$totalLoops"
+                "[COMPLETION_NATIVE] skippedDuplicate=true reason=app-active sessionId=$sessionId remainingSeconds=${remainingMs / 1000} currentMala=${completedLoops + 1} targetMalaCount=$totalLoops"
             )
             isCompleting.set(false)
             return
@@ -370,7 +380,7 @@ class JapamTimerService : Service() {
         if (completedLoops >= totalLoops) {
             Log.d(
                 "NativeTimer",
-                "[COMPLETION_NATIVE] skippedDuplicate=true reason=already-complete remainingSeconds=${remainingMs / 1000} currentMala=$completedLoops targetMalaCount=$totalLoops"
+                "[COMPLETION_NATIVE] skippedDuplicate=true reason=already-complete sessionId=$sessionId remainingSeconds=${remainingMs / 1000} currentMala=$completedLoops targetMalaCount=$totalLoops"
             )
             isCompleting.set(false)
             saveState()
@@ -389,7 +399,7 @@ class JapamTimerService : Service() {
         val isFinal = newCompleted >= totalLoops
         Log.d(
             "NativeTimer",
-            "[COMPLETION_NATIVE] accepted remainingSeconds=${remainingMs / 1000} currentMala=$newCompleted targetMalaCount=$totalLoops durationMs=$durationMs isFinal=$isFinal"
+            "[COMPLETION_NATIVE] accepted sessionId=$sessionId remainingSeconds=${remainingMs / 1000} currentMala=$newCompleted targetMalaCount=$totalLoops durationMs=$durationMs isFinal=$isFinal"
         )
 
         saveState()
@@ -400,6 +410,7 @@ class JapamTimerService : Service() {
 
         // Broadcast so native module can relay to JS if app wakes up
         sendBroadcast(Intent(ACTION_LOOP_COMPLETE).setPackage(packageName).apply {
+            putExtra("sessionId", sessionId)
             putExtra("completedLoops", newCompleted)
             putExtra("isFinal", isFinal)
             putExtra("userId", userId)
@@ -458,12 +469,17 @@ class JapamTimerService : Service() {
             onComplete()
             return
         }
+        val playbackSessionId = sessionId
         try {
             var finished = false
             fun finishOnce() {
                 if (finished) return
                 finished = true
                 mp.setOnCompletionListener(null)
+                if (playbackSessionId != sessionId) {
+                    Log.d("NativeTimer", "[COMPLETION_NATIVE] skippedDuplicate=true reason=stale-sound-callback playbackSessionId=$playbackSessionId activeSessionId=$sessionId")
+                    return
+                }
                 onComplete()
             }
             mp.seekTo(0)
@@ -491,6 +507,7 @@ class JapamTimerService : Service() {
     private fun saveState() {
         getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().apply {
             putBoolean("isRunning", isRunning && !isPaused)
+            putString("sessionId", sessionId)
             putBoolean("isPaused", isPaused)
             putLong("startedAt", startedAt)
             putLong("pausedElapsedMs", pausedElapsedMs)

@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { dedupeByCompletionId } from '../../lib/historyStore';
+import { appendCompletion, dedupeByCompletionId, markSynced } from '../../lib/historyStore';
 import * as FileSystem from 'expo-file-system/legacy';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
@@ -26,6 +26,10 @@ type Session = {
   duration: number;
   manual?: boolean;
   userId?: string;
+  userName?: string;
+  userEmail?: string;
+  completionId?: string;
+  syncStatus?: 'pending' | 'synced';
 };
 
 type DailyRow = {
@@ -44,9 +48,23 @@ type RemoteHistoryRow = {
   created_at?: string;
   malas?: number | string;
   count?: number | string;
+  user_name?: string;
+  user_email?: string;
 };
 
+const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
+const USER_NAME_KEY = 'userName';
+const USER_EMAIL_KEY = 'userEmail';
+
+const getStoredUserMeta = async () => {
+  const [storedName, storedEmail] = await Promise.all([
+    AsyncStorage.getItem(USER_NAME_KEY),
+    AsyncStorage.getItem(USER_EMAIL_KEY),
+  ]);
+  const userName = (storedName || storedEmail || 'Unknown User').trim() || 'Unknown User';
+  return { userName, userEmail: storedEmail || undefined };
+};
 
 const getLocalDateKey = (date = new Date()) => {
   const y = date.getFullYear();
@@ -183,7 +201,7 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
   try {
     const fetchBy = async (field: 'user_id' | 'user_name', value: string) => {
       const query = new URLSearchParams({
-        select: 'id,created_at,malas,count',
+        select: 'id,created_at,malas,count,user_name',
         [field]: `eq.${value}`,
         order: 'created_at.asc',
       });
@@ -203,18 +221,19 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
       const rows: RemoteHistoryRow[] = await response.json();
 
       return rows.map((row) => {
-      const malas = Number(row.malas) || 0;
-      const totalCount = Number(row.count) || malas * 108;
+        const malas = Number(row.malas) || 0;
+        const totalCount = Number(row.count) || malas * 108;
 
-      return {
-        date: row.created_at || new Date().toISOString(),
-        malas: malas || Math.floor(totalCount / 108),
-        totalCount,
-        duration: 0,
-        manual: false,
-        userId,
-      };
-    });
+        return {
+          date: row.created_at || new Date().toISOString(),
+          malas: malas || Math.floor(totalCount / 108),
+          totalCount,
+          duration: 0,
+          manual: false,
+          userId,
+          userName: row.user_name || undefined,
+        };
+      });
     };
 
     const byUserId = await fetchBy('user_id', userId);
@@ -227,9 +246,11 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
 
 const saveToSupabase = async (
   userId: string,
+  userName: string,
   malas: number,
   totalCount: number,
-  dateKey: string,
+  createdAt: string,
+  completionId: string,
 ): Promise<boolean> => {
   const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
   const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -238,17 +259,19 @@ const saveToSupabase = async (
   try {
     const body = {
       user_id: userId,
+      user_name: userName,
       malas,
       count: totalCount,
-      created_at: `${dateKey}T12:00:00.000Z`,
+      created_at: createdAt,
+      completion_id: completionId,
     };
-    const res = await fetch(`${url}/rest/v1/japam_history`, {
+    const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         apikey: key,
         Authorization: `Bearer ${key}`,
-        Prefer: 'return=minimal',
+        Prefer: 'return=minimal,resolution=ignore-duplicates',
       },
       body: JSON.stringify(body),
     });
@@ -319,28 +342,46 @@ export default function HistoryScreen() {
 
     setIsSaving(true);
     try {
-      const supabaseOk = await saveToSupabase(currentUserId, finalMalas, finalCount, manualDate);
+      const { userName, userEmail } = await getStoredUserMeta();
+      const createdAt = `${manualDate}T12:00:00.000Z`;
+      const raw = await AsyncStorage.getItem(HISTORY_KEY);
+      const existing = parseHistory(raw);
+      const updated = appendCompletion(existing, {
+        date: createdAt,
+        malas: finalMalas,
+        totalCount: finalCount,
+        duration: 0,
+        manual: true,
+        userId: currentUserId,
+        userName,
+        userEmail,
+      });
+      const newCompletionId = updated[0].completionId;
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
 
-      if (!supabaseOk) {
-        const newSession: Session = {
-          date: manualDate,
-          malas: finalMalas,
-          totalCount: finalCount,
-          duration: 0,
-          manual: true,
-          userId: currentUserId,
-        };
-        const raw = await AsyncStorage.getItem('history');
-        const existing = parseHistory(raw);
-        await AsyncStorage.setItem('history', JSON.stringify([...existing, newSession]));
+      const supabaseOk = await saveToSupabase(
+        currentUserId,
+        userName,
+        finalMalas,
+        finalCount,
+        createdAt,
+        newCompletionId
+      );
+
+      if (supabaseOk) {
+        const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
+        const latest = parseHistory(latestRaw);
+        await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, [newCompletionId])));
       }
 
       setShowManualModal(false);
       await loadHistory();
 
       DeviceEventEmitter.emit('japam-stats-updated');
+      DeviceEventEmitter.emit('japam-history-updated', { userId: currentUserId });
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.dispatchEvent(new Event('japam-stats-updated'));
+        window.dispatchEvent(new Event('japam-history-updated'));
       }
 
       Alert.alert('Saved', 'Manual entry saved.');
@@ -381,7 +422,13 @@ export default function HistoryScreen() {
         return dayKey === 'unknown' || dayKey <= todayKey;
       });
 
-      const localUserSessions = cleanedSessions.filter((item) => item.userId === currentUserId);
+      const latestRaw = await AsyncStorage.getItem('history');
+      const latestSessions = parseHistory(latestRaw);
+      const latestCleanedSessions = latestSessions.filter((item) => {
+        const dayKey = toDayKey(item.date);
+        return dayKey === 'unknown' || dayKey <= todayKey;
+      });
+      const localUserSessions = latestCleanedSessions.filter((item) => item.userId === currentUserId);
       const mergedMap = new Map<string, Session>();
       [...filteredRemoteSessions, ...localUserSessions].forEach((session) => {
         const key = `${session.date}-${session.totalCount}-${session.malas}`;
@@ -390,7 +437,7 @@ export default function HistoryScreen() {
       sessions = dedupeSessions([...mergedMap.values()]).sort(
         (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
       );
-      const otherUserSessions = cleanedSessions.filter((item) => item.userId !== currentUserId);
+      const otherUserSessions = latestCleanedSessions.filter((item) => item.userId !== currentUserId);
       await AsyncStorage.setItem('history', JSON.stringify([...sessions, ...otherUserSessions]));
 
       // Notify Home screen to re-sync stats from the updated local history

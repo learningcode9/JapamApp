@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { mergeHistories } from '../../lib/historyStore';
+import { mergeHistories, todayStatsFor, makeCompletionId } from '../../lib/historyStore';
 import * as Google from 'expo-auth-session/providers/google';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { Audio } from 'expo-av';
@@ -148,6 +148,10 @@ export default function JapamMain() {
   const [count, setCount] = useState(0);
   const [malas, setMalas] = useState(0);
   const [total, setTotal] = useState(0);
+  // History-derived "today" stat (single source of truth shared with Timer/History screens).
+  // The displayed Malas/Today-count read from these; `malas`/`total` above remain the live tap counter.
+  const [historyMalas, setHistoryMalas] = useState(0);
+  const [historyTotal, setHistoryTotal] = useState(0);
   const [dayStreak, setDayStreak] = useState(0);
   const [seconds, setSeconds] = useState(0);
   const [hasRestoredTotal, setHasRestoredTotal] = useState(false);
@@ -745,10 +749,32 @@ export default function JapamMain() {
     }
   }, [isRunning, seconds, targetSeconds]);
 
+  // Single source of truth for the displayed "today" stat: derive Malas today / Today count from
+  // the merged local history (same as Timer & History screens). Local-first — never waits for or
+  // depends on Supabase, so offline completions count immediately.
+  const loadHistoryStats = useCallback(async () => {
+    try {
+      const uid = await AsyncStorage.getItem(USER_ID_KEY);
+      const raw = await AsyncStorage.getItem(HISTORY_KEY);
+      const history = Array.isArray(JSON.parse(raw || '[]')) ? JSON.parse(raw || '[]') : [];
+      const toDayKey = (iso: string) => getLocalDateKey(new Date(iso));
+      const { malas: hMalas, totalCount: hTotal } = todayStatsFor(history, uid, getLocalDateKey(), toDayKey);
+      setHistoryMalas(hMalas);
+      setHistoryTotal(hTotal);
+      const pending = history.filter((r: any) => r?.syncStatus === 'pending').length;
+      const synced = history.length - pending;
+      console.log('[StatsAudit] screen=main localHistoryCount=%d pendingCount=%d syncedCount=%d mainScreenMalasToday=%d historyMalasToday=%d',
+        history.length, pending, synced, hMalas, hMalas);
+    } catch {}
+  }, []);
+
   useEffect(() => {
     const onHistoryUpdated = () => {
       void restoreTodayTotal();
+      void loadHistoryStats();
     };
+
+    void loadHistoryStats();
 
     const historySubscription = DeviceEventEmitter.addListener('japam-history-updated', onHistoryUpdated);
     const statsSubscription = DeviceEventEmitter.addListener('japam-stats-updated', onHistoryUpdated);
@@ -766,7 +792,14 @@ export default function JapamMain() {
         window.removeEventListener('japam-stats-updated', onHistoryUpdated as EventListener);
       }
     };
-  }, [restoreTodayTotal]);
+  }, [restoreTodayTotal, loadHistoryStats]);
+
+  // Recompute the history-derived stat whenever the Main screen regains focus.
+  useFocusEffect(
+    useCallback(() => {
+      void loadHistoryStats();
+    }, [loadHistoryStats])
+  );
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
@@ -1345,9 +1378,11 @@ export default function JapamMain() {
 
     try {
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
-      const history: Session[] = raw ? JSON.parse(raw) : [];
-      const userId = currentUserId;
-      const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+	      const history: Session[] = raw ? JSON.parse(raw) : [];
+	      const userId = currentUserId;
+	      const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+	      const savedUserEmail = await AsyncStorage.getItem(USER_EMAIL_KEY);
+	      const historyUserName = savedUserName || userName || savedUserEmail || 'Unknown User';
 
       const session: Session = {
         date: new Date().toISOString(),
@@ -1373,16 +1408,17 @@ export default function JapamMain() {
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
       if (url && key) {
-        const baseBody = {
-          user_name: savedUserName || userName,
-          malas: sessionMalas,
+	        const baseBody = {
+	          user_name: historyUserName,
+	          malas: sessionMalas,
           count: sessionTotal,
           created_at: session.date,
+          completion_id: makeCompletionId(userId, session.date),
         };
         const postHistory = async (body: Record<string, unknown>) => {
-          const res = await fetch(`${url}/rest/v1/japam_history`, {
+          const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal' },
+            headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal,resolution=ignore-duplicates' },
             body: JSON.stringify(body),
           });
           return res.ok;
@@ -1954,7 +1990,7 @@ export default function JapamMain() {
                   />
                 ))}
               </View>
-              <Text style={styles.statValue}>{malas}</Text>
+              <Text style={styles.statValue}>{historyMalas}</Text>
               <Text style={styles.statLabel}>Malas today</Text>
             </View>
             <View style={styles.statDivider} />
@@ -1966,7 +2002,7 @@ export default function JapamMain() {
             <View style={styles.statDivider} />
             <View style={styles.statColumn}>
               <Ionicons name="radio-button-on-outline" style={styles.statIcon} />
-              <Text style={styles.statValue}>{total}</Text>
+              <Text style={styles.statValue}>{historyTotal}</Text>
               <Text style={styles.statLabel}>Today count</Text>
             </View>
           </View>

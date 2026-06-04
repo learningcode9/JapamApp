@@ -5,13 +5,6 @@ import * as Haptics from 'expo-haptics';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import * as Notifications from 'expo-notifications';
 import { usePathname, useRouter } from 'expo-router';
-import {
-  getNativeTimerState,
-  pauseForegroundService,
-  setNativeAppActive,
-  startForegroundService,
-  stopForegroundService,
-} from '../lib/timerForegroundService';
 import { getTimerState, updateTimerState } from '../lib/timerState';
 import { appendCompletion, getPending, markSynced } from '../lib/historyStore';
 import React, {
@@ -44,6 +37,7 @@ const TIMER_TARGET_KEY = 'timerTarget';
 const TIMER_PAUSED_KEY = 'timerPaused';
 const TIMER_COMPLETED_LOOPS_KEY = 'timerCompletedLoops';
 const TIMER_STARTED_AT_KEY = 'timerStartedAt';
+const TIMER_SESSION_ID_KEY = 'timerSessionId';
 const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
 const SOUND_ENABLED_KEY = 'soundEnabled';
@@ -64,6 +58,9 @@ const getLocalDateKey = (date = new Date()) => {
   return `${y}-${m}-${d}`;
 };
 
+const createTimerSessionId = () =>
+  `timer-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
 const getCurrentMalaLabel = (completedLoops: number, selectedLoops: number, runningOrPaused = true) => {
   const safeSelectedLoops = Math.max(1, selectedLoops);
   const safeCompletedLoops = Math.min(Math.max(0, completedLoops), safeSelectedLoops);
@@ -74,17 +71,6 @@ const getCurrentMalaLabel = (completedLoops: number, selectedLoops: number, runn
 const clampCompletedLoops = (completed: number, target: number) => {
   const safeTarget = Math.max(1, target);
   return Math.min(Math.max(0, completed), safeTarget);
-};
-
-const getLoopTiming = (startedAt: number | null | undefined, durationMs: number) => {
-  const safeDurationMs = Math.max(1000, durationMs || 0);
-  const elapsedMs = startedAt ? Math.max(0, Date.now() - startedAt) : 0;
-  const remainingMs = Math.max(0, safeDurationMs - elapsedMs);
-  return {
-    elapsedSeconds: Math.floor(elapsedMs / 1000),
-    remainingSeconds: Math.ceil(remainingMs / 1000),
-    expired: remainingMs <= 0,
-  };
 };
 
 type TimerContextValue = {
@@ -152,6 +138,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const vibrationEnabledRef = useRef(true);
   const userIdRef = useRef('');
   const timerStartedAtRef = useRef<number | null>(null);
+  const timerSessionIdRef = useRef('');
   const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const notifIdRef = useRef<string | null>(null);
   const completionNotifIdRef = useRef<string | null>(null);
@@ -163,6 +150,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const notifIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const soundRef = useRef<Audio.Sound | null>(null);
   const isCompletingRef = useRef(false);
+  const syncInFlightRef = useRef(false);
   const processedCompletionLoopsRef = useRef<Set<number>>(new Set());
   const lastSavedSessionRef = useRef<{ key: string; savedAt: number } | null>(null);
   const suppressNextCompletionSoundRef = useRef(false);
@@ -180,6 +168,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const getCurrentRemainingSeconds = useCallback(() => (
     Math.max(0, selectedDurationRef.current * 60 - secondsRef.current)
   ), []);
+
+  const getActiveSessionId = useCallback(() => {
+    if (!timerSessionIdRef.current) {
+      timerSessionIdRef.current = createTimerSessionId();
+    }
+    return timerSessionIdRef.current;
+  }, []);
 
   const claimCompletionLoop = useCallback((
     source: 'JS' | 'NATIVE' | 'SINGLETON',
@@ -272,6 +267,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       [TIMER_PAUSED_KEY, String(paused)],
       [TIMER_COMPLETED_LOOPS_KEY, String(completedLoopsRef.current)],
       [TIMER_STARTED_AT_KEY, running && timerStartedAtRef.current ? String(timerStartedAtRef.current) : ''],
+      [TIMER_SESSION_ID_KEY, timerSessionIdRef.current],
       [T_DURATION_KEY, String(selectedDurationRef.current)],
       [T_LOOPS_KEY, String(selectedLoopsRef.current)],
     ];
@@ -281,6 +277,30 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         await AsyncStorage.multiSet(pairs.map(([k, v]) => [getUserKey(k, uid), v] as [string, string]));
       }
     } catch {}
+  }, []);
+
+  const persistCompletedLoops = useCallback(async (nextCompletedLoops: number) => {
+    const uid = userIdRef.current;
+    const value = String(clampCompletedLoops(nextCompletedLoops, selectedLoopsRef.current));
+    try {
+      await AsyncStorage.setItem(TIMER_COMPLETED_LOOPS_KEY, value);
+      if (uid) {
+        await AsyncStorage.setItem(getUserKey(TIMER_COMPLETED_LOOPS_KEY, uid), value);
+      }
+    } catch {}
+  }, []);
+
+  const readPersistedCompletedLoops = useCallback(async () => {
+    const uid = userIdRef.current;
+    try {
+      const raw = uid
+        ? (await AsyncStorage.getItem(getUserKey(TIMER_COMPLETED_LOOPS_KEY, uid))) ??
+          (await AsyncStorage.getItem(TIMER_COMPLETED_LOOPS_KEY))
+        : await AsyncStorage.getItem(TIMER_COMPLETED_LOOPS_KEY);
+      return clampCompletedLoops(Number(raw) || 0, selectedLoopsRef.current);
+    } catch {
+      return 0;
+    }
   }, []);
 
   const startTimerInterval = useCallback(() => {
@@ -358,7 +378,6 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       return;
     }
     if (Platform.OS === 'android') {
-      void stopForegroundService();
       return;
     }
     void (async () => {
@@ -449,9 +468,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     }
 
     if (isAndroid) {
-      // Android background completions are handled immediately by JapamTimerService.
-      // Scheduled Expo notifications can be delayed by Doze and arrive minutes late,
-      // so do not schedule them for Android unless the native service path is absent.
+      // Simple timer mode: Android has no countdown/completion notification path.
+      // Avoid scheduled notifications because Doze can delay them and create stale alerts.
       if (completionNotifIdRef.current) {
         void Notifications.cancelScheduledNotificationAsync(completionNotifIdRef.current).catch(() => {});
         completionNotifIdRef.current = null;
@@ -570,9 +588,6 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     }
 
     if (Platform.OS === 'android') {
-      // Singleton already has the latest startedAt/durationSeconds/completedLoops/totalLoops.
-      // The background task reads from it directly — no closures needed.
-      void startForegroundService();
       return;
     }
 
@@ -639,52 +654,77 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
     const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
     if (!url || !key) return;
-    let history: any[] = [];
-    try {
-      const raw = await AsyncStorage.getItem(HISTORY_KEY);
-      history = raw ? JSON.parse(raw) : [];
-    } catch {
+    // Concurrency guard: only one sync runs at a time. Overlapping triggers (after completion +
+    // app-foreground/launch, especially on reconnect) would otherwise both read the same record as
+    // pending and POST it twice -> duplicate Supabase rows. Re-entrant calls are skipped.
+    if (syncInFlightRef.current) {
+      console.log('[Stats] STATS_SYNC_SKIPPED reason=in-flight');
       return;
     }
-    const pending = getPending(history).filter((r) => r.userId === uid);
-    if (pending.length === 0) return;
-    const userName = (await AsyncStorage.getItem('userName')) || '';
-    const syncedIds: string[] = [];
-    for (const rec of pending) {
+    syncInFlightRef.current = true;
+    try {
+      let history: any[] = [];
       try {
-        const res = await fetch(`${url}/rest/v1/japam_history`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            apikey: key,
-            Authorization: `Bearer ${key}`,
-            Prefer: 'return=minimal',
-          },
-          body: JSON.stringify({
-            user_id: uid,
-            user_name: userName,
-            malas: rec.malas,
-            count: rec.totalCount,
-            created_at: rec.date,
-          }),
-        });
-        if (res.ok) {
-          syncedIds.push(rec.completionId);
-        } else {
-          console.log('[Stats] STATS_SYNC_FAILED status=%d', res.status);
-        }
+        const raw = await AsyncStorage.getItem(HISTORY_KEY);
+        history = raw ? JSON.parse(raw) : [];
       } catch {
-        // Offline / network error — stop; remaining records stay pending for the next attempt.
-        break;
+        return;
       }
-    }
+      const pending = getPending(history).filter((r) => r.userId === uid);
+      if (pending.length === 0) return;
+      const storedUserName = (await AsyncStorage.getItem('userName')) || '';
+      const storedUserEmail = (await AsyncStorage.getItem('userEmail')) || '';
+      const fallbackUserName = storedUserName || storedUserEmail || 'Unknown User';
+      const syncedIds: string[] = [];
+      for (const rec of pending) {
+        const recordUserName = rec.userName || rec.userEmail || fallbackUserName;
+        try {
+          // Idempotent upsert: on_conflict=completion_id + ignore-duplicates makes a re-uploaded
+          // completion a no-op at the DB (no duplicate row). A duplicate attempt still returns ok,
+          // so we treat it as success and mark the local record synced.
+          const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: key,
+              Authorization: `Bearer ${key}`,
+              Prefer: 'return=minimal,resolution=ignore-duplicates',
+            },
+	            body: JSON.stringify({
+	              user_id: uid,
+	              user_name: recordUserName,
+	              malas: rec.malas,
+	              count: rec.totalCount,
+	              created_at: rec.date,
+              completion_id: rec.completionId,
+            }),
+          });
+          if (res.ok) {
+            syncedIds.push(rec.completionId);
+          } else {
+            console.log('[Stats] STATS_SYNC_FAILED status=%d', res.status);
+          }
+        } catch {
+          // Offline / network error — stop; remaining records stay pending for the next attempt.
+          break;
+        }
+      }
     if (syncedIds.length > 0) {
       try {
         const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
         const latest = latestRaw ? JSON.parse(latestRaw) : [];
         await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, syncedIds)));
         console.log('[Stats] STATS_SYNC_DONE marked=%d synced', syncedIds.length);
+        DeviceEventEmitter.emit('japam-stats-updated');
+        DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('japam-stats-updated'));
+          window.dispatchEvent(new Event('japam-history-updated'));
+        }
       } catch {}
+    }
+    } finally {
+      syncInFlightRef.current = false;
     }
   }, []);
 
@@ -708,7 +748,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       console.log('[Stats] STATS_SAVE_SKIPPED reason=recent-duplicate sessionKey=%s malasTodayBefore=%d', sessionKey, before.malas);
       return;
     }
-    // Also skip if the background task already saved this loop index
+    // Also skip if this active timer session already saved this loop index.
     if (getTimerState().lastSavedCompletedLoops >= completedLoopsRef.current) {
       console.log('[Stats] STATS_SAVE_SKIPPED reason=bg-already-saved loop=%d lastSavedCompletedLoops=%d malasTodayBefore=%d',
         completedLoopsRef.current, getTimerState().lastSavedCompletedLoops, before.malas);
@@ -727,6 +767,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       getLocalDateKey(now),
       now.toISOString()
     );
+    const [storedUserName, storedUserEmail] = uid
+      ? await Promise.all([
+          AsyncStorage.getItem('userName'),
+          AsyncStorage.getItem('userEmail'),
+        ])
+      : [null, null];
+    const completionUserName = storedUserName || storedUserEmail || (uid ? 'Unknown User' : undefined);
     const completion = {
       date: now.toISOString(),
       malas: 1,
@@ -734,6 +781,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       duration,
       manual: false,
       userId: uid || undefined,
+      userName: completionUserName,
+      userEmail: storedUserEmail || undefined,
     };
 
     // Local save FIRST (offline-first) + event emission — awaited by completeCycle so stats
@@ -743,15 +792,15 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       const history = raw ? JSON.parse(raw) : [];
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(appendCompletion(history, completion)));
 
+      const after = await readMalasTodaySnapshot();
+      console.log('[Stats] STATS_SAVE_ACCEPTED completionSource=JS currentMala=%d targetMalaCount=%d malasTodayAfter=%d todayCountAfter=%d entriesAfter=%d',
+        completedLoopsRef.current, selectedLoopsRef.current, after.malas, after.count, after.entries);
       DeviceEventEmitter.emit('japam-stats-updated');
       DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.dispatchEvent(new Event('japam-stats-updated'));
         window.dispatchEvent(new Event('japam-history-updated'));
       }
-      const after = await readMalasTodaySnapshot();
-      console.log('[Stats] STATS_SAVE_ACCEPTED completionSource=JS currentMala=%d targetMalaCount=%d malasTodayAfter=%d todayCountAfter=%d entriesAfter=%d',
-        completedLoopsRef.current, selectedLoopsRef.current, after.malas, after.count, after.entries);
     } catch (err) {
       console.log('Timer session save error:', err);
       return;
@@ -789,7 +838,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       completedLoopsRef.current = 0;
       isCompletingRef.current = false;
       timerStartedAtRef.current = null;
-      updateTimerState({ startedAt: null, completedLoops: 0, isCompleting: false });
+      timerSessionIdRef.current = '';
+      updateTimerState({ sessionId: '', startedAt: null, completedLoops: 0, isCompleting: false });
       void hideNotification();
     }
   }, [clearTimerInterval, hideNotification, releaseWakeLock]);
@@ -804,7 +854,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       );
       return;
     }
-    // Guard: if background task already started handling this loop, skip
+    // Guard against duplicate completion for the same loop.
     if (getTimerState().isCompleting) {
       console.log(
         '[COMPLETION_JS] skippedDuplicate=true reason=singleton-isCompleting remainingSeconds=%d currentMala=%d targetMalaCount=%d',
@@ -828,7 +878,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       isRunningRef.current = false;
       setCompletedLoops(selectedLoopsRef.current);
       completedLoopsRef.current = selectedLoopsRef.current;
-      updateTimerState({ completedLoops: selectedLoopsRef.current, isCompleting: false, startedAt: null });
+      timerSessionIdRef.current = '';
+      updateTimerState({ sessionId: '', completedLoops: selectedLoopsRef.current, isCompleting: false, startedAt: null });
       void hideNotification();
       void persistState(false);
       return;
@@ -841,7 +892,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       return;
     }
     isCompletingRef.current = true;
-    updateTimerState({ isCompleting: true }); // block background task from interfering
+    updateTimerState({ isCompleting: true }); // block duplicate completion handling
     console.log(
       '[LoopComplete] Foreground handling loop completion source=JS remaining=%d currentMala=%d targetMalaCount=%d',
       remainingBeforeCompletion,
@@ -863,6 +914,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     setCompletedLoops(newDone);
     completedLoopsRef.current = newDone;
     updateTimerState({ completedLoops: newDone });
+    await persistCompletedLoops(newDone);
     const isFinal = newDone >= selectedLoopsRef.current;
     console.log('[LoopComplete] Foreground: loop %d/%d done, isFinal=%s source=JS', newDone, selectedLoopsRef.current, isFinal);
     console.log('[Stats] MALA_COMPLETE completionSource=JS currentMala=%d targetMalaCount=%d isFinal=%s isPaused=%s isRunning=%s',
@@ -915,7 +967,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     }
 
     if (isFinal) {
-      updateTimerState({ isCompleting: false, startedAt: null });
+      timerSessionIdRef.current = '';
+      updateTimerState({ sessionId: '', isCompleting: false, startedAt: null });
       void persistState(false);
       isCompletingRef.current = false;
       console.log('[LoopComplete] All loops done in foreground');
@@ -929,6 +982,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     timerStartedAtRef.current = Date.now();
     // Update singleton with new loop's startedAt BEFORE starting background service
     updateTimerState({
+      sessionId: timerSessionIdRef.current,
       startedAt: timerStartedAtRef.current,
       completedLoops: newDone,
       isCompleting: false,
@@ -1043,7 +1097,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           { shouldPlay: false, isLooping: false, volume: 0.95 }
         );
         soundRef.current = sound;
-        // Share the loaded sound object with the background task via singleton
+        // Keep the loaded sound object available to the active timer context.
         updateTimerState({ soundObject: sound as any });
         console.log('[TimerBG] Om sound loaded and registered in singleton');
       } catch {}
@@ -1065,7 +1119,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           uid
             ? (await AsyncStorage.getItem(getUserKey(key, uid))) ?? (await AsyncStorage.getItem(key))
             : AsyncStorage.getItem(key);
-        const [sec, target, dur, loops, paused, completed, running, startedAt] = await Promise.all([
+        const [sec, target, dur, loops, paused, completed, running, startedAt, sessionId] = await Promise.all([
           get(TIMER_SECONDS_KEY),
           get(TIMER_TARGET_KEY),
           get(T_DURATION_KEY),
@@ -1074,6 +1128,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           get(TIMER_COMPLETED_LOOPS_KEY),
           get(TIMER_RUNNING_KEY),
           get(TIMER_STARTED_AT_KEY),
+          get(TIMER_SESSION_ID_KEY),
         ]);
         const savedSec = Number(sec) || 0;
         const savedTarget = Number(target) || 0;
@@ -1083,6 +1138,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         const savedPaused = paused === 'true';
         const savedRunning = running === 'true';
         const savedStartedAt = Number(startedAt) || 0;
+        const savedSessionId = sessionId || (savedRunning ? createTimerSessionId() : '');
+        timerSessionIdRef.current = savedSessionId;
         if (savedDur > 0) {
           setSelectedDuration(savedDur);
           selectedDurationRef.current = savedDur;
@@ -1096,6 +1153,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           selectedLoopsRef.current = savedLoops;
         }
         const activeLoopLimit = LOOP_OPTIONS.includes(savedLoops) ? savedLoops : selectedLoopsRef.current;
+
         const safeCompletedLoops = Math.min(savedCompletedLoops, Math.max(0, activeLoopLimit - 1));
         if (safeCompletedLoops > 0) {
           setCompletedLoops(safeCompletedLoops);
@@ -1121,6 +1179,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           timerStartedAtRef.current = savedStartedAt;
           updateTimerState({
             startedAt: savedStartedAt,
+            sessionId: savedSessionId,
             durationSeconds: restoredTarget,
             completedLoops: safeCompletedLoops,
             totalLoops: activeLoopLimit,
@@ -1140,6 +1199,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           setIsRunning(false);
           isRunningRef.current = false;
           timerStartedAtRef.current = null;
+          updateTimerState({ sessionId: savedSessionId });
           console.log('[TimerBG] TIMER_RESTORE_PAUSED elapsed=%ds target=%ds completedLoops=%d/%d',
             restoredSeconds, restoredTarget, safeCompletedLoops, activeLoopLimit);
         }
@@ -1160,7 +1220,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         uid
           ? (await AsyncStorage.getItem(getUserKey(key, uid))) ?? (await AsyncStorage.getItem(key))
           : AsyncStorage.getItem(key);
-      const [sec, target, dur, loops, completed, running, startedAt] = await Promise.all([
+      const [sec, target, dur, loops, completed, running, startedAt, sessionId] = await Promise.all([
         get(TIMER_SECONDS_KEY),
         get(TIMER_TARGET_KEY),
         get(T_DURATION_KEY),
@@ -1168,6 +1228,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         get(TIMER_COMPLETED_LOOPS_KEY),
         get(TIMER_RUNNING_KEY),
         get(TIMER_STARTED_AT_KEY),
+        get(TIMER_SESSION_ID_KEY),
       ]);
 
       const savedRunning = running === 'true';
@@ -1177,6 +1238,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       const savedStartedAt = Number(startedAt) || 0;
       const savedSeconds = Number(sec) || 0;
       if (!savedRunning || restoredTarget <= 0) return false;
+      const restoredSessionId = sessionId || createTimerSessionId();
 
       const restoredStartedAt = savedStartedAt > 0
         ? savedStartedAt
@@ -1201,9 +1263,11 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       setSeconds(elapsed);
       secondsRef.current = elapsed;
       timerStartedAtRef.current = restoredStartedAt;
+      timerSessionIdRef.current = restoredSessionId;
       setIsRunning(true);
       isRunningRef.current = true;
       updateTimerState({
+        sessionId: restoredSessionId,
         startedAt: restoredStartedAt,
         durationSeconds: restoredTarget,
         completedLoops: safeCompletedLoops,
@@ -1214,8 +1278,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       startTimerInterval();
       void acquireWakeLock();
       void persistState(true);
-      console.log('[TimerBG] TIMER_RESTORE_RUNNING startedAt=%d elapsed=%ds target=%ds completedLoops=%d/%d',
-        restoredStartedAt, elapsed, restoredTarget, safeCompletedLoops, activeLoopLimit);
+      console.log('[TimerBG] TIMER_RESTORE_RUNNING sessionId=%s startedAt=%d elapsed=%ds target=%ds completedLoops=%d/%d',
+        restoredSessionId, restoredStartedAt, elapsed, restoredTarget, safeCompletedLoops, activeLoopLimit);
       return true;
     } catch (error) {
       console.log('[TimerBG] Restore running timer error:', error);
@@ -1231,311 +1295,41 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
-      // ── Going to background ──────────────────────────────────────────────
       if (next !== 'active' && appStateRef.current === 'active') {
-        updateTimerState({ appIsActive: false });
-        if (Platform.OS === 'android') {
-          setNativeAppActive(false);
-          if (isRunningRef.current) {
-            void startForegroundService();
-          }
-        }
+        const wasRunning = isRunningRef.current;
         if (isRunningRef.current && timerStartedAtRef.current !== null) {
           const elapsed = Math.max(0, Math.floor((Date.now() - timerStartedAtRef.current) / 1000));
           secondsRef.current = elapsed;
-          const remaining = selectedDurationRef.current * 60 - elapsed;
-          if (remaining > 1) {
-            scheduleCompletionNotification(remaining);
-          }
+          setSeconds(Math.min(elapsed, Math.max(0, selectedDurationRef.current * 60 - 1)));
         }
+        clearTimerInterval();
+        releaseWakeLock();
+        setIsRunning(false);
+        isRunningRef.current = false;
+        timerStartedAtRef.current = null;
+        updateTimerState({ appIsActive: false, startedAt: null, isCompleting: false });
         soundRef.current?.stopAsync().catch(() => {});
-        void persistState(isRunningRef.current);
-        console.log('[TimerBG] App backgrounded, native service taking over');
+        void hideNotification();
+        clearCompletionNotification();
+        void persistState(false);
+        console.log('[TimerBG] App backgrounded, simple JS timer paused wasRunning=%s seconds=%d', wasRunning, secondsRef.current);
       }
 
-      // ── Returning to foreground ──────────────────────────────────────────
       if (next === 'active' && appStateRef.current !== 'active') {
         updateTimerState({ appIsActive: true });
-        if (Platform.OS === 'android') {
-          setNativeAppActive(true);
-        }
-
-        const handleResume = async () => {
-          // For Android: sync state from native Kotlin service (authoritative source in background)
-          if (Platform.OS === 'android') {
-            try {
-              const nativeState = await getNativeTimerState();
-              if (nativeState && nativeState.completedLoops > completedLoopsRef.current) {
-                const nativeCompleted = clampCompletedLoops(nativeState.completedLoops, selectedLoopsRef.current);
-                const currentCompleted = clampCompletedLoops(completedLoopsRef.current, selectedLoopsRef.current);
-                const loopsGained = Math.max(0, nativeCompleted - currentCompleted);
-                const nativeTiming = getLoopTiming(nativeState.startedAt, nativeState.durationMs);
-                const previousStartedAt = timerStartedAtRef.current || 0;
-                const nativeAdvancedToNextLoop =
-                  nativeCompleted < selectedLoopsRef.current &&
-                  nativeState.isRunning &&
-                  nativeState.startedAt > previousStartedAt;
-                const nativeCompletionIsPlausible = nativeTiming.expired || nativeAdvancedToNextLoop;
-                console.log(
-                  '[TimerNative] Foreground resumed source=native nativeLoops=%d clampedLoops=%d currentMala=%d targetMalaCount=%d loopsGained=%d remainingSeconds=%d expired=%s advancedNextLoop=%s',
-                  nativeState.completedLoops,
-                  nativeCompleted,
-                  currentCompleted,
-                  selectedLoopsRef.current,
-                  loopsGained,
-                  nativeTiming.remainingSeconds,
-                  nativeTiming.expired,
-                  nativeAdvancedToNextLoop
-                );
-                if (!nativeCompletionIsPlausible) {
-                  console.log(
-                    '[TimerNative] skippedDuplicate=true source=native reason=completion-before-expiry remainingSeconds=%d currentMala=%d targetMalaCount=%d nativeLoops=%d',
-                    nativeTiming.remainingSeconds,
-                    currentCompleted,
-                    selectedLoopsRef.current,
-                    nativeState.completedLoops
-                  );
-                  if (nativeState.startedAt > 0) {
-                    const elapsed = Math.max(0, nativeTiming.elapsedSeconds);
-                    timerStartedAtRef.current = nativeState.startedAt;
-                    secondsRef.current = elapsed;
-                    setSeconds(elapsed);
-                    setIsRunning(nativeState.isRunning);
-                    isRunningRef.current = nativeState.isRunning;
-                    if (nativeState.isRunning) {
-                      startTimerInterval();
-                      void showNotification();
-                    }
-                  }
-                  return;
-                }
-                if (loopsGained <= 0) {
-                  setCompletedLoops(nativeCompleted);
-                  completedLoopsRef.current = nativeCompleted;
-                  updateTimerState({ completedLoops: nativeCompleted });
-                  return;
-                }
-
-                // Save any loops that were completed in the native service to history
-                const uid = userIdRef.current;
-                let acceptedNativeLoops = 0;
-                for (let i = 0; i < loopsGained; i++) {
-                  const loopNum = currentCompleted + i + 1;
-                  const accepted = claimCompletionLoop(
-                    'NATIVE',
-                    loopNum,
-                    nativeAdvancedToNextLoop ? 0 : nativeTiming.remainingSeconds,
-                    { allowRunningNextLoop: nativeAdvancedToNextLoop }
-                  );
-                  if (!accepted) continue;
-                  acceptedNativeLoops += 1;
-                  if (getTimerState().lastSavedCompletedLoops < loopNum) {
-                    updateTimerState({ lastSavedCompletedLoops: loopNum });
-                    // Fire-and-forget local history save for each native-completed loop
-                    const now = new Date();
-                    console.log('[TimerSessionDate] source=native deviceLocalTime=%s generatedDateKey=%s sessionIso=%s',
-                      now.toString(),
-                      getLocalDateKey(now),
-                      now.toISOString()
-                    );
-                    const completion = {
-                      date: now.toISOString(),
-                      malas: 1,
-                      totalCount: 108,
-                      duration: Math.round(nativeState.durationMs / 1000),
-                      manual: false,
-                      userId: uid || undefined,
-                    };
-                    void (async () => {
-                      try {
-                        const raw = await AsyncStorage.getItem('history');
-                        const history = raw ? JSON.parse(raw) : [];
-                        // Stamp completionId + syncStatus:'pending' so this native-completed loop
-                        // merges/dedups consistently and gets uploaded opportunistically.
-                        await AsyncStorage.setItem('history', JSON.stringify(appendCompletion(history, completion)));
-                      } catch {}
-                    })();
-                    console.log('[Stats] MALA_COMPLETE completionSource=NATIVE currentMala=%d targetMalaCount=%d loopNum=%d isPaused=false isRunning=%s',
-                      nativeCompleted, selectedLoopsRef.current, loopNum, nativeState.isRunning);
-                    console.log('[Stats] STATS_SAVE_ACCEPTED completionSource=NATIVE loopNum=%d lastSavedCompletedLoops=%d', loopNum, loopNum);
-                  } else {
-                    console.log('[Stats] STATS_SAVE_SKIPPED reason=bg-already-saved completionSource=NATIVE loopNum=%d lastSavedCompletedLoops=%d',
-                      loopNum, getTimerState().lastSavedCompletedLoops);
-                  }
-                }
-
-                if (acceptedNativeLoops <= 0) {
-                  console.log(
-                    '[COMPLETION_NATIVE] skippedDuplicate=true reason=no-accepted-native-loops remainingSeconds=%d currentMala=%d targetMalaCount=%d',
-                    nativeTiming.remainingSeconds,
-                    currentCompleted,
-                    selectedLoopsRef.current
-                  );
-                  return;
-                }
-
-                setCompletedLoops(nativeCompleted);
-                completedLoopsRef.current = nativeCompleted;
-                updateTimerState({ completedLoops: nativeCompleted });
-
-                DeviceEventEmitter.emit('japam-stats-updated');
-                DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
-                console.log('[StatsRefresh] Events re-emitted on foreground resume (native path)');
-
-                const isFinal = nativeCompleted >= selectedLoopsRef.current;
-                if (isFinal || !nativeState.isRunning) {
-                  clearTimerInterval();
-                  releaseWakeLock();
-                  setIsRunning(false);
-                  isRunningRef.current = false;
-                  timerStartedAtRef.current = null;
-                  isCompletingRef.current = false;
-                  return;
-                }
-
-                // Next loop running in native — sync JS to it
-                if (nativeState.startedAt > 0) {
-                  timerStartedAtRef.current = nativeState.startedAt;
-                  const elapsed = Math.floor((Date.now() - nativeState.startedAt) / 1000);
-                  secondsRef.current = elapsed;
-                  setSeconds(elapsed);
-                  setIsRunning(true);
-                  isRunningRef.current = true;
-                  startTimerInterval();
-                  void showNotification();
-                  console.log('[TimerNative] Synced to loop %d, elapsed=%ds', Math.min(selectedLoopsRef.current, nativeCompleted + 1), elapsed);
-                }
-                return;
-              } else if (nativeState && nativeState.isRunning) {
-                // Same loop, timer still running — use native startedAt as authoritative source
-                const startedAt = nativeState.startedAt > 0 ? nativeState.startedAt : timerStartedAtRef.current;
-                if (startedAt) {
-                  timerStartedAtRef.current = startedAt;
-                  const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-                  secondsRef.current = elapsed;
-                  setSeconds(elapsed);
-                  setIsRunning(true);
-                  isRunningRef.current = true;
-                  startTimerInterval();
-                  void showNotification();
-                  console.log('[TimerNative] Foreground resumed same loop, elapsed=%ds', elapsed);
-                }
-                return;
-              }
-            } catch (e) {
-              console.log('[TimerNative] getState error on resume:', e);
-            }
-          }
-
-          // JS singleton fallback (non-Android or if native module unavailable)
-          const bgState = getTimerState();
-          if (bgState.completedLoops > completedLoopsRef.current) {
-            const bgCompleted = clampCompletedLoops(bgState.completedLoops, selectedLoopsRef.current);
-            const loopsGained = Math.max(0, bgCompleted - clampCompletedLoops(completedLoopsRef.current, selectedLoopsRef.current));
-            const bgTiming = getLoopTiming(bgState.startedAt, bgState.durationSeconds * 1000);
-            const previousStartedAt = timerStartedAtRef.current || 0;
-            const bgAdvancedToNextLoop =
-              bgCompleted < selectedLoopsRef.current &&
-              Boolean(bgState.startedAt) &&
-              bgState.startedAt! > previousStartedAt;
-            const bgCompletionIsPlausible = bgTiming.expired || bgAdvancedToNextLoop;
-            console.log(
-              '[TimerBG] Foreground resumed: background completed %d loop(s), clamped=%d/%d remainingSeconds=%d expired=%s advancedNextLoop=%s',
-              loopsGained,
-              bgCompleted,
-              selectedLoopsRef.current,
-              bgTiming.remainingSeconds,
-              bgTiming.expired,
-              bgAdvancedToNextLoop
-            );
-            if (!bgCompletionIsPlausible) {
-              console.log(
-                '[TimerBG] skippedDuplicate=true source=singleton reason=completion-before-expiry remainingSeconds=%d currentMala=%d targetMalaCount=%d',
-                bgTiming.remainingSeconds,
-                clampCompletedLoops(completedLoopsRef.current, selectedLoopsRef.current),
-                selectedLoopsRef.current
-              );
-              if (bgState.startedAt) {
-                timerStartedAtRef.current = bgState.startedAt;
-                secondsRef.current = bgTiming.elapsedSeconds;
-                setSeconds(bgTiming.elapsedSeconds);
-                setIsRunning(true);
-                isRunningRef.current = true;
-                startTimerInterval();
-                void showNotification();
-              }
-              return;
-            }
-            let acceptedSingletonLoops = 0;
-            const currentCompleted = clampCompletedLoops(completedLoopsRef.current, selectedLoopsRef.current);
-            for (let i = 0; i < loopsGained; i += 1) {
-              const loopNum = currentCompleted + i + 1;
-              const accepted = claimCompletionLoop(
-                'SINGLETON',
-                loopNum,
-                bgAdvancedToNextLoop ? 0 : bgTiming.remainingSeconds,
-                { allowRunningNextLoop: bgAdvancedToNextLoop }
-              );
-              if (accepted) acceptedSingletonLoops += 1;
-            }
-            if (acceptedSingletonLoops <= 0) {
-              console.log(
-                '[COMPLETION_SINGLETON] skippedDuplicate=true reason=no-accepted-singleton-loops remainingSeconds=%d currentMala=%d targetMalaCount=%d',
-                bgTiming.remainingSeconds,
-                currentCompleted,
-                selectedLoopsRef.current
-              );
-              return;
-            }
-            setCompletedLoops(bgCompleted);
-            completedLoopsRef.current = bgCompleted;
-            updateTimerState({ completedLoops: bgCompleted });
-            DeviceEventEmitter.emit('japam-stats-updated');
-            DeviceEventEmitter.emit('japam-history-updated', { userId: userIdRef.current || 'guest' });
-
-            if (!bgState.startedAt) {
-              clearTimerInterval();
-              releaseWakeLock();
-              setIsRunning(false);
-              isRunningRef.current = false;
-              timerStartedAtRef.current = null;
-              isCompletingRef.current = false;
-            } else {
-              timerStartedAtRef.current = bgState.startedAt;
-              const elapsed = Math.floor((Date.now() - bgState.startedAt) / 1000);
-              secondsRef.current = elapsed;
-              setSeconds(elapsed);
-              setIsRunning(true);
-              isRunningRef.current = true;
-              startTimerInterval();
-              void showNotification();
-            }
-          } else if (isRunningRef.current && timerStartedAtRef.current !== null) {
-            const elapsed = Math.floor((Date.now() - timerStartedAtRef.current) / 1000);
-            secondsRef.current = elapsed;
-            setSeconds(elapsed);
-            startTimerInterval();
-            console.log('[TimerBG] Foreground resumed, resynced elapsed=%ds', elapsed);
-          } else {
-            await restoreRunningTimerFromStorage();
-          }
-        };
-
-        void handleResume();
+        void restoreRunningTimerFromStorage();
       }
 
       appStateRef.current = next;
     });
     return () => sub.remove();
   }, [
-    claimCompletionLoop,
     clearTimerInterval,
+    clearCompletionNotification,
+    hideNotification,
     persistState,
     releaseWakeLock,
     restoreRunningTimerFromStorage,
-    scheduleCompletionNotification,
-    showNotification,
-    startTimerInterval,
   ]);
 
   useEffect(() => {
@@ -1619,8 +1413,16 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     console.log('[TimerBG] TIMER_START_ACCEPTED resume=%s', resume);
     isCompletingRef.current = false;
     if (resume) {
+      const persistedCompletedLoops = await readPersistedCompletedLoops();
+      const restoredCompletedLoops = Math.max(completedLoopsRef.current, persistedCompletedLoops);
+      if (restoredCompletedLoops !== completedLoopsRef.current) {
+        setCompletedLoops(restoredCompletedLoops);
+        completedLoopsRef.current = restoredCompletedLoops;
+      }
+      timerSessionIdRef.current = getActiveSessionId();
       timerStartedAtRef.current = Date.now() - seconds * 1000;
     } else {
+      timerSessionIdRef.current = createTimerSessionId();
       processedCompletionLoopsRef.current.clear();
       setSeconds(0);
       secondsRef.current = 0;
@@ -1628,9 +1430,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       completedLoopsRef.current = 0;
       timerStartedAtRef.current = Date.now();
     }
-    // Populate singleton BEFORE starting the foreground service so the background
-    // task immediately has the correct startedAt, duration, and loop counts.
+    // Populate singleton before ticking starts so the active timer has the
+    // correct startedAt, duration, and loop counts.
     updateTimerState({
+      sessionId: timerSessionIdRef.current,
       startedAt: timerStartedAtRef.current,
       durationSeconds: selectedDurationRef.current * 60,
       completedLoops: completedLoopsRef.current,
@@ -1640,20 +1443,17 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       lastSavedCompletedLoops: 0,
       appIsActive: appStateRef.current === 'active',
     });
-    console.log('[TimerBG] Timer started: duration=%ds loops=%d/%d startedAt=%d',
-      selectedDurationRef.current * 60, completedLoopsRef.current, selectedLoopsRef.current, timerStartedAtRef.current);
+    console.log('[TimerBG] Timer started: sessionId=%s duration=%ds loops=%d/%d startedAt=%d',
+      timerSessionIdRef.current, selectedDurationRef.current * 60, completedLoopsRef.current, selectedLoopsRef.current, timerStartedAtRef.current);
     setIsRunning(true);
     isRunningRef.current = true;
     startTimerInterval();
     void acquireWakeLock();
-    if (Platform.OS === 'android') {
-      setNativeAppActive(appStateRef.current === 'active');
-    }
     void showNotification();
     void requestNotificationPermission().then((granted) => {
       if (!isRunningRef.current) return;
       if (!granted) {
-        console.log('[TimerNotify] Notification permission not granted; keeping Media Session/foreground timer only.');
+        console.log('[TimerNotify] Notification permission not granted; continuing in-app timer only.');
       }
       void showNotification();
       scheduleCompletionNotification(targetSeconds - secondsRef.current);
@@ -1661,8 +1461,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     void persistState(true);
   }, [
     acquireWakeLock,
+    getActiveSessionId,
     isRunning,
     persistState,
+    readPersistedCompletedLoops,
     requestNotificationPermission,
     scheduleCompletionNotification,
     seconds,
@@ -1676,13 +1478,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     releaseWakeLock();
     setIsRunning(false);
     isRunningRef.current = false;
-    updateTimerState({ startedAt: null, isCompleting: false });
-    if (Platform.OS === 'android') {
-      // Keep native notification visible but show paused state
-      void pauseForegroundService();
-    } else {
-      void hideNotification();
-    }
+    updateTimerState({ sessionId: timerSessionIdRef.current, startedAt: null, isCompleting: false });
+    void hideNotification();
     clearCompletionNotification();
     void persistState(false);
     console.log('[TimerBG] Timer paused');
@@ -1700,7 +1497,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     isCompletingRef.current = false;
     processedCompletionLoopsRef.current.clear();
     timerStartedAtRef.current = null;
-    updateTimerState({ startedAt: null, completedLoops: 0, isCompleting: false, lastSavedCompletedLoops: 0 });
+    timerSessionIdRef.current = '';
+    updateTimerState({ sessionId: '', startedAt: null, completedLoops: 0, isCompleting: false, lastSavedCompletedLoops: 0 });
     void hideNotification();
     clearCompletionNotification();
     void persistState(false);
@@ -1717,6 +1515,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     completedLoopsRef.current = 0;
     processedCompletionLoopsRef.current.clear();
     timerStartedAtRef.current = null;
+    timerSessionIdRef.current = '';
     void AsyncStorage.setItem(T_DURATION_KEY, String(mins));
   }, []);
 
@@ -1725,6 +1524,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     setSelectedLoops(loops);
     selectedLoopsRef.current = loops;
     processedCompletionLoopsRef.current.clear();
+    timerSessionIdRef.current = '';
     void AsyncStorage.setItem(T_LOOPS_KEY, String(loops));
   }, []);
 

@@ -5,7 +5,7 @@ import * as Updates from 'expo-updates';
 import { Asset } from 'expo-asset';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { AppState, Platform, View } from 'react-native';
 import 'react-native-reanimated';
 import { PaperProvider } from 'react-native-paper';
@@ -18,13 +18,12 @@ export const unstable_settings = {
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
-  const [bgReady, setBgReady] = useState(false);
 
+  // Warm the background image cache in the background only. This must NEVER gate app render:
+  // gating on downloadAsync() froze startup when offline (the call can hang without network and
+  // never reject). The app renders immediately; the image appears once cached, over the solid bg.
   useEffect(() => {
-    Asset.fromModule(ZEN_BACKGROUND)
-      .downloadAsync()
-      .then(() => setBgReady(true))
-      .catch(() => setBgReady(true));
+    Asset.fromModule(ZEN_BACKGROUND).downloadAsync().catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -185,17 +184,15 @@ export default function RootLayout() {
 
   return (
     <View style={{ flex: 1, backgroundColor: '#edf7f4' }}>
-      {bgReady && (
-        <PaperProvider>
-          <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-            <Stack>
-              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-              <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-            </Stack>
-            <StatusBar style="auto" />
-          </ThemeProvider>
-        </PaperProvider>
-      )}
+      <PaperProvider>
+        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <Stack>
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+          </Stack>
+          <StatusBar style="auto" />
+        </ThemeProvider>
+      </PaperProvider>
     </View>
   );
 }

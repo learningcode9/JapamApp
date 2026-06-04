@@ -7,6 +7,7 @@ import {
   getPending,
   markSynced,
   todayCountFor,
+  todayStatsFor,
   type HistoryRecord,
 } from '../historyStore';
 
@@ -64,6 +65,31 @@ describe('offline-first: appendCompletion', () => {
     expect(n.completionId).toBe(makeCompletionId(UID, legacy.date));
     expect(n.syncStatus).toBe('synced'); // legacy assumed already handled
   });
+  it('preserves a logged-in manual entry user name while pending', () => {
+    const h = appendCompletion([], session('2026-06-03T10:00:00.000Z', {
+      manual: true,
+      userName: 'Sravani',
+      userEmail: 'sravani@example.com',
+    }));
+    expect(h[0].manual).toBe(true);
+    expect(h[0].syncStatus).toBe('pending');
+    expect(h[0].userName).toBe('Sravani');
+    expect(h[0].userEmail).toBe('sravani@example.com');
+  });
+  it('normalizes remote snake_case user metadata for restore/sync safety', () => {
+    const n = normalizeRecord({
+      date: '2026-06-03T10:00:00.000Z',
+      malas: 1,
+      totalCount: 108,
+      duration: 0,
+      manual: true,
+      userId: UID,
+      user_name: 'Remote User',
+      user_email: 'remote@example.com',
+    });
+    expect(n.userName).toBe('Remote User');
+    expect(n.userEmail).toBe('remote@example.com');
+  });
 });
 
 describe('no undercounting: dedupeByCompletionId', () => {
@@ -86,11 +112,12 @@ describe('no undercounting: dedupeByCompletionId', () => {
   it('upgrades the kept record to synced when a duplicate is synced', () => {
     const iso = '2026-06-03T10:00:00.000Z';
     const out = dedupeByCompletionId([
-      session(iso, { syncStatus: 'pending' }),
+      session(iso, { syncStatus: 'pending', userName: 'Local User' }),
       session(iso, { syncStatus: 'synced' }),
     ]);
     expect(out).toHaveLength(1);
     expect(out[0].syncStatus).toBe('synced');
+    expect(out[0].userName).toBe('Local User');
   });
 });
 
@@ -148,6 +175,20 @@ describe('sync lifecycle: getPending / markSynced', () => {
   });
 });
 
+describe('duplicate sync attempts do not re-upload (idempotent)', () => {
+  it('a synced record is no longer pending, so a repeat sync uploads nothing', () => {
+    let h = appendCompletion([], session('2026-06-04T10:00:00.000Z')); // pending
+    expect(getPending(h)).toHaveLength(1);
+    // simulate a successful upload + mark
+    h = markSynced(h, getPending(h).map((p) => p.completionId));
+    expect(getPending(h)).toHaveLength(0); // second sync run finds nothing -> no duplicate POST
+    // re-marking again is still a no-op
+    h = markSynced(h, [makeCompletionId(UID, '2026-06-04T10:00:00.000Z')]);
+    expect(getPending(h)).toHaveLength(0);
+    expect(h).toHaveLength(1); // never duplicates the record
+  });
+});
+
 describe('stats correct offline: todayCountFor', () => {
   it('sums today\'s deduped totalCount for the user (floor(count/108) malas)', () => {
     const today = '2026-06-03T';
@@ -166,5 +207,24 @@ describe('stats correct offline: todayCountFor', () => {
     const iso = '2026-06-03T10:00:00.000Z';
     const count = todayCountFor([session(iso), session(iso)], UID, toDayKey(iso), toDayKey);
     expect(count).toBe(108); // one mala, not two
+  });
+});
+
+describe('shared selector: todayStatsFor (Main/Timer/History must agree)', () => {
+  it('returns matching malas + totalCount from merged history (single source of truth)', () => {
+    const today = '2026-06-03T';
+    const recs = [
+      session(`${today}10:00:00.000Z`),                 // tap/timer mala 1
+      session(`${today}10:01:30.000Z`),                 // distinct mala 2
+      session(`${today}10:00:00.000Z`),                 // duplicate of mala 1 -> ignored
+      session('2026-06-02T09:00:00.000Z'),              // yesterday -> excluded
+    ];
+    const stats = todayStatsFor(recs, UID, toDayKey(`${today}10:00:00.000Z`), toDayKey);
+    expect(stats).toEqual({ malas: 2, totalCount: 216 });
+  });
+  it('counts a pending (offline) mala immediately, no Supabase needed', () => {
+    const h = appendCompletion([], session('2026-06-03T10:00:00.000Z')); // pending
+    const stats = todayStatsFor(h, UID, toDayKey('2026-06-03T10:00:00.000Z'), toDayKey);
+    expect(stats.malas).toBe(1);
   });
 });
