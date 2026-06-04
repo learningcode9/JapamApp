@@ -52,6 +52,15 @@ type RemoteHistoryRow = {
   user_email?: string;
 };
 
+type ManualSyncInput = {
+  userId: string;
+  userName: string;
+  malas: number;
+  totalCount: number;
+  createdAt: string;
+  completionId: string;
+};
+
 const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
@@ -64,6 +73,33 @@ const getStoredUserMeta = async () => {
   ]);
   const userName = (storedName || storedEmail || 'Unknown User').trim() || 'Unknown User';
   return { userName, userEmail: storedEmail || undefined };
+};
+
+const backfillMissingUserNames = async (userId: string, userName: string) => {
+  const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+  const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key || !userId || !userName) return;
+
+  try {
+    const query = new URLSearchParams({ user_id: `eq.${userId}` });
+    query.append('or', '(user_name.is.null,user_name.eq.)');
+    const response = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({ user_name: userName }),
+    });
+
+    if (!response.ok) {
+      console.log('Supabase user_name backfill error:', await response.text());
+    }
+  } catch (error) {
+    console.log('Supabase user_name backfill error:', error);
+  }
 };
 
 const getLocalDateKey = (date = new Date()) => {
@@ -271,7 +307,7 @@ const saveToSupabase = async (
         'Content-Type': 'application/json',
         apikey: key,
         Authorization: `Bearer ${key}`,
-        Prefer: 'return=minimal,resolution=ignore-duplicates',
+        Prefer: 'return=minimal,resolution=merge-duplicates',
       },
       body: JSON.stringify(body),
     });
@@ -279,6 +315,35 @@ const saveToSupabase = async (
   } catch (err) {
     console.log('Supabase manual entry save error:', err);
     return false;
+  }
+};
+
+const syncManualEntryToSupabase = async ({
+  userId,
+  userName,
+  malas,
+  totalCount,
+  createdAt,
+  completionId,
+}: ManualSyncInput) => {
+  try {
+    const supabaseOk = await saveToSupabase(
+      userId,
+      userName,
+      malas,
+      totalCount,
+      createdAt,
+      completionId
+    );
+
+    if (!supabaseOk) return;
+
+    await backfillMissingUserNames(userId, userName);
+    const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
+    const latest = parseHistory(latestRaw);
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, [completionId])));
+  } catch (error) {
+    console.log('Supabase manual entry background sync error:', error);
   }
 };
 
@@ -359,20 +424,14 @@ export default function HistoryScreen() {
       const newCompletionId = updated[0].completionId;
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
 
-      const supabaseOk = await saveToSupabase(
-        currentUserId,
+      void syncManualEntryToSupabase({
+        userId: currentUserId,
         userName,
-        finalMalas,
-        finalCount,
+        malas: finalMalas,
+        totalCount: finalCount,
         createdAt,
-        newCompletionId
-      );
-
-      if (supabaseOk) {
-        const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
-        const latest = parseHistory(latestRaw);
-        await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, [newCompletionId])));
-      }
+        completionId: newCompletionId,
+      });
 
       setShowManualModal(false);
       await loadHistory();
@@ -392,7 +451,6 @@ export default function HistoryScreen() {
       setIsSaving(false);
     }
   };
-
   const loadHistory = useCallback(async () => {
     const todayKey = getLocalDateKey();
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
@@ -403,6 +461,9 @@ export default function HistoryScreen() {
       setDailyRows([]);
       return;
     }
+
+    const { userName } = await getStoredUserMeta();
+    void backfillMissingUserNames(currentUserId, userName);
 
     const cleanedSessions = allSessions.filter((item) => {
       const dayKey = toDayKey(item.date);

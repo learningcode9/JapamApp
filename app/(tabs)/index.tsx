@@ -1378,11 +1378,11 @@ export default function JapamMain() {
 
     try {
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
-	      const history: Session[] = raw ? JSON.parse(raw) : [];
-	      const userId = currentUserId;
-	      const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
-	      const savedUserEmail = await AsyncStorage.getItem(USER_EMAIL_KEY);
-	      const historyUserName = savedUserName || userName || savedUserEmail || 'Unknown User';
+      const history: Session[] = raw ? JSON.parse(raw) : [];
+      const userId = currentUserId;
+      const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+      const savedUserEmail = await AsyncStorage.getItem(USER_EMAIL_KEY);
+      const historyUserName = savedUserName || userName || savedUserEmail || 'Unknown User';
 
       const session: Session = {
         date: new Date().toISOString(),
@@ -1408,9 +1408,9 @@ export default function JapamMain() {
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
       if (url && key) {
-	        const baseBody = {
-	          user_name: historyUserName,
-	          malas: sessionMalas,
+        const baseBody = {
+          user_name: historyUserName,
+          malas: sessionMalas,
           count: sessionTotal,
           created_at: session.date,
           completion_id: makeCompletionId(userId, session.date),
@@ -1418,7 +1418,7 @@ export default function JapamMain() {
         const postHistory = async (body: Record<string, unknown>) => {
           const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal,resolution=ignore-duplicates' },
+            headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal,resolution=merge-duplicates' },
             body: JSON.stringify(body),
           });
           return res.ok;
@@ -2867,17 +2867,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: 'rgba(255,255,255,0.75)',
+    backgroundColor: 'rgba(255,255,255,0.94)',
     borderRadius: 28,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.72)',
-    paddingVertical: isShortMobile ? 13 : isMobile ? 17 : 22,
+    borderColor: 'rgba(15,143,135,0.22)',
+    paddingVertical: isShortMobile ? 15 : isMobile ? 18 : 22,
     paddingHorizontal: isMobile ? 12 : 16,
     shadowColor: '#0f766e',
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.14,
     shadowRadius: 22,
     shadowOffset: { width: 0, height: 12 },
-    elevation: 7,
+    elevation: 10,
     marginBottom: isMobile ? 20 : 28,
   },
   installBanner: {
@@ -2947,7 +2947,7 @@ const styles = StyleSheet.create({
   statDivider: {
     width: 1,
     height: isShortMobile ? 46 : isMobile ? 52 : 58,
-    backgroundColor: 'rgba(95,127,128,0.22)',
+    backgroundColor: 'rgba(15,143,135,0.24)',
   },
   statIcon: {
     color: '#0F8F87',
@@ -2967,15 +2967,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#0F8F87',
   },
   statValue: {
-    color: '#12383c',
-    fontSize: isShortMobile ? 28 : isMobile ? 30 : 32,
-    fontWeight: '800',
+    color: '#063B3B',
+    fontSize: isShortMobile ? 30 : isMobile ? 32 : 34,
+    fontWeight: '900',
     lineHeight: isShortMobile ? 32 : isMobile ? 34 : 36,
   },
   statLabel: {
-    color: '#5f7778',
-    fontSize: isMobile ? 14 : 15,
-    fontWeight: '600',
+    color: '#234E52',
+    fontSize: isShortMobile ? 13 : isMobile ? 14 : 15,
+    fontWeight: '800',
+    lineHeight: isShortMobile ? 16 : 18,
     textAlign: 'center',
     marginTop: 4,
   },

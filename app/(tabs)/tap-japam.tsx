@@ -1371,11 +1371,11 @@ export default function JapamMain() {
 
     try {
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
-	      const history: Session[] = raw ? JSON.parse(raw) : [];
-	      const userId = currentUserId;
-	      const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
-	      const savedUserEmail = await AsyncStorage.getItem(USER_EMAIL_KEY);
-	      const historyUserName = savedUserName || userName || savedUserEmail || 'Unknown User';
+      const history: Session[] = raw ? JSON.parse(raw) : [];
+      const userId = currentUserId;
+      const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+      const savedUserEmail = await AsyncStorage.getItem(USER_EMAIL_KEY);
+      const historyUserName = savedUserName || userName || savedUserEmail || 'Unknown User';
 
       const session: Session = {
         date: new Date().toISOString(),
@@ -1401,9 +1401,9 @@ export default function JapamMain() {
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
       if (url && key) {
-	        const baseBody = {
-	          user_name: historyUserName,
-	          malas: sessionMalas,
+        const baseBody = {
+          user_name: historyUserName,
+          malas: sessionMalas,
           count: sessionTotal,
           created_at: session.date,
           completion_id: makeCompletionId(userId, session.date),
@@ -1411,7 +1411,7 @@ export default function JapamMain() {
         const postHistory = async (body: Record<string, unknown>) => {
           const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal,resolution=ignore-duplicates' },
+            headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal,resolution=merge-duplicates' },
             body: JSON.stringify(body),
           });
           return res.ok;

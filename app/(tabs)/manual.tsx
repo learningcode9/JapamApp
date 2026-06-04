@@ -15,6 +15,15 @@ type Session = {
   userId?: string;
 };
 
+type ManualSyncInput = {
+  userId: string;
+  userName: string;
+  malaNum: number;
+  totalNum: number;
+  selectedDateTime: string;
+  completionId: string;
+};
+
 const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
@@ -27,6 +36,84 @@ const getStoredUserMeta = async () => {
   ]);
   const userName = (storedName || storedEmail || 'Unknown User').trim() || 'Unknown User';
   return { userName, userEmail: storedEmail || undefined };
+};
+
+const backfillMissingUserNames = async (userId: string, userName: string) => {
+  const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+  const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key || !userId || !userName) return;
+
+  try {
+    const query = new URLSearchParams({ user_id: `eq.${userId}` });
+    query.append('or', '(user_name.is.null,user_name.eq.)');
+    const response = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({ user_name: userName }),
+    });
+
+    if (!response.ok) {
+      console.log('Supabase user_name backfill error:', await response.text());
+    }
+  } catch (error) {
+    console.log('Supabase user_name backfill error:', error);
+  }
+};
+
+const syncManualEntryToSupabase = async ({
+  userId,
+  userName,
+  malaNum,
+  totalNum,
+  selectedDateTime,
+  completionId,
+}: ManualSyncInput) => {
+  try {
+    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!url || !key) return;
+
+    const response = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        Prefer: 'return=minimal,resolution=merge-duplicates',
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        user_name: userName,
+        malas: malaNum,
+        count: totalNum,
+        accumulated: totalNum,
+        type: 'Manual',
+        created_at: selectedDateTime,
+        completion_id: completionId,
+      }),
+    });
+
+    if (!response.ok) {
+      console.log('Supabase manual save error:', await response.text());
+      return;
+    }
+
+    await backfillMissingUserNames(userId, userName);
+
+    try {
+      const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
+      const latest = latestRaw ? JSON.parse(latestRaw) : [];
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, [completionId])));
+    } catch {}
+  } catch (error) {
+    console.log('Supabase manual save error:', error);
+  }
 };
 
 export default function ManualEntry() {
@@ -128,53 +215,14 @@ if (!userId) {
     const newCompletionId = updatedHistory[0].completionId;
     await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
 
-    try {
-      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-
-      if (url && key) {
-        const response = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            apikey: key,
-            Authorization: `Bearer ${key}`,
-            Prefer: 'return=minimal,resolution=ignore-duplicates',
-          },
-          body: JSON.stringify({
-            user_id: userId,
-            user_name: userName,
-            malas: malaNum,
-            count: totalNum,
-            accumulated: totalNum,
-            type: 'Manual',
-            created_at: selectedDateTime,
-            completion_id: newCompletionId,
-          }),
-        });
-
-        if (!response.ok) {
-          console.log('Supabase manual save error:', await response.text());
-          Alert.alert(
-            'Saved locally',
-            'Your entry was saved on this device, but cloud sync failed.'
-          );
-        } else {
-          // Cloud sync succeeded — mark this record synced so it isn't re-uploaded later.
-          try {
-            const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
-            const latest = latestRaw ? JSON.parse(latestRaw) : [];
-            await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, [newCompletionId])));
-          } catch {}
-        }
-      }
-    } catch (error) {
-      console.log('Supabase manual save error:', error);
-      Alert.alert(
-        'Saved locally',
-        'Your entry was saved on this device, but cloud sync failed.'
-      );
-    }
+    void syncManualEntryToSupabase({
+      userId,
+      userName,
+      malaNum,
+      totalNum,
+      selectedDateTime,
+      completionId: newCompletionId,
+    });
 
     Alert.alert('Saved', 'Manual entry added to history');
 

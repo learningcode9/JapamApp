@@ -688,14 +688,14 @@ export function TimerProvider({ children }: { children: ReactNode }) {
               'Content-Type': 'application/json',
               apikey: key,
               Authorization: `Bearer ${key}`,
-              Prefer: 'return=minimal,resolution=ignore-duplicates',
+              Prefer: 'return=minimal,resolution=merge-duplicates',
             },
-	            body: JSON.stringify({
-	              user_id: uid,
-	              user_name: recordUserName,
-	              malas: rec.malas,
-	              count: rec.totalCount,
-	              created_at: rec.date,
+            body: JSON.stringify({
+              user_id: uid,
+              user_name: recordUserName,
+              malas: rec.malas,
+              count: rec.totalCount,
+              created_at: rec.date,
               completion_id: rec.completionId,
             }),
           });
