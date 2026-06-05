@@ -170,6 +170,7 @@ export default function JapamMain() {
   const [hasSelectedTimer, setHasSelectedTimer] = useState(false);
   const [customMinutesInput, setCustomMinutesInput] = useState('');
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [repetitionSoundEnabled, setRepetitionSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
@@ -195,6 +196,7 @@ export default function JapamMain() {
   const rippleAnim = useRef(new Animated.Value(0)).current;
   const isSavingSessionRef = useRef(false);
   const completeSoundRef = useRef<Audio.Sound | null>(null);
+  const webAudioPrimedRef = useRef(false);
   const timerNotifIdRef = useRef<string | null>(null);
   const timerNotifUpdateRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const userIdRef = useRef<string | null>(null);
@@ -218,6 +220,50 @@ export default function JapamMain() {
       });
     } catch (error) {
       console.log('Audio mode error:', error);
+    }
+  }, []);
+
+  const syncStoredAuth = useCallback(async () => {
+    const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+    const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    const authPending = await isAuthPending();
+
+    if (savedUserName && savedUserId) {
+      userIdRef.current = savedUserId;
+      setUserName(savedUserName);
+      setShowUserModal(false);
+      setIsSigningIn(false);
+    } else {
+      userIdRef.current = null;
+      setUserName('');
+      setIsSigningIn(authPending);
+      if (!authPending) {
+        setShowUserModal(false);
+      }
+    }
+
+    setAuthReady(true);
+    return { savedUserName, savedUserId, authPending };
+  }, []);
+
+  const primeWebCompletionAudio = useCallback(async () => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    if (webAudioPrimedRef.current) return;
+
+    const sound = completeSoundRef.current;
+    if (!sound) return;
+
+    try {
+      await sound.stopAsync().catch(() => undefined);
+      await sound.setPositionAsync(0).catch(() => undefined);
+      await sound.setVolumeAsync(0).catch(() => undefined);
+      await sound.playAsync();
+      await sound.pauseAsync().catch(() => undefined);
+      await sound.setPositionAsync(0).catch(() => undefined);
+      await sound.setVolumeAsync(0.9).catch(() => undefined);
+      webAudioPrimedRef.current = true;
+    } catch (error) {
+      console.log('Web audio unlock error:', error);
     }
   }, []);
 
@@ -477,10 +523,11 @@ export default function JapamMain() {
   );
 
   useEffect(() => {
+    if (!authReady) return;
     if (params.signin === '1' && !userName && !isSigningIn) {
       setShowUserModal(true);
     }
-  }, [isSigningIn, params.signin, userName]);
+  }, [authReady, isSigningIn, params.signin, userName]);
 
   const restoreTotal = useCallback(
     async (nextTotal: number, options?: { userId?: string | null }) => {
@@ -838,6 +885,7 @@ export default function JapamMain() {
         }
 
         completeSoundRef.current = normalSound;
+        webAudioPrimedRef.current = false;
       } catch (error) {
         console.log('Sound preload error:', error);
       }
@@ -946,11 +994,17 @@ export default function JapamMain() {
   }, []);
 
   useEffect(() => {
+    const sync = () => {
+      void syncStoredAuth();
+    };
+    const authSubscription = DeviceEventEmitter.addListener('japam-auth-updated', sync);
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.addEventListener('japam-auth-updated', sync);
+    }
+
     const loadData = async () => {
       const today = getLocalDateKey();
-      const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
-      const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-      const authPending = await isAuthPending();
+      const { savedUserName, savedUserId } = await syncStoredAuth();
 
       if (savedUserId) {
         const userJapamName = await AsyncStorage.getItem(getUserStorageKey(JAPAM_NAME_KEY, savedUserId));
@@ -968,7 +1022,6 @@ export default function JapamMain() {
         await restoreTodayTotal();
       } else {
         setUserName('');
-        setIsSigningIn(authPending);
         setShowUserModal(false);
         setDayStreak(0);
         await restoreTotal(0, { userId: null });
@@ -1015,7 +1068,13 @@ export default function JapamMain() {
     };
 
     void loadData();
-  }, [applyRestoredTimerState, fetchTimerStateFromSupabase, restoreTodayTotal, restoreTotal]);
+    return () => {
+      authSubscription.remove();
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.removeEventListener('japam-auth-updated', sync);
+      }
+    };
+  }, [applyRestoredTimerState, fetchTimerStateFromSupabase, restoreTodayTotal, restoreTotal, syncStoredAuth]);
 
   useEffect(() => {
     return () => {
@@ -1136,6 +1195,7 @@ export default function JapamMain() {
       setHasRestoredTimer(false);
       setUserName(googleName);
       setShowUserModal(false);
+      setAuthReady(true);
       setShowUserMenu(false);
       await restoreTotal(0, { userId: null });
       totalRef.current = 0;
@@ -1208,6 +1268,7 @@ export default function JapamMain() {
         setHasRestoredTimer(false);
         setUserName(googleName);
         setShowUserModal(false);
+        setAuthReady(true);
         setShowUserMenu(false);
         await restoreTotal(0, { userId: null });
         totalRef.current = 0;
@@ -1317,6 +1378,9 @@ export default function JapamMain() {
   const playCompleteSound = async (variant: 'normal' | 'final' = 'normal') => {
     try {
       await configureAudio();
+      if (!webAudioPrimedRef.current) {
+        await primeWebCompletionAudio();
+      }
       const sound = completeSoundRef.current;
 
       if (!sound) return;
@@ -1598,6 +1662,7 @@ export default function JapamMain() {
   
 
   const requireLogin = () => {
+    if (!authReady) return false;
     if (!userName) { setShowUserModal(true); return false; }
     return true;
   };
@@ -1627,6 +1692,7 @@ export default function JapamMain() {
 
   const handleTap = async () => {
     if (!requireLogin()) return;
+    void primeWebCompletionAudio();
 
     const now = Date.now();
     if (now - lastTapRef.current < 100) return;
@@ -1655,6 +1721,7 @@ export default function JapamMain() {
 
   const handleStart = () => {
     if (!requireLogin()) return;
+    void primeWebCompletionAudio();
     const mins = Math.max(1, Math.floor(Number(minutesInput) || 1));
     const nextTargetSeconds = mins * 60;
     const targetChanged = nextTargetSeconds !== targetSeconds;
