@@ -186,10 +186,11 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
     try {
       // iOS Safari ignores the `volume` property on media elements, so priming by
-      // playing the Om at volume 0 would actually play it AUDIBLY on Start. iOS DOES
-      // honor `muted`, so mute the element across the unlock play/pause to keep it
-      // silent, then unmute so the real completion playback is audible. This unlocks
-      // the Om element within the Start user-gesture without any audible sound.
+      // playing the Om at volume 0 plays it AUDIBLY on Start. iOS DOES honor `muted`.
+      // Mute the element and do a silent play/pause to unlock it within the Start
+      // user-gesture, then LEAVE it muted. The completion path unmutes + restores the
+      // volume immediately before it actually plays the Om, so nothing is ever audible
+      // at Start (and there is no unmute-too-early blip).
       await sound.stopAsync().catch(() => undefined);
       await sound.setPositionAsync(0).catch(() => undefined);
       await sound.setIsMutedAsync(true).catch(() => undefined);
@@ -197,8 +198,6 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       await sound.playAsync();
       await sound.pauseAsync().catch(() => undefined);
       await sound.setPositionAsync(0).catch(() => undefined);
-      await sound.setIsMutedAsync(false).catch(() => undefined);
-      await sound.setVolumeAsync(0.95).catch(() => undefined);
       webCompletionAudioPrimedRef.current = true;
     } catch (error) {
       console.log('[TimerBG] Web audio unlock error:', error);
@@ -976,6 +975,12 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         if (sound) {
           if (Platform.OS === 'web' && !webCompletionAudioPrimedRef.current) {
             await primeWebCompletionAudio();
+          }
+          if (Platform.OS === 'web') {
+            // The element was primed muted/volume-0 so Start stays silent. Make it
+            // audible now, immediately before the real completion playback.
+            await sound.setIsMutedAsync(false).catch(() => {});
+            await sound.setVolumeAsync(0.95).catch(() => {});
           }
           await sound.stopAsync().catch(() => {});
           await sound.playAsync();
