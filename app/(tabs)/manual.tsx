@@ -88,12 +88,12 @@ const syncManualEntryToSupabase = async ({
         Prefer: 'return=minimal,resolution=merge-duplicates',
       },
       body: JSON.stringify({
+        // NOTE: japam_history has no `accumulated`/`type` columns — sending them made every
+        // manual-entry insert fail with HTTP 400 (PGRST204), so entries never reached Supabase.
         user_id: userId,
         user_name: userName,
         malas: malaNum,
         count: totalNum,
-        accumulated: totalNum,
-        type: 'Manual',
         created_at: selectedDateTime,
         completion_id: completionId,
       }),
