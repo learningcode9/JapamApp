@@ -10,6 +10,7 @@ import * as Notifications from 'expo-notifications';
 import { useFocusEffect } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { isIOSSafariWeb } from '../../lib/pwaInstall';
 
 import {
   Alert,
@@ -196,6 +197,7 @@ export default function JapamMain() {
   const isCompletingRef = useRef(false);
   const completedLoopMalasRef = useRef(0);
   const deferredInstallPromptRef = useRef<any>(null);
+  const isIosSafariWeb = isIOSSafariWeb();
   const rippleAnim = useRef(new Animated.Value(0)).current;
   const isSavingSessionRef = useRef(false);
   const completeSoundRef = useRef<Audio.Sound | null>(null);
@@ -809,6 +811,13 @@ export default function JapamMain() {
     const dismissedAt = Number(window.localStorage.getItem(dismissKey) || '0');
     const recentlyDismissed = dismissedAt > 0 && Date.now() - dismissedAt < dismissWindowMs;
 
+    if (isIosSafariWeb) {
+      if (!recentlyDismissed) {
+        setShowInstallBanner(true);
+      }
+      return;
+    }
+
     const onBeforeInstallPrompt = (event: Event) => {
       event.preventDefault();
       if (recentlyDismissed) return;
@@ -829,7 +838,7 @@ export default function JapamMain() {
       window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
       window.removeEventListener('appinstalled', onAppInstalled);
     };
-  }, []);
+  }, [isIosSafariWeb]);
 
   useEffect(() => {
     timerRef.current = { seconds, isRunning, targetSeconds, minutesInput, loopTimer };
@@ -1895,15 +1904,22 @@ export default function JapamMain() {
           {showInstallBanner && !installBannerDismissed && (
             <View style={styles.installBanner}>
               <View style={styles.installBannerTextWrap}>
-                <Text style={styles.installBannerTitle}>Install this app for a better experience</Text>
+                <Text style={styles.installBannerTitle}>
+                  {isIosSafariWeb ? 'Add to Home Screen' : 'Install this app for a better experience'}
+                </Text>
+                {isIosSafariWeb && (
+                  <Text style={styles.installBannerHelp}>Safari Share → Add to Home Screen.</Text>
+                )}
               </View>
               <View style={styles.installBannerActions}>
                 <Pressable style={styles.installBannerSecondary} onPress={dismissInstallBanner}>
                   <Text style={styles.installBannerSecondaryText}>Not now</Text>
                 </Pressable>
-                <Pressable style={styles.installBannerPrimary} onPress={() => void handleInstallApp()}>
-                  <Text style={styles.installBannerPrimaryText}>Install App</Text>
-                </Pressable>
+                {!isIosSafariWeb && (
+                  <Pressable style={styles.installBannerPrimary} onPress={() => void handleInstallApp()}>
+                    <Text style={styles.installBannerPrimaryText}>Install App</Text>
+                  </Pressable>
+                )}
               </View>
             </View>
           )}
@@ -2906,6 +2922,14 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     textAlign: 'center',
     lineHeight: 21,
+  },
+  installBannerHelp: {
+    color: '#5F7F80',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+    lineHeight: 17,
+    marginTop: 6,
   },
   installBannerActions: {
     flexDirection: 'row',

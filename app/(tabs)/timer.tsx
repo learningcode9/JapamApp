@@ -28,6 +28,7 @@ import {
   formatTimer,
   useTimer,
 } from '../../contexts/timer-context';
+import { isIOSSafariWeb } from '../../lib/pwaInstall';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -112,6 +113,7 @@ export default function TimerScreen() {
   const [todayCount, setTodayCount] = useState(0);
   const [dayStreak, setDayStreak] = useState(0);
   const deferredInstallPromptRef = useRef<any>(null);
+  const isIosSafariWeb = isIOSSafariWeb();
 
   const [request, response, promptAsync] = Google.useAuthRequest({
     webClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
@@ -342,12 +344,19 @@ export default function TimerScreen() {
     const isStandalone =
       window.matchMedia?.('(display-mode: standalone)').matches ||
       (window.navigator as any).standalone === true;
+    if (isIosSafariWeb) {
+      setShowInstallBanner(true);
+      setShowInstallHelp(true);
+      return;
+    }
+
     if (!isStandalone) {
       setShowInstallBanner(true);
     }
 
     const onBeforeInstallPrompt = (event: Event) => {
       event.preventDefault();
+      if (isIosSafariWeb) return;
       deferredInstallPromptRef.current = event;
       setShowInstallHelp(false);
       setShowInstallBanner(true);
@@ -366,7 +375,7 @@ export default function TimerScreen() {
       window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
       window.removeEventListener('appinstalled', onAppInstalled);
     };
-  }, []);
+  }, [isIosSafariWeb]);
 
   const handleStart = () => {
     if (!timer.canStart) {
@@ -458,14 +467,20 @@ export default function TimerScreen() {
 
       {showInstallBanner && (
             <View style={styles.installBanner}>
-              <Text style={styles.installBannerTitle}>Install this app for a better experience</Text>
-              {showInstallHelp && (
+              <Text style={styles.installBannerTitle}>
+                {isIosSafariWeb ? 'Add to Home Screen' : 'Install this app for a better experience'}
+              </Text>
+              {isIosSafariWeb ? (
+                <Text style={styles.installBannerHelp}>Safari Share → Add to Home Screen.</Text>
+              ) : showInstallHelp ? (
                 <Text style={styles.installBannerHelp}>Tap browser menu ⋮ → Add to Home screen</Text>
-              )}
+              ) : null}
               <View style={styles.installBannerActions}>
-                <Pressable style={styles.installBannerPrimary} onPress={() => void handleInstallNow()}>
-                  <Text style={styles.installBannerPrimaryText}>Install Now</Text>
-                </Pressable>
+                {!isIosSafariWeb && (
+                  <Pressable style={styles.installBannerPrimary} onPress={() => void handleInstallNow()}>
+                    <Text style={styles.installBannerPrimaryText}>Install Now</Text>
+                  </Pressable>
+                )}
                 <Pressable style={styles.installBannerSecondary} onPress={() => setShowInstallBanner(false)}>
                   <Text style={styles.installBannerSecondaryText}>Later</Text>
                 </Pressable>
