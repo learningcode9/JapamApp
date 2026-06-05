@@ -76,6 +76,12 @@ describe('offline-first: appendCompletion', () => {
     expect(h[0].userName).toBe('Sravani');
     expect(h[0].userEmail).toBe('sravani@example.com');
   });
+  it('preserves tap completion source metadata locally', () => {
+    const h = appendCompletion([], session('2026-06-03T10:00:00.000Z', {
+      source: 'tap',
+    }));
+    expect(h[0].source).toBe('tap');
+  });
   it('normalizes remote snake_case user metadata for restore/sync safety', () => {
     const n = normalizeRecord({
       date: '2026-06-03T10:00:00.000Z',

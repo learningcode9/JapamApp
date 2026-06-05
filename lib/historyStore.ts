@@ -27,6 +27,7 @@ export interface HistoryRecord {
   userId?: string;
   userName?: string;
   userEmail?: string;
+  source?: string;
   completionId: string;
   syncStatus: SyncStatus;
 }
@@ -68,6 +69,7 @@ export const normalizeRecord = (raw: RawHistoryRecord): HistoryRecord => {
     userId,
     userName,
     userEmail,
+    source: raw.source,
     completionId: raw.completionId || makeCompletionId(userId, raw.date),
     syncStatus: raw.syncStatus === 'pending' ? 'pending' : 'synced',
   };
@@ -91,6 +93,7 @@ export const appendCompletion = (
     userId?: string;
     userName?: string;
     userEmail?: string;
+    source?: string;
   }
 ): HistoryRecord[] => {
   const record: HistoryRecord = {
@@ -102,6 +105,7 @@ export const appendCompletion = (
     userId: completion.userId,
     userName: completion.userName,
     userEmail: completion.userEmail,
+    source: completion.source,
     completionId: makeCompletionId(completion.userId, completion.date),
     syncStatus: completion.userId ? 'pending' : 'synced',
   };

@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
-import { mergeHistories, makeCompletionId } from '../../lib/historyStore';
+import { appendCompletion, markSynced, mergeHistories } from '../../lib/historyStore';
 import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
 import { Audio } from 'expo-av';
@@ -39,6 +39,11 @@ type Session = {
   duration: number;
   manual?: boolean;
   userId?: string;
+  userName?: string;
+  userEmail?: string;
+  source?: string;
+  completionId?: string;
+  syncStatus?: 'pending' | 'synced';
 };
 
 type TimerStateRow = {
@@ -1359,17 +1364,30 @@ export default function JapamMain() {
   }, []);
 
   const saveSession = useCallback(async (
-    duration: number, sessionMalas: number, sessionTotal: number, accumulatedTotal: number
-  ) => {
-    if (isSavingSessionRef.current) return;
+    duration: number,
+    sessionMalas: number,
+    sessionTotal: number,
+    accumulatedTotal: number,
+    source: 'tap' | 'timer' = 'timer'
+  ): Promise<boolean> => {
+    if (isSavingSessionRef.current) {
+      if (source === 'tap') console.log('TAP_HISTORY_SAVE_SKIPPED reason=in-flight');
+      return false;
+    }
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
     const sessionSignature = `${currentUserId || 'guest'}-${getLocalDateKey()}-${duration}-${sessionMalas}-${sessionTotal}-${accumulatedTotal}`;
-    if (lastSavedSessionRef.current === sessionSignature) return;
+    if (lastSavedSessionRef.current === sessionSignature) {
+      if (source === 'tap') console.log('TAP_HISTORY_SAVE_SKIPPED reason=duplicate signature=%s', sessionSignature);
+      return false;
+    }
 
     isSavingSessionRef.current = true;
     lastSavedSessionRef.current = sessionSignature;
 
     try {
+      if (source === 'tap') {
+        console.log('TAP_HISTORY_SAVE_START signature=%s total=%d count=%d', sessionSignature, accumulatedTotal, sessionTotal);
+      }
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
       const history: Session[] = raw ? JSON.parse(raw) : [];
       const userId = currentUserId;
@@ -1377,50 +1395,84 @@ export default function JapamMain() {
       const savedUserEmail = await AsyncStorage.getItem(USER_EMAIL_KEY);
       const historyUserName = savedUserName || userName || savedUserEmail || 'Unknown User';
 
-      const session: Session = {
-        date: new Date().toISOString(),
+      const sessionDate = new Date().toISOString();
+      const updatedHistory = appendCompletion(history, {
+        date: sessionDate,
         malas: sessionMalas,
         totalCount: sessionTotal,
         duration,
         manual: false,
         userId: userId || undefined,
-      };
+        userName: userId ? historyUserName : undefined,
+        userEmail: userId ? savedUserEmail || undefined : undefined,
+        source,
+      });
+      const savedRecord = updatedHistory[0];
 
-      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([session, ...history]));
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
       await AsyncStorage.setItem(HISTORY_SYNC_VERSION_KEY, String(Date.now()));
+      if (source === 'tap') {
+        console.log(
+          'TAP_HISTORY_SAVE_ACCEPTED completionId=%s userId=%s userName=%s',
+          savedRecord.completionId,
+          userId || 'guest',
+          historyUserName
+        );
+      }
 
       // Emit immediately after local save — Home and History update without waiting for Supabase
+      DeviceEventEmitter.emit('japam-stats-updated');
       DeviceEventEmitter.emit('japam-history-updated', { userId: userId || 'guest', todayTotal: accumulatedTotal });
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('japam-stats-updated'));
         window.dispatchEvent(new Event('japam-history-updated'));
       }
-
-      if (!userId) return;
-
-      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-
-      if (url && key) {
-        const baseBody = {
-          user_name: historyUserName,
-          malas: sessionMalas,
-          count: sessionTotal,
-          created_at: session.date,
-          completion_id: makeCompletionId(userId, session.date),
-        };
-        const postHistory = async (body: Record<string, unknown>) => {
-          const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal,resolution=merge-duplicates' },
-            body: JSON.stringify(body),
-          });
-          return res.ok;
-        };
-        const savedWithUserId = await postHistory({ user_id: userId, ...baseBody });
-        if (!savedWithUserId) await postHistory(baseBody);
+      if (source === 'tap') {
+        console.log('TAP_STATS_EVENT_DISPATCHED completionId=%s', savedRecord.completionId);
       }
+
+      if (userId) {
+        const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+        const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+        if (url && key) {
+          const baseBody = {
+            user_name: historyUserName,
+            malas: sessionMalas,
+            count: sessionTotal,
+            created_at: savedRecord.date,
+            completion_id: savedRecord.completionId,
+          };
+          void (async () => {
+            try {
+              const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal,resolution=merge-duplicates' },
+                body: JSON.stringify({ user_id: userId, ...baseBody }),
+              });
+
+              if (!res.ok) {
+                console.log('Tap Supabase save error:', await res.text());
+                return;
+              }
+
+              const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
+              const latest = latestRaw ? JSON.parse(latestRaw) : [];
+              await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, [savedRecord.completionId])));
+            } catch (error) {
+              console.log('Tap Supabase save error:', error);
+            }
+          })();
+        }
+      }
+      return true;
     } catch (error) {
       console.log('Supabase save error:', error);
+      if (source === 'tap') {
+        lastSavedSessionRef.current = '';
+        console.log('TAP_HISTORY_SAVE_SKIPPED reason=error');
+      }
+      return false;
     } finally {
       isSavingSessionRef.current = false;
     }
@@ -1573,7 +1625,7 @@ export default function JapamMain() {
     ]);
   };
 
-  const handleTap = () => {
+  const handleTap = async () => {
     if (!requireLogin()) return;
 
     const now = Date.now();
@@ -1591,8 +1643,11 @@ export default function JapamMain() {
     const newCount = newTotal % 108;
 
     if (newCount === 0) {
-      void saveSession(0, 1, 108, newTotal);
-      void completeFeedback('final');
+      console.log('TAP_MALA_COMPLETE_REACHED total=%d count=%d', newTotal, newCount);
+      const saved = await saveSession(0, 1, 108, newTotal, 'tap');
+      if (saved) {
+        await completeFeedback('final');
+      }
     } else {
       void tapFeedback();
     }
