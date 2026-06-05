@@ -10,7 +10,7 @@ import * as Notifications from 'expo-notifications';
 import { useFocusEffect } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { isIOSSafariWeb } from '../../lib/pwaInstall';
+import { isIOSDeviceWeb, isStandaloneOrInstalledWeb } from '../../lib/pwaInstall';
 
 import {
   Alert,
@@ -197,7 +197,7 @@ export default function JapamMain() {
   const isCompletingRef = useRef(false);
   const completedLoopMalasRef = useRef(0);
   const deferredInstallPromptRef = useRef<any>(null);
-  const isIosSafariWeb = isIOSSafariWeb();
+  const isIosDeviceWeb = isIOSDeviceWeb();
   const rippleAnim = useRef(new Animated.Value(0)).current;
   const isSavingSessionRef = useRef(false);
   const completeSoundRef = useRef<Audio.Sound | null>(null);
@@ -810,8 +810,14 @@ export default function JapamMain() {
     const dismissWindowMs = 7 * 24 * 60 * 60 * 1000;
     const dismissedAt = Number(window.localStorage.getItem(dismissKey) || '0');
     const recentlyDismissed = dismissedAt > 0 && Date.now() - dismissedAt < dismissWindowMs;
+    const isStandalone = isStandaloneOrInstalledWeb();
 
-    if (isIosSafariWeb) {
+    if (isStandalone) {
+      setShowInstallBanner(false);
+      return;
+    }
+
+    if (isIosDeviceWeb) {
       if (!recentlyDismissed) {
         setShowInstallBanner(true);
       }
@@ -838,7 +844,7 @@ export default function JapamMain() {
       window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
       window.removeEventListener('appinstalled', onAppInstalled);
     };
-  }, [isIosSafariWeb]);
+  }, [isIosDeviceWeb]);
 
   useEffect(() => {
     timerRef.current = { seconds, isRunning, targetSeconds, minutesInput, loopTimer };
@@ -1325,7 +1331,7 @@ export default function JapamMain() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seconds, isRunning, targetSeconds, loopTimer]);
 
-  const playCompleteSound = async (variant: 'normal' | 'final' = 'normal') => {
+  const playCompleteSound = useCallback(async (variant: 'normal' | 'final' = 'normal') => {
     try {
       await configureAudio();
       const sound = completeSoundRef.current;
@@ -1342,7 +1348,7 @@ export default function JapamMain() {
     } catch (error) {
       console.log('Sound error:', error);
     }
-  };
+  }, [configureAudio]);
 
   const notifyCompletionFallback = useCallback(async (variant: 'normal' | 'final') => {
     try {
@@ -1512,7 +1518,14 @@ export default function JapamMain() {
       console.log('Completion vibration error:', error);
       try { Vibration.vibrate([0, 200, 80, 200]); } catch {}
     }
-  }, [notifyCompletionFallback, playCompletionAnimation, repetitionSoundEnabled, soundEnabled, vibrationEnabled]);
+  }, [
+    notifyCompletionFallback,
+    playCompletionAnimation,
+    playCompleteSound,
+    repetitionSoundEnabled,
+    soundEnabled,
+    vibrationEnabled,
+  ]);
 
   const setCountersFromTotal = (nextTotal: number) => {
     const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
@@ -1901,21 +1914,21 @@ export default function JapamMain() {
             )}
           </View>
 
-          {showInstallBanner && !installBannerDismissed && (
+          {showInstallBanner && !installBannerDismissed && !isStandaloneOrInstalledWeb() && (
             <View style={styles.installBanner}>
               <View style={styles.installBannerTextWrap}>
                 <Text style={styles.installBannerTitle}>
-                  {isIosSafariWeb ? 'Add to Home Screen' : 'Install this app for a better experience'}
+                  {isIosDeviceWeb ? 'Add to Home Screen' : 'Install this app for a better experience'}
                 </Text>
-                {isIosSafariWeb && (
-                  <Text style={styles.installBannerHelp}>Safari Share → Add to Home Screen.</Text>
+                {isIosDeviceWeb && (
+                  <Text style={styles.installBannerHelp}>Use Share → Add to Home Screen.</Text>
                 )}
               </View>
               <View style={styles.installBannerActions}>
                 <Pressable style={styles.installBannerSecondary} onPress={dismissInstallBanner}>
                   <Text style={styles.installBannerSecondaryText}>Not now</Text>
                 </Pressable>
-                {!isIosSafariWeb && (
+                {!isIosDeviceWeb && (
                   <Pressable style={styles.installBannerPrimary} onPress={() => void handleInstallApp()}>
                     <Text style={styles.installBannerPrimaryText}>Install App</Text>
                   </Pressable>

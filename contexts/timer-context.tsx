@@ -154,6 +154,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const processedCompletionLoopsRef = useRef<Set<number>>(new Set());
   const lastSavedSessionRef = useRef<{ key: string; savedAt: number } | null>(null);
   const suppressNextCompletionSoundRef = useRef(false);
+  const webCompletionAudioPrimedRef = useRef(false);
   const appStateRef = useRef(AppState.currentState);
   const wakeLockRef = useRef<any>(null);
 
@@ -174,6 +175,27 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       timerSessionIdRef.current = createTimerSessionId();
     }
     return timerSessionIdRef.current;
+  }, []);
+
+  const primeWebCompletionAudio = useCallback(async () => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    if (webCompletionAudioPrimedRef.current) return;
+
+    const sound = soundRef.current;
+    if (!sound) return;
+
+    try {
+      await sound.stopAsync().catch(() => undefined);
+      await sound.setPositionAsync(0).catch(() => undefined);
+      await sound.setVolumeAsync(0).catch(() => undefined);
+      await sound.playAsync();
+      await sound.pauseAsync().catch(() => undefined);
+      await sound.setPositionAsync(0).catch(() => undefined);
+      await sound.setVolumeAsync(0.95).catch(() => undefined);
+      webCompletionAudioPrimedRef.current = true;
+    } catch (error) {
+      console.log('[TimerBG] Web audio unlock error:', error);
+    }
   }, []);
 
   const claimCompletionLoop = useCallback((
@@ -941,6 +963,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       try {
         const sound = soundRef.current;
         if (sound) {
+          if (Platform.OS === 'web' && !webCompletionAudioPrimedRef.current) {
+            await primeWebCompletionAudio();
+          }
           await sound.stopAsync().catch(() => {});
           await sound.playAsync();
           await new Promise<void>((resolve) => {
@@ -1005,6 +1030,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     persistState,
     releaseWakeLock,
     saveSession,
+    persistCompletedLoops,
+    primeWebCompletionAudio,
     scheduleCompletionNotification,
     showNotification,
     showBrowserCompletionNotification,
@@ -1097,6 +1124,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           { shouldPlay: false, isLooping: false, volume: 0.95 }
         );
         soundRef.current = sound;
+        webCompletionAudioPrimedRef.current = false;
         // Keep the loaded sound object available to the active timer context.
         updateTimerState({ soundObject: sound as any });
         console.log('[TimerBG] Om sound loaded and registered in singleton');
@@ -1105,6 +1133,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     return () => {
       soundRef.current?.unloadAsync().catch(() => {});
       soundRef.current = null;
+      webCompletionAudioPrimedRef.current = false;
       updateTimerState({ soundObject: null });
     };
   }, []);
@@ -1390,7 +1419,6 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     // 'seconds' intentionally excluded — including it caused showNotification() to fire every
     // second, creating a dismiss+recreate storm that made the notification flicker and disappear.
     // The 60-second interval inside showNotification keeps the time display acceptably fresh.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [completedLoops, isRunning, showNotification]);
 
   useEffect(() => () => {
@@ -1412,6 +1440,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     }
     console.log('[TimerBG] TIMER_START_ACCEPTED resume=%s', resume);
     isCompletingRef.current = false;
+    void primeWebCompletionAudio();
     if (resume) {
       const persistedCompletedLoops = await readPersistedCompletedLoops();
       const restoredCompletedLoops = Math.max(completedLoopsRef.current, persistedCompletedLoops);
@@ -1464,6 +1493,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     getActiveSessionId,
     isRunning,
     persistState,
+    primeWebCompletionAudio,
     readPersistedCompletedLoops,
     requestNotificationPermission,
     scheduleCompletionNotification,
