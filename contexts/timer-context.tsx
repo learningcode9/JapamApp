@@ -185,12 +185,19 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     if (!sound) return;
 
     try {
+      // iOS Safari ignores the `volume` property on media elements, so priming by
+      // playing the Om at volume 0 would actually play it AUDIBLY on Start. iOS DOES
+      // honor `muted`, so mute the element across the unlock play/pause to keep it
+      // silent, then unmute so the real completion playback is audible. This unlocks
+      // the Om element within the Start user-gesture without any audible sound.
       await sound.stopAsync().catch(() => undefined);
       await sound.setPositionAsync(0).catch(() => undefined);
+      await sound.setIsMutedAsync(true).catch(() => undefined);
       await sound.setVolumeAsync(0).catch(() => undefined);
       await sound.playAsync();
       await sound.pauseAsync().catch(() => undefined);
       await sound.setPositionAsync(0).catch(() => undefined);
+      await sound.setIsMutedAsync(false).catch(() => undefined);
       await sound.setVolumeAsync(0.95).catch(() => undefined);
       webCompletionAudioPrimedRef.current = true;
     } catch (error) {
@@ -257,7 +264,11 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       const nav = navigator as Navigator & {
         wakeLock?: { request: (type: 'screen') => Promise<any> };
       };
-      if (!nav.wakeLock || wakeLockRef.current) return;
+      if (!nav.wakeLock) {
+        console.log('[TimerBG] WAKE_LOCK_UNSUPPORTED');
+        return;
+      }
+      if (wakeLockRef.current) return;
       wakeLockRef.current = await nav.wakeLock.request('screen');
       wakeLockRef.current?.addEventListener?.('release', () => {
         wakeLockRef.current = null;
@@ -994,6 +1005,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     if (isFinal) {
       timerSessionIdRef.current = '';
       updateTimerState({ sessionId: '', isCompleting: false, startedAt: null });
+      releaseWakeLock();
       void persistState(false);
       isCompletingRef.current = false;
       console.log('[LoopComplete] All loops done in foreground');
@@ -1321,6 +1333,19 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     const iv = setInterval(() => void persistState(true), 10000);
     return () => clearInterval(iv);
   }, [isRunning, persistState]);
+
+  // Browsers auto-release a screen wake lock whenever the page becomes hidden, so
+  // reacquire it when the page is visible again and the timer is still running. (req #7)
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && isRunningRef.current) {
+        void acquireWakeLock();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [acquireWakeLock]);
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
