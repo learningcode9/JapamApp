@@ -408,7 +408,15 @@ export default function HistoryScreen() {
     setIsSaving(true);
     try {
       const { userName, userEmail } = await getStoredUserMeta();
-      const createdAt = `${manualDate}T12:00:00.000Z`;
+      // Unique timestamp per entry (selected day + current time-of-day) so multiple manual entries
+      // on the SAME date don't share a completion_id (= userId:epochMs). The old fixed noon made
+      // every same-date manual entry collide -> dedup/upsert collapsed them ("Saved" but no change).
+      const [mY, mM, mD] = manualDate.split('-').map(Number);
+      const nowParts = new Date();
+      const createdAt = new Date(
+        mY, mM - 1, mD,
+        nowParts.getHours(), nowParts.getMinutes(), nowParts.getSeconds(), nowParts.getMilliseconds()
+      ).toISOString();
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
       const existing = parseHistory(raw);
       const updated = appendCompletion(existing, {

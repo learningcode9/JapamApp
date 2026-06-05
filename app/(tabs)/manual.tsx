@@ -3,7 +3,7 @@ import { appendCompletion, markSynced } from '../../lib/historyStore';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect } from 'expo-router';
 import React, { useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, DeviceEventEmitter, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 
 type Session = {
@@ -73,11 +73,15 @@ const syncManualEntryToSupabase = async ({
   selectedDateTime,
   completionId,
 }: ManualSyncInput) => {
+  console.log('[Manual] MANUAL_SYNC_START completionId=%s malas=%d count=%d', completionId, malaNum, totalNum);
   try {
     const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
     const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
-    if (!url || !key) return;
+    if (!url || !key) {
+      console.log('[Manual] MANUAL_SYNC_FAILED reason=no-supabase-config (stays pending)');
+      return;
+    }
 
     const response = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
       method: 'POST',
@@ -100,6 +104,7 @@ const syncManualEntryToSupabase = async ({
     });
 
     if (!response.ok) {
+      console.log('[Manual] MANUAL_SYNC_FAILED status=%d (stays pending)', response.status);
       console.log('Supabase manual save error:', await response.text());
       return;
     }
@@ -111,7 +116,9 @@ const syncManualEntryToSupabase = async ({
       const latest = latestRaw ? JSON.parse(latestRaw) : [];
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, [completionId])));
     } catch {}
+    console.log('[Manual] MANUAL_SYNC_SUCCESS completionId=%s', completionId);
   } catch (error) {
+    console.log('[Manual] MANUAL_SYNC_FAILED reason=network (stays pending)');
     console.log('Supabase manual save error:', error);
   }
 };
@@ -138,6 +145,7 @@ export default function ManualEntry() {
 
   const onSave = async () => {
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
+    console.log('[Manual] MANUAL_SAVE_START hasUser=%s', Boolean(userId));
 
     // onSave లో — alert బదులు:
 if (!userId) {
@@ -176,7 +184,14 @@ if (!userId) {
       return;
     }
 
-    const selectedDateTime = `${selectedDate}T12:00:00`;
+    // Unique timestamp per entry (selected day + current time-of-day) so multiple manual entries
+    // on the SAME date don't share a completion_id (= userId:epochMs). The old fixed noon made every
+    // same-date manual entry collide -> dedup/upsert collapsed them ("Saved" but no change).
+    const nowParts = new Date();
+    const selectedDateTime = new Date(
+      selectedYear, selectedMonth - 1, selectedDay,
+      nowParts.getHours(), nowParts.getMinutes(), nowParts.getSeconds(), nowParts.getMilliseconds()
+    ).toISOString();
 
     setDateText(selectedDate);
 
@@ -213,7 +228,25 @@ if (!userId) {
       userEmail,
     });
     const newCompletionId = updatedHistory[0].completionId;
-    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
+    try {
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
+      console.log('[Manual] MANUAL_HISTORY_SAVE_ACCEPTED completionId=%s malas=%d count=%d userId=%s userName=%s',
+        newCompletionId, malaNum, totalNum, userId, userName);
+    } catch (err) {
+      console.log('[Manual] MANUAL_HISTORY_SAVE_FAILED', err);
+      Alert.alert('Save failed', 'Could not save the entry on this device.');
+      return;
+    }
+
+    // Refresh History + Main stats immediately — same event the timer/tap completion path emits.
+    // Without this the screens keep showing stale counts until a manual re-focus.
+    DeviceEventEmitter.emit('japam-stats-updated');
+    DeviceEventEmitter.emit('japam-history-updated', { userId: userId || 'guest' });
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('japam-stats-updated'));
+      window.dispatchEvent(new Event('japam-history-updated'));
+    }
+    console.log('[Manual] MANUAL_STATS_EVENT_DISPATCHED');
 
     void syncManualEntryToSupabase({
       userId,
