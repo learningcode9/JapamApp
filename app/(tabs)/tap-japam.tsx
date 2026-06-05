@@ -254,18 +254,80 @@ export default function JapamMain() {
     if (!sound) return;
 
     try {
+      // iOS Safari ignores the `volume` property on media elements, so priming by
+      // playing the Om at volume 0 plays it AUDIBLY on the first tap. iOS DOES honor
+      // `muted`: mute the element, do a silent play/pause to unlock it within the tap
+      // gesture, and LEAVE it muted. playCompleteSound unmutes + restores volume right
+      // before it actually plays the Om, so nothing is audible while tapping.
       await sound.stopAsync().catch(() => undefined);
       await sound.setPositionAsync(0).catch(() => undefined);
+      await sound.setIsMutedAsync(true).catch(() => undefined);
       await sound.setVolumeAsync(0).catch(() => undefined);
       await sound.playAsync();
       await sound.pauseAsync().catch(() => undefined);
       await sound.setPositionAsync(0).catch(() => undefined);
-      await sound.setVolumeAsync(0.9).catch(() => undefined);
       webAudioPrimedRef.current = true;
     } catch (error) {
       console.log('Web audio unlock error:', error);
     }
   }, []);
+
+  // Keep the screen awake while the Tap Japam screen is in use, so the device does
+  // not sleep mid-japam. Web only: Screen Wake Lock API (iOS 16.4+ Safari, Android
+  // Chrome). Tied to screen focus; releases when leaving the screen or backgrounding.
+  const tapWakeLockRef = useRef<any>(null);
+  const tapScreenFocusedRef = useRef(false);
+
+  const releaseTapWakeLock = useCallback(() => {
+    if (Platform.OS !== 'web') return;
+    if (!tapWakeLockRef.current) return;
+    tapWakeLockRef.current.release?.().catch?.(() => {});
+    tapWakeLockRef.current = null;
+  }, []);
+
+  const acquireTapWakeLock = useCallback(async () => {
+    if (Platform.OS !== 'web' || typeof navigator === 'undefined') return;
+    try {
+      const nav = navigator as Navigator & {
+        wakeLock?: { request: (type: 'screen') => Promise<any> };
+      };
+      if (!nav.wakeLock) {
+        console.log('[TapJapam] WAKE_LOCK_UNSUPPORTED');
+        return;
+      }
+      if (tapWakeLockRef.current) return;
+      tapWakeLockRef.current = await nav.wakeLock.request('screen');
+      tapWakeLockRef.current?.addEventListener?.('release', () => {
+        tapWakeLockRef.current = null;
+      });
+    } catch (error) {
+      console.log('[TapJapam] Wake lock error:', error);
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      tapScreenFocusedRef.current = true;
+      void acquireTapWakeLock();
+      return () => {
+        tapScreenFocusedRef.current = false;
+        releaseTapWakeLock();
+      };
+    }, [acquireTapWakeLock, releaseTapWakeLock])
+  );
+
+  // Browsers auto-release a screen wake lock when the page hides; reacquire it when
+  // the page is visible again and the Tap Japam screen is still focused.
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && tapScreenFocusedRef.current) {
+        void acquireTapWakeLock();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [acquireTapWakeLock]);
 
   const requestNotificationPermissionOnce = useCallback(async () => {
     try {
@@ -1387,6 +1449,9 @@ export default function JapamMain() {
 
       await sound.stopAsync().catch(() => undefined);
       await sound.setPositionAsync(0).catch(() => undefined);
+      // The element was primed muted to keep tapping silent; make it audible now,
+      // immediately before the real completion playback.
+      await sound.setIsMutedAsync(false).catch(() => undefined);
       await sound.setVolumeAsync(0.9).catch(() => undefined);
       await sound.playAsync();
       setTimeout(() => {
