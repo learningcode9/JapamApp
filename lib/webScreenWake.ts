@@ -18,6 +18,11 @@ const KEEP_AWAKE_MP4 = "data:video/mp4;base64,AAAAHGZ0eXBNNFYgAAACAGlzb21pc28yYX
 let refCount = 0;
 let wakeLock: any = null;
 let video: HTMLVideoElement | null = null;
+let lastError = '';
+
+// Temporary on-screen diagnostic. Flip to false (or remove) once keep-awake is verified.
+const SHOW_DEBUG_OVERLAY = true;
+let debugEl: HTMLDivElement | null = null;
 
 const isWebRuntime = () =>
   typeof document !== 'undefined' && typeof navigator !== 'undefined';
@@ -31,12 +36,15 @@ function ensureVideo(): HTMLVideoElement | null {
   el.muted = true;
   el.loop = true;
   (el as any).disableRemotePlayback = true;
+  // iOS will NOT inhibit sleep for a fully hidden / zero-size video, so keep it
+  // technically rendered: tiny + near-transparent in a corner (effectively invisible).
   el.style.position = 'fixed';
-  el.style.left = '-1px';
-  el.style.top = '-1px';
-  el.style.width = '1px';
-  el.style.height = '1px';
-  el.style.opacity = '0';
+  el.style.right = '0px';
+  el.style.bottom = '0px';
+  el.style.width = '2px';
+  el.style.height = '2px';
+  el.style.opacity = '0.01';
+  el.style.zIndex = '0';
   el.style.pointerEvents = 'none';
   const webm = document.createElement('source');
   webm.src = KEEP_AWAKE_WEBM;
@@ -58,9 +66,13 @@ function playKeepAwakeVideo(): void {
     el.currentTime = 0;
     const p = el.play();
     if (p && typeof p.catch === 'function') {
-      p.catch((e: unknown) => console.log('[ScreenWake] keep-awake video play error:', e));
+      p.catch((e: unknown) => {
+        lastError = 'vid:' + String((e as any)?.name || e);
+        console.log('[ScreenWake] keep-awake video play error:', e);
+      });
     }
   } catch (e) {
+    lastError = 'vid:' + String((e as any)?.name || e);
     console.log('[ScreenWake] keep-awake video error:', e);
   }
 }
@@ -81,14 +93,40 @@ async function requestWakeLock(): Promise<void> {
       wakeLock = null;
     });
   } catch (e) {
+    lastError = 'wl:' + String((e as any)?.name || e);
     console.log('[ScreenWake] Wake lock error:', e);
   }
+}
+
+function ensureDebugOverlay(): void {
+  if (!SHOW_DEBUG_OVERLAY || !isWebRuntime() || debugEl) return;
+  const el = document.createElement('div');
+  el.style.cssText =
+    'position:fixed;left:6px;bottom:96px;z-index:99999;background:rgba(0,0,0,0.78);' +
+    'color:#3cff8e;font:11px/1.35 monospace;padding:5px 7px;border-radius:6px;' +
+    'pointer-events:none;white-space:pre;max-width:92vw;';
+  document.body.appendChild(el);
+  debugEl = el;
+  const tick = () => {
+    if (!debugEl) return;
+    const nav = navigator as any;
+    const v = video;
+    debugEl.textContent =
+      `keep-awake refs=${refCount}\n` +
+      `wakeLock sup=${'wakeLock' in nav ? 'Y' : 'N'} held=${wakeLock ? 'Y' : 'N'}\n` +
+      `video el=${v ? 'Y' : 'N'} paused=${v ? (v.paused ? 'Y' : 'N') : '-'} ` +
+      `rs=${v ? v.readyState : '-'} t=${v ? v.currentTime.toFixed(1) : '-'}\n` +
+      `err=${lastError || '-'}`;
+  };
+  tick();
+  setInterval(tick, 1000);
 }
 
 /** Acquire a screen-awake hold (ref-counted). Call once per holder. */
 export async function acquireWebScreenWake(): Promise<void> {
   if (!isWebRuntime()) return;
   refCount += 1;
+  ensureDebugOverlay();
   playKeepAwakeVideo();
   await requestWakeLock();
 }
