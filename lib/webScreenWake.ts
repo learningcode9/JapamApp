@@ -32,8 +32,13 @@ function ensureVideo(): HTMLVideoElement | null {
   if (video) return video;
   const el = document.createElement('video');
   el.setAttribute('playsinline', '');
-  el.setAttribute('muted', '');
-  el.muted = true;
+  // NOT muted on purpose: iOS only inhibits screen auto-lock for a video that holds an
+  // active audio session. A muted video autoplays but does NOT keep the screen awake.
+  // This is a SILENT video (no audible audio), so playing it unmuted makes no sound but
+  // holds the session. iOS requires the first play() to be inside a user gesture
+  // (the Start button / a tap), which is where the timer and tap screens trigger it.
+  el.muted = false;
+  el.volume = 1;
   el.loop = true;
   (el as any).disableRemotePlayback = true;
   // iOS will NOT inhibit sleep for a fully hidden / zero-size video, so keep it
@@ -115,7 +120,8 @@ function ensureDebugOverlay(): void {
       `keep-awake refs=${refCount}\n` +
       `wakeLock sup=${'wakeLock' in nav ? 'Y' : 'N'} held=${wakeLock ? 'Y' : 'N'}\n` +
       `video el=${v ? 'Y' : 'N'} paused=${v ? (v.paused ? 'Y' : 'N') : '-'} ` +
-      `rs=${v ? v.readyState : '-'} t=${v ? v.currentTime.toFixed(1) : '-'}\n` +
+      `m=${v ? (v.muted ? 'Y' : 'N') : '-'} rs=${v ? v.readyState : '-'} ` +
+      `t=${v ? v.currentTime.toFixed(1) : '-'}\n` +
       `err=${lastError || '-'}`;
   };
   tick();
