@@ -1751,11 +1751,11 @@ export default function JapamMain() {
   };
 
   const handleTap = async () => {
+    // Engage screen keep-awake on the tap gesture itself (before the login gate): the
+    // unmuted keep-awake video can only start inside a user gesture, and this tap is it.
+    nudgeWebScreenWake();
     if (!requireLogin()) return;
     void primeWebCompletionAudio();
-    // Ensure the keep-awake video is running (iOS may block the focus-time muted
-    // autoplay until a user gesture; this tap is that gesture). No-op once playing.
-    nudgeWebScreenWake();
 
     const now = Date.now();
     if (now - lastTapRef.current < 100) return;
