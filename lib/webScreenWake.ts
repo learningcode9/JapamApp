@@ -161,3 +161,14 @@ export function nudgeWebScreenWake(): void {
   if (video && video.paused) playKeepAwakeVideo();
   if (!wakeLock) void requestWakeLock();
 }
+
+/**
+ * Temporarily pause the keep-awake video so a completion sound (the Om) can own the iOS
+ * audio session and play in full — the looping keep-awake video otherwise competes for
+ * the session and truncates it. Does NOT change the hold count; call nudgeWebScreenWake()
+ * once the sound has finished to resume the video.
+ */
+export function pauseKeepAwakeVideo(): void {
+  if (!isWebRuntime() || !video) return;
+  try { video.pause(); } catch {}
+}
