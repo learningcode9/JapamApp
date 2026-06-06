@@ -20,8 +20,8 @@ let wakeLock: any = null;
 let video: HTMLVideoElement | null = null;
 let lastError = '';
 
-// Temporary on-screen diagnostic. Flip to false (or remove) once keep-awake is verified.
-const SHOW_DEBUG_OVERLAY = true;
+// On-screen keep-awake diagnostic — kept behind a flag (off) for future debugging.
+const SHOW_DEBUG_OVERLAY = false;
 let debugEl: HTMLDivElement | null = null;
 
 const isWebRuntime = () =>
