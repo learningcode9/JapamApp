@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
-import { dedupeByCompletionId } from '../../lib/historyStore';
+import { dedupeByCompletionId, mergeHistories } from '../../lib/historyStore';
 import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -94,6 +94,39 @@ const dedupeHistoryForStats = (history: Session[]): Session[] =>
   dedupeByCompletionId(history).filter(
     (item) => item.totalCount > 0 && !Number.isNaN(new Date(item.date).getTime())
   );
+
+// Pull the signed-in user's history down from Supabase and merge it into local storage,
+// so the main-page stats (Malas Today / Today Count / Day Streak) populate immediately
+// on login instead of only after navigating to another screen that triggers the sync.
+// Merge never overwrites local (keeps pending records) — see lib/historyStore.ts.
+const restoreHistoryFromSupabase = async (googleUserId: string) => {
+  try {
+    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseKey) return;
+    const encodedUserId = encodeURIComponent(googleUserId);
+    const response = await fetch(
+      `${supabaseUrl}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=*&order=created_at.asc`,
+      { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` } }
+    );
+    if (!response.ok) return;
+    const rows = await response.json();
+    const remoteHistory: Session[] = rows.map((item: any) => ({
+      date: item.created_at,
+      malas: Number(item.malas) || 0,
+      totalCount: Number(item.count) || 0,
+      duration: 0,
+      manual: false,
+      userId: googleUserId,
+    }));
+    const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
+    const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
+    const mergedHistory = mergeHistories(localHistory, remoteHistory);
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
+  } catch (error) {
+    console.log('[Timer] History restore error:', error);
+  }
+};
 
 export default function TimerScreen() {
   const router = useRouter();
@@ -245,6 +278,8 @@ export default function TimerScreen() {
       await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
       setUserName(googleName);
       setShowUserModal(false);
+      // Pull the user's history down first so the stats populate immediately on login.
+      await restoreHistoryFromSupabase(googleUserId);
       DeviceEventEmitter.emit('japam-auth-updated');
       DeviceEventEmitter.emit('japam-stats-updated');
       void loadStats();
@@ -319,6 +354,8 @@ export default function TimerScreen() {
         await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
         setUserName(googleName);
         setShowUserModal(false);
+        // Pull the user's history down first so the stats populate immediately on login.
+        await restoreHistoryFromSupabase(googleUserId);
         DeviceEventEmitter.emit('japam-auth-updated');
         DeviceEventEmitter.emit('japam-stats-updated');
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
