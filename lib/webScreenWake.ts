@@ -70,8 +70,8 @@ function playKeepAwakeVideo(): void {
   try {
     el.currentTime = 0;
     const p = el.play();
-    if (p && typeof p.catch === 'function') {
-      p.catch((e: unknown) => {
+    if (p && typeof p.then === 'function') {
+      p.then(() => { lastError = ''; }).catch((e: unknown) => {
         lastError = 'vid:' + String((e as any)?.name || e);
         console.log('[ScreenWake] keep-awake video play error:', e);
       });
