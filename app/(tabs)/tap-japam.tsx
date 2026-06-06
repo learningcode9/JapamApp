@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { appendCompletion, markSynced, mergeHistories } from '../../lib/historyStore';
+import { acquireWebScreenWake, nudgeWebScreenWake, releaseWebScreenWake } from '../../lib/webScreenWake';
 import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
 import { Audio } from 'expo-av';
@@ -275,34 +276,28 @@ export default function JapamMain() {
   // Keep the screen awake while the Tap Japam screen is in use, so the device does
   // not sleep mid-japam. Web only: Screen Wake Lock API (iOS 16.4+ Safari, Android
   // Chrome). Tied to screen focus; releases when leaving the screen or backgrounding.
-  const tapWakeLockRef = useRef<any>(null);
+  const tapScreenWakeHeldRef = useRef(false);
   const tapScreenFocusedRef = useRef(false);
 
+  // Keep the screen awake while the Tap Japam screen is in use. Web uses the shared
+  // screen-wake helper (Wake Lock API + muted keep-awake video) — the video is what
+  // actually keeps iOS Safari awake, since navigator.wakeLock alone does not. The held
+  // flag keeps acquire idempotent so repeated calls only take one shared hold.
   const releaseTapWakeLock = useCallback(() => {
     if (Platform.OS !== 'web') return;
-    if (!tapWakeLockRef.current) return;
-    tapWakeLockRef.current.release?.().catch?.(() => {});
-    tapWakeLockRef.current = null;
+    if (!tapScreenWakeHeldRef.current) return;
+    tapScreenWakeHeldRef.current = false;
+    releaseWebScreenWake();
   }, []);
 
   const acquireTapWakeLock = useCallback(async () => {
-    if (Platform.OS !== 'web' || typeof navigator === 'undefined') return;
-    try {
-      const nav = navigator as Navigator & {
-        wakeLock?: { request: (type: 'screen') => Promise<any> };
-      };
-      if (!nav.wakeLock) {
-        console.log('[TapJapam] WAKE_LOCK_UNSUPPORTED');
-        return;
-      }
-      if (tapWakeLockRef.current) return;
-      tapWakeLockRef.current = await nav.wakeLock.request('screen');
-      tapWakeLockRef.current?.addEventListener?.('release', () => {
-        tapWakeLockRef.current = null;
-      });
-    } catch (error) {
-      console.log('[TapJapam] Wake lock error:', error);
+    if (Platform.OS !== 'web') return;
+    if (tapScreenWakeHeldRef.current) {
+      nudgeWebScreenWake();
+      return;
     }
+    tapScreenWakeHeldRef.current = true;
+    await acquireWebScreenWake();
   }, []);
 
   useFocusEffect(
@@ -316,18 +311,18 @@ export default function JapamMain() {
     }, [acquireTapWakeLock, releaseTapWakeLock])
   );
 
-  // Browsers auto-release a screen wake lock when the page hides; reacquire it when
-  // the page is visible again and the Tap Japam screen is still focused.
+  // Browsers auto-release the screen wake lock / pause the video when the page hides;
+  // nudge it back when the page is visible again and the Tap Japam screen is focused.
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible' && tapScreenFocusedRef.current) {
-        void acquireTapWakeLock();
+        nudgeWebScreenWake();
       }
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
-  }, [acquireTapWakeLock]);
+  }, []);
 
   const requestNotificationPermissionOnce = useCallback(async () => {
     try {
@@ -1758,6 +1753,9 @@ export default function JapamMain() {
   const handleTap = async () => {
     if (!requireLogin()) return;
     void primeWebCompletionAudio();
+    // Ensure the keep-awake video is running (iOS may block the focus-time muted
+    // autoplay until a user gesture; this tap is that gesture). No-op once playing.
+    nudgeWebScreenWake();
 
     const now = Date.now();
     if (now - lastTapRef.current < 100) return;

@@ -7,6 +7,7 @@ import * as Notifications from 'expo-notifications';
 import { usePathname, useRouter } from 'expo-router';
 import { getTimerState, updateTimerState } from '../lib/timerState';
 import { appendCompletion, getPending, markSynced } from '../lib/historyStore';
+import { acquireWebScreenWake, nudgeWebScreenWake, releaseWebScreenWake } from '../lib/webScreenWake';
 import React, {
   createContext,
   useCallback,
@@ -156,7 +157,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const suppressNextCompletionSoundRef = useRef(false);
   const webCompletionAudioPrimedRef = useRef(false);
   const appStateRef = useRef(AppState.currentState);
-  const wakeLockRef = useRef<any>(null);
+  const screenWakeHeldRef = useRef(false);
 
   useEffect(() => { secondsRef.current = seconds; }, [seconds]);
   useEffect(() => { isRunningRef.current = isRunning; }, [isRunning]);
@@ -243,14 +244,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     return true;
   }, []);
 
+  // Keep the screen awake while the timer runs. Web uses the shared screen-wake helper
+  // (Wake Lock API + muted keep-awake video, because navigator.wakeLock alone is
+  // unreliable on iOS Safari); native uses expo-keep-awake. The held flag keeps this
+  // idempotent so the timer's repeated acquire calls (one per loop) only take one hold.
   const releaseWakeLock = useCallback(() => {
     if (Platform.OS !== 'web') {
       deactivateKeepAwake();
       return;
     }
-    if (!wakeLockRef.current) return;
-    wakeLockRef.current.release?.().catch?.(() => {});
-    wakeLockRef.current = null;
+    if (!screenWakeHeldRef.current) return;
+    screenWakeHeldRef.current = false;
+    releaseWebScreenWake();
   }, []);
 
   const acquireWakeLock = useCallback(async () => {
@@ -258,23 +263,12 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       await activateKeepAwakeAsync().catch(() => {});
       return;
     }
-    if (typeof navigator === 'undefined') return;
-    try {
-      const nav = navigator as Navigator & {
-        wakeLock?: { request: (type: 'screen') => Promise<any> };
-      };
-      if (!nav.wakeLock) {
-        console.log('[TimerBG] WAKE_LOCK_UNSUPPORTED');
-        return;
-      }
-      if (wakeLockRef.current) return;
-      wakeLockRef.current = await nav.wakeLock.request('screen');
-      wakeLockRef.current?.addEventListener?.('release', () => {
-        wakeLockRef.current = null;
-      });
-    } catch (error) {
-      console.log('Wake lock error:', error);
+    if (screenWakeHeldRef.current) {
+      nudgeWebScreenWake();
+      return;
     }
+    screenWakeHeldRef.current = true;
+    await acquireWebScreenWake();
   }, []);
 
   const clearTimerInterval = useCallback(() => {
