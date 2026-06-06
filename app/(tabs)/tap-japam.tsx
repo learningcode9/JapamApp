@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { appendCompletion, markSynced, mergeHistories } from '../../lib/historyStore';
-import { acquireWebScreenWake, nudgeWebScreenWake, pauseKeepAwakeVideo, releaseWebScreenWake } from '../../lib/webScreenWake';
+import { acquireWebScreenWake, nudgeWebScreenWake, releaseWebScreenWake } from '../../lib/webScreenWake';
 import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
 import { Audio } from 'expo-av';
@@ -1442,9 +1442,6 @@ export default function JapamMain() {
 
       if (!sound) return;
 
-      // Pause the keep-awake video so the Om owns the iOS audio session and plays in
-      // full (the looping unmuted keep-awake video otherwise truncates it).
-      pauseKeepAwakeVideo();
       await sound.stopAsync().catch(() => undefined);
       await sound.setPositionAsync(0).catch(() => undefined);
       // The element was primed muted to keep tapping silent; make it audible now,
@@ -1454,8 +1451,6 @@ export default function JapamMain() {
       await sound.playAsync();
       setTimeout(() => {
         sound.stopAsync().catch(() => undefined);
-        // Resume the keep-awake video now that the Om has finished.
-        nudgeWebScreenWake();
       }, variant === 'final' ? 6000 : 5000);
     } catch (error) {
       console.log('Sound error:', error);

@@ -7,7 +7,7 @@ import * as Notifications from 'expo-notifications';
 import { usePathname, useRouter } from 'expo-router';
 import { getTimerState, updateTimerState } from '../lib/timerState';
 import { appendCompletion, getPending, markSynced } from '../lib/historyStore';
-import { acquireWebScreenWake, nudgeWebScreenWake, pauseKeepAwakeVideo, releaseWebScreenWake } from '../lib/webScreenWake';
+import { acquireWebScreenWake, nudgeWebScreenWake, releaseWebScreenWake } from '../lib/webScreenWake';
 import React, {
   createContext,
   useCallback,
@@ -971,10 +971,6 @@ export function TimerProvider({ children }: { children: ReactNode }) {
             await primeWebCompletionAudio();
           }
           if (Platform.OS === 'web') {
-            // Pause the keep-awake video so the Om owns the iOS audio session and plays
-            // in full (the looping unmuted keep-awake video otherwise truncates it). It
-            // resumes via the acquireWakeLock/releaseWakeLock that follow this block.
-            pauseKeepAwakeVideo();
             // The element was primed muted/volume-0 so Start stays silent. Make it
             // audible now, immediately before the real completion playback.
             await sound.setIsMutedAsync(false).catch(() => {});
