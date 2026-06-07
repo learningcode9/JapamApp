@@ -1,5 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { appendCompletion, dedupeByCompletionId, markSynced } from '../../lib/historyStore';
+import {
+  appendCompletion,
+  buildSupabaseHistoryPayload,
+  dedupeByCompletionId,
+  markSynced,
+  mergeHistories,
+  toLocalDayKey,
+} from '../../lib/historyStore';
 import * as FileSystem from 'expo-file-system/legacy';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
@@ -50,6 +57,7 @@ type RemoteHistoryRow = {
   count?: number | string;
   user_name?: string;
   user_email?: string;
+  completion_id?: string;
 };
 
 type ManualSyncInput = {
@@ -110,30 +118,8 @@ const getLocalDateKey = (date = new Date()) => {
   return `${y}-${m}-${d}`;
 };
 
-const parseHistoryDate = (rawDate: string) => {
-  if (!rawDate) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
-    const [year, month, day] = rawDate.split('-').map(Number);
-    return new Date(year, month - 1, day, 12);
-  }
-
-  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(rawDate);
-  const normalized = hasTimezone ? rawDate : `${rawDate}Z`;
-  const date = new Date(normalized);
-  return Number.isNaN(date.getTime()) ? null : date;
-};
-
 const toDayKey = (rawDate: string) => {
-  if (!rawDate) return 'unknown';
-
-  if (/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
-    return rawDate;
-  }
-
-  const d = parseHistoryDate(rawDate);
-  if (!d) return 'unknown';
-
-  return getLocalDateKey(d);
+  return toLocalDayKey(rawDate);
 };
 
 const toDayLabel = (dayKey: string) => {
@@ -164,7 +150,7 @@ const parseHistory = (raw: string | null): Session[] => {
 // only invalid/zero-count rows are dropped. See lib/historyStore.ts.
 const dedupeSessions = (sessions: Session[]): Session[] =>
   dedupeByCompletionId(sessions).filter(
-    (item) => item.totalCount > 0 && Boolean(parseHistoryDate(item.date))
+    (item) => item.totalCount > 0 && toDayKey(item.date) !== 'unknown'
   );
 
 const buildDailyRows = (sessions: Session[]) => {
@@ -237,7 +223,7 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
   try {
     const fetchBy = async (field: 'user_id' | 'user_name', value: string) => {
       const query = new URLSearchParams({
-        select: 'id,created_at,malas,count,user_name',
+        select: 'id,created_at,malas,count,user_name,user_email,completion_id',
         [field]: `eq.${value}`,
         order: 'created_at.asc',
       });
@@ -268,6 +254,9 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
           manual: false,
           userId,
           userName: row.user_name || undefined,
+          userEmail: row.user_email || undefined,
+          completionId: row.completion_id || undefined,
+          syncStatus: 'synced' as const,
         };
       });
     };
@@ -293,14 +282,23 @@ const saveToSupabase = async (
   if (!url || !key) return false;
 
   try {
-    const body = {
-      user_id: userId,
-      user_name: userName,
+    const body = buildSupabaseHistoryPayload({
+      date: createdAt,
       malas,
-      count: totalCount,
-      created_at: createdAt,
-      completion_id: completionId,
-    };
+      totalCount,
+      duration: 0,
+      manual: true,
+      userId,
+      userName,
+      completionId,
+      syncStatus: 'pending',
+    }, userId, userName);
+    console.log(
+      '[SYNC_PAYLOAD_CREATED_AT] source=history-manual completionId=%s created_at=%s localDay=%s',
+      body.completion_id,
+      body.created_at,
+      toDayKey(body.created_at)
+    );
     const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
       method: 'POST',
       headers: {
@@ -311,8 +309,11 @@ const saveToSupabase = async (
       },
       body: JSON.stringify(body),
     });
+    if (res.ok) console.log('[SYNC_SUCCESS] source=history-manual completionId=%s', completionId);
+    else console.log('[SYNC_FAILED] source=history-manual completionId=%s status=%d', completionId, res.status);
     return res.ok;
   } catch (err) {
+    console.log('[SYNC_FAILED] source=history-manual completionId=%s reason=network', completionId);
     console.log('Supabase manual entry save error:', err);
     return false;
   }
@@ -342,6 +343,7 @@ const syncManualEntryToSupabase = async ({
     const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
     const latest = parseHistory(latestRaw);
     await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, [completionId])));
+    console.log('[MARK_SYNCED] source=history-manual completionId=%s', completionId);
   } catch (error) {
     console.log('Supabase manual entry background sync error:', error);
   }
@@ -431,6 +433,13 @@ export default function HistoryScreen() {
       });
       const newCompletionId = updated[0].completionId;
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+      console.log(
+        '[OFFLINE_SAVE_ACCEPTED] source=history-manual completionId=%s created_at=%s localDay=%s syncStatus=%s',
+        newCompletionId,
+        createdAt,
+        toDayKey(createdAt),
+        updated[0].syncStatus
+      );
 
       void syncManualEntryToSupabase({
         userId: currentUserId,
@@ -497,17 +506,23 @@ export default function HistoryScreen() {
         const dayKey = toDayKey(item.date);
         return dayKey === 'unknown' || dayKey <= todayKey;
       });
-      const localUserSessions = latestCleanedSessions.filter((item) => item.userId === currentUserId);
-      const mergedMap = new Map<string, Session>();
-      [...filteredRemoteSessions, ...localUserSessions].forEach((session) => {
-        const key = `${session.date}-${session.totalCount}-${session.malas}`;
-        mergedMap.set(key, session);
-      });
-      sessions = dedupeSessions([...mergedMap.values()]).sort(
+      const mergedHistory = mergeHistories(latestCleanedSessions, filteredRemoteSessions);
+      sessions = dedupeSessions(mergedHistory.filter((item) => item.userId === currentUserId)).sort(
         (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
       );
-      const otherUserSessions = latestCleanedSessions.filter((item) => item.userId !== currentUserId);
-      await AsyncStorage.setItem('history', JSON.stringify([...sessions, ...otherUserSessions]));
+      const mergedForStorage = mergeHistories(latestCleanedSessions, filteredRemoteSessions);
+      await AsyncStorage.setItem('history', JSON.stringify(mergedForStorage));
+      console.log('[RESTORE_REMOTE_COUNT] screen=history count=%d', filteredRemoteSessions.length);
+      console.log(
+        '[MERGE_LOCAL_COUNT_BEFORE] screen=history count=%d pending=%d',
+        latestCleanedSessions.length,
+        latestCleanedSessions.filter((item) => item.userId === currentUserId && item.syncStatus === 'pending').length
+      );
+      console.log('[MERGE_LOCAL_COUNT_AFTER] screen=history count=%d', mergedForStorage.length);
+      console.log('[LOCAL_DAY_BUCKET] screen=history todayKey=%s buckets=%o',
+        todayKey,
+        sessions.map((s) => ({ completionId: s.completionId, day: toDayKey(s.date) }))
+      );
 
       // Notify Home screen to re-sync stats from the updated local history
       DeviceEventEmitter.emit('japam-stats-updated');

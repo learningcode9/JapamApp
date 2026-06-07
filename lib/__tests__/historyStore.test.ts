@@ -8,6 +8,8 @@ import {
   markSynced,
   todayCountFor,
   todayStatsFor,
+  buildSupabaseHistoryPayload,
+  toLocalDayKey,
   type HistoryRecord,
 } from '../historyStore';
 
@@ -115,6 +117,13 @@ describe('no undercounting: dedupeByCompletionId', () => {
     const out = dedupeByCompletionId([session(iso), session(iso)]);
     expect(out).toHaveLength(1);
   });
+  it('keeps two different completionIds on the same day', () => {
+    const out = dedupeByCompletionId([
+      session('2026-06-03T10:00:00.000Z'),
+      session('2026-06-03T10:00:01.000Z'),
+    ]);
+    expect(out).toHaveLength(2);
+  });
   it('upgrades the kept record to synced when a duplicate is synced', () => {
     const iso = '2026-06-03T10:00:00.000Z';
     const out = dedupeByCompletionId([
@@ -162,6 +171,43 @@ describe('no data loss: mergeHistories (Supabase restore)', () => {
     const restored = mergeHistories(localAfterOffline, remoteOnSignIn);
     expect(restored.find((r) => r.completionId === makeCompletionId(UID, '2026-06-03T10:00:00.000Z')))
       .toBeTruthy(); // the offline mala was NOT lost
+  });
+  it('preserves pending yesterday and today records when remote restore has neither', () => {
+    const yesterday = session('2026-06-02T23:30:00.000Z', { syncStatus: 'pending' });
+    const today = session('2026-06-03T10:00:00.000Z', { syncStatus: 'pending' });
+    const remote = [session('2026-06-01T09:00:00.000Z', { syncStatus: 'synced' })];
+
+    const merged = mergeHistories([yesterday, today], remote);
+
+    expect(merged.find((r) => r.completionId === makeCompletionId(UID, yesterday.date))?.syncStatus).toBe('pending');
+    expect(merged.find((r) => r.completionId === makeCompletionId(UID, today.date))?.syncStatus).toBe('pending');
+    expect(merged).toHaveLength(3);
+  });
+});
+
+describe('sync payload/date integrity', () => {
+  it('preserves yesterday offline completion created_at for Supabase payload', () => {
+    const createdAt = '2026-06-02T23:30:00.000Z';
+    const record = appendCompletion([], session(createdAt))[0];
+    const payload = buildSupabaseHistoryPayload(record, UID, 'Sravani');
+
+    expect(payload.created_at).toBe(createdAt);
+    expect(payload.completion_id).toBe(record.completionId);
+    expect(payload.user_id).toBe(UID);
+  });
+
+  it('preserves today offline completion created_at for Supabase payload', () => {
+    const createdAt = '2026-06-03T10:00:00.000Z';
+    const record = appendCompletion([], session(createdAt))[0];
+    const payload = buildSupabaseHistoryPayload(record, UID, 'Sravani');
+
+    expect(payload.created_at).toBe(createdAt);
+    expect(payload.completion_id).toBe(record.completionId);
+  });
+
+  it('buckets bare dates and ISO timestamps by local day', () => {
+    expect(toLocalDayKey('2026-06-02')).toBe('2026-06-02');
+    expect(toLocalDayKey('2026-06-02T23:30:00.000Z')).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });
 

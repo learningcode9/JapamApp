@@ -6,7 +6,13 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import * as Notifications from 'expo-notifications';
 import { usePathname, useRouter } from 'expo-router';
 import { getTimerState, updateTimerState } from '../lib/timerState';
-import { appendCompletion, getPending, markSynced } from '../lib/historyStore';
+import {
+  appendCompletion,
+  buildSupabaseHistoryPayload,
+  getPending,
+  markSynced,
+  toLocalDayKey,
+} from '../lib/historyStore';
 import React, {
   createContext,
   useCallback,
@@ -551,7 +557,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
             });
             navigator.mediaSession.playbackState = isRunningRef.current ? 'playing' : 'paused';
           }
-        } catch (error) {
+        } catch {
           console.log('[TimerNotify] Media session update error:', error);
         }
 
@@ -598,7 +604,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
             webRunningNotificationShownRef.current = true;
           }
-        } catch (error) {
+        } catch {
           console.log('[TimerNotify] Web running notification error:', error);
         }
       };
@@ -654,8 +660,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       let count = 0;
       let entries = 0;
       for (const item of hist) {
-        const d = new Date(item?.date);
-        if (Number.isNaN(d.getTime()) || getLocalDateKey(d) !== todayKey) continue;
+        if (toLocalDayKey(item?.date) !== todayKey) continue;
         const matchesUser = uid ? item.userId === uid : !item.userId;
         if (!matchesUser) continue;
         count += Number(item.totalCount) || (Number(item.malas) || 0) * 108;
@@ -692,14 +697,22 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       } catch {
         return;
       }
+      console.log('[LOCAL_HISTORY_COUNT_BEFORE_SYNC] count=%d', history.length);
       const pending = getPending(history).filter((r) => r.userId === uid);
+      console.log('[PENDING_RECORDS_COUNT] count=%d userId=%s', pending.length, uid);
       if (pending.length === 0) return;
       const storedUserName = (await AsyncStorage.getItem('userName')) || '';
       const storedUserEmail = (await AsyncStorage.getItem('userEmail')) || '';
       const fallbackUserName = storedUserName || storedUserEmail || 'Unknown User';
       const syncedIds: string[] = [];
       for (const rec of pending) {
-        const recordUserName = rec.userName || rec.userEmail || fallbackUserName;
+        const payload = buildSupabaseHistoryPayload(rec, uid, fallbackUserName);
+        console.log(
+          '[SYNC_PAYLOAD_CREATED_AT] completionId=%s created_at=%s localDay=%s',
+          payload.completion_id,
+          payload.created_at,
+          toLocalDayKey(payload.created_at)
+        );
         try {
           // Idempotent upsert: on_conflict=completion_id + ignore-duplicates makes a re-uploaded
           // completion a no-op at the DB (no duplicate row). A duplicate attempt still returns ok,
@@ -712,22 +725,17 @@ export function TimerProvider({ children }: { children: ReactNode }) {
               Authorization: `Bearer ${key}`,
               Prefer: 'return=minimal,resolution=merge-duplicates',
             },
-            body: JSON.stringify({
-              user_id: uid,
-              user_name: recordUserName,
-              malas: rec.malas,
-              count: rec.totalCount,
-              created_at: rec.date,
-              completion_id: rec.completionId,
-            }),
+            body: JSON.stringify(payload),
           });
           if (res.ok) {
             syncedIds.push(rec.completionId);
+            console.log('[SYNC_SUCCESS] completionId=%s', rec.completionId);
           } else {
-            console.log('[Stats] STATS_SYNC_FAILED status=%d', res.status);
+            console.log('[SYNC_FAILED] completionId=%s status=%d', rec.completionId, res.status);
           }
         } catch {
           // Offline / network error — stop; remaining records stay pending for the next attempt.
+          console.log('[SYNC_FAILED] completionId=%s reason=network', rec.completionId);
           break;
         }
       }
@@ -736,7 +744,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
         const latest = latestRaw ? JSON.parse(latestRaw) : [];
         await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, syncedIds)));
-        console.log('[Stats] STATS_SYNC_DONE marked=%d synced', syncedIds.length);
+        console.log('[MARK_SYNCED] count=%d ids=%s', syncedIds.length, syncedIds.join(','));
         DeviceEventEmitter.emit('japam-stats-updated');
         DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -812,7 +820,15 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     try {
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
       const history = raw ? JSON.parse(raw) : [];
-      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(appendCompletion(history, completion)));
+      const updatedHistory = appendCompletion(history, completion);
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
+      console.log(
+        '[OFFLINE_SAVE_ACCEPTED] source=timer completionId=%s created_at=%s localDay=%s syncStatus=%s',
+        updatedHistory[0]?.completionId,
+        updatedHistory[0]?.date,
+        toLocalDayKey(updatedHistory[0]?.date),
+        updatedHistory[0]?.syncStatus
+      );
 
       const after = await readMalasTodaySnapshot();
       console.log('[Stats] STATS_SAVE_ACCEPTED completionSource=JS currentMala=%d targetMalaCount=%d malasTodayAfter=%d todayCountAfter=%d entriesAfter=%d',

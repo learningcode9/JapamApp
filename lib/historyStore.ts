@@ -32,6 +32,32 @@ export interface HistoryRecord {
   syncStatus: SyncStatus;
 }
 
+export type SupabaseHistoryPayload = {
+  user_id: string;
+  user_name: string;
+  malas: number;
+  count: number;
+  created_at: string;
+  completion_id: string;
+};
+
+/**
+ * Shared local-day bucket helper. It intentionally uses the device timezone for ISO timestamps,
+ * because "today/yesterday" in the app should follow the user's local day, not UTC midnight.
+ */
+export const toLocalDayKey = (rawDate?: string | null): string => {
+  if (!rawDate) return 'unknown';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) return rawDate;
+
+  const parsed = new Date(rawDate);
+  if (Number.isNaN(parsed.getTime())) return 'unknown';
+
+  const y = parsed.getFullYear();
+  const m = String(parsed.getMonth() + 1).padStart(2, '0');
+  const d = String(parsed.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
 export type RawHistoryRecord = Partial<HistoryRecord> & {
   date: string;
   user_name?: string;
@@ -184,6 +210,29 @@ export const markSynced = (
   return normalizeAll(records).map((r) =>
     ids.has(r.completionId) && r.syncStatus === 'pending' ? { ...r, syncStatus: 'synced' } : r
   );
+};
+
+/**
+ * Build the Supabase row from the local record. The important bit is `created_at: record.date`:
+ * offline completions must upload with their actual completion time, not the later sync time.
+ */
+export const buildSupabaseHistoryPayload = (
+  record: RawHistoryRecord,
+  fallbackUserId?: string | null,
+  fallbackUserName = 'Unknown User'
+): SupabaseHistoryPayload => {
+  const normalized = normalizeRecord(record);
+  const userId = normalized.userId || fallbackUserId || '';
+  const userName = normalized.userName || normalized.userEmail || fallbackUserName || 'Unknown User';
+
+  return {
+    user_id: userId,
+    user_name: userName,
+    malas: normalized.malas,
+    count: normalized.totalCount,
+    created_at: normalized.date,
+    completion_id: normalized.completionId,
+  };
 };
 
 /** Sum of today's totalCount for a user (or guest), over de-duplicated records. */

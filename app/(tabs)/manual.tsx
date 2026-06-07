@@ -1,5 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { appendCompletion, markSynced } from '../../lib/historyStore';
+import {
+  appendCompletion,
+  buildSupabaseHistoryPayload,
+  markSynced,
+  toLocalDayKey,
+} from '../../lib/historyStore';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect } from 'expo-router';
 import React, { useState } from 'react';
@@ -83,6 +88,24 @@ const syncManualEntryToSupabase = async ({
       return;
     }
 
+    const payload = buildSupabaseHistoryPayload({
+      date: selectedDateTime,
+      malas: malaNum,
+      totalCount: totalNum,
+      duration: 0,
+      manual: true,
+      userId,
+      userName,
+      completionId,
+      syncStatus: 'pending',
+    }, userId, userName);
+    console.log(
+      '[SYNC_PAYLOAD_CREATED_AT] source=manual completionId=%s created_at=%s localDay=%s',
+      payload.completion_id,
+      payload.created_at,
+      toLocalDayKey(payload.created_at)
+    );
+
     const response = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
       method: 'POST',
       headers: {
@@ -91,20 +114,11 @@ const syncManualEntryToSupabase = async ({
         Authorization: `Bearer ${key}`,
         Prefer: 'return=minimal,resolution=merge-duplicates',
       },
-      body: JSON.stringify({
-        // NOTE: japam_history has no `accumulated`/`type` columns — sending them made every
-        // manual-entry insert fail with HTTP 400 (PGRST204), so entries never reached Supabase.
-        user_id: userId,
-        user_name: userName,
-        malas: malaNum,
-        count: totalNum,
-        created_at: selectedDateTime,
-        completion_id: completionId,
-      }),
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
-      console.log('[Manual] MANUAL_SYNC_FAILED status=%d (stays pending)', response.status);
+      console.log('[SYNC_FAILED] source=manual completionId=%s status=%d (stays pending)', completionId, response.status);
       console.log('Supabase manual save error:', await response.text());
       return;
     }
@@ -115,8 +129,9 @@ const syncManualEntryToSupabase = async ({
       const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
       const latest = latestRaw ? JSON.parse(latestRaw) : [];
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, [completionId])));
+      console.log('[MARK_SYNCED] source=manual completionId=%s', completionId);
     } catch {}
-    console.log('[Manual] MANUAL_SYNC_SUCCESS completionId=%s', completionId);
+    console.log('[SYNC_SUCCESS] source=manual completionId=%s', completionId);
   } catch (error) {
     console.log('[Manual] MANUAL_SYNC_FAILED reason=network (stays pending)');
     console.log('Supabase manual save error:', error);
@@ -230,8 +245,8 @@ if (!userId) {
     const newCompletionId = updatedHistory[0].completionId;
     try {
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
-      console.log('[Manual] MANUAL_HISTORY_SAVE_ACCEPTED completionId=%s malas=%d count=%d userId=%s userName=%s',
-        newCompletionId, malaNum, totalNum, userId, userName);
+      console.log('[OFFLINE_SAVE_ACCEPTED] source=manual completionId=%s malas=%d count=%d userId=%s userName=%s localDay=%s',
+        newCompletionId, malaNum, totalNum, userId, userName, toLocalDayKey(selectedDateTime));
     } catch (err) {
       console.log('[Manual] MANUAL_HISTORY_SAVE_FAILED', err);
       Alert.alert('Save failed', 'Could not save the entry on this device.');

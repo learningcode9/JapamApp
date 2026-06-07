@@ -1,6 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { mergeHistories, todayStatsFor, makeCompletionId } from '../../lib/historyStore';
+import {
+  buildSupabaseHistoryPayload,
+  mergeHistories,
+  todayStatsFor,
+  makeCompletionId,
+  toLocalDayKey,
+} from '../../lib/historyStore';
 import * as Google from 'expo-auth-session/providers/google';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { Audio } from 'expo-av';
@@ -41,6 +47,10 @@ type Session = {
   duration: number;
   manual?: boolean;
   userId?: string;
+  userName?: string;
+  userEmail?: string;
+  completionId?: string;
+  syncStatus?: 'pending' | 'synced';
 };
 
 type TimerStateRow = {
@@ -522,10 +532,10 @@ export default function JapamMain() {
         if (item.userId !== activeUserId) return;
         if ((Number(item.totalCount) || 0) <= 0 && (Number(item.malas) || 0) <= 0) return;
 
-        const itemDate = new Date(item.date);
-        if (Number.isNaN(itemDate.getTime())) return;
+        const itemDay = toLocalDayKey(item.date);
+        if (itemDay === 'unknown') return;
 
-        activeDays.add(getLocalDateKey(itemDate));
+        activeDays.add(itemDay);
       });
 
       const todayKey = getLocalDateKey();
@@ -613,7 +623,7 @@ export default function JapamMain() {
     const todayKey = getLocalDateKey();
 
     return sessions
-      .filter((item) => item.userId === userId && getLocalDateKey(new Date(item.date)) === todayKey)
+      .filter((item) => item.userId === userId && toLocalDayKey(item.date) === todayKey)
       .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
   }, []);
 
@@ -643,11 +653,18 @@ export default function JapamMain() {
         if (url && key) {
           const encodedUserId = encodeURIComponent(savedUserId);
           const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count&order=created_at.asc`,
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,user_email,completion_id&order=created_at.asc`,
             { headers: { apikey: key, Authorization: `Bearer ${key}` } }
           );
           if (res.ok) {
-            const rows: { created_at: string; malas: number | string; count: number | string }[] =
+            const rows: {
+              created_at: string;
+              malas: number | string;
+              count: number | string;
+              user_name?: string;
+              user_email?: string;
+              completion_id?: string;
+            }[] =
               await res.json();
             remoteSessions = rows.map((row) => ({
               date: row.created_at,
@@ -656,28 +673,43 @@ export default function JapamMain() {
               duration: 0,
               manual: false,
               userId: savedUserId,
+              userName: row.user_name,
+              userEmail: row.user_email,
+              completionId: row.completion_id,
+              syncStatus: 'synced' as const,
             }));
           }
         }
 
         if (remoteSessions !== null) {
-          // Sync remote history to local for History tab display
+          // Merge remote history into local without dropping pending offline completions.
           const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
           const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
-          const otherUserSessions = localHistory.filter((s) => s.userId !== savedUserId);
-          const filteredRemote = remoteSessions.filter(
-            (s) => getLocalDateKey(new Date(s.date)) <= todayKey
+          const mergedHistory = mergeHistories(localHistory, remoteSessions).filter((s) => {
+            const day = toLocalDayKey(s.date);
+            return day === 'unknown' || day <= todayKey;
+          });
+
+          console.log('[RESTORE_REMOTE_COUNT] screen=main count=%d', remoteSessions.length);
+          console.log(
+            '[MERGE_LOCAL_COUNT_BEFORE] screen=main count=%d pending=%d',
+            localHistory.length,
+            localHistory.filter((s) => s.userId === savedUserId && s.syncStatus === 'pending').length
           );
-          await AsyncStorage.setItem(
-            HISTORY_KEY,
-            JSON.stringify([...filteredRemote, ...otherUserSessions])
+          console.log('[MERGE_LOCAL_COUNT_AFTER] screen=main count=%d', mergedHistory.length);
+          console.log('[LOCAL_DAY_BUCKET] screen=main todayKey=%s buckets=%o',
+            todayKey,
+            mergedHistory.map((s) => ({ completionId: s.completionId, day: toLocalDayKey(s.date) }))
           );
 
-          const remoteHistoryTotal = filteredRemote
-            .filter((s) => getLocalDateKey(new Date(s.date)) === todayKey)
-            .reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
+          await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
 
-          const safeTotal = remoteHistoryTotal;
+          const { totalCount: safeTotal } = todayStatsFor(
+            mergedHistory,
+            savedUserId,
+            todayKey,
+            toLocalDayKey
+          );
           await restoreTotal(safeTotal, { userId: savedUserId });
           totalRef.current = safeTotal;
           await refreshDayStreak({ userId: savedUserId, todayTotal: safeTotal });
@@ -759,8 +791,12 @@ export default function JapamMain() {
       const uid = await AsyncStorage.getItem(USER_ID_KEY);
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
       const history = Array.isArray(JSON.parse(raw || '[]')) ? JSON.parse(raw || '[]') : [];
-      const toDayKey = (iso: string) => getLocalDateKey(new Date(iso));
-      const { malas: hMalas, totalCount: hTotal } = todayStatsFor(history, uid, getLocalDateKey(), toDayKey);
+      const { malas: hMalas, totalCount: hTotal } = todayStatsFor(
+        history,
+        uid,
+        getLocalDateKey(),
+        toLocalDayKey
+      );
       setHistoryMalas(hMalas);
       setHistoryTotal(hTotal);
       const pending = history.filter((r: any) => r?.syncStatus === 'pending').length;
@@ -1111,6 +1147,10 @@ export default function JapamMain() {
         duration: 0,
         manual: false,
         userId: googleUserId,
+        userName: item.user_name,
+        userEmail: item.user_email,
+        completionId: item.completion_id,
+        syncStatus: 'synced' as const,
       }));
 
       const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
@@ -1121,6 +1161,13 @@ export default function JapamMain() {
       // upgraded to 'synced'. This replaces the old behavior that discarded the current user's
       // local entries and could lose unsynced malas on sign-in.
       const mergedHistory = mergeHistories(localHistory, remoteHistory);
+      console.log('[RESTORE_REMOTE_COUNT] screen=main-login count=%d', remoteHistory.length);
+      console.log(
+        '[MERGE_LOCAL_COUNT_BEFORE] screen=main-login count=%d pending=%d',
+        localHistory.length,
+        localHistory.filter((item) => item.userId === googleUserId && item.syncStatus === 'pending').length
+      );
+      console.log('[MERGE_LOCAL_COUNT_AFTER] screen=main-login count=%d', mergedHistory.length);
 
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
       await restoreTodayTotal();
@@ -1423,13 +1470,17 @@ export default function JapamMain() {
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
       if (url && key) {
-        const baseBody = {
-          user_name: historyUserName,
-          malas: sessionMalas,
-          count: sessionTotal,
-          created_at: session.date,
-          completion_id: makeCompletionId(userId, session.date),
-        };
+        const payload = buildSupabaseHistoryPayload({
+          ...session,
+          userName: historyUserName,
+          completionId: makeCompletionId(userId, session.date),
+        }, userId, historyUserName);
+        console.log(
+          '[SYNC_PAYLOAD_CREATED_AT] source=legacy-main completionId=%s created_at=%s localDay=%s',
+          payload.completion_id,
+          payload.created_at,
+          toLocalDayKey(payload.created_at)
+        );
         const postHistory = async (body: Record<string, unknown>) => {
           const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
             method: 'POST',
@@ -1438,8 +1489,8 @@ export default function JapamMain() {
           });
           return res.ok;
         };
-        const savedWithUserId = await postHistory({ user_id: userId, ...baseBody });
-        if (!savedWithUserId) await postHistory(baseBody);
+        const savedWithUserId = await postHistory(payload);
+        if (!savedWithUserId) console.log('[SYNC_FAILED] source=legacy-main completionId=%s', payload.completion_id);
       }
     } catch (error) {
       console.log('Supabase save error:', error);
