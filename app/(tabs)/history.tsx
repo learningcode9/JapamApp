@@ -5,6 +5,7 @@ import {
   dedupeByCompletionId,
   markSynced,
   mergeHistories,
+  mergeTombstones,
   toLocalDayKey,
 } from '../../lib/historyStore';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -48,6 +49,7 @@ type DailyRow = {
   duration: number;
   manualCount: number;
   autoCount: number;
+  completionIds: string[];
 };
 
 type RemoteHistoryRow = {
@@ -70,6 +72,7 @@ type ManualSyncInput = {
 };
 
 const HISTORY_KEY = 'history';
+const DELETED_COMPLETIONS_KEY = 'deletedCompletions';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
 const USER_EMAIL_KEY = 'userEmail';
@@ -171,6 +174,7 @@ const buildDailyRows = (sessions: Session[]) => {
       existing.malas += malas;
       existing.totalCount += totalCount;
       existing.duration += duration;
+      if (item.completionId) existing.completionIds.push(item.completionId);
 
       if (isManual) existing.manualCount += 1;
       else existing.autoCount += 1;
@@ -186,6 +190,7 @@ const buildDailyRows = (sessions: Session[]) => {
       duration,
       manualCount: isManual ? 1 : 0,
       autoCount: isManual ? 0 : 1,
+      completionIds: item.completionId ? [item.completionId] : [],
     });
   });
 
@@ -533,6 +538,74 @@ export default function HistoryScreen() {
     setDailyRows(buildDailyRows(sessions));
   }, []);
 
+  // Tombstone-based delete: remove the records locally, record a tombstone (so self-heal never
+  // re-uploads them and other devices delete their copy on sync), and best-effort delete remote
+  // now. If offline, the local tombstone is pushed by syncPendingHistory on the next sync.
+  const performDelete = useCallback(async (completionIds: string[]) => {
+    if (!completionIds.length) return;
+    const ids = new Set(completionIds);
+    const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+
+    const raw = await AsyncStorage.getItem(HISTORY_KEY);
+    const local = parseHistory(raw);
+    const filtered = local.filter((item) => !ids.has((item as Session).completionId as string));
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(filtered));
+
+    const rawTomb = await AsyncStorage.getItem(DELETED_COMPLETIONS_KEY);
+    const localTomb: string[] = rawTomb ? JSON.parse(rawTomb) : [];
+    await AsyncStorage.setItem(
+      DELETED_COMPLETIONS_KEY,
+      JSON.stringify(mergeTombstones(localTomb, completionIds))
+    );
+
+    setDailyRows(buildDailyRows(filtered.filter((item) => item.userId === currentUserId)));
+    DeviceEventEmitter.emit('japam-stats-updated');
+    DeviceEventEmitter.emit('japam-history-updated', { userId: currentUserId || 'guest' });
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('japam-stats-updated'));
+      window.dispatchEvent(new Event('japam-history-updated'));
+    }
+    console.log('[DELETE_LOCAL_TOMBSTONE] count=%d ids=%s', completionIds.length, completionIds.join(','));
+
+    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    if (url && key && currentUserId) {
+      for (const id of completionIds) {
+        try {
+          await fetch(`${url}/rest/v1/deleted_completions?on_conflict=completion_id`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: key,
+              Authorization: `Bearer ${key}`,
+              Prefer: 'return=minimal,resolution=merge-duplicates',
+            },
+            body: JSON.stringify({ completion_id: id, user_id: currentUserId }),
+          });
+          await fetch(`${url}/rest/v1/japam_history?completion_id=eq.${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+            headers: { apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal' },
+          });
+          console.log('[DELETE_REMOTE_DONE] completionId=%s', id);
+        } catch {
+          console.log('[DELETE_REMOTE_FAILED] completionId=%s reason=network (queued via tombstone)', id);
+        }
+      }
+    }
+  }, []);
+
+  const confirmDeleteDay = useCallback((row: DailyRow) => {
+    if (!row.completionIds.length) return;
+    Alert.alert(
+      'Delete this day?',
+      `Delete ${row.malas} mala${row.malas === 1 ? '' : 's'} on ${row.dateLabel}? This removes them here and from Supabase, on all your devices. This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => void performDelete(row.completionIds) },
+      ]
+    );
+  }, [performDelete]);
+
   useFocusEffect(
     useCallback(() => {
       void loadHistory();
@@ -735,8 +808,10 @@ export default function HistoryScreen() {
           </View>
         ) : (
           dailyRows.map((row, index) => (
-            <View
+            <Pressable
               key={`${row.dateKey}-${index}`}
+              onLongPress={() => confirmDeleteDay(row)}
+              delayLongPress={500}
               style={[styles.tableRow, index % 2 === 1 && styles.altTableRow]}
             >
               <Text style={[styles.tableCell, styles.dateCell]}>
@@ -745,10 +820,16 @@ export default function HistoryScreen() {
               <Text style={styles.tableCell}>{row.malas}</Text>
               <Text style={styles.tableCell}>{row.totalCount}</Text>
               <Text style={styles.tableCell}>{row.accumulated}</Text>
-            </View>
+            </Pressable>
           ))
         )}
       </View>
+
+      {dailyRows.length > 0 && (
+        <Text style={{ textAlign: 'center', color: '#5f7778', fontSize: 12, marginTop: 10 }}>
+          Tip: long-press a row to delete that day (syncs to all your devices).
+        </Text>
+      )}
 
     </ScrollView>
     </LinearGradient>

@@ -279,19 +279,22 @@ export const todayStatsFor = (
 export const selfHealSyncStatus = (
   records: RawHistoryRecord[],
   userId: string | null | undefined,
-  remoteCompletionIds: Iterable<string>
+  remoteCompletionIds: Iterable<string>,
+  tombstones: Iterable<string> = []
 ): { records: HistoryRecord[]; markedPending: string[] } => {
   const remoteIds =
     remoteCompletionIds instanceof Set
       ? remoteCompletionIds
       : new Set<string>(remoteCompletionIds);
+  const tomb = tombstones instanceof Set ? tombstones : new Set<string>(tombstones);
   const markedPending: string[] = [];
   const result = normalizeAll(records).map((r) => {
     if (
       userId &&
       r.userId === userId &&
       r.syncStatus === 'synced' &&
-      !remoteIds.has(r.completionId)
+      !remoteIds.has(r.completionId) &&
+      !tomb.has(r.completionId) // never resurrect a record the user explicitly deleted
     ) {
       markedPending.push(r.completionId);
       return { ...r, syncStatus: 'pending' as const };
@@ -299,4 +302,30 @@ export const selfHealSyncStatus = (
     return r;
   });
   return { records: result, markedPending };
+};
+
+/**
+ * Tombstone support — explicit deletions that propagate to every device and survive sync.
+ *
+ * A deletion is recorded as a tombstone (the deleted completionId), NOT inferred from "absent
+ * remotely" (which would wrongly erase un-uploaded offline malas). Tombstones sync via the
+ * `deleted_completions` table, so: self-heal skips them (no resurrection), restore removes the
+ * matching local records, and other devices delete their local copy after pulling tombstones.
+ */
+
+/** Remove records whose completionId is tombstoned. Used on restore/delete to honor deletions. */
+export const applyTombstones = (
+  records: RawHistoryRecord[],
+  tombstones: Iterable<string>
+): HistoryRecord[] => {
+  const t = tombstones instanceof Set ? tombstones : new Set<string>(tombstones);
+  if (t.size === 0) return normalizeAll(records);
+  return normalizeAll(records).filter((r) => !t.has(r.completionId));
+};
+
+/** Union of two tombstone id collections (local + remote), de-duplicated. */
+export const mergeTombstones = (a: Iterable<string>, b: Iterable<string>): string[] => {
+  const s = new Set<string>(a);
+  for (const x of b) s.add(x);
+  return [...s];
 };

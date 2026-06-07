@@ -11,6 +11,8 @@ import {
   buildSupabaseHistoryPayload,
   toLocalDayKey,
   selfHealSyncStatus,
+  applyTombstones,
+  mergeTombstones,
   type HistoryRecord,
 } from '../historyStore';
 
@@ -393,6 +395,66 @@ describe('self-heal sync: phantom-synced records re-upload (data consistency)', 
     expect(second.records[0].syncStatus).toBe('synced');
     // a re-uploaded completion never doubles: dedup by completion_id keeps exactly one
     expect(dedupeByCompletionId([...records, session(iso, { syncStatus: 'synced' })])).toHaveLength(1);
+  });
+});
+
+describe('tombstone delete sync (explicit deletion propagates, offline-safe)', () => {
+  const iso = '2026-06-06T18:00:00.000Z';
+  const cid = makeCompletionId(UID, iso);
+
+  it('1. applyTombstones removes the deleted record from local history', () => {
+    const local = [session(iso, { syncStatus: 'synced' }), session('2026-06-06T19:00:00.000Z')];
+    const out = applyTombstones(local, [cid]);
+    expect(out.map((r) => r.completionId)).not.toContain(cid);
+    expect(out).toHaveLength(1);
+  });
+
+  it('2. tombstoned record does NOT resurrect — self-heal skips it', () => {
+    // synced locally + absent remotely (deleted in Supabase) BUT tombstoned -> must NOT re-upload
+    const { records, markedPending } = selfHealSyncStatus(
+      [session(iso, { syncStatus: 'synced' })],
+      UID,
+      new Set(), // remote empty
+      [cid] // tombstoned
+    );
+    expect(markedPending).toEqual([]);
+    expect(records[0].syncStatus).toBe('synced'); // untouched (applyTombstones will drop it)
+  });
+
+  it('3. an offline PENDING record (not tombstoned) is NOT deleted', () => {
+    const pIso = '2026-06-06T20:00:00.000Z';
+    const out = applyTombstones(
+      [session(iso, { syncStatus: 'synced' }), session(pIso, { syncStatus: 'pending' })],
+      [cid] // only the synced one tombstoned
+    );
+    const pCid = makeCompletionId(UID, pIso);
+    expect(out.map((r) => r.completionId)).toContain(pCid);
+    expect(out.find((r) => r.completionId === pCid)?.syncStatus).toBe('pending');
+  });
+
+  it('4. second device removes the tombstoned record after pulling remote tombstones', () => {
+    const device2Local = [session(iso, { syncStatus: 'synced' }), session('2026-06-05T10:00:00.000Z')];
+    const merged = mergeTombstones([] /* local */, [cid] /* remote */);
+    const out = applyTombstones(device2Local, merged);
+    expect(out.map((r) => r.completionId)).not.toContain(cid);
+    expect(out).toHaveLength(1);
+  });
+
+  it('5. self-heal does not re-upload tombstoned ids, but still heals legitimate ones', () => {
+    const otherIso = '2026-06-06T21:00:00.000Z';
+    const otherCid = makeCompletionId(UID, otherIso);
+    const { markedPending } = selfHealSyncStatus(
+      [session(iso, { syncStatus: 'synced' }), session(otherIso, { syncStatus: 'synced' })],
+      UID,
+      new Set(), // both absent remotely
+      [cid] // only `cid` tombstoned
+    );
+    expect(markedPending).toContain(otherCid); // genuine synced-but-missing -> re-upload
+    expect(markedPending).not.toContain(cid); // deleted -> stays gone
+  });
+
+  it('mergeTombstones unions local + remote tombstones without duplicates', () => {
+    expect(mergeTombstones(['a', 'b'], ['b', 'c']).sort()).toEqual(['a', 'b', 'c']);
   });
 });
 

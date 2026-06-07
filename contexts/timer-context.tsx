@@ -8,9 +8,11 @@ import { usePathname, useRouter } from 'expo-router';
 import { getTimerState, updateTimerState } from '../lib/timerState';
 import {
   appendCompletion,
+  applyTombstones,
   buildSupabaseHistoryPayload,
   getPending,
   markSynced,
+  mergeTombstones,
   selfHealSyncStatus,
   toLocalDayKey,
 } from '../lib/historyStore';
@@ -46,6 +48,7 @@ const TIMER_COMPLETED_LOOPS_KEY = 'timerCompletedLoops';
 const TIMER_STARTED_AT_KEY = 'timerStartedAt';
 const TIMER_SESSION_ID_KEY = 'timerSessionId';
 const HISTORY_KEY = 'history';
+const DELETED_COMPLETIONS_KEY = 'deletedCompletions';
 const USER_ID_KEY = 'userId';
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
@@ -707,6 +710,80 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       }
       console.log('[LOCAL_HISTORY_COUNT_BEFORE_SYNC] count=%d', history.length);
 
+      // Tombstones (explicit deletions). Pull remote tombstones, merge with local, REMOVE the
+      // matching local records, and push any local-only tombstones (record the tombstone + delete
+      // the Supabase rows). This is the ONLY thing that deletes local records — never "absent from
+      // remote", so un-uploaded offline malas are safe. Self-heal below skips tombstoned ids.
+      let tombstoneSet = new Set<string>();
+      try {
+        const rawTomb = await AsyncStorage.getItem(DELETED_COMPLETIONS_KEY);
+        const localTomb: string[] = rawTomb ? JSON.parse(rawTomb) : [];
+        const encUid = encodeURIComponent(uid);
+        let remoteTomb: string[] = [];
+        try {
+          const tRes = await fetch(
+            `${url}/rest/v1/deleted_completions?user_id=eq.${encUid}&select=completion_id`,
+            { headers: { apikey: key, Authorization: `Bearer ${key}` } }
+          );
+          if (tRes.ok) {
+            remoteTomb = ((await tRes.json()) as { completion_id?: string }[]).map((r) =>
+              String(r.completion_id)
+            );
+            console.log('[TOMBSTONE_REMOTE_COUNT] count=%d', remoteTomb.length);
+          } else {
+            console.log('[TOMBSTONE_FETCH_SKIPPED] status=%d', tRes.status);
+          }
+        } catch {
+          console.log('[TOMBSTONE_FETCH_SKIPPED] reason=network');
+        }
+        const mergedTomb = mergeTombstones(localTomb, remoteTomb);
+        tombstoneSet = new Set(mergedTomb);
+        if (mergedTomb.length !== localTomb.length) {
+          await AsyncStorage.setItem(DELETED_COMPLETIONS_KEY, JSON.stringify(mergedTomb));
+        }
+        const beforeLen = history.length;
+        const filtered = applyTombstones(history, tombstoneSet);
+        if (filtered.length !== beforeLen) {
+          history = filtered;
+          await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(filtered));
+          console.log('[TOMBSTONE_APPLIED_LOCAL] removed=%d', beforeLen - filtered.length);
+          DeviceEventEmitter.emit('japam-stats-updated');
+          DeviceEventEmitter.emit('japam-history-updated', { userId: uid });
+          if (Platform.OS === 'web' && typeof window !== 'undefined') {
+            window.dispatchEvent(new Event('japam-stats-updated'));
+            window.dispatchEvent(new Event('japam-history-updated'));
+          }
+        }
+        // Propagate local-only tombstones to Supabase: record tombstone + delete the history rows.
+        const localOnly = localTomb.filter((id) => !remoteTomb.includes(id));
+        for (const id of localOnly) {
+          try {
+            await fetch(`${url}/rest/v1/deleted_completions?on_conflict=completion_id`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                apikey: key,
+                Authorization: `Bearer ${key}`,
+                Prefer: 'return=minimal,resolution=merge-duplicates',
+              },
+              body: JSON.stringify({ completion_id: id, user_id: uid }),
+            });
+            await fetch(
+              `${url}/rest/v1/japam_history?completion_id=eq.${encodeURIComponent(id)}`,
+              {
+                method: 'DELETE',
+                headers: { apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal' },
+              }
+            );
+            console.log('[TOMBSTONE_PUSHED] completionId=%s', id);
+          } catch {
+            console.log('[TOMBSTONE_PUSH_FAILED] completionId=%s reason=network', id);
+          }
+        }
+      } catch {
+        console.log('[TOMBSTONE_SKIPPED] reason=error');
+      }
+
       // Self-heal: a full remote fetch tells us exactly what Supabase has for this user. Any local
       // record marked 'synced' whose completion_id is absent remotely never actually persisted (or
       // was removed) — re-mark it 'pending' so the upload loop below re-sends it. The on_conflict=
@@ -727,7 +804,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
             (r) => r.userId === uid && r.syncStatus === 'synced'
           ).length;
           console.log('[SELF_HEAL_LOCAL_SYNCED_COUNT] count=%d userId=%s', localSyncedCount, uid);
-          const { records: healed, markedPending } = selfHealSyncStatus(history, uid, remoteIds);
+          const { records: healed, markedPending } = selfHealSyncStatus(history, uid, remoteIds, tombstoneSet);
           console.log('[SELF_HEAL_MARK_PENDING] count=%d', markedPending.length);
           if (markedPending.length > 0) {
             console.log('[SELF_HEAL_COMPLETION_IDS] ids=%s', markedPending.join(','));
