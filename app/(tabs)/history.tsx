@@ -223,7 +223,7 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
   try {
     const fetchBy = async (field: 'user_id' | 'user_name', value: string) => {
       const query = new URLSearchParams({
-        select: 'id,created_at,malas,count,user_name,user_email,completion_id',
+        select: 'id,created_at,malas,count,user_name,completion_id',
         [field]: `eq.${value}`,
         order: 'created_at.asc',
       });
@@ -254,7 +254,6 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
           manual: false,
           userId,
           userName: row.user_name || undefined,
-          userEmail: row.user_email || undefined,
           completionId: row.completion_id || undefined,
           syncStatus: 'synced' as const,
         };

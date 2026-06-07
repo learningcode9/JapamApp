@@ -653,7 +653,7 @@ export default function JapamMain() {
         if (url && key) {
           const encodedUserId = encodeURIComponent(savedUserId);
           const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,user_email,completion_id&order=created_at.asc`,
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,completion_id&order=created_at.asc`,
             { headers: { apikey: key, Authorization: `Bearer ${key}` } }
           );
           if (res.ok) {
@@ -662,7 +662,6 @@ export default function JapamMain() {
               malas: number | string;
               count: number | string;
               user_name?: string;
-              user_email?: string;
               completion_id?: string;
             }[] =
               await res.json();
@@ -674,7 +673,6 @@ export default function JapamMain() {
               manual: false,
               userId: savedUserId,
               userName: row.user_name,
-              userEmail: row.user_email,
               completionId: row.completion_id,
               syncStatus: 'synced' as const,
             }));

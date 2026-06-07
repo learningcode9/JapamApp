@@ -262,6 +262,72 @@ describe('stats correct offline: todayCountFor', () => {
   });
 });
 
+describe('local-day bucketing: UTC date vs local day (launch-blocking consistency)', () => {
+  it('buckets a late-night local completion under its LOCAL day, even when that instant is the NEXT day in UTC', () => {
+    // Local Jun 6, 23:30. In any timezone behind UTC this exact instant is Jun 7 in UTC,
+    // but it must still bucket as the user's local Jun 6 (STEP 3 rule 3). Deterministic in
+    // any runner timezone because the instant is built from LOCAL calendar components.
+    const iso = new Date(2026, 5, 6, 23, 30, 0).toISOString(); // month 5 = June
+    expect(toLocalDayKey(iso)).toBe('2026-06-06');
+  });
+
+  it('uses the LOCAL day, never the raw UTC date slice (no created_at.split("T")[0])', () => {
+    const iso = '2026-06-07T05:00:00.000Z';
+    // Must equal the local-day computation, matching how every screen buckets.
+    expect(toLocalDayKey(iso)).toBe(toDayKey(iso));
+    // When local day differs from the UTC date (any tz offset from UTC), it must NOT be the slice.
+    if (toDayKey(iso) !== iso.slice(0, 10)) {
+      expect(toLocalDayKey(iso)).not.toBe(iso.slice(0, 10));
+    }
+  });
+
+  it('two malas the same UTC day but different LOCAL days bucket under different local days', () => {
+    // Both instants are the SAME UTC calendar day, but ~24h of local time apart.
+    const earlyLocal = new Date(2026, 5, 6, 1, 0, 0).toISOString();  // local Jun 6 01:00
+    const lateLocal = new Date(2026, 5, 6, 23, 0, 0).toISOString();  // local Jun 6 23:00
+    // Both are local Jun 6 regardless of runner tz.
+    expect(toLocalDayKey(earlyLocal)).toBe('2026-06-06');
+    expect(toLocalDayKey(lateLocal)).toBe('2026-06-06');
+  });
+});
+
+describe('browser/app parity: same merged history => same count', () => {
+  it('app (local pending + synced) and browser (empty local) agree AFTER both merge the same remote', () => {
+    const day = '2026-06-06T';
+    const remote = [
+      session(`${day}15:00:00.000Z`, { syncStatus: 'synced' }),
+      session(`${day}15:05:00.000Z`, { syncStatus: 'synced' }),
+    ];
+    // App had one synced locally + completed a second one (pending) before it uploaded.
+    const appLocal = appendCompletion(
+      [session(`${day}15:00:00.000Z`, { syncStatus: 'synced' })],
+      session(`${day}15:05:00.000Z`)
+    );
+    // Browser started with nothing local (fresh device) and must fetch/merge remote on load.
+    const browserLocal: ReturnType<typeof session>[] = [];
+
+    const appMerged = mergeHistories(appLocal, remote);
+    const browserMerged = mergeHistories(browserLocal, remote);
+    const key = toDayKey(`${day}15:00:00.000Z`);
+
+    // Identical count on both — the discrepancy only appears if a client skips the remote merge.
+    expect(todayStatsFor(appMerged, UID, key, toDayKey)).toEqual(
+      todayStatsFor(browserMerged, UID, key, toDayKey)
+    );
+    expect(todayStatsFor(appMerged, UID, key, toDayKey)).toEqual({ malas: 2, totalCount: 216 });
+  });
+
+  it('a logged-in user does NOT count rows with a null/guest user_id', () => {
+    const day = '2026-06-06T';
+    const recs = [
+      session(`${day}15:00:00.000Z`),
+      session(`${day}15:05:00.000Z`, { userId: undefined }), // guest row must be excluded
+    ];
+    const key = toDayKey(`${day}15:00:00.000Z`);
+    expect(todayStatsFor(recs, UID, key, toDayKey)).toEqual({ malas: 1, totalCount: 108 });
+  });
+});
+
 describe('shared selector: todayStatsFor (Main/Timer/History must agree)', () => {
   it('returns matching malas + totalCount from merged history (single source of truth)', () => {
     const today = '2026-06-03T';

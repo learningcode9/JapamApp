@@ -86,6 +86,7 @@ const LAST_OPEN_DATE_KEY = 'lastOpenDate';
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
+const WEB_OM_AUDIO_SRC = '/om_complete.mp3';
 const USER_NAME_KEY = 'userName';
 const USER_EMAIL_KEY = 'userEmail';
 const USER_ID_KEY = 'userId';
@@ -261,6 +262,12 @@ export default function JapamMain() {
     if (!sound) return;
 
     try {
+      if ('caches' in window) {
+        caches.open('japam-audio-v1')
+          .then((cache) => cache.add(WEB_OM_AUDIO_SRC).catch(() => undefined))
+          .catch(() => undefined);
+      }
+      await fetch(WEB_OM_AUDIO_SRC, { cache: 'force-cache' }).catch(() => undefined);
       await sound.stopAsync().catch(() => undefined);
       await sound.setPositionAsync(0).catch(() => undefined);
       await sound.setVolumeAsync(0).catch(() => undefined);
@@ -724,7 +731,7 @@ export default function JapamMain() {
         if (url && key) {
           const encodedUserId = encodeURIComponent(savedUserId);
           const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,user_email,completion_id&order=created_at.asc`,
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,completion_id&order=created_at.asc`,
             { headers: { apikey: key, Authorization: `Bearer ${key}` } }
           );
           if (res.ok) {
@@ -733,7 +740,6 @@ export default function JapamMain() {
               malas: number | string;
               count: number | string;
               user_name?: string;
-              user_email?: string;
               completion_id?: string;
             }[] =
               await res.json();
@@ -745,7 +751,6 @@ export default function JapamMain() {
               manual: false,
               userId: savedUserId,
               userName: row.user_name,
-              userEmail: row.user_email,
               completionId: row.completion_id,
               syncStatus: 'synced' as const,
             }));
@@ -883,9 +888,12 @@ export default function JapamMain() {
     const preloadSounds = async () => {
       try {
         await configureAudio();
+        const source = Platform.OS === 'web'
+          ? { uri: WEB_OM_AUDIO_SRC }
+          : require('../../assets/om_complete.mp3');
 
         const { sound: normalSound } = await Audio.Sound.createAsync(
-          require('../../assets/om_complete.mp3'),
+          source,
           { shouldPlay: false, volume: 0.9 }
         );
 

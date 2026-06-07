@@ -48,6 +48,7 @@ const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
+const WEB_OM_AUDIO_SRC = '/om_complete.mp3';
 const WEB_TIMER_AUDIO_SRC = '/silent-timer.wav';
 
 export const STD_DURATIONS = [1, 3, 5, 10, 15];
@@ -191,6 +192,12 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     if (!sound) return;
 
     try {
+      if ('caches' in window) {
+        caches.open('japam-audio-v1')
+          .then((cache) => cache.add(WEB_OM_AUDIO_SRC).catch(() => undefined))
+          .catch(() => undefined);
+      }
+      await fetch(WEB_OM_AUDIO_SRC, { cache: 'force-cache' }).catch(() => undefined);
       await sound.stopAsync().catch(() => undefined);
       await sound.setPositionAsync(0).catch(() => undefined);
       await sound.setVolumeAsync(0).catch(() => undefined);
@@ -852,11 +859,27 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   // Flush any pending (offline-recorded) malas on launch and whenever the app returns to the
   // foreground — i.e. opportunistically when connectivity is likely back. No-op when offline.
   useEffect(() => {
+    console.log('[SYNC_TRIGGER_SOURCE] source=timer-provider-mount');
     void syncPendingHistory();
     const sub = AppState.addEventListener('change', (next) => {
-      if (next === 'active') void syncPendingHistory();
+      if (next === 'active') {
+        console.log('[SYNC_TRIGGER_SOURCE] source=appstate-active');
+        void syncPendingHistory();
+      }
     });
-    return () => sub.remove();
+    const onOnline = () => {
+      console.log('[SYNC_TRIGGER_SOURCE] source=browser-online');
+      void syncPendingHistory();
+    };
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.addEventListener('online', onOnline);
+    }
+    return () => {
+      sub.remove();
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.removeEventListener('online', onOnline);
+      }
+    };
   }, [syncPendingHistory]);
 
   const refreshAuthState = useCallback(async () => {
@@ -1135,8 +1158,11 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     void (async () => {
       try {
         await configureAudio();
+        const source = Platform.OS === 'web'
+          ? { uri: WEB_OM_AUDIO_SRC }
+          : require('../assets/om_complete.mp3');
         const { sound } = await Audio.Sound.createAsync(
-          require('../assets/om_complete.mp3'),
+          source,
           { shouldPlay: false, isLooping: false, volume: 0.95 }
         );
         soundRef.current = sound;
