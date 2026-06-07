@@ -16,6 +16,7 @@ import {
   selfHealSyncStatus,
   toLocalDayKey,
 } from '../lib/historyStore';
+import { getWebOmAudioUri } from '../lib/webOmAudio';
 import React, {
   createContext,
   useCallback,
@@ -1279,8 +1280,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     void (async () => {
       try {
         await configureAudio();
+        // Web: load the Om from an in-memory blob: URL (cached once while online) so the
+        // completion sound plays OFFLINE. Falls back to the network URL if the fetch fails.
         const source = Platform.OS === 'web'
-          ? { uri: WEB_OM_AUDIO_SRC }
+          ? { uri: await getWebOmAudioUri() }
           : require('../assets/om_complete.mp3');
         const { sound } = await Audio.Sound.createAsync(
           source,
