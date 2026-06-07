@@ -10,6 +10,7 @@ import {
   todayStatsFor,
   buildSupabaseHistoryPayload,
   toLocalDayKey,
+  selfHealSyncStatus,
   type HistoryRecord,
 } from '../historyStore';
 
@@ -325,6 +326,73 @@ describe('browser/app parity: same merged history => same count', () => {
     ];
     const key = toDayKey(`${day}15:00:00.000Z`);
     expect(todayStatsFor(recs, UID, key, toDayKey)).toEqual({ malas: 1, totalCount: 108 });
+  });
+});
+
+describe('self-heal sync: phantom-synced records re-upload (data consistency)', () => {
+  const iso = '2026-06-06T18:51:49.300Z';
+  const cid = makeCompletionId(UID, iso);
+
+  it('1. re-marks a local synced record absent from remote back to pending', () => {
+    const { records, markedPending } = selfHealSyncStatus(
+      [session(iso, { syncStatus: 'synced' })],
+      UID,
+      new Set() // remote has nothing
+    );
+    expect(markedPending).toEqual([cid]);
+    expect(records[0].syncStatus).toBe('pending');
+  });
+
+  it('2. the re-marked record is then picked up by getPending (so it WILL sync to Supabase)', () => {
+    const { records } = selfHealSyncStatus([session(iso, { syncStatus: 'synced' })], UID, new Set());
+    expect(getPending(records).map((r) => r.completionId)).toContain(cid);
+  });
+
+  it('3. leaves a synced record that IS present in remote as synced', () => {
+    const { records, markedPending } = selfHealSyncStatus(
+      [session(iso, { syncStatus: 'synced' })],
+      UID,
+      new Set([cid])
+    );
+    expect(markedPending).toEqual([]);
+    expect(records[0].syncStatus).toBe('synced');
+  });
+
+  it('4. leaves an already-pending local record pending', () => {
+    const { records, markedPending } = selfHealSyncStatus(
+      [session(iso, { syncStatus: 'pending' })],
+      UID,
+      new Set()
+    );
+    expect(markedPending).toEqual([]);
+    expect(records[0].syncStatus).toBe('pending');
+  });
+
+  it('5. does not modify another user\'s record, nor a guest (null userId) record', () => {
+    const { records, markedPending } = selfHealSyncStatus(
+      [
+        session(iso, { userId: 'other-user', syncStatus: 'synced' }),
+        session(iso, { userId: undefined, syncStatus: 'synced' }),
+      ],
+      UID,
+      new Set() // remote empty for UID
+    );
+    expect(markedPending).toEqual([]);
+    expect(records.find((r) => r.userId === 'other-user')?.syncStatus).toBe('synced');
+    expect(records.find((r) => !r.userId)?.syncStatus).toBe('synced');
+  });
+
+  it('6. re-upload is idempotent: once remote has it, a second self-heal does not re-mark, and dedup keeps one row', () => {
+    // 1st pass: missing remotely -> pending
+    let { records } = selfHealSyncStatus([session(iso, { syncStatus: 'synced' })], UID, new Set());
+    expect(records[0].syncStatus).toBe('pending');
+    // simulate a successful re-upload (Supabase now has it via on_conflict upsert) + local mark
+    records = markSynced(records, [cid]);
+    const second = selfHealSyncStatus(records, UID, new Set([cid]));
+    expect(second.markedPending).toEqual([]);
+    expect(second.records[0].syncStatus).toBe('synced');
+    // a re-uploaded completion never doubles: dedup by completion_id keeps exactly one
+    expect(dedupeByCompletionId([...records, session(iso, { syncStatus: 'synced' })])).toHaveLength(1);
   });
 });
 

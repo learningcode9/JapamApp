@@ -11,6 +11,7 @@ import {
   buildSupabaseHistoryPayload,
   getPending,
   markSynced,
+  selfHealSyncStatus,
   toLocalDayKey,
 } from '../lib/historyStore';
 import React, {
@@ -705,6 +706,43 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         return;
       }
       console.log('[LOCAL_HISTORY_COUNT_BEFORE_SYNC] count=%d', history.length);
+
+      // Self-heal: a full remote fetch tells us exactly what Supabase has for this user. Any local
+      // record marked 'synced' whose completion_id is absent remotely never actually persisted (or
+      // was removed) — re-mark it 'pending' so the upload loop below re-sends it. The on_conflict=
+      // completion_id upsert makes re-uploads idempotent (no duplicate rows). Other users / guests /
+      // already-pending records are untouched, and nothing is ever dropped.
+      let selfHealedIds: string[] = [];
+      try {
+        const encodedUid = encodeURIComponent(uid);
+        const healRes = await fetch(
+          `${url}/rest/v1/japam_history?user_id=eq.${encodedUid}&select=completion_id`,
+          { headers: { apikey: key, Authorization: `Bearer ${key}` } }
+        );
+        if (healRes.ok) {
+          const remoteRows: { completion_id?: string }[] = await healRes.json();
+          const remoteIds = new Set(remoteRows.map((r) => String(r.completion_id)));
+          console.log('[SELF_HEAL_REMOTE_COUNT] count=%d userId=%s', remoteIds.size, uid);
+          const localSyncedCount = history.filter(
+            (r) => r.userId === uid && r.syncStatus === 'synced'
+          ).length;
+          console.log('[SELF_HEAL_LOCAL_SYNCED_COUNT] count=%d userId=%s', localSyncedCount, uid);
+          const { records: healed, markedPending } = selfHealSyncStatus(history, uid, remoteIds);
+          console.log('[SELF_HEAL_MARK_PENDING] count=%d', markedPending.length);
+          if (markedPending.length > 0) {
+            console.log('[SELF_HEAL_COMPLETION_IDS] ids=%s', markedPending.join(','));
+            history = healed;
+            await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(healed));
+            selfHealedIds = markedPending;
+          }
+        } else {
+          console.log('[SELF_HEAL_SKIPPED] reason=fetch-status status=%d', healRes.status);
+        }
+      } catch {
+        console.log('[SELF_HEAL_SKIPPED] reason=network');
+      }
+      const selfHealedSet = new Set(selfHealedIds);
+
       const pending = getPending(history).filter((r) => r.userId === uid);
       console.log('[PENDING_RECORDS_COUNT] count=%d userId=%s', pending.length, uid);
       if (pending.length === 0) return;
@@ -737,8 +775,14 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           if (res.ok) {
             syncedIds.push(rec.completionId);
             console.log('[SYNC_SUCCESS] completionId=%s', rec.completionId);
+            if (selfHealedSet.has(rec.completionId)) {
+              console.log('[SYNC_REUPLOAD_SUCCESS] completionId=%s', rec.completionId);
+            }
           } else {
             console.log('[SYNC_FAILED] completionId=%s status=%d', rec.completionId, res.status);
+            if (selfHealedSet.has(rec.completionId)) {
+              console.log('[SYNC_REUPLOAD_FAILED] completionId=%s status=%d', rec.completionId, res.status);
+            }
           }
         } catch {
           // Offline / network error — stop; remaining records stay pending for the next attempt.
