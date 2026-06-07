@@ -1,7 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
-import { dedupeByCompletionId } from '../../lib/historyStore';
+import {
+  dedupeByCompletionId,
+  mergeHistories,
+  todayStatsFor,
+  toLocalDayKey,
+} from '../../lib/historyStore';
 import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -50,6 +55,11 @@ type Session = {
   duration: number;
   manual?: boolean;
   userId?: string;
+  userName?: string;
+  userEmail?: string;
+  source?: string;
+  completionId?: string;
+  syncStatus?: 'pending' | 'synced';
 };
 
 const getLocalDateKey = (date = new Date()) => {
@@ -57,19 +67,6 @@ const getLocalDateKey = (date = new Date()) => {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
-};
-
-const parseHistoryDate = (rawDate: string) => {
-  if (!rawDate) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
-    const [year, month, day] = rawDate.split('-').map(Number);
-    return new Date(year, month - 1, day, 12);
-  }
-
-  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(rawDate);
-  const normalized = hasTimezone ? rawDate : `${rawDate}Z`;
-  const date = new Date(normalized);
-  return Number.isNaN(date.getTime()) ? null : date;
 };
 
 const getPreviousDateKey = (dayKey: string) => {
@@ -92,7 +89,7 @@ const parseHistory = (raw: string | null): Session[] => {
 // close together are never merged. Drops only invalid/zero-count rows. See lib/historyStore.ts.
 const dedupeHistoryForStats = (history: Session[]): Session[] =>
   dedupeByCompletionId(history).filter(
-    (item) => item.totalCount > 0 && !Number.isNaN(new Date(item.date).getTime())
+    (item) => item.totalCount > 0 && toLocalDayKey(item.date) !== 'unknown'
   );
 
 export default function TimerScreen() {
@@ -135,22 +132,95 @@ export default function TimerScreen() {
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
     const todayKey = getLocalDateKey();
     const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
-    const history = dedupeHistoryForStats(parseHistory(rawHistory)).filter((item) => {
+    const localHistory = parseHistory(rawHistory);
+    let mergedHistory = localHistory;
+    let rawSupabaseRows = 0;
+    let rawSupabaseCount = 0;
+
+    if (userId) {
+      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      if (url && key) {
+        try {
+          const encodedUserId = encodeURIComponent(userId);
+          const res = await fetch(
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,user_email,completion_id&order=created_at.asc`,
+            { headers: { apikey: key, Authorization: `Bearer ${key}` } }
+          );
+          if (res.ok) {
+            const rows: {
+              id?: number | string;
+              created_at: string;
+              malas: number | string;
+              count: number | string;
+              user_name?: string;
+              user_email?: string;
+              completion_id?: string;
+            }[] = await res.json();
+            rawSupabaseRows = rows.length;
+            const remoteHistory: Session[] = rows.map((row) => ({
+              date: row.created_at,
+              malas: Number(row.malas) || Math.floor((Number(row.count) || 0) / 108),
+              totalCount: Number(row.count) || (Number(row.malas) || 0) * 108,
+              duration: 0,
+              manual: false,
+              userId,
+              userName: row.user_name,
+              userEmail: row.user_email,
+              completionId: row.completion_id,
+              syncStatus: 'synced' as const,
+            }));
+            rawSupabaseCount = remoteHistory.reduce(
+              (sum, row) => sum + (Number(row.totalCount) || 0),
+              0
+            );
+            mergedHistory = mergeHistories(localHistory, remoteHistory);
+            await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
+            console.log('[RESTORE_REMOTE_COUNT] screen=timer count=%d', remoteHistory.length);
+            console.log(
+              '[MERGE_LOCAL_COUNT_BEFORE] screen=timer count=%d pending=%d',
+              localHistory.length,
+              localHistory.filter((item) => item.userId === userId && item.syncStatus === 'pending').length
+            );
+            console.log('[MERGE_LOCAL_COUNT_AFTER] screen=timer count=%d', mergedHistory.length);
+          } else {
+            console.log('[SYNC_FAILED] source=timer-stats-restore status=%d', res.status);
+          }
+        } catch {
+          console.log('[SYNC_FAILED] source=timer-stats-restore reason=network');
+        }
+      }
+    }
+
+    const history = dedupeHistoryForStats(mergedHistory).filter((item) => {
       if (!userId) return !item.userId;
       return item.userId === userId;
     });
 
     const totalByDay = new Map<string, number>();
     history.forEach((item) => {
-      const date = parseHistoryDate(item.date);
-      if (!date) return;
+      const dayKey = toLocalDayKey(item.date);
+      if (dayKey === 'unknown') return;
       const totalCount = Number(item.totalCount) || (Number(item.malas) || 0) * 108;
       if (totalCount <= 0) return;
-      const dayKey = getLocalDateKey(date);
+      console.log('[LOCAL_DAY_BUCKET] screen=timer userLocalDate=%s recordCreatedAtISO=%s recordLocalDay=%s recordUTCDate=%s completion_id=%s source=%s user_id=%s',
+        todayKey,
+        item.date,
+        dayKey,
+        item.date?.slice(0, 10),
+        item.completionId || '',
+        item.source || '',
+        item.userId || ''
+      );
       totalByDay.set(dayKey, (totalByDay.get(dayKey) || 0) + totalCount);
     });
 
-    const safeTodayTotal = totalByDay.get(todayKey) || 0;
+    const { totalCount: safeTodayTotal } = todayStatsFor(
+      history,
+      userId,
+      todayKey,
+      toLocalDayKey
+    );
     if (safeTodayTotal > 0) totalByDay.set(todayKey, safeTodayTotal);
 
     const activeDays = new Set([...totalByDay.entries()].filter(([, total]) => total > 0).map(([day]) => day));
@@ -164,9 +234,13 @@ export default function TimerScreen() {
     setTodayCount(safeTodayTotal);
     setMalasToday(Math.floor(safeTodayTotal / 108));
     setDayStreak(nextStreak);
-    console.log('[TimerStatsDate] deviceLocalTime=%s malasTodayDateKey=%s todayTotal=%d streak=%d',
+    console.log('[TimerStatsDate] deviceLocalTime=%s userLocalDate=%s rawSupabaseRows=%d rawSupabaseCount=%d dedupedCount=%d appMalasToday=%d todayTotal=%d streak=%d',
       new Date().toString(),
       todayKey,
+      rawSupabaseRows,
+      rawSupabaseCount,
+      safeTodayTotal,
+      Math.floor(safeTodayTotal / 108),
       safeTodayTotal,
       nextStreak
     );

@@ -557,7 +557,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
             });
             navigator.mediaSession.playbackState = isRunningRef.current ? 'playing' : 'paused';
           }
-        } catch {
+        } catch (error) {
           console.log('[TimerNotify] Media session update error:', error);
         }
 
@@ -604,7 +604,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
             webRunningNotificationShownRef.current = true;
           }
-        } catch {
+        } catch (error) {
           console.log('[TimerNotify] Web running notification error:', error);
         }
       };
