@@ -625,15 +625,16 @@ export default function HistoryScreen() {
 
   const confirmDeleteDay = useCallback((row: DailyRow) => {
     if (!row.completionIds.length) return;
-    const message = `Delete ${row.malas} mala${row.malas === 1 ? '' : 's'} on ${row.dateLabel}? This removes them here and from Supabase, on all your devices. This cannot be undone.`;
+    const title = 'Delete these records?';
+    const message = 'This will permanently delete these records from all your devices and cannot be undone.';
     // react-native-web does not render Alert.alert, so use the browser's confirm dialog on web.
     if (Platform.OS === 'web') {
-      if (typeof window !== 'undefined' && window.confirm(message)) {
+      if (typeof window !== 'undefined' && window.confirm(`${title}\n\n${message}`)) {
         void performDelete(row.completionIds);
       }
       return;
     }
-    Alert.alert('Delete this day?', message, [
+    Alert.alert(title, message, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: () => void performDelete(row.completionIds) },
     ]);
