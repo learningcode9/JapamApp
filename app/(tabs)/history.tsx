@@ -486,6 +486,13 @@ export default function HistoryScreen() {
     const { userName } = await getStoredUserMeta();
     void backfillMissingUserNames(currentUserId, userName);
 
+    // Local tombstones (deleted completionIds). These are honored here so a delete is reflected
+    // immediately even if the remote row hasn't been removed yet — otherwise a same-tick remote
+    // fetch would merge the just-deleted row back in (the "needs two clicks to delete" bug).
+    const rawTomb = await AsyncStorage.getItem(DELETED_COMPLETIONS_KEY);
+    const tombSet = new Set<string>(rawTomb ? JSON.parse(rawTomb) : []);
+    const isTombstoned = (item: Session) => tombSet.has(item.completionId as string);
+
     const cleanedSessions = allSessions.filter((item) => {
       const dayKey = toDayKey(item.date);
       return dayKey === 'unknown' || dayKey <= todayKey;
@@ -495,7 +502,9 @@ export default function HistoryScreen() {
       await AsyncStorage.setItem('history', JSON.stringify(cleanedSessions));
     }
 
-    let sessions = dedupeSessions(cleanedSessions.filter((item) => item.userId === currentUserId));
+    let sessions = dedupeSessions(
+      cleanedSessions.filter((item) => item.userId === currentUserId && !isTombstoned(item))
+    );
     const remoteSessions = await fetchRemoteSessions(currentUserId);
 
     if (remoteSessions !== null) {
@@ -511,10 +520,16 @@ export default function HistoryScreen() {
         return dayKey === 'unknown' || dayKey <= todayKey;
       });
       const mergedHistory = mergeHistories(latestCleanedSessions, filteredRemoteSessions);
-      sessions = dedupeSessions(mergedHistory.filter((item) => item.userId === currentUserId)).sort(
+      // Honor tombstones on the merged result so a remote row that hasn't been deleted yet (or a
+      // remote delete still in flight) does NOT resurrect a locally-deleted record.
+      const mergedForStorage = mergedHistory.filter((item) => !isTombstoned(item as Session));
+      const removedByTomb = mergedHistory.length - mergedForStorage.length;
+      if (removedByTomb > 0) {
+        console.log('[TOMBSTONE_APPLIED] screen=history removed=%d', removedByTomb);
+      }
+      sessions = dedupeSessions(mergedForStorage.filter((item) => item.userId === currentUserId)).sort(
         (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
       );
-      const mergedForStorage = mergeHistories(latestCleanedSessions, filteredRemoteSessions);
       await AsyncStorage.setItem('history', JSON.stringify(mergedForStorage));
       console.log('[RESTORE_REMOTE_COUNT] screen=history count=%d', filteredRemoteSessions.length);
       console.log(
@@ -542,22 +557,32 @@ export default function HistoryScreen() {
   // re-uploads them and other devices delete their copy on sync), and best-effort delete remote
   // now. If offline, the local tombstone is pushed by syncPendingHistory on the next sync.
   const performDelete = useCallback(async (completionIds: string[]) => {
-    if (!completionIds.length) return;
+    if (!completionIds.length) {
+      console.log('[DELETE_SKIPPED_REASON] reason=no-completion-ids');
+      return;
+    }
+    console.log('[DELETE_START] count=%d ids=%s', completionIds.length, completionIds.join(','));
     const ids = new Set(completionIds);
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
 
-    const raw = await AsyncStorage.getItem(HISTORY_KEY);
-    const local = parseHistory(raw);
-    const filtered = local.filter((item) => !ids.has((item as Session).completionId as string));
-    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(filtered));
-
+    // 1) Write the tombstone FIRST. loadHistory honors this set, so even a same-tick remote
+    //    fetch can never resurrect the record while the remote delete is still in flight.
     const rawTomb = await AsyncStorage.getItem(DELETED_COMPLETIONS_KEY);
     const localTomb: string[] = rawTomb ? JSON.parse(rawTomb) : [];
     await AsyncStorage.setItem(
       DELETED_COMPLETIONS_KEY,
       JSON.stringify(mergeTombstones(localTomb, completionIds))
     );
+    console.log('[DELETE_TOMBSTONE_CREATED] count=%d ids=%s', completionIds.length, completionIds.join(','));
 
+    // 2) Remove the records from local history.
+    const raw = await AsyncStorage.getItem(HISTORY_KEY);
+    const local = parseHistory(raw);
+    const filtered = local.filter((item) => !ids.has((item as Session).completionId as string));
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(filtered));
+    console.log('[DELETE_LOCAL_REMOVED] removed=%d remaining=%d', local.length - filtered.length, filtered.length);
+
+    // 3) Refresh this screen's UI immediately and notify Main/History to recompute counts.
     setDailyRows(buildDailyRows(filtered.filter((item) => item.userId === currentUserId)));
     DeviceEventEmitter.emit('japam-stats-updated');
     DeviceEventEmitter.emit('japam-history-updated', { userId: currentUserId || 'guest' });
@@ -565,8 +590,10 @@ export default function HistoryScreen() {
       window.dispatchEvent(new Event('japam-stats-updated'));
       window.dispatchEvent(new Event('japam-history-updated'));
     }
-    console.log('[DELETE_LOCAL_TOMBSTONE] count=%d ids=%s', completionIds.length, completionIds.join(','));
+    console.log('[DELETE_UI_REFRESHED] ids=%s', completionIds.join(','));
 
+    // 4) Best-effort remote delete now. If offline / failed, the tombstone is pushed by
+    //    syncPendingHistory on the next sync (so the remote row is removed later).
     const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
     const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
     if (url && key && currentUserId) {
@@ -586,11 +613,13 @@ export default function HistoryScreen() {
             method: 'DELETE',
             headers: { apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal' },
           });
-          console.log('[DELETE_REMOTE_DONE] completionId=%s', id);
+          console.log('[DELETE_REMOTE_REMOVED] completionId=%s', id);
         } catch {
           console.log('[DELETE_REMOTE_FAILED] completionId=%s reason=network (queued via tombstone)', id);
         }
       }
+    } else {
+      console.log('[DELETE_REMOTE_REMOVED] skipped=offline-or-guest queued=via-tombstone');
     }
   }, []);
 

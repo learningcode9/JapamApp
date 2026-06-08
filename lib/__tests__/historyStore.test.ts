@@ -456,6 +456,19 @@ describe('tombstone delete sync (explicit deletion propagates, offline-safe)', (
   it('mergeTombstones unions local + remote tombstones without duplicates', () => {
     expect(mergeTombstones(['a', 'b'], ['b', 'c']).sort()).toEqual(['a', 'b', 'c']);
   });
+
+  it('6. one-click delete: a still-present remote row does NOT resurrect a tombstoned record (loadHistory merge)', () => {
+    // Reproduces the "needs two clicks" bug: after a delete, local no longer has the row, but the
+    // immediate remote fetch still returns it (remote DELETE in flight). mergeHistories re-adds it,
+    // so the merged result MUST be filtered by the tombstone set before display/persist.
+    const localAfterDelete = [session('2026-06-06T19:00:00.000Z')]; // deleted row already removed
+    const remoteStillHasIt = [session(iso, { syncStatus: 'synced' }), session('2026-06-06T19:00:00.000Z')];
+    const merged = mergeHistories(localAfterDelete, remoteStillHasIt);
+    expect(merged.map((r) => r.completionId)).toContain(cid); // merge alone resurrects it
+    const out = applyTombstones(merged, [cid]); // tombstone filter (what loadHistory now does)
+    expect(out.map((r) => r.completionId)).not.toContain(cid);
+    expect(out).toHaveLength(1);
+  });
 });
 
 describe('shared selector: todayStatsFor (Main/Timer/History must agree)', () => {
