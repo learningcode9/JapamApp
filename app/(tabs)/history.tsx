@@ -625,14 +625,18 @@ export default function HistoryScreen() {
 
   const confirmDeleteDay = useCallback((row: DailyRow) => {
     if (!row.completionIds.length) return;
-    Alert.alert(
-      'Delete this day?',
-      `Delete ${row.malas} mala${row.malas === 1 ? '' : 's'} on ${row.dateLabel}? This removes them here and from Supabase, on all your devices. This cannot be undone.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: () => void performDelete(row.completionIds) },
-      ]
-    );
+    const message = `Delete ${row.malas} mala${row.malas === 1 ? '' : 's'} on ${row.dateLabel}? This removes them here and from Supabase, on all your devices. This cannot be undone.`;
+    // react-native-web does not render Alert.alert, so use the browser's confirm dialog on web.
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm(message)) {
+        void performDelete(row.completionIds);
+      }
+      return;
+    }
+    Alert.alert('Delete this day?', message, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => void performDelete(row.completionIds) },
+    ]);
   }, [performDelete]);
 
   useFocusEffect(
@@ -829,6 +833,7 @@ export default function HistoryScreen() {
           <Text style={styles.tableCell}>Malas</Text>
           <Text style={styles.tableCell}>Count</Text>
           <Text style={styles.tableCell}>Total</Text>
+          {Platform.OS === 'web' && <View style={styles.webDeleteCell} />}
         </View>
 
         {dailyRows.length === 0 ? (
@@ -849,6 +854,16 @@ export default function HistoryScreen() {
               <Text style={styles.tableCell}>{row.malas}</Text>
               <Text style={styles.tableCell}>{row.totalCount}</Text>
               <Text style={styles.tableCell}>{row.accumulated}</Text>
+              {Platform.OS === 'web' && (
+                <Pressable
+                  style={styles.webDeleteCell}
+                  onPress={() => confirmDeleteDay(row)}
+                  accessibilityLabel={`Delete ${row.dateLabel}`}
+                  hitSlop={8}
+                >
+                  <Text style={styles.webDeleteIcon}>🗑</Text>
+                </Pressable>
+              )}
             </Pressable>
           ))
         )}
@@ -856,7 +871,9 @@ export default function HistoryScreen() {
 
       {dailyRows.length > 0 && (
         <Text style={{ textAlign: 'center', color: '#5f7778', fontSize: 12, marginTop: 10 }}>
-          Tip: long-press a row to delete that day (syncs to all your devices).
+          {Platform.OS === 'web'
+            ? 'Tip: click 🗑 on a row to delete that day (syncs to all your devices).'
+            : 'Tip: long-press a row to delete that day (syncs to all your devices).'}
         </Text>
       )}
 
@@ -1068,6 +1085,16 @@ const styles = StyleSheet.create({
   },
   dateCell: {
     flex: 1.4,
+  },
+
+  // Web-only: visible delete control per row (long-press isn't discoverable with a mouse).
+  webDeleteCell: {
+    width: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  webDeleteIcon: {
+    fontSize: 18,
   },
 
   emptyRow: {
