@@ -6,6 +6,10 @@
     "framework": null,
     "rewrites": [
       {
+        "source": "/privacy",
+        "destination": "/privacy.html"
+      },
+      {
         "source": "/:path*",
         "destination": "/"
       }
