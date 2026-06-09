@@ -44,8 +44,17 @@ npx expo install expo-keep-awake
 ```
 (Do **not** reinstall — it is present; this is only the recommended command.)
 
-## How to test on an iPhone
-You need a native iOS build (the App Store / TestFlight build, not Safari) for the reliable path:
+## ⚠️ A PHYSICAL iPhone is REQUIRED to verify this
+The **iOS Simulator cannot test screen-awake.** The simulator never auto-locks or dims, so
+`isIdleTimerDisabled` (what keep-awake toggles) produces no observable difference there. Likewise
+there is no static/automated check that can prove "the screen stayed awake." This feature can **only**
+be verified on a **real iPhone** (via a TestFlight / native build), exactly the way Android was
+verified on a real device path — never on a simulator. Verification is therefore deferred until an
+Apple Developer account is ready and an EAS iOS build can be installed on a physical device.
+
+## How to test on an iPhone (real device only)
+You need a native iOS build (the App Store / TestFlight build, not Safari, not the simulator) for the
+reliable path:
 
 1. Build for iOS: `eas build --platform ios --profile production` (or `--profile preview` for an
    internal/TestFlight build). Install via TestFlight.
