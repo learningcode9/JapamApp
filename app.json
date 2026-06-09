@@ -72,7 +72,8 @@
         }
       ],
       "@react-native-google-signin/google-signin",
-      "./plugins/withJapamTimerService"
+      "./plugins/withJapamTimerService",
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true
