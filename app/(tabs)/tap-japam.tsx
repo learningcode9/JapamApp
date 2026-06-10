@@ -18,6 +18,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { supabase } from '../../lib/supabase';
 
 import {
   Alert,
@@ -1219,6 +1220,11 @@ export default function JapamMain() {
         return;
       }
       const { id, name, givenName, email } = userInfo.data.user;
+      const { idToken } = userInfo.data;
+      if (idToken) {
+        const { error: authError } = await supabase.auth.signInWithIdToken({ provider: 'google', token: idToken });
+        if (authError) console.log('Supabase signInWithIdToken error:', authError.message);
+      }
       const googleName = givenName || name || email || 'User';
       const googleEmail = email || '';
       const googleUserId = String(id).trim();

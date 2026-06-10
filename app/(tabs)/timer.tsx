@@ -34,6 +34,7 @@ import {
   useTimer,
 } from '../../contexts/timer-context';
 import { isIOSDeviceWeb, isStandaloneOrInstalledWeb } from '../../lib/pwaInstall';
+import { supabase } from '../../lib/supabase';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -307,12 +308,17 @@ export default function TimerScreen() {
         return;
       }
       const { id, name, givenName, email } = googleUser;
+      const idToken = rawUserInfo?.data?.idToken as string | null | undefined;
       const googleName = givenName || name || email || 'User';
       const googleEmail = email || '';
       const googleUserId = String(id).trim();
 
       if (!googleUserId) { setIsSigningIn(false); setShowUserModal(true); return; }
 
+      if (idToken) {
+        const { error: authError } = await supabase.auth.signInWithIdToken({ provider: 'google', token: idToken });
+        if (authError) console.log('Supabase signInWithIdToken error:', authError.message);
+      }
       await AsyncStorage.setItem(USER_NAME_KEY, googleName);
       if (googleEmail) await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
       await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
@@ -323,25 +329,11 @@ export default function TimerScreen() {
       void loadStats();
     } catch (error) {
       console.log('Native Google sign-in error:', error);
-      const errorCode = (error as { code?: string })?.code;
-      if (errorCode === '10' && request) {
-        console.log('Native Google sign-in failed with DEVELOPER_ERROR; trying AuthSession fallback.');
-        try {
-          await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
-          const result = await promptAsync({ showInRecents: true });
-          if (result.type === 'success') {
-            return;
-          }
-          console.log('AuthSession fallback result:', result.type);
-        } catch (fallbackError) {
-          console.log('AuthSession fallback error:', fallbackError);
-        }
-      }
       setShowUserModal(true);
     } finally {
       setIsSigningIn(false);
     }
-  }, [loadStats, promptAsync, request]);
+  }, [loadStats]);
 
   useEffect(() => {
     const handleGoogleLogin = async () => {
