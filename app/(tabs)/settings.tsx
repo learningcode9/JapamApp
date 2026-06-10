@@ -157,8 +157,20 @@ export default function SettingsScreen() {
 
   const openFeedbackForm = () => {
     const formUrl = 'https://docs.google.com/forms/d/e/1FAIpQLScYFBZqgour0aN3hFFjW2hrOAkc9vVFdN0-1NPXdouZZRsHfQ/viewform?usp=sf_link';
-    Linking.openURL(formUrl).catch(() => 
+    Linking.openURL(formUrl).catch(() =>
       Alert.alert("Error", "Could not open the feedback form. Please try again.")
+    );
+  };
+
+  const openPrivacyPolicy = () => {
+    Linking.openURL('https://mantra-japam.vercel.app/privacy').catch(() =>
+      Alert.alert('Error', 'Could not open the privacy policy. Please try again.')
+    );
+  };
+
+  const openDeleteAccount = () => {
+    Linking.openURL('https://mantra-japam.vercel.app/delete-account').catch(() =>
+      Alert.alert('Error', 'Could not open the delete account page. Please try again.')
     );
   };
 
@@ -242,6 +254,28 @@ export default function SettingsScreen() {
             </View>
             <Pressable style={styles.compactButton} onPress={openFeedbackForm}>
               <Text style={styles.compactButtonText}>Open Form</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Legal</Text>
+          <View style={styles.card}>
+            <View style={styles.textBlock}>
+              <Text style={styles.label}>Privacy Policy</Text>
+              <Text style={styles.description}>View our privacy policy</Text>
+            </View>
+            <Pressable style={styles.compactButton} onPress={openPrivacyPolicy}>
+              <Text style={styles.compactButtonText}>Open</Text>
+            </Pressable>
+          </View>
+          <View style={styles.card}>
+            <View style={styles.textBlock}>
+              <Text style={styles.label}>Delete Account Request</Text>
+              <Text style={styles.description}>Request deletion of your account and data</Text>
+            </View>
+            <Pressable style={styles.compactButton} onPress={openDeleteAccount}>
+              <Text style={styles.compactButtonText}>Open</Text>
             </Pressable>
           </View>
         </View>
