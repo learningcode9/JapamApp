@@ -586,6 +586,12 @@ export default function TimerScreen() {
             </Pressable>
           </View>
 
+          {isIosDeviceWeb && timer.isRunning && (
+            <Text style={styles.iosWakeTip}>
+              For long sessions, keep screen open or set Auto-Lock to Never in Settings.
+            </Text>
+          )}
+
           <View style={styles.card}>
             <Text style={styles.cardLabel}>DURATION</Text>
             <View style={styles.chips}>
@@ -1023,6 +1029,15 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 6,
     lineHeight: 18,
+  },
+  iosWakeTip: {
+    color: '#5F7F80',
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 8,
+    marginBottom: 2,
+    paddingHorizontal: 16,
+    lineHeight: 17,
   },
   installBannerActions: {
     flexDirection: 'row',

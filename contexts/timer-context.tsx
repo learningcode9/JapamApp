@@ -203,13 +203,20 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           .catch(() => undefined);
       }
       await fetch(WEB_OM_AUDIO_SRC, { cache: 'force-cache' }).catch(() => undefined);
-      await sound.stopAsync().catch(() => undefined);
-      await sound.setPositionAsync(0).catch(() => undefined);
-      await sound.setVolumeAsync(0).catch(() => undefined);
-      await sound.playAsync();
-      await sound.pauseAsync().catch(() => undefined);
-      await sound.setPositionAsync(0).catch(() => undefined);
-      await sound.setVolumeAsync(0.95).catch(() => undefined);
+      // iOS Safari ignores element.volume = 0 (read-only on iOS), so the silent-play
+      // would fire the Om at full volume. On iOS, any user gesture globally unlocks
+      // audio for the page, so pressing Start is sufficient — no explicit priming needed.
+      const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      if (!isIOS) {
+        await sound.stopAsync().catch(() => undefined);
+        await sound.setPositionAsync(0).catch(() => undefined);
+        await sound.setVolumeAsync(0).catch(() => undefined);
+        await sound.playAsync();
+        await sound.pauseAsync().catch(() => undefined);
+        await sound.setPositionAsync(0).catch(() => undefined);
+        await sound.setVolumeAsync(0.95).catch(() => undefined);
+      }
       webCompletionAudioPrimedRef.current = true;
     } catch (error) {
       console.log('[TimerBG] Web audio unlock error:', error);
@@ -279,6 +286,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       wakeLockRef.current = await nav.wakeLock.request('screen');
       wakeLockRef.current?.addEventListener?.('release', () => {
         wakeLockRef.current = null;
+        if (isRunningRef.current) void acquireWakeLock();
       });
     } catch (error) {
       console.log('Wake lock error:', error);
@@ -1490,7 +1498,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
-      if (next !== 'active' && appStateRef.current === 'active') {
+      if (next === 'background' && appStateRef.current !== 'background') {
         const wasRunning = isRunningRef.current;
         if (isRunningRef.current && timerStartedAtRef.current !== null) {
           const elapsed = Math.max(0, Math.floor((Date.now() - timerStartedAtRef.current) / 1000));
@@ -1512,7 +1520,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
       if (next === 'active' && appStateRef.current !== 'active') {
         updateTimerState({ appIsActive: true });
-        void restoreRunningTimerFromStorage();
+        if (!isRunningRef.current) void restoreRunningTimerFromStorage();
       }
 
       appStateRef.current = next;

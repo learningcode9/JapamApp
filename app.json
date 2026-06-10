@@ -15,7 +15,8 @@
     "updates": {
       "enabled": true,
       "checkAutomatically": "ON_LOAD",
-      "fallbackToCacheTimeout": 0
+      "fallbackToCacheTimeout": 0,
+      "url": "https://u.expo.dev/17d71629-9516-49b8-8c90-863cc7e47027"
     },
     "splash": {
       "image": "./assets/images/splash-icon.png",

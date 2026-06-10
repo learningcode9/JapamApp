@@ -14,6 +14,7 @@ import * as Google from 'expo-auth-session/providers/google';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import * as Notifications from 'expo-notifications';
+import * as Updates from 'expo-updates';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
@@ -1606,8 +1607,9 @@ export default function JapamMain() {
     }
 
     if (Platform.OS === 'android') {
-      Vibration.vibrate(200);
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+      // Pattern [0, 80]: 0ms delay then 80ms vibration. More perceptible than 50ms
+      // while still feeling like a tap. vibrate(50) was inaudible on some devices.
+      Vibration.vibrate([0, 80]);
       return;
     }
 
@@ -2113,6 +2115,11 @@ export default function JapamMain() {
             </Pressable>
           )}
 
+          {Platform.OS === 'android' && (
+            <Text style={styles.buildDebug}>
+              {`v3 · ${Updates.isEmbeddedLaunch ? 'embedded' : `ota:${(Updates.updateId ?? '').slice(0, 8)}`}`}
+            </Text>
+          )}
         </View>
 
         <Modal visible={showUserModal && !isSigningIn} transparent animationType="fade">
@@ -3205,4 +3212,5 @@ const styles = StyleSheet.create({
     borderRadius: 20, zIndex: 20,
   },
   signingInText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+  buildDebug: { color: '#9B9B9B', fontSize: 10, textAlign: 'center', marginTop: 6, opacity: 0.6 },
 });
