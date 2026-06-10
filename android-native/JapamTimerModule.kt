@@ -23,6 +23,7 @@ class JapamTimerModule(private val reactContext: ReactApplicationContext) :
         override fun onReceive(ctx: Context, intent: Intent) {
             if (intent.action != JapamTimerService.ACTION_LOOP_COMPLETE) return
             val params: WritableMap = Arguments.createMap().apply {
+                putString("sessionId", intent.getStringExtra("sessionId") ?: "")
                 putInt("completedLoops", intent.getIntExtra("completedLoops", 0))
                 putBoolean("isFinal", intent.getBooleanExtra("isFinal", false))
                 putString("userId", intent.getStringExtra("userId") ?: "")
@@ -57,6 +58,7 @@ class JapamTimerModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun startTimer(
+        sessionId: String,
         durationSeconds: Int,
         completedLoops: Int,
         totalLoops: Int,
@@ -66,10 +68,11 @@ class JapamTimerModule(private val reactContext: ReactApplicationContext) :
         startedAt: Double,
         promise: Promise
     ) {
-        Log.d("NativeTimer", "[NativeTimer] startTimer called: duration=${durationSeconds}s loops=$completedLoops/$totalLoops sound=$soundEnabled")
+        Log.d("NativeTimer", "[NativeTimer] startTimer called: sessionId=$sessionId duration=${durationSeconds}s loops=$completedLoops/$totalLoops sound=$soundEnabled")
         try {
             val intent = Intent(reactContext, JapamTimerService::class.java).apply {
                 action = JapamTimerService.ACTION_START
+                putExtra(JapamTimerService.EXTRA_SESSION_ID, sessionId)
                 putExtra(JapamTimerService.EXTRA_DURATION, durationSeconds)
                 putExtra(JapamTimerService.EXTRA_COMPLETED, completedLoops)
                 putExtra(JapamTimerService.EXTRA_TOTAL, totalLoops)
@@ -139,6 +142,7 @@ class JapamTimerModule(private val reactContext: ReactApplicationContext) :
         try {
             val prefs = reactContext.getSharedPreferences(JapamTimerService.PREFS, Context.MODE_PRIVATE)
             val result: WritableMap = Arguments.createMap().apply {
+                putString("sessionId", prefs.getString("sessionId", "") ?: "")
                 putBoolean("isRunning", JapamTimerService.isRunning && prefs.getBoolean("isRunning", false))
                 putBoolean("isPaused", prefs.getBoolean("isPaused", false))
                 putDouble("startedAt", prefs.getLong("startedAt", 0L).toDouble())

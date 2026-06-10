@@ -1,5 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  buildSupabaseHistoryPayload,
+  mergeHistories,
+  todayStatsFor,
+  makeCompletionId,
+  toLocalDayKey,
+} from '../../lib/historyStore';
 import * as Google from 'expo-auth-session/providers/google';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { Audio } from 'expo-av';
@@ -9,6 +16,7 @@ import * as Notifications from 'expo-notifications';
 import { useFocusEffect } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { isIOSDeviceWeb, isStandaloneOrInstalledWeb } from '../../lib/pwaInstall';
 
 import {
   Alert,
@@ -39,6 +47,10 @@ type Session = {
   duration: number;
   manual?: boolean;
   userId?: string;
+  userName?: string;
+  userEmail?: string;
+  completionId?: string;
+  syncStatus?: 'pending' | 'synced';
 };
 
 type TimerStateRow = {
@@ -147,6 +159,10 @@ export default function JapamMain() {
   const [count, setCount] = useState(0);
   const [malas, setMalas] = useState(0);
   const [total, setTotal] = useState(0);
+  // History-derived "today" stat (single source of truth shared with Timer/History screens).
+  // The displayed Malas/Today-count read from these; `malas`/`total` above remain the live tap counter.
+  const [historyMalas, setHistoryMalas] = useState(0);
+  const [historyTotal, setHistoryTotal] = useState(0);
   const [dayStreak, setDayStreak] = useState(0);
   const [seconds, setSeconds] = useState(0);
   const [hasRestoredTotal, setHasRestoredTotal] = useState(false);
@@ -191,6 +207,7 @@ export default function JapamMain() {
   const isCompletingRef = useRef(false);
   const completedLoopMalasRef = useRef(0);
   const deferredInstallPromptRef = useRef<any>(null);
+  const isIosDeviceWeb = isIOSDeviceWeb();
   const rippleAnim = useRef(new Animated.Value(0)).current;
   const isSavingSessionRef = useRef(false);
   const completeSoundRef = useRef<Audio.Sound | null>(null);
@@ -437,7 +454,7 @@ export default function JapamMain() {
   startTimerIntervalRef.current = startTimerInterval;
 
   const [request, response, promptAsync] = Google.useAuthRequest({
-    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? (Platform.OS === 'web' ? '' : undefined),
+    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
     clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
     scopes: ['profile', 'email'],
     redirectUri: Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : undefined,
@@ -516,10 +533,10 @@ export default function JapamMain() {
         if (item.userId !== activeUserId) return;
         if ((Number(item.totalCount) || 0) <= 0 && (Number(item.malas) || 0) <= 0) return;
 
-        const itemDate = new Date(item.date);
-        if (Number.isNaN(itemDate.getTime())) return;
+        const itemDay = toLocalDayKey(item.date);
+        if (itemDay === 'unknown') return;
 
-        activeDays.add(getLocalDateKey(itemDate));
+        activeDays.add(itemDay);
       });
 
       const todayKey = getLocalDateKey();
@@ -607,7 +624,7 @@ export default function JapamMain() {
     const todayKey = getLocalDateKey();
 
     return sessions
-      .filter((item) => item.userId === userId && getLocalDateKey(new Date(item.date)) === todayKey)
+      .filter((item) => item.userId === userId && toLocalDayKey(item.date) === todayKey)
       .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
   }, []);
 
@@ -637,11 +654,17 @@ export default function JapamMain() {
         if (url && key) {
           const encodedUserId = encodeURIComponent(savedUserId);
           const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count&order=created_at.asc`,
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,completion_id&order=created_at.asc`,
             { headers: { apikey: key, Authorization: `Bearer ${key}` } }
           );
           if (res.ok) {
-            const rows: { created_at: string; malas: number | string; count: number | string }[] =
+            const rows: {
+              created_at: string;
+              malas: number | string;
+              count: number | string;
+              user_name?: string;
+              completion_id?: string;
+            }[] =
               await res.json();
             remoteSessions = rows.map((row) => ({
               date: row.created_at,
@@ -650,28 +673,42 @@ export default function JapamMain() {
               duration: 0,
               manual: false,
               userId: savedUserId,
+              userName: row.user_name,
+              completionId: row.completion_id,
+              syncStatus: 'synced' as const,
             }));
           }
         }
 
         if (remoteSessions !== null) {
-          // Sync remote history to local for History tab display
+          // Merge remote history into local without dropping pending offline completions.
           const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
           const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
-          const otherUserSessions = localHistory.filter((s) => s.userId !== savedUserId);
-          const filteredRemote = remoteSessions.filter(
-            (s) => getLocalDateKey(new Date(s.date)) <= todayKey
+          const mergedHistory = mergeHistories(localHistory, remoteSessions).filter((s) => {
+            const day = toLocalDayKey(s.date);
+            return day === 'unknown' || day <= todayKey;
+          });
+
+          console.log('[RESTORE_REMOTE_COUNT] screen=main count=%d', remoteSessions.length);
+          console.log(
+            '[MERGE_LOCAL_COUNT_BEFORE] screen=main count=%d pending=%d',
+            localHistory.length,
+            localHistory.filter((s) => s.userId === savedUserId && s.syncStatus === 'pending').length
           );
-          await AsyncStorage.setItem(
-            HISTORY_KEY,
-            JSON.stringify([...filteredRemote, ...otherUserSessions])
+          console.log('[MERGE_LOCAL_COUNT_AFTER] screen=main count=%d', mergedHistory.length);
+          console.log('[LOCAL_DAY_BUCKET] screen=main todayKey=%s buckets=%o',
+            todayKey,
+            mergedHistory.map((s) => ({ completionId: s.completionId, day: toLocalDayKey(s.date) }))
           );
 
-          const remoteHistoryTotal = filteredRemote
-            .filter((s) => getLocalDateKey(new Date(s.date)) === todayKey)
-            .reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
+          await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
 
-          const safeTotal = remoteHistoryTotal;
+          const { totalCount: safeTotal } = todayStatsFor(
+            mergedHistory,
+            savedUserId,
+            todayKey,
+            toLocalDayKey
+          );
           await restoreTotal(safeTotal, { userId: savedUserId });
           totalRef.current = safeTotal;
           await refreshDayStreak({ userId: savedUserId, todayTotal: safeTotal });
@@ -745,10 +782,36 @@ export default function JapamMain() {
     }
   }, [isRunning, seconds, targetSeconds]);
 
+  // Single source of truth for the displayed "today" stat: derive Malas today / Today count from
+  // the merged local history (same as Timer & History screens). Local-first — never waits for or
+  // depends on Supabase, so offline completions count immediately.
+  const loadHistoryStats = useCallback(async () => {
+    try {
+      const uid = await AsyncStorage.getItem(USER_ID_KEY);
+      const raw = await AsyncStorage.getItem(HISTORY_KEY);
+      const history = Array.isArray(JSON.parse(raw || '[]')) ? JSON.parse(raw || '[]') : [];
+      const { malas: hMalas, totalCount: hTotal } = todayStatsFor(
+        history,
+        uid,
+        getLocalDateKey(),
+        toLocalDayKey
+      );
+      setHistoryMalas(hMalas);
+      setHistoryTotal(hTotal);
+      const pending = history.filter((r: any) => r?.syncStatus === 'pending').length;
+      const synced = history.length - pending;
+      console.log('[StatsAudit] screen=main localHistoryCount=%d pendingCount=%d syncedCount=%d mainScreenMalasToday=%d historyMalasToday=%d',
+        history.length, pending, synced, hMalas, hMalas);
+    } catch {}
+  }, []);
+
   useEffect(() => {
     const onHistoryUpdated = () => {
       void restoreTodayTotal();
+      void loadHistoryStats();
     };
+
+    void loadHistoryStats();
 
     const historySubscription = DeviceEventEmitter.addListener('japam-history-updated', onHistoryUpdated);
     const statsSubscription = DeviceEventEmitter.addListener('japam-stats-updated', onHistoryUpdated);
@@ -766,7 +829,14 @@ export default function JapamMain() {
         window.removeEventListener('japam-stats-updated', onHistoryUpdated as EventListener);
       }
     };
-  }, [restoreTodayTotal]);
+  }, [restoreTodayTotal, loadHistoryStats]);
+
+  // Recompute the history-derived stat whenever the Main screen regains focus.
+  useFocusEffect(
+    useCallback(() => {
+      void loadHistoryStats();
+    }, [loadHistoryStats])
+  );
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
@@ -775,6 +845,19 @@ export default function JapamMain() {
     const dismissWindowMs = 7 * 24 * 60 * 60 * 1000;
     const dismissedAt = Number(window.localStorage.getItem(dismissKey) || '0');
     const recentlyDismissed = dismissedAt > 0 && Date.now() - dismissedAt < dismissWindowMs;
+    const isStandalone = isStandaloneOrInstalledWeb();
+
+    if (isStandalone) {
+      setShowInstallBanner(false);
+      return;
+    }
+
+    if (isIosDeviceWeb) {
+      if (!recentlyDismissed) {
+        setShowInstallBanner(true);
+      }
+      return;
+    }
 
     const onBeforeInstallPrompt = (event: Event) => {
       event.preventDefault();
@@ -796,7 +879,7 @@ export default function JapamMain() {
       window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
       window.removeEventListener('appinstalled', onAppInstalled);
     };
-  }, []);
+  }, [isIosDeviceWeb]);
 
   useEffect(() => {
     timerRef.current = { seconds, isRunning, targetSeconds, minutesInput, loopTimer };
@@ -1063,15 +1146,27 @@ export default function JapamMain() {
         duration: 0,
         manual: false,
         userId: googleUserId,
+        userName: item.user_name,
+        userEmail: item.user_email,
+        completionId: item.completion_id,
+        syncStatus: 'synced' as const,
       }));
 
       const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
       const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
-      const otherUserLocalHistory = localHistory.filter((item) => item.userId !== googleUserId);
 
-      const mergedHistory = [...remoteHistory, ...otherUserLocalHistory].sort(
-        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+      // Merge — never overwrite. Union by stable completionId; every local record (including
+      // unsynced 'pending' malas recorded offline) is kept, and any that the remote confirms is
+      // upgraded to 'synced'. This replaces the old behavior that discarded the current user's
+      // local entries and could lose unsynced malas on sign-in.
+      const mergedHistory = mergeHistories(localHistory, remoteHistory);
+      console.log('[RESTORE_REMOTE_COUNT] screen=main-login count=%d', remoteHistory.length);
+      console.log(
+        '[MERGE_LOCAL_COUNT_BEFORE] screen=main-login count=%d pending=%d',
+        localHistory.length,
+        localHistory.filter((item) => item.userId === googleUserId && item.syncStatus === 'pending').length
       );
+      console.log('[MERGE_LOCAL_COUNT_AFTER] screen=main-login count=%d', mergedHistory.length);
 
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
       await restoreTodayTotal();
@@ -1282,7 +1377,7 @@ export default function JapamMain() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seconds, isRunning, targetSeconds, loopTimer]);
 
-  const playCompleteSound = async (variant: 'normal' | 'final' = 'normal') => {
+  const playCompleteSound = useCallback(async (variant: 'normal' | 'final' = 'normal') => {
     try {
       await configureAudio();
       const sound = completeSoundRef.current;
@@ -1299,7 +1394,7 @@ export default function JapamMain() {
     } catch (error) {
       console.log('Sound error:', error);
     }
-  };
+  }, [configureAudio]);
 
   const notifyCompletionFallback = useCallback(async (variant: 'normal' | 'final') => {
     try {
@@ -1347,6 +1442,8 @@ export default function JapamMain() {
       const history: Session[] = raw ? JSON.parse(raw) : [];
       const userId = currentUserId;
       const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+      const savedUserEmail = await AsyncStorage.getItem(USER_EMAIL_KEY);
+      const historyUserName = savedUserName || userName || savedUserEmail || 'Unknown User';
 
       const session: Session = {
         date: new Date().toISOString(),
@@ -1372,22 +1469,27 @@ export default function JapamMain() {
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
       if (url && key) {
-        const baseBody = {
-          user_name: savedUserName || userName,
-          malas: sessionMalas,
-          count: sessionTotal,
-          created_at: session.date,
-        };
+        const payload = buildSupabaseHistoryPayload({
+          ...session,
+          userName: historyUserName,
+          completionId: makeCompletionId(userId, session.date),
+        }, userId, historyUserName);
+        console.log(
+          '[SYNC_PAYLOAD_CREATED_AT] source=legacy-main completionId=%s created_at=%s localDay=%s',
+          payload.completion_id,
+          payload.created_at,
+          toLocalDayKey(payload.created_at)
+        );
         const postHistory = async (body: Record<string, unknown>) => {
-          const res = await fetch(`${url}/rest/v1/japam_history`, {
+          const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal' },
+            headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal,resolution=merge-duplicates' },
             body: JSON.stringify(body),
           });
           return res.ok;
         };
-        const savedWithUserId = await postHistory({ user_id: userId, ...baseBody });
-        if (!savedWithUserId) await postHistory(baseBody);
+        const savedWithUserId = await postHistory(payload);
+        if (!savedWithUserId) console.log('[SYNC_FAILED] source=legacy-main completionId=%s', payload.completion_id);
       }
     } catch (error) {
       console.log('Supabase save error:', error);
@@ -1466,7 +1568,14 @@ export default function JapamMain() {
       console.log('Completion vibration error:', error);
       try { Vibration.vibrate([0, 200, 80, 200]); } catch {}
     }
-  }, [notifyCompletionFallback, playCompletionAnimation, repetitionSoundEnabled, soundEnabled, vibrationEnabled]);
+  }, [
+    notifyCompletionFallback,
+    playCompletionAnimation,
+    playCompleteSound,
+    repetitionSoundEnabled,
+    soundEnabled,
+    vibrationEnabled,
+  ]);
 
   const setCountersFromTotal = (nextTotal: number) => {
     const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
@@ -1855,18 +1964,25 @@ export default function JapamMain() {
             )}
           </View>
 
-          {showInstallBanner && !installBannerDismissed && (
+          {showInstallBanner && !installBannerDismissed && !isStandaloneOrInstalledWeb() && (
             <View style={styles.installBanner}>
               <View style={styles.installBannerTextWrap}>
-                <Text style={styles.installBannerTitle}>Install this app for a better experience</Text>
+                <Text style={styles.installBannerTitle}>
+                  {isIosDeviceWeb ? 'Add to Home Screen' : 'Install this app for a better experience'}
+                </Text>
+                {isIosDeviceWeb && (
+                  <Text style={styles.installBannerHelp}>Use Share → Add to Home Screen.</Text>
+                )}
               </View>
               <View style={styles.installBannerActions}>
                 <Pressable style={styles.installBannerSecondary} onPress={dismissInstallBanner}>
                   <Text style={styles.installBannerSecondaryText}>Not now</Text>
                 </Pressable>
-                <Pressable style={styles.installBannerPrimary} onPress={() => void handleInstallApp()}>
-                  <Text style={styles.installBannerPrimaryText}>Install App</Text>
-                </Pressable>
+                {!isIosDeviceWeb && (
+                  <Pressable style={styles.installBannerPrimary} onPress={() => void handleInstallApp()}>
+                    <Text style={styles.installBannerPrimaryText}>Install App</Text>
+                  </Pressable>
+                )}
               </View>
             </View>
           )}
@@ -1953,7 +2069,7 @@ export default function JapamMain() {
                   />
                 ))}
               </View>
-              <Text style={styles.statValue}>{malas}</Text>
+              <Text style={styles.statValue}>{historyMalas}</Text>
               <Text style={styles.statLabel}>Malas today</Text>
             </View>
             <View style={styles.statDivider} />
@@ -1965,7 +2081,7 @@ export default function JapamMain() {
             <View style={styles.statDivider} />
             <View style={styles.statColumn}>
               <Ionicons name="radio-button-on-outline" style={styles.statIcon} />
-              <Text style={styles.statValue}>{total}</Text>
+              <Text style={styles.statValue}>{historyTotal}</Text>
               <Text style={styles.statLabel}>Today count</Text>
             </View>
           </View>
@@ -2830,17 +2946,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: 'rgba(255,255,255,0.75)',
+    backgroundColor: 'rgba(255,255,255,0.94)',
     borderRadius: 28,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.72)',
-    paddingVertical: isShortMobile ? 13 : isMobile ? 17 : 22,
+    borderColor: 'rgba(15,143,135,0.22)',
+    paddingVertical: isShortMobile ? 15 : isMobile ? 18 : 22,
     paddingHorizontal: isMobile ? 12 : 16,
     shadowColor: '#0f766e',
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.14,
     shadowRadius: 22,
     shadowOffset: { width: 0, height: 12 },
-    elevation: 7,
+    elevation: 10,
     marginBottom: isMobile ? 20 : 28,
   },
   installBanner: {
@@ -2869,6 +2985,14 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     textAlign: 'center',
     lineHeight: 21,
+  },
+  installBannerHelp: {
+    color: '#5F7F80',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+    lineHeight: 17,
+    marginTop: 6,
   },
   installBannerActions: {
     flexDirection: 'row',
@@ -2910,7 +3034,7 @@ const styles = StyleSheet.create({
   statDivider: {
     width: 1,
     height: isShortMobile ? 46 : isMobile ? 52 : 58,
-    backgroundColor: 'rgba(95,127,128,0.22)',
+    backgroundColor: 'rgba(15,143,135,0.24)',
   },
   statIcon: {
     color: '#0F8F87',
@@ -2930,15 +3054,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#0F8F87',
   },
   statValue: {
-    color: '#12383c',
-    fontSize: isShortMobile ? 28 : isMobile ? 30 : 32,
-    fontWeight: '800',
+    color: '#063B3B',
+    fontSize: isShortMobile ? 30 : isMobile ? 32 : 34,
+    fontWeight: '900',
     lineHeight: isShortMobile ? 32 : isMobile ? 34 : 36,
   },
   statLabel: {
-    color: '#5f7778',
-    fontSize: isMobile ? 14 : 15,
-    fontWeight: '600',
+    color: '#234E52',
+    fontSize: isShortMobile ? 13 : isMobile ? 14 : 15,
+    fontWeight: '800',
+    lineHeight: isShortMobile ? 16 : 18,
     textAlign: 'center',
     marginTop: 4,
   },

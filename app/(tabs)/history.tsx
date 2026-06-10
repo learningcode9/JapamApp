@@ -1,4 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  appendCompletion,
+  buildSupabaseHistoryPayload,
+  dedupeByCompletionId,
+  markSynced,
+  mergeHistories,
+  mergeTombstones,
+  toLocalDayKey,
+} from '../../lib/historyStore';
 import * as FileSystem from 'expo-file-system/legacy';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
@@ -25,6 +34,10 @@ type Session = {
   duration: number;
   manual?: boolean;
   userId?: string;
+  userName?: string;
+  userEmail?: string;
+  completionId?: string;
+  syncStatus?: 'pending' | 'synced';
 };
 
 type DailyRow = {
@@ -36,6 +49,7 @@ type DailyRow = {
   duration: number;
   manualCount: number;
   autoCount: number;
+  completionIds: string[];
 };
 
 type RemoteHistoryRow = {
@@ -43,9 +57,61 @@ type RemoteHistoryRow = {
   created_at?: string;
   malas?: number | string;
   count?: number | string;
+  user_name?: string;
+  user_email?: string;
+  completion_id?: string;
 };
 
+type ManualSyncInput = {
+  userId: string;
+  userName: string;
+  malas: number;
+  totalCount: number;
+  createdAt: string;
+  completionId: string;
+};
+
+const HISTORY_KEY = 'history';
+const DELETED_COMPLETIONS_KEY = 'deletedCompletions';
 const USER_ID_KEY = 'userId';
+const USER_NAME_KEY = 'userName';
+const USER_EMAIL_KEY = 'userEmail';
+
+const getStoredUserMeta = async () => {
+  const [storedName, storedEmail] = await Promise.all([
+    AsyncStorage.getItem(USER_NAME_KEY),
+    AsyncStorage.getItem(USER_EMAIL_KEY),
+  ]);
+  const userName = (storedName || storedEmail || 'Unknown User').trim() || 'Unknown User';
+  return { userName, userEmail: storedEmail || undefined };
+};
+
+const backfillMissingUserNames = async (userId: string, userName: string) => {
+  const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+  const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key || !userId || !userName) return;
+
+  try {
+    const query = new URLSearchParams({ user_id: `eq.${userId}` });
+    query.append('or', '(user_name.is.null,user_name.eq.)');
+    const response = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify({ user_name: userName }),
+    });
+
+    if (!response.ok) {
+      console.log('Supabase user_name backfill error:', await response.text());
+    }
+  } catch (error) {
+    console.log('Supabase user_name backfill error:', error);
+  }
+};
 
 const getLocalDateKey = (date = new Date()) => {
   const y = date.getFullYear();
@@ -56,16 +122,7 @@ const getLocalDateKey = (date = new Date()) => {
 };
 
 const toDayKey = (rawDate: string) => {
-  if (!rawDate) return 'unknown';
-
-  if (/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
-    return rawDate;
-  }
-
-  const d = new Date(rawDate);
-  if (Number.isNaN(d.getTime())) return 'unknown';
-
-  return getLocalDateKey(d);
+  return toLocalDayKey(rawDate);
 };
 
 const toDayLabel = (dayKey: string) => {
@@ -92,50 +149,12 @@ const parseHistory = (raw: string | null): Session[] => {
   }
 };
 
-const dedupeSessions = (sessions: Session[]) => {
-  const exactSeen = new Set<string>();
-  const nearTimerRows = new Map<string, number[]>();
-
-  return sessions.filter((item) => {
-    const date = new Date(item.date);
-    if (Number.isNaN(date.getTime())) return false;
-
-    const itemMalas = Number(item.malas) || 0;
-    const totalCount = Number(item.totalCount) || itemMalas * 108;
-    if (totalCount <= 0) return false;
-
-    const dayKey = toDayKey(item.date);
-    const exactKey = [
-      item.userId || 'guest',
-      dayKey,
-      date.toISOString(),
-      totalCount,
-      itemMalas,
-      Number(item.duration) || 0,
-      item.manual ? 'manual' : 'auto',
-    ].join(':');
-
-    if (exactSeen.has(exactKey)) return false;
-    exactSeen.add(exactKey);
-
-    if (!item.manual) {
-      const nearKey = [
-        item.userId || 'guest',
-        dayKey,
-        totalCount,
-        itemMalas,
-      ].join(':');
-      const existingTimes = nearTimerRows.get(nearKey) || [];
-      const time = date.getTime();
-      if (existingTimes.some((existing) => Math.abs(existing - time) < 30000)) {
-        return false;
-      }
-      nearTimerRows.set(nearKey, [...existingTimes, time]);
-    }
-
-    return true;
-  });
-};
+// Dedup by stable completionId only (no time-window collapse). Distinct malas are never merged;
+// only invalid/zero-count rows are dropped. See lib/historyStore.ts.
+const dedupeSessions = (sessions: Session[]): Session[] =>
+  dedupeByCompletionId(sessions).filter(
+    (item) => item.totalCount > 0 && toDayKey(item.date) !== 'unknown'
+  );
 
 const buildDailyRows = (sessions: Session[]) => {
   const grouped = new Map<string, DailyRow>();
@@ -155,6 +174,7 @@ const buildDailyRows = (sessions: Session[]) => {
       existing.malas += malas;
       existing.totalCount += totalCount;
       existing.duration += duration;
+      if (item.completionId) existing.completionIds.push(item.completionId);
 
       if (isManual) existing.manualCount += 1;
       else existing.autoCount += 1;
@@ -170,8 +190,19 @@ const buildDailyRows = (sessions: Session[]) => {
       duration,
       manualCount: isManual ? 1 : 0,
       autoCount: isManual ? 0 : 1,
+      completionIds: item.completionId ? [item.completionId] : [],
     });
   });
+
+  console.log('[HistoryDate] deviceLocalTime=%s todayKey=%s rows=%o',
+    new Date().toString(),
+    getLocalDateKey(),
+    [...grouped.values()].map((row) => ({
+      dateKey: row.dateKey,
+      displayLabel: row.dateLabel,
+      totalCount: row.totalCount,
+    }))
+  );
 
   const oldestFirstRows = [...grouped.values()].sort((a, b) => {
     if (a.dateKey === 'unknown') return 1;
@@ -197,7 +228,7 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
   try {
     const fetchBy = async (field: 'user_id' | 'user_name', value: string) => {
       const query = new URLSearchParams({
-        select: 'id,created_at,malas,count',
+        select: 'id,created_at,malas,count,user_name,completion_id',
         [field]: `eq.${value}`,
         order: 'created_at.asc',
       });
@@ -217,18 +248,21 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
       const rows: RemoteHistoryRow[] = await response.json();
 
       return rows.map((row) => {
-      const malas = Number(row.malas) || 0;
-      const totalCount = Number(row.count) || malas * 108;
+        const malas = Number(row.malas) || 0;
+        const totalCount = Number(row.count) || malas * 108;
 
-      return {
-        date: row.created_at || new Date().toISOString(),
-        malas: malas || Math.floor(totalCount / 108),
-        totalCount,
-        duration: 0,
-        manual: false,
-        userId,
-      };
-    });
+        return {
+          date: row.created_at || new Date().toISOString(),
+          malas: malas || Math.floor(totalCount / 108),
+          totalCount,
+          duration: 0,
+          manual: false,
+          userId,
+          userName: row.user_name || undefined,
+          completionId: row.completion_id || undefined,
+          syncStatus: 'synced' as const,
+        };
+      });
     };
 
     const byUserId = await fetchBy('user_id', userId);
@@ -241,35 +275,81 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
 
 const saveToSupabase = async (
   userId: string,
+  userName: string,
   malas: number,
   totalCount: number,
-  dateKey: string,
+  createdAt: string,
+  completionId: string,
 ): Promise<boolean> => {
   const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
   const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) return false;
 
   try {
-    const body = {
-      user_id: userId,
+    const body = buildSupabaseHistoryPayload({
+      date: createdAt,
       malas,
-      count: totalCount,
-      created_at: `${dateKey}T12:00:00.000Z`,
-    };
-    const res = await fetch(`${url}/rest/v1/japam_history`, {
+      totalCount,
+      duration: 0,
+      manual: true,
+      userId,
+      userName,
+      completionId,
+      syncStatus: 'pending',
+    }, userId, userName);
+    console.log(
+      '[SYNC_PAYLOAD_CREATED_AT] source=history-manual completionId=%s created_at=%s localDay=%s',
+      body.completion_id,
+      body.created_at,
+      toDayKey(body.created_at)
+    );
+    const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         apikey: key,
         Authorization: `Bearer ${key}`,
-        Prefer: 'return=minimal',
+        Prefer: 'return=minimal,resolution=merge-duplicates',
       },
       body: JSON.stringify(body),
     });
+    if (res.ok) console.log('[SYNC_SUCCESS] source=history-manual completionId=%s', completionId);
+    else console.log('[SYNC_FAILED] source=history-manual completionId=%s status=%d', completionId, res.status);
     return res.ok;
   } catch (err) {
+    console.log('[SYNC_FAILED] source=history-manual completionId=%s reason=network', completionId);
     console.log('Supabase manual entry save error:', err);
     return false;
+  }
+};
+
+const syncManualEntryToSupabase = async ({
+  userId,
+  userName,
+  malas,
+  totalCount,
+  createdAt,
+  completionId,
+}: ManualSyncInput) => {
+  try {
+    const supabaseOk = await saveToSupabase(
+      userId,
+      userName,
+      malas,
+      totalCount,
+      createdAt,
+      completionId
+    );
+
+    if (!supabaseOk) return;
+
+    await backfillMissingUserNames(userId, userName);
+    const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
+    const latest = parseHistory(latestRaw);
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, [completionId])));
+    console.log('[MARK_SYNCED] source=history-manual completionId=%s', completionId);
+  } catch (error) {
+    console.log('Supabase manual entry background sync error:', error);
   }
 };
 
@@ -333,28 +413,55 @@ export default function HistoryScreen() {
 
     setIsSaving(true);
     try {
-      const supabaseOk = await saveToSupabase(currentUserId, finalMalas, finalCount, manualDate);
+      const { userName, userEmail } = await getStoredUserMeta();
+      // Unique timestamp per entry (selected day + current time-of-day) so multiple manual entries
+      // on the SAME date don't share a completion_id (= userId:epochMs). The old fixed noon made
+      // every same-date manual entry collide -> dedup/upsert collapsed them ("Saved" but no change).
+      const [mY, mM, mD] = manualDate.split('-').map(Number);
+      const nowParts = new Date();
+      const createdAt = new Date(
+        mY, mM - 1, mD,
+        nowParts.getHours(), nowParts.getMinutes(), nowParts.getSeconds(), nowParts.getMilliseconds()
+      ).toISOString();
+      const raw = await AsyncStorage.getItem(HISTORY_KEY);
+      const existing = parseHistory(raw);
+      const updated = appendCompletion(existing, {
+        date: createdAt,
+        malas: finalMalas,
+        totalCount: finalCount,
+        duration: 0,
+        manual: true,
+        userId: currentUserId,
+        userName,
+        userEmail,
+      });
+      const newCompletionId = updated[0].completionId;
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+      console.log(
+        '[OFFLINE_SAVE_ACCEPTED] source=history-manual completionId=%s created_at=%s localDay=%s syncStatus=%s',
+        newCompletionId,
+        createdAt,
+        toDayKey(createdAt),
+        updated[0].syncStatus
+      );
 
-      if (!supabaseOk) {
-        const newSession: Session = {
-          date: manualDate,
-          malas: finalMalas,
-          totalCount: finalCount,
-          duration: 0,
-          manual: true,
-          userId: currentUserId,
-        };
-        const raw = await AsyncStorage.getItem('history');
-        const existing = parseHistory(raw);
-        await AsyncStorage.setItem('history', JSON.stringify([...existing, newSession]));
-      }
+      void syncManualEntryToSupabase({
+        userId: currentUserId,
+        userName,
+        malas: finalMalas,
+        totalCount: finalCount,
+        createdAt,
+        completionId: newCompletionId,
+      });
 
       setShowManualModal(false);
       await loadHistory();
 
       DeviceEventEmitter.emit('japam-stats-updated');
+      DeviceEventEmitter.emit('japam-history-updated', { userId: currentUserId });
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.dispatchEvent(new Event('japam-stats-updated'));
+        window.dispatchEvent(new Event('japam-history-updated'));
       }
 
       Alert.alert('Saved', 'Manual entry saved.');
@@ -365,7 +472,6 @@ export default function HistoryScreen() {
       setIsSaving(false);
     }
   };
-
   const loadHistory = useCallback(async () => {
     const todayKey = getLocalDateKey();
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
@@ -377,6 +483,16 @@ export default function HistoryScreen() {
       return;
     }
 
+    const { userName } = await getStoredUserMeta();
+    void backfillMissingUserNames(currentUserId, userName);
+
+    // Local tombstones (deleted completionIds). These are honored here so a delete is reflected
+    // immediately even if the remote row hasn't been removed yet — otherwise a same-tick remote
+    // fetch would merge the just-deleted row back in (the "needs two clicks to delete" bug).
+    const rawTomb = await AsyncStorage.getItem(DELETED_COMPLETIONS_KEY);
+    const tombSet = new Set<string>(rawTomb ? JSON.parse(rawTomb) : []);
+    const isTombstoned = (item: Session) => tombSet.has(item.completionId as string);
+
     const cleanedSessions = allSessions.filter((item) => {
       const dayKey = toDayKey(item.date);
       return dayKey === 'unknown' || dayKey <= todayKey;
@@ -386,7 +502,9 @@ export default function HistoryScreen() {
       await AsyncStorage.setItem('history', JSON.stringify(cleanedSessions));
     }
 
-    let sessions = dedupeSessions(cleanedSessions.filter((item) => item.userId === currentUserId));
+    let sessions = dedupeSessions(
+      cleanedSessions.filter((item) => item.userId === currentUserId && !isTombstoned(item))
+    );
     const remoteSessions = await fetchRemoteSessions(currentUserId);
 
     if (remoteSessions !== null) {
@@ -395,17 +513,35 @@ export default function HistoryScreen() {
         return dayKey === 'unknown' || dayKey <= todayKey;
       });
 
-      const localUserSessions = cleanedSessions.filter((item) => item.userId === currentUserId);
-      const mergedMap = new Map<string, Session>();
-      [...filteredRemoteSessions, ...localUserSessions].forEach((session) => {
-        const key = `${session.date}-${session.totalCount}-${session.malas}`;
-        mergedMap.set(key, session);
+      const latestRaw = await AsyncStorage.getItem('history');
+      const latestSessions = parseHistory(latestRaw);
+      const latestCleanedSessions = latestSessions.filter((item) => {
+        const dayKey = toDayKey(item.date);
+        return dayKey === 'unknown' || dayKey <= todayKey;
       });
-      sessions = dedupeSessions([...mergedMap.values()]).sort(
+      const mergedHistory = mergeHistories(latestCleanedSessions, filteredRemoteSessions);
+      // Honor tombstones on the merged result so a remote row that hasn't been deleted yet (or a
+      // remote delete still in flight) does NOT resurrect a locally-deleted record.
+      const mergedForStorage = mergedHistory.filter((item) => !isTombstoned(item as Session));
+      const removedByTomb = mergedHistory.length - mergedForStorage.length;
+      if (removedByTomb > 0) {
+        console.log('[TOMBSTONE_APPLIED] screen=history removed=%d', removedByTomb);
+      }
+      sessions = dedupeSessions(mergedForStorage.filter((item) => item.userId === currentUserId)).sort(
         (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
       );
-      const otherUserSessions = cleanedSessions.filter((item) => item.userId !== currentUserId);
-      await AsyncStorage.setItem('history', JSON.stringify([...sessions, ...otherUserSessions]));
+      await AsyncStorage.setItem('history', JSON.stringify(mergedForStorage));
+      console.log('[RESTORE_REMOTE_COUNT] screen=history count=%d', filteredRemoteSessions.length);
+      console.log(
+        '[MERGE_LOCAL_COUNT_BEFORE] screen=history count=%d pending=%d',
+        latestCleanedSessions.length,
+        latestCleanedSessions.filter((item) => item.userId === currentUserId && item.syncStatus === 'pending').length
+      );
+      console.log('[MERGE_LOCAL_COUNT_AFTER] screen=history count=%d', mergedForStorage.length);
+      console.log('[LOCAL_DAY_BUCKET] screen=history todayKey=%s buckets=%o',
+        todayKey,
+        sessions.map((s) => ({ completionId: s.completionId, day: toDayKey(s.date) }))
+      );
 
       // Notify Home screen to re-sync stats from the updated local history
       DeviceEventEmitter.emit('japam-stats-updated');
@@ -416,6 +552,93 @@ export default function HistoryScreen() {
 
     setDailyRows(buildDailyRows(sessions));
   }, []);
+
+  // Tombstone-based delete: remove the records locally, record a tombstone (so self-heal never
+  // re-uploads them and other devices delete their copy on sync), and best-effort delete remote
+  // now. If offline, the local tombstone is pushed by syncPendingHistory on the next sync.
+  const performDelete = useCallback(async (completionIds: string[]) => {
+    if (!completionIds.length) {
+      console.log('[DELETE_SKIPPED_REASON] reason=no-completion-ids');
+      return;
+    }
+    console.log('[DELETE_START] count=%d ids=%s', completionIds.length, completionIds.join(','));
+    const ids = new Set(completionIds);
+    const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+
+    // 1) Write the tombstone FIRST. loadHistory honors this set, so even a same-tick remote
+    //    fetch can never resurrect the record while the remote delete is still in flight.
+    const rawTomb = await AsyncStorage.getItem(DELETED_COMPLETIONS_KEY);
+    const localTomb: string[] = rawTomb ? JSON.parse(rawTomb) : [];
+    await AsyncStorage.setItem(
+      DELETED_COMPLETIONS_KEY,
+      JSON.stringify(mergeTombstones(localTomb, completionIds))
+    );
+    console.log('[DELETE_TOMBSTONE_CREATED] count=%d ids=%s', completionIds.length, completionIds.join(','));
+
+    // 2) Remove the records from local history.
+    const raw = await AsyncStorage.getItem(HISTORY_KEY);
+    const local = parseHistory(raw);
+    const filtered = local.filter((item) => !ids.has((item as Session).completionId as string));
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(filtered));
+    console.log('[DELETE_LOCAL_REMOVED] removed=%d remaining=%d', local.length - filtered.length, filtered.length);
+
+    // 3) Refresh this screen's UI immediately and notify Main/History to recompute counts.
+    setDailyRows(buildDailyRows(filtered.filter((item) => item.userId === currentUserId)));
+    DeviceEventEmitter.emit('japam-stats-updated');
+    DeviceEventEmitter.emit('japam-history-updated', { userId: currentUserId || 'guest' });
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('japam-stats-updated'));
+      window.dispatchEvent(new Event('japam-history-updated'));
+    }
+    console.log('[DELETE_UI_REFRESHED] ids=%s', completionIds.join(','));
+
+    // 4) Best-effort remote delete now. If offline / failed, the tombstone is pushed by
+    //    syncPendingHistory on the next sync (so the remote row is removed later).
+    const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    if (url && key && currentUserId) {
+      for (const id of completionIds) {
+        try {
+          await fetch(`${url}/rest/v1/deleted_completions?on_conflict=completion_id`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: key,
+              Authorization: `Bearer ${key}`,
+              Prefer: 'return=minimal,resolution=merge-duplicates',
+            },
+            body: JSON.stringify({ completion_id: id, user_id: currentUserId }),
+          });
+          await fetch(`${url}/rest/v1/japam_history?completion_id=eq.${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+            headers: { apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal' },
+          });
+          console.log('[DELETE_REMOTE_REMOVED] completionId=%s', id);
+        } catch {
+          console.log('[DELETE_REMOTE_FAILED] completionId=%s reason=network (queued via tombstone)', id);
+        }
+      }
+    } else {
+      console.log('[DELETE_REMOTE_REMOVED] skipped=offline-or-guest queued=via-tombstone');
+    }
+  }, []);
+
+  const confirmDeleteDay = useCallback((row: DailyRow) => {
+    if (!row.completionIds.length) return;
+    const title = 'Delete these records?';
+    const message = 'This will permanently delete these records from all your devices and cannot be undone.';
+    // react-native-web does not render Alert.alert, so use the browser's confirm dialog on web.
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm(`${title}\n\n${message}`)) {
+        void performDelete(row.completionIds);
+      }
+      return;
+    }
+    Alert.alert(title, message, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => void performDelete(row.completionIds) },
+    ]);
+  }, [performDelete]);
 
   useFocusEffect(
     useCallback(() => {
@@ -611,6 +834,7 @@ export default function HistoryScreen() {
           <Text style={styles.tableCell}>Malas</Text>
           <Text style={styles.tableCell}>Count</Text>
           <Text style={styles.tableCell}>Total</Text>
+          {Platform.OS === 'web' && <View style={styles.webDeleteCell} />}
         </View>
 
         {dailyRows.length === 0 ? (
@@ -619,8 +843,10 @@ export default function HistoryScreen() {
           </View>
         ) : (
           dailyRows.map((row, index) => (
-            <View
+            <Pressable
               key={`${row.dateKey}-${index}`}
+              onLongPress={() => confirmDeleteDay(row)}
+              delayLongPress={500}
               style={[styles.tableRow, index % 2 === 1 && styles.altTableRow]}
             >
               <Text style={[styles.tableCell, styles.dateCell]}>
@@ -629,10 +855,28 @@ export default function HistoryScreen() {
               <Text style={styles.tableCell}>{row.malas}</Text>
               <Text style={styles.tableCell}>{row.totalCount}</Text>
               <Text style={styles.tableCell}>{row.accumulated}</Text>
-            </View>
+              {Platform.OS === 'web' && (
+                <Pressable
+                  style={styles.webDeleteCell}
+                  onPress={() => confirmDeleteDay(row)}
+                  accessibilityLabel={`Delete ${row.dateLabel}`}
+                  hitSlop={8}
+                >
+                  <Text style={styles.webDeleteIcon}>🗑</Text>
+                </Pressable>
+              )}
+            </Pressable>
           ))
         )}
       </View>
+
+      {dailyRows.length > 0 && (
+        <Text style={{ textAlign: 'center', color: '#5f7778', fontSize: 12, marginTop: 10 }}>
+          {Platform.OS === 'web'
+            ? 'Tip: click 🗑 on a row to delete that day (syncs to all your devices).'
+            : 'Tip: long-press a row to delete that day (syncs to all your devices).'}
+        </Text>
+      )}
 
     </ScrollView>
     </LinearGradient>
@@ -842,6 +1086,16 @@ const styles = StyleSheet.create({
   },
   dateCell: {
     flex: 1.4,
+  },
+
+  // Web-only: visible delete control per row (long-press isn't discoverable with a mouse).
+  webDeleteCell: {
+    width: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  webDeleteIcon: {
+    fontSize: 18,
   },
 
   emptyRow: {

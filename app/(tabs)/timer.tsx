@@ -1,6 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import {
+  dedupeByCompletionId,
+  mergeHistories,
+  todayStatsFor,
+  toLocalDayKey,
+} from '../../lib/historyStore';
 import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -27,6 +33,7 @@ import {
   formatTimer,
   useTimer,
 } from '../../contexts/timer-context';
+import { isIOSDeviceWeb, isStandaloneOrInstalledWeb } from '../../lib/pwaInstall';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -48,6 +55,11 @@ type Session = {
   duration: number;
   manual?: boolean;
   userId?: string;
+  userName?: string;
+  userEmail?: string;
+  source?: string;
+  completionId?: string;
+  syncStatus?: 'pending' | 'synced';
 };
 
 const getLocalDateKey = (date = new Date()) => {
@@ -73,53 +85,20 @@ const parseHistory = (raw: string | null): Session[] => {
   }
 };
 
-const dedupeHistoryForStats = (history: Session[]) => {
-  const exactSeen = new Set<string>();
-  const nearTimerRows = new Map<string, number[]>();
-
-  return history.filter((item) => {
-    const date = new Date(item.date);
-    if (Number.isNaN(date.getTime())) return false;
-
-    const totalCount = Number(item.totalCount) || (Number(item.malas) || 0) * 108;
-    if (totalCount <= 0) return false;
-
-    const dayKey = getLocalDateKey(date);
-    const key = [
-      item.userId || 'guest',
-      dayKey,
-      date.toISOString(),
-      totalCount,
-      Number(item.malas) || 0,
-      Number(item.duration) || 0,
-      item.manual ? 'manual' : 'auto',
-    ].join(':');
-
-    if (exactSeen.has(key)) return false;
-    exactSeen.add(key);
-
-    if (!item.manual) {
-      const nearKey = [
-        item.userId || 'guest',
-        dayKey,
-        totalCount,
-        Number(item.malas) || 0,
-      ].join(':');
-      const existingTimes = nearTimerRows.get(nearKey) || [];
-      const time = date.getTime();
-      if (existingTimes.some((existing) => Math.abs(existing - time) < 30000)) {
-        return false;
-      }
-      nearTimerRows.set(nearKey, [...existingTimes, time]);
-    }
-
-    return true;
-  });
-};
+// Dedup by stable completionId only (no time-window collapse) so two legitimate malas completed
+// close together are never merged. Drops only invalid/zero-count rows. See lib/historyStore.ts.
+const dedupeHistoryForStats = (history: Session[]): Session[] =>
+  dedupeByCompletionId(history).filter(
+    (item) => item.totalCount > 0 && toLocalDayKey(item.date) !== 'unknown'
+  );
 
 export default function TimerScreen() {
   const router = useRouter();
   const timer = useTimer();
+  const visibleMala = Math.min(
+    Math.max(1, timer.completedLoops + (timer.isRunning || timer.isPaused ? 1 : 0)),
+    timer.selectedLoops
+  );
   const [showCustomInput, setShowCustomInput] = useState(false);
   const [customText, setCustomText] = useState('');
   const [userName, setUserName] = useState('');
@@ -131,9 +110,11 @@ export default function TimerScreen() {
   const [todayCount, setTodayCount] = useState(0);
   const [dayStreak, setDayStreak] = useState(0);
   const deferredInstallPromptRef = useRef<any>(null);
+  const isIosDeviceWeb = isIOSDeviceWeb();
 
   const [request, response, promptAsync] = Google.useAuthRequest({
-    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? (Platform.OS === 'web' ? '' : undefined),
+    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
+    androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
     clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
     scopes: ['profile', 'email'],
     redirectUri: Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : undefined,
@@ -152,22 +133,93 @@ export default function TimerScreen() {
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
     const todayKey = getLocalDateKey();
     const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
-    const history = dedupeHistoryForStats(parseHistory(rawHistory)).filter((item) => {
+    const localHistory = parseHistory(rawHistory);
+    let mergedHistory = localHistory;
+    let rawSupabaseRows = 0;
+    let rawSupabaseCount = 0;
+
+    if (userId) {
+      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      if (url && key) {
+        try {
+          const encodedUserId = encodeURIComponent(userId);
+          const res = await fetch(
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,completion_id&order=created_at.asc`,
+            { headers: { apikey: key, Authorization: `Bearer ${key}` } }
+          );
+          if (res.ok) {
+            const rows: {
+              id?: number | string;
+              created_at: string;
+              malas: number | string;
+              count: number | string;
+              user_name?: string;
+              completion_id?: string;
+            }[] = await res.json();
+            rawSupabaseRows = rows.length;
+            const remoteHistory: Session[] = rows.map((row) => ({
+              date: row.created_at,
+              malas: Number(row.malas) || Math.floor((Number(row.count) || 0) / 108),
+              totalCount: Number(row.count) || (Number(row.malas) || 0) * 108,
+              duration: 0,
+              manual: false,
+              userId,
+              userName: row.user_name,
+              completionId: row.completion_id,
+              syncStatus: 'synced' as const,
+            }));
+            rawSupabaseCount = remoteHistory.reduce(
+              (sum, row) => sum + (Number(row.totalCount) || 0),
+              0
+            );
+            mergedHistory = mergeHistories(localHistory, remoteHistory);
+            await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
+            console.log('[RESTORE_REMOTE_COUNT] screen=timer count=%d', remoteHistory.length);
+            console.log(
+              '[MERGE_LOCAL_COUNT_BEFORE] screen=timer count=%d pending=%d',
+              localHistory.length,
+              localHistory.filter((item) => item.userId === userId && item.syncStatus === 'pending').length
+            );
+            console.log('[MERGE_LOCAL_COUNT_AFTER] screen=timer count=%d', mergedHistory.length);
+          } else {
+            console.log('[SYNC_FAILED] source=timer-stats-restore status=%d', res.status);
+          }
+        } catch {
+          console.log('[SYNC_FAILED] source=timer-stats-restore reason=network');
+        }
+      }
+    }
+
+    const history = dedupeHistoryForStats(mergedHistory).filter((item) => {
       if (!userId) return !item.userId;
       return item.userId === userId;
     });
 
     const totalByDay = new Map<string, number>();
     history.forEach((item) => {
-      const date = new Date(item.date);
-      if (Number.isNaN(date.getTime())) return;
+      const dayKey = toLocalDayKey(item.date);
+      if (dayKey === 'unknown') return;
       const totalCount = Number(item.totalCount) || (Number(item.malas) || 0) * 108;
       if (totalCount <= 0) return;
-      const dayKey = getLocalDateKey(date);
+      console.log('[LOCAL_DAY_BUCKET] screen=timer userLocalDate=%s recordCreatedAtISO=%s recordLocalDay=%s recordUTCDate=%s completion_id=%s source=%s user_id=%s',
+        todayKey,
+        item.date,
+        dayKey,
+        item.date?.slice(0, 10),
+        item.completionId || '',
+        item.source || '',
+        item.userId || ''
+      );
       totalByDay.set(dayKey, (totalByDay.get(dayKey) || 0) + totalCount);
     });
 
-    const safeTodayTotal = totalByDay.get(todayKey) || 0;
+    const { totalCount: safeTodayTotal } = todayStatsFor(
+      history,
+      userId,
+      todayKey,
+      toLocalDayKey
+    );
     if (safeTodayTotal > 0) totalByDay.set(todayKey, safeTodayTotal);
 
     const activeDays = new Set([...totalByDay.entries()].filter(([, total]) => total > 0).map(([day]) => day));
@@ -181,6 +233,16 @@ export default function TimerScreen() {
     setTodayCount(safeTodayTotal);
     setMalasToday(Math.floor(safeTodayTotal / 108));
     setDayStreak(nextStreak);
+    console.log('[TimerStatsDate] deviceLocalTime=%s userLocalDate=%s rawSupabaseRows=%d rawSupabaseCount=%d dedupedCount=%d appMalasToday=%d todayTotal=%d streak=%d',
+      new Date().toString(),
+      todayKey,
+      rawSupabaseRows,
+      rawSupabaseCount,
+      safeTodayTotal,
+      Math.floor(safeTodayTotal / 108),
+      safeTodayTotal,
+      nextStreak
+    );
   }, []);
 
   useFocusEffect(
@@ -227,14 +289,24 @@ export default function TimerScreen() {
     setIsSigningIn(true);
     setShowUserModal(false);
     try {
-      await GoogleSignin.hasPlayServices();
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
       const userInfo = await GoogleSignin.signIn();
-      if (userInfo.type !== 'success') {
+      const rawUserInfo = userInfo as any;
+      console.log('Native Google sign-in result type:', rawUserInfo?.type || 'raw-user');
+      const googleUser =
+        rawUserInfo?.type
+          ? rawUserInfo.type === 'success'
+            ? rawUserInfo.data?.user
+            : null
+          : rawUserInfo?.user;
+
+      if (!googleUser) {
+        console.log('Native Google sign-in did not return a user.');
         setIsSigningIn(false);
         setShowUserModal(true);
         return;
       }
-      const { id, name, givenName, email } = userInfo.data.user;
+      const { id, name, givenName, email } = googleUser;
       const googleName = givenName || name || email || 'User';
       const googleEmail = email || '';
       const googleUserId = String(id).trim();
@@ -251,15 +323,28 @@ export default function TimerScreen() {
       void loadStats();
     } catch (error) {
       console.log('Native Google sign-in error:', error);
+      const errorCode = (error as { code?: string })?.code;
+      if (errorCode === '10' && request) {
+        console.log('Native Google sign-in failed with DEVELOPER_ERROR; trying AuthSession fallback.');
+        try {
+          await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
+          const result = await promptAsync({ showInRecents: true });
+          if (result.type === 'success') {
+            return;
+          }
+          console.log('AuthSession fallback result:', result.type);
+        } catch (fallbackError) {
+          console.log('AuthSession fallback error:', fallbackError);
+        }
+      }
       setShowUserModal(true);
     } finally {
       setIsSigningIn(false);
     }
-  }, [loadStats]);
+  }, [loadStats, promptAsync, request]);
 
   useEffect(() => {
     const handleGoogleLogin = async () => {
-      if (Platform.OS !== 'web') return; // native platforms use handleNativeGoogleSignIn
       if (!response) return;
 
       if (response.type !== 'success') {
@@ -332,12 +417,25 @@ export default function TimerScreen() {
     const isStandalone =
       window.matchMedia?.('(display-mode: standalone)').matches ||
       (window.navigator as any).standalone === true;
+    const isInstalled = isStandaloneOrInstalledWeb();
+    if (isInstalled) {
+      setShowInstallBanner(false);
+      setShowInstallHelp(false);
+      return;
+    }
+    if (isIosDeviceWeb) {
+      setShowInstallBanner(true);
+      setShowInstallHelp(true);
+      return;
+    }
+
     if (!isStandalone) {
       setShowInstallBanner(true);
     }
 
     const onBeforeInstallPrompt = (event: Event) => {
       event.preventDefault();
+      if (isIosDeviceWeb) return;
       deferredInstallPromptRef.current = event;
       setShowInstallHelp(false);
       setShowInstallBanner(true);
@@ -356,7 +454,7 @@ export default function TimerScreen() {
       window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt);
       window.removeEventListener('appinstalled', onAppInstalled);
     };
-  }, []);
+  }, [isIosDeviceWeb]);
 
   const handleStart = () => {
     if (!timer.canStart) {
@@ -446,16 +544,22 @@ export default function TimerScreen() {
           <Text style={styles.dateText}>Today · {todayLabel}</Text>
           <Text style={styles.subtitle}>Pick a duration, set loops, breathe.</Text>
 
-      {showInstallBanner && (
+      {showInstallBanner && !isStandaloneOrInstalledWeb() && (
             <View style={styles.installBanner}>
-              <Text style={styles.installBannerTitle}>Install this app for a better experience</Text>
-              {showInstallHelp && (
+              <Text style={styles.installBannerTitle}>
+                {isIosDeviceWeb ? 'Add to Home Screen' : 'Install this app for a better experience'}
+              </Text>
+              {isIosDeviceWeb ? (
+                <Text style={styles.installBannerHelp}>Use Share → Add to Home Screen.</Text>
+              ) : showInstallHelp ? (
                 <Text style={styles.installBannerHelp}>Tap browser menu ⋮ → Add to Home screen</Text>
-              )}
+              ) : null}
               <View style={styles.installBannerActions}>
-                <Pressable style={styles.installBannerPrimary} onPress={() => void handleInstallNow()}>
-                  <Text style={styles.installBannerPrimaryText}>Install Now</Text>
-                </Pressable>
+                {!isIosDeviceWeb && (
+                  <Pressable style={styles.installBannerPrimary} onPress={() => void handleInstallNow()}>
+                    <Text style={styles.installBannerPrimaryText}>Install Now</Text>
+                  </Pressable>
+                )}
                 <Pressable style={styles.installBannerSecondary} onPress={() => setShowInstallBanner(false)}>
                   <Text style={styles.installBannerSecondaryText}>Later</Text>
                 </Pressable>
@@ -467,7 +571,7 @@ export default function TimerScreen() {
             <View style={styles.circleOuter}>
               <View style={styles.circleInner}>
                 <Text style={styles.timerText}>{formatTimer(timer.timeLeft)}</Text>
-                <Text style={styles.malaText}>Mala {timer.completedLoops} / {timer.selectedLoops}</Text>
+                <Text style={styles.malaText}>Mala {visibleMala} / {timer.selectedLoops}</Text>
               </View>
             </View>
           </View>
@@ -860,30 +964,40 @@ const styles = StyleSheet.create({
     maxWidth: 460,
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10,
+    gap: 9,
     marginTop: isShortMobile ? 12 : isMobile ? 14 : 22,
+    marginBottom: isMobile ? 12 : 0,
   },
   statCard: {
     flexGrow: 1,
     flexBasis: '30%',
-    backgroundColor: 'rgba(255,255,255,0.72)',
+    minHeight: isShortMobile ? 88 : isMobile ? 96 : 104,
+    backgroundColor: 'rgba(255,255,255,0.94)',
     borderRadius: 18,
-    paddingVertical: isMobile ? 13 : 16,
-    paddingHorizontal: 12,
+    paddingVertical: isShortMobile ? 12 : isMobile ? 14 : 16,
+    paddingHorizontal: isShortMobile ? 8 : 10,
     alignItems: 'center',
+    justifyContent: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(15,143,135,0.14)',
+    borderColor: 'rgba(15,143,135,0.24)',
+    shadowColor: '#0a3a3c',
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 5,
   },
   statValue: {
-    color: '#12383c',
-    fontSize: isMobile ? 24 : 28,
+    color: '#063B3B',
+    fontSize: isShortMobile ? 26 : isMobile ? 29 : 32,
     fontWeight: '900',
+    lineHeight: isShortMobile ? 31 : isMobile ? 35 : 38,
   },
   statLabel: {
-    color: '#547071',
-    fontSize: isMobile ? 12 : 13,
+    color: '#234E52',
+    fontSize: isShortMobile ? 12 : isMobile ? 13 : 14,
     fontWeight: '800',
-    marginTop: 4,
+    lineHeight: isShortMobile ? 15 : 17,
+    marginTop: 5,
     textAlign: 'center',
   },
   installBanner: {

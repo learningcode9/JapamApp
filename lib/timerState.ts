@@ -11,6 +11,7 @@ export type SoundObject = {
 };
 
 type TimerSharedState = {
+  sessionId: string;               // active timer session; rejects stale native events
   startedAt: number | null;       // wall-clock ms when the current mala started
   durationSeconds: number;         // seconds per mala
   completedLoops: number;          // how many malas done so far
@@ -25,6 +26,7 @@ type TimerSharedState = {
 };
 
 const state: TimerSharedState = {
+  sessionId: '',
   startedAt: null,
   durationSeconds: 600,
   completedLoops: 0,

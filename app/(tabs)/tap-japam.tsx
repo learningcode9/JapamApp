@@ -1,5 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import {
+  appendCompletion,
+  buildSupabaseHistoryPayload,
+  markSynced,
+  mergeHistories,
+  todayStatsFor,
+  toLocalDayKey,
+} from '../../lib/historyStore';
+import { getWebOmAudioUri } from '../../lib/webOmAudio';
 import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
 import { Audio } from 'expo-av';
@@ -38,6 +47,11 @@ type Session = {
   duration: number;
   manual?: boolean;
   userId?: string;
+  userName?: string;
+  userEmail?: string;
+  source?: string;
+  completionId?: string;
+  syncStatus?: 'pending' | 'synced';
 };
 
 type TimerStateRow = {
@@ -73,6 +87,7 @@ const LAST_OPEN_DATE_KEY = 'lastOpenDate';
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
+const WEB_OM_AUDIO_SRC = '/om_complete.mp3';
 const USER_NAME_KEY = 'userName';
 const USER_EMAIL_KEY = 'userEmail';
 const USER_ID_KEY = 'userId';
@@ -164,6 +179,7 @@ export default function JapamMain() {
   const [hasSelectedTimer, setHasSelectedTimer] = useState(false);
   const [customMinutesInput, setCustomMinutesInput] = useState('');
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [repetitionSoundEnabled, setRepetitionSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
@@ -189,6 +205,7 @@ export default function JapamMain() {
   const rippleAnim = useRef(new Animated.Value(0)).current;
   const isSavingSessionRef = useRef(false);
   const completeSoundRef = useRef<Audio.Sound | null>(null);
+  const webAudioPrimedRef = useRef(false);
   const timerNotifIdRef = useRef<string | null>(null);
   const timerNotifUpdateRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const userIdRef = useRef<string | null>(null);
@@ -212,6 +229,56 @@ export default function JapamMain() {
       });
     } catch (error) {
       console.log('Audio mode error:', error);
+    }
+  }, []);
+
+  const syncStoredAuth = useCallback(async () => {
+    const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+    const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    const authPending = await isAuthPending();
+
+    if (savedUserName && savedUserId) {
+      userIdRef.current = savedUserId;
+      setUserName(savedUserName);
+      setShowUserModal(false);
+      setIsSigningIn(false);
+    } else {
+      userIdRef.current = null;
+      setUserName('');
+      setIsSigningIn(authPending);
+      if (!authPending) {
+        setShowUserModal(false);
+      }
+    }
+
+    setAuthReady(true);
+    return { savedUserName, savedUserId, authPending };
+  }, []);
+
+  const primeWebCompletionAudio = useCallback(async () => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    if (webAudioPrimedRef.current) return;
+
+    const sound = completeSoundRef.current;
+    if (!sound) return;
+
+    try {
+      if ('caches' in window) {
+        caches.open('japam-audio-v1')
+          .then((cache) => cache.add(WEB_OM_AUDIO_SRC).catch(() => undefined))
+          .catch(() => undefined);
+      }
+      await fetch(WEB_OM_AUDIO_SRC, { cache: 'force-cache' }).catch(() => undefined);
+      await sound.stopAsync().catch(() => undefined);
+      await sound.setPositionAsync(0).catch(() => undefined);
+      await sound.setVolumeAsync(0).catch(() => undefined);
+      await sound.playAsync();
+      await sound.pauseAsync().catch(() => undefined);
+      await sound.setPositionAsync(0).catch(() => undefined);
+      await sound.setVolumeAsync(0.9).catch(() => undefined);
+      webAudioPrimedRef.current = true;
+    } catch (error) {
+      console.log('Web audio unlock error:', error);
     }
   }, []);
 
@@ -440,7 +507,7 @@ export default function JapamMain() {
   startTimerIntervalRef.current = startTimerInterval;
 
   const [request, response, promptAsync] = Google.useAuthRequest({
-    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? (Platform.OS === 'web' ? '' : undefined),
+    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
     clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
     scopes: ['profile', 'email'],
     redirectUri: Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : undefined,
@@ -472,10 +539,11 @@ export default function JapamMain() {
   );
 
   useEffect(() => {
+    if (!authReady) return;
     if (params.signin === '1' && !userName && !isSigningIn) {
       setShowUserModal(true);
     }
-  }, [isSigningIn, params.signin, userName]);
+  }, [authReady, isSigningIn, params.signin, userName]);
 
   const restoreTotal = useCallback(
     async (nextTotal: number, options?: { userId?: string | null }) => {
@@ -624,7 +692,7 @@ export default function JapamMain() {
     const todayKey = getLocalDateKey();
 
     return sessions
-      .filter((item) => item.userId === userId && getLocalDateKey(new Date(item.date)) === todayKey)
+      .filter((item) => item.userId === userId && toLocalDayKey(item.date) === todayKey)
       .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
   }, []);
 
@@ -665,11 +733,17 @@ export default function JapamMain() {
         if (url && key) {
           const encodedUserId = encodeURIComponent(savedUserId);
           const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count&order=created_at.asc`,
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,completion_id&order=created_at.asc`,
             { headers: { apikey: key, Authorization: `Bearer ${key}` } }
           );
           if (res.ok) {
-            const rows: { created_at: string; malas: number | string; count: number | string }[] =
+            const rows: {
+              created_at: string;
+              malas: number | string;
+              count: number | string;
+              user_name?: string;
+              completion_id?: string;
+            }[] =
               await res.json();
             remoteSessions = rows.map((row) => ({
               date: row.created_at,
@@ -678,34 +752,29 @@ export default function JapamMain() {
               duration: 0,
               manual: false,
               userId: savedUserId,
+              userName: row.user_name,
+              completionId: row.completion_id,
+              syncStatus: 'synced' as const,
             }));
           }
         }
 
         if (remoteSessions !== null) {
-          // Merge remote history with local same-user entries so a just-completed
-          // timer mala is not dropped while Supabase is still catching up.
           const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
           const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
-          const otherUserSessions = localHistory.filter((s) => s.userId !== savedUserId);
-          const sameUserLocalSessions = localHistory.filter((s) => s.userId === savedUserId);
-          const mergedMap = new Map<string, Session>();
-          [...remoteSessions, ...sameUserLocalSessions].forEach((session) => {
-            const key = `${session.date}-${session.totalCount}-${session.malas}`;
-            mergedMap.set(key, session);
+          const mergedHistory = mergeHistories(localHistory, remoteSessions).filter((s) => {
+            const day = toLocalDayKey(s.date);
+            return day === 'unknown' || day <= todayKey;
           });
-          const filteredUserSessions = [...mergedMap.values()].filter(
-            (s) => getLocalDateKey(new Date(s.date)) <= todayKey
-          );
 
-          await AsyncStorage.setItem(
-            HISTORY_KEY,
-            JSON.stringify([...filteredUserSessions, ...otherUserSessions])
-          );
+          await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
 
-          const remoteHistoryTotal = filteredUserSessions
-            .filter((s) => getLocalDateKey(new Date(s.date)) === todayKey)
-            .reduce((sum, s) => sum + (Number(s.totalCount) || 0), 0);
+          const { totalCount: remoteHistoryTotal } = todayStatsFor(
+            mergedHistory,
+            savedUserId,
+            todayKey,
+            toLocalDayKey
+          );
 
           if (!preserveManualCount) {
             await restoreTotal(localStoredTotal, { userId: savedUserId });
@@ -821,9 +890,14 @@ export default function JapamMain() {
     const preloadSounds = async () => {
       try {
         await configureAudio();
+        // Web: load the Om from an in-memory blob: URL (cached once while online) so the
+        // completion sound plays OFFLINE. Falls back to the network URL if the fetch fails.
+        const source = Platform.OS === 'web'
+          ? { uri: await getWebOmAudioUri() }
+          : require('../../assets/om_complete.mp3');
 
         const { sound: normalSound } = await Audio.Sound.createAsync(
-          require('../../assets/om_complete.mp3'),
+          source,
           { shouldPlay: false, volume: 0.9 }
         );
 
@@ -833,6 +907,7 @@ export default function JapamMain() {
         }
 
         completeSoundRef.current = normalSound;
+        webAudioPrimedRef.current = false;
       } catch (error) {
         console.log('Sound preload error:', error);
       }
@@ -941,11 +1016,17 @@ export default function JapamMain() {
   }, []);
 
   useEffect(() => {
+    const sync = () => {
+      void syncStoredAuth();
+    };
+    const authSubscription = DeviceEventEmitter.addListener('japam-auth-updated', sync);
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.addEventListener('japam-auth-updated', sync);
+    }
+
     const loadData = async () => {
       const today = getLocalDateKey();
-      const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
-      const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-      const authPending = await isAuthPending();
+      const { savedUserName, savedUserId } = await syncStoredAuth();
 
       if (savedUserId) {
         const userJapamName = await AsyncStorage.getItem(getUserStorageKey(JAPAM_NAME_KEY, savedUserId));
@@ -963,7 +1044,6 @@ export default function JapamMain() {
         await restoreTodayTotal();
       } else {
         setUserName('');
-        setIsSigningIn(authPending);
         setShowUserModal(false);
         setDayStreak(0);
         await restoreTotal(0, { userId: null });
@@ -1010,7 +1090,13 @@ export default function JapamMain() {
     };
 
     void loadData();
-  }, [applyRestoredTimerState, fetchTimerStateFromSupabase, restoreTodayTotal, restoreTotal]);
+    return () => {
+      authSubscription.remove();
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.removeEventListener('japam-auth-updated', sync);
+      }
+    };
+  }, [applyRestoredTimerState, fetchTimerStateFromSupabase, restoreTodayTotal, restoreTotal, syncStoredAuth]);
 
   useEffect(() => {
     return () => {
@@ -1076,15 +1162,25 @@ export default function JapamMain() {
         duration: 0,
         manual: false,
         userId: googleUserId,
+        userName: item.user_name,
+        userEmail: item.user_email,
+        completionId: item.completion_id,
+        syncStatus: 'synced' as const,
       }));
 
       const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
       const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
-      const otherUserLocalHistory = localHistory.filter((item) => item.userId !== googleUserId);
 
-      const mergedHistory = [...remoteHistory, ...otherUserLocalHistory].sort(
-        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+      // Merge — never overwrite (see lib/historyStore.ts). Keeps all local records, including
+      // unsynced 'pending' malas, and upgrades any the remote confirms to 'synced'.
+      const mergedHistory = mergeHistories(localHistory, remoteHistory);
+      console.log('[RESTORE_REMOTE_COUNT] screen=tap-login count=%d', remoteHistory.length);
+      console.log(
+        '[MERGE_LOCAL_COUNT_BEFORE] screen=tap-login count=%d pending=%d',
+        localHistory.length,
+        localHistory.filter((item) => item.userId === googleUserId && item.syncStatus === 'pending').length
       );
+      console.log('[MERGE_LOCAL_COUNT_AFTER] screen=tap-login count=%d', mergedHistory.length);
 
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
       await restoreTodayTotal();
@@ -1132,6 +1228,7 @@ export default function JapamMain() {
       setHasRestoredTimer(false);
       setUserName(googleName);
       setShowUserModal(false);
+      setAuthReady(true);
       setShowUserMenu(false);
       await restoreTotal(0, { userId: null });
       totalRef.current = 0;
@@ -1204,6 +1301,7 @@ export default function JapamMain() {
         setHasRestoredTimer(false);
         setUserName(googleName);
         setShowUserModal(false);
+        setAuthReady(true);
         setShowUserMenu(false);
         await restoreTotal(0, { userId: null });
         totalRef.current = 0;
@@ -1313,6 +1411,9 @@ export default function JapamMain() {
   const playCompleteSound = async (variant: 'normal' | 'final' = 'normal') => {
     try {
       await configureAudio();
+      if (!webAudioPrimedRef.current) {
+        await primeWebCompletionAudio();
+      }
       const sound = completeSoundRef.current;
 
       if (!sound) return;
@@ -1360,65 +1461,128 @@ export default function JapamMain() {
   }, []);
 
   const saveSession = useCallback(async (
-    duration: number, sessionMalas: number, sessionTotal: number, accumulatedTotal: number
-  ) => {
-    if (isSavingSessionRef.current) return;
+    duration: number,
+    sessionMalas: number,
+    sessionTotal: number,
+    accumulatedTotal: number,
+    source: 'tap' | 'timer' = 'timer'
+  ): Promise<boolean> => {
+    if (isSavingSessionRef.current) {
+      if (source === 'tap') console.log('TAP_HISTORY_SAVE_SKIPPED reason=in-flight');
+      return false;
+    }
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
     const sessionSignature = `${currentUserId || 'guest'}-${getLocalDateKey()}-${duration}-${sessionMalas}-${sessionTotal}-${accumulatedTotal}`;
-    if (lastSavedSessionRef.current === sessionSignature) return;
+    if (lastSavedSessionRef.current === sessionSignature) {
+      if (source === 'tap') console.log('TAP_HISTORY_SAVE_SKIPPED reason=duplicate signature=%s', sessionSignature);
+      return false;
+    }
 
     isSavingSessionRef.current = true;
     lastSavedSessionRef.current = sessionSignature;
 
     try {
+      if (source === 'tap') {
+        console.log('TAP_HISTORY_SAVE_START signature=%s total=%d count=%d', sessionSignature, accumulatedTotal, sessionTotal);
+      }
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
       const history: Session[] = raw ? JSON.parse(raw) : [];
       const userId = currentUserId;
       const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+      const savedUserEmail = await AsyncStorage.getItem(USER_EMAIL_KEY);
+      const historyUserName = savedUserName || userName || savedUserEmail || 'Unknown User';
 
-      const session: Session = {
-        date: new Date().toISOString(),
+      const sessionDate = new Date().toISOString();
+      const updatedHistory = appendCompletion(history, {
+        date: sessionDate,
         malas: sessionMalas,
         totalCount: sessionTotal,
         duration,
         manual: false,
         userId: userId || undefined,
-      };
+        userName: userId ? historyUserName : undefined,
+        userEmail: userId ? savedUserEmail || undefined : undefined,
+        source,
+      });
+      const savedRecord = updatedHistory[0];
 
-      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([session, ...history]));
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
       await AsyncStorage.setItem(HISTORY_SYNC_VERSION_KEY, String(Date.now()));
+      console.log(
+        '[OFFLINE_SAVE_ACCEPTED] source=%s completionId=%s created_at=%s localDay=%s syncStatus=%s',
+        source,
+        savedRecord.completionId,
+        savedRecord.date,
+        toLocalDayKey(savedRecord.date),
+        savedRecord.syncStatus
+      );
+      if (source === 'tap') {
+        console.log(
+          'TAP_HISTORY_SAVE_ACCEPTED completionId=%s userId=%s userName=%s',
+          savedRecord.completionId,
+          userId || 'guest',
+          historyUserName
+        );
+      }
 
       // Emit immediately after local save — Home and History update without waiting for Supabase
+      DeviceEventEmitter.emit('japam-stats-updated');
       DeviceEventEmitter.emit('japam-history-updated', { userId: userId || 'guest', todayTotal: accumulatedTotal });
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('japam-stats-updated'));
         window.dispatchEvent(new Event('japam-history-updated'));
       }
-
-      if (!userId) return;
-
-      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-
-      if (url && key) {
-        const baseBody = {
-          user_name: savedUserName || userName,
-          malas: sessionMalas,
-          count: sessionTotal,
-          created_at: session.date,
-        };
-        const postHistory = async (body: Record<string, unknown>) => {
-          const res = await fetch(`${url}/rest/v1/japam_history`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal' },
-            body: JSON.stringify(body),
-          });
-          return res.ok;
-        };
-        const savedWithUserId = await postHistory({ user_id: userId, ...baseBody });
-        if (!savedWithUserId) await postHistory(baseBody);
+      if (source === 'tap') {
+        console.log('TAP_STATS_EVENT_DISPATCHED completionId=%s', savedRecord.completionId);
       }
+
+      if (userId) {
+        const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+        const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+
+        if (url && key) {
+          const payload = buildSupabaseHistoryPayload(savedRecord, userId, historyUserName);
+          console.log(
+            '[SYNC_PAYLOAD_CREATED_AT] source=%s completionId=%s created_at=%s localDay=%s',
+            source,
+            payload.completion_id,
+            payload.created_at,
+            toLocalDayKey(payload.created_at)
+          );
+          void (async () => {
+            try {
+              const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal,resolution=merge-duplicates' },
+                body: JSON.stringify(payload),
+              });
+
+              if (!res.ok) {
+                console.log('[SYNC_FAILED] source=%s completionId=%s status=%d', source, payload.completion_id, res.status);
+                console.log('Tap Supabase save error:', await res.text());
+                return;
+              }
+              console.log('[SYNC_SUCCESS] source=%s completionId=%s', source, payload.completion_id);
+
+              const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
+              const latest = latestRaw ? JSON.parse(latestRaw) : [];
+              await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, [savedRecord.completionId])));
+              console.log('[MARK_SYNCED] source=%s completionId=%s', source, savedRecord.completionId);
+            } catch (error) {
+              console.log('[SYNC_FAILED] source=%s completionId=%s reason=network', source, payload.completion_id);
+              console.log('Tap Supabase save error:', error);
+            }
+          })();
+        }
+      }
+      return true;
     } catch (error) {
       console.log('Supabase save error:', error);
+      if (source === 'tap') {
+        lastSavedSessionRef.current = '';
+        console.log('TAP_HISTORY_SAVE_SKIPPED reason=error');
+      }
+      return false;
     } finally {
       isSavingSessionRef.current = false;
     }
@@ -1544,6 +1708,7 @@ export default function JapamMain() {
   
 
   const requireLogin = () => {
+    if (!authReady) return false;
     if (!userName) { setShowUserModal(true); return false; }
     return true;
   };
@@ -1571,8 +1736,9 @@ export default function JapamMain() {
     ]);
   };
 
-  const handleTap = () => {
+  const handleTap = async () => {
     if (!requireLogin()) return;
+    void primeWebCompletionAudio();
 
     const now = Date.now();
     if (now - lastTapRef.current < 100) return;
@@ -1589,8 +1755,11 @@ export default function JapamMain() {
     const newCount = newTotal % 108;
 
     if (newCount === 0) {
-      void saveSession(0, 1, 108, newTotal);
-      void completeFeedback('final');
+      console.log('TAP_MALA_COMPLETE_REACHED total=%d count=%d', newTotal, newCount);
+      const saved = await saveSession(0, 1, 108, newTotal, 'tap');
+      if (saved) {
+        await completeFeedback('final');
+      }
     } else {
       void tapFeedback();
     }
@@ -1598,6 +1767,7 @@ export default function JapamMain() {
 
   const handleStart = () => {
     if (!requireLogin()) return;
+    void primeWebCompletionAudio();
     const mins = Math.max(1, Math.floor(Number(minutesInput) || 1));
     const nextTargetSeconds = mins * 60;
     const targetChanged = nextTargetSeconds !== targetSeconds;
