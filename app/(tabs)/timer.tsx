@@ -133,6 +133,7 @@ export default function TimerScreen() {
   const deferredInstallPromptRef = useRef<any>(null);
 
   const [request, response, promptAsync] = Google.useAuthRequest({
+    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? (Platform.OS === 'web' ? '' : undefined),
     clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
     scopes: ['profile', 'email'],
     redirectUri: Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : undefined,
