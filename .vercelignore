@@ -1,0 +1,15 @@
+# Vercel builds the web app itself (npm install + `expo export -p web`), so only the
+# source needs uploading. Exclude heavy/native/build artifacts to stay under the upload limit.
+node_modules
+android
+ios
+.git
+.expo
+.vercel
+dist
+*.apk
+*.aab
+*.keystore
+*.jks
+.gradle
+coverage

@@ -46,3 +46,4 @@ app-example
 .env
 firebaseConfig.ts
 lib/supabase.ts
+.vercel
