@@ -271,13 +271,17 @@ export default function JapamMain() {
           .catch(() => undefined);
       }
       await fetch(WEB_OM_AUDIO_SRC, { cache: 'force-cache' }).catch(() => undefined);
-      await sound.stopAsync().catch(() => undefined);
-      await sound.setPositionAsync(0).catch(() => undefined);
-      await sound.setVolumeAsync(0).catch(() => undefined);
-      await sound.playAsync();
-      await sound.pauseAsync().catch(() => undefined);
-      await sound.setPositionAsync(0).catch(() => undefined);
-      await sound.setVolumeAsync(0.9).catch(() => undefined);
+      const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      if (!isIOS) {
+        await sound.stopAsync().catch(() => undefined);
+        await sound.setPositionAsync(0).catch(() => undefined);
+        await sound.setVolumeAsync(0).catch(() => undefined);
+        await sound.playAsync();
+        await sound.pauseAsync().catch(() => undefined);
+        await sound.setPositionAsync(0).catch(() => undefined);
+        await sound.setVolumeAsync(0.9).catch(() => undefined);
+      }
       webAudioPrimedRef.current = true;
     } catch (error) {
       console.log('Web audio unlock error:', error);
