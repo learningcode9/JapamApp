@@ -85,6 +85,7 @@ const TIMER_TARGET_KEY = 'timerTarget';
 const TIMER_MINUTES_KEY = 'timerMinutes';
 const TIMER_LOOP_KEY = 'timerLoop';
 const TOTAL_DATE_KEY = 'totalDate';
+const DELETED_COMPLETIONS_KEY = 'deletedCompletions';
 const DEFAULT_TIMER_MINUTES = 5;
 const SESSION_TIME_OPTIONS = [5, 10, 15];
 
@@ -684,9 +685,13 @@ export default function JapamMain() {
           // Merge remote history into local without dropping pending offline completions.
           const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
           const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
+          // Honor tombstones so a remote row whose Supabase delete is still in-flight does not
+          // resurrect a locally-deleted record and inflate the displayed count.
+          const rawTomb = await AsyncStorage.getItem(DELETED_COMPLETIONS_KEY);
+          const tombSet = new Set<string>(rawTomb ? JSON.parse(rawTomb) : []);
           const mergedHistory = mergeHistories(localHistory, remoteSessions).filter((s) => {
             const day = toLocalDayKey(s.date);
-            return day === 'unknown' || day <= todayKey;
+            return (day === 'unknown' || day <= todayKey) && !tombSet.has(s.completionId as string);
           });
 
           console.log('[RESTORE_REMOTE_COUNT] screen=main count=%d', remoteSessions.length);
