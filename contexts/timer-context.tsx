@@ -197,19 +197,16 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     if (!sound) return;
 
     try {
+      // Unlock iOS audio session with the existing silent file — must happen before any
+      // I/O await so the user-gesture trust token is still valid when play() fires.
+      const unlock = new window.Audio('/silent-timer.wav');
+      await unlock.play().catch(() => undefined);
       if ('caches' in window) {
         caches.open('japam-audio-v1')
           .then((cache) => cache.add(WEB_OM_AUDIO_SRC).catch(() => undefined))
           .catch(() => undefined);
       }
       await fetch(WEB_OM_AUDIO_SRC, { cache: 'force-cache' }).catch(() => undefined);
-      await sound.stopAsync().catch(() => undefined);
-      await sound.setPositionAsync(0).catch(() => undefined);
-      await sound.setIsMutedAsync(true).catch(() => undefined);
-      await sound.playAsync();
-      await sound.pauseAsync().catch(() => undefined);
-      await sound.setPositionAsync(0).catch(() => undefined);
-      await sound.setIsMutedAsync(false).catch(() => undefined);
       webCompletionAudioPrimedRef.current = true;
     } catch (error) {
       console.log('[TimerBG] Web audio unlock error:', error);
