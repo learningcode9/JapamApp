@@ -1086,6 +1086,11 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     setIsRunning(false);
     isRunningRef.current = false;
     hideNotification();
+    // hideNotification() stops silent-timer.wav on web. Restart it immediately so the
+    // iOS audio session stays active through the saveSession() network delay below.
+    if (Platform.OS === 'web') {
+      startWebTimerAudio();
+    }
     const completedInBackground = appStateRef.current !== 'active';
     if (!completedInBackground) {
       clearCompletionNotification();
@@ -1148,6 +1153,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           });
         }
       } catch {}
+    }
+    // Om has played (or was skipped). Stop the keep-alive that was restarted above.
+    if (Platform.OS === 'web') {
+      stopWebTimerAudio();
     }
 
     if (isFinal) {
