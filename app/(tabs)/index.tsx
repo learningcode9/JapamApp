@@ -1046,7 +1046,12 @@ export default function JapamMain() {
       }
 
       if (savedUserId) {
-        const timerState = await fetchTimerStateFromSupabase(savedUserId);
+        let timerState: TimerStateRow | null = null;
+        try {
+          timerState = await fetchTimerStateFromSupabase(savedUserId);
+        } catch {
+          // offline — fall through to local AsyncStorage restore below
+        }
         if (timerState) {
           // Local storage may have more recent seconds if app was killed between cloud saves
           const localSeconds = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_SECONDS_KEY, savedUserId))) || '0');
