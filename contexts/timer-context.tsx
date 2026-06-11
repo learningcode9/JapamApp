@@ -203,20 +203,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           .catch(() => undefined);
       }
       await fetch(WEB_OM_AUDIO_SRC, { cache: 'force-cache' }).catch(() => undefined);
-      // iOS Safari ignores element.volume = 0 (read-only on iOS), so the silent-play
-      // would fire the Om at full volume. On iOS, any user gesture globally unlocks
-      // audio for the page, so pressing Start is sufficient — no explicit priming needed.
-      const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
-        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-      if (!isIOS) {
-        await sound.stopAsync().catch(() => undefined);
-        await sound.setPositionAsync(0).catch(() => undefined);
-        await sound.setVolumeAsync(0).catch(() => undefined);
-        await sound.playAsync();
-        await sound.pauseAsync().catch(() => undefined);
-        await sound.setPositionAsync(0).catch(() => undefined);
-        await sound.setVolumeAsync(0.95).catch(() => undefined);
-      }
+      await sound.stopAsync().catch(() => undefined);
+      await sound.setPositionAsync(0).catch(() => undefined);
+      await sound.setIsMutedAsync(true).catch(() => undefined);
+      await sound.playAsync();
+      await sound.pauseAsync().catch(() => undefined);
+      await sound.setPositionAsync(0).catch(() => undefined);
+      await sound.setIsMutedAsync(false).catch(() => undefined);
       webCompletionAudioPrimedRef.current = true;
     } catch (error) {
       console.log('[TimerBG] Web audio unlock error:', error);
