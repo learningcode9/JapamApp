@@ -169,6 +169,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const webCompletionAudioPrimedRef = useRef(false);
   const appStateRef = useRef(AppState.currentState);
   const wakeLockRef = useRef<any>(null);
+  const omAudioContextRef = useRef<AudioContext | null>(null);
+  const omAudioBufferRef = useRef<AudioBuffer | null>(null);
+  const omKeepAliveAudioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => { secondsRef.current = seconds; }, [seconds]);
   useEffect(() => { isRunningRef.current = isRunning; }, [isRunning]);
@@ -191,25 +194,76 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
   const primeWebCompletionAudio = useCallback(async () => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
-    if (webCompletionAudioPrimedRef.current) return;
 
-    const sound = soundRef.current;
-    if (!sound) return;
+    // If already primed: try to resume a suspended context (e.g. after background) and
+    // restart the keep-alive — both are safe no-ops if already running.
+    if (webCompletionAudioPrimedRef.current) {
+      const ctx = omAudioContextRef.current;
+      if (ctx?.state === 'suspended') {
+        await ctx.resume().catch(() => undefined);
+      }
+      const ka = omKeepAliveAudioRef.current;
+      if (ka?.paused) {
+        ka.play().catch(() => undefined);
+      }
+      return;
+    }
 
     try {
-      // Unlock iOS audio session with the existing silent file — must happen before any
-      // I/O await so the user-gesture trust token is still valid when play() fires.
-      const unlock = new window.Audio('/silent-timer.wav');
+      // Step 1 — Unlock iOS audio session via silent HTMLMediaElement.
+      // This must fire before any async I/O so the gesture activation window is still open.
+      const unlock = new window.Audio(WEB_TIMER_AUDIO_SRC);
       await unlock.play().catch(() => undefined);
+
+      // Step 2 — Create and authorize AudioContext inside the gesture activation window.
+      // ctx.resume() is the critical call; once the context is running it stays running
+      // as long as audio flows through it — no further gesture needed.
+      const AudioContextClass = (
+        window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+      );
+      const ctx = new AudioContextClass();
+      await ctx.resume();
+
+      // Step 3 — Decode Om into an AudioBuffer (raw PCM in memory, ZERO audio output).
+      // Nothing plays here. The buffer is reused for every loop completion.
+      let omBuffer: AudioBuffer | null = null;
+      try {
+        const resp = await fetch(WEB_OM_AUDIO_SRC, { cache: 'force-cache' });
+        if (resp.ok) {
+          const arrayBuf = await resp.arrayBuffer();
+          omBuffer = await ctx.decodeAudioData(arrayBuf);
+        }
+      } catch {
+        // Decode failure: Om won't play at completion, but nothing audible leaks at start.
+        console.log('[TimerBG] Om decode failed — completion sound unavailable');
+      }
+      omAudioBufferRef.current = omBuffer;
+      omAudioContextRef.current = ctx;
+
+      // Step 4 — Route a dedicated silent-timer.wav element through the AudioContext.
+      // WHY: HTMLMediaElement playback is handled by iOS's media engine, not JS. When JS
+      // is frozen in background, iOS keeps feeding the audio bitstream into the
+      // MediaElementSourceNode, which keeps ctx.state === 'running'. This guarantees
+      // AudioBufferSourceNode.start() works at completion without a new gesture.
+      const keepAlive = new window.Audio(WEB_TIMER_AUDIO_SRC);
+      keepAlive.loop = true;
+      keepAlive.volume = 0;  // completely silent — sole purpose is to tick the AudioContext
+      const srcNode = ctx.createMediaElementSource(keepAlive);
+      srcNode.connect(ctx.destination);
+      keepAlive.play().catch(() => undefined);
+      omKeepAliveAudioRef.current = keepAlive;
+
+      // Step 5 — Pre-cache Om in the browser cache for instant access at completion.
       if ('caches' in window) {
         caches.open('japam-audio-v1')
           .then((cache) => cache.add(WEB_OM_AUDIO_SRC).catch(() => undefined))
           .catch(() => undefined);
       }
-      await fetch(WEB_OM_AUDIO_SRC, { cache: 'force-cache' }).catch(() => undefined);
+
       webCompletionAudioPrimedRef.current = true;
+      console.log('[TimerBG] AudioContext primed for Om completion');
     } catch (error) {
-      console.log('[TimerBG] Web audio unlock error:', error);
+      console.log('[TimerBG] Web AudioContext setup error:', error);
     }
   }, []);
 
@@ -1122,19 +1176,27 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     if (shouldPlaySound) {
       try {
         if (Platform.OS === 'web') {
-          // Use a fresh Audio element so iOS never hits the "previously-paused" restriction.
-          // A never-paused element plays freely from setInterval when the audio session is alive
-          // (silent-timer.wav kept running via skipWebAudioCleanup).
-          const omUri = await getWebOmAudioUri();
-          const omAudio = new window.Audio(omUri);
-          omAudio.volume = 0.95;
-          await new Promise<void>((resolve) => {
-            let done = false;
-            const finish = () => { if (done) return; done = true; resolve(); };
-            const cutoff = setTimeout(() => { omAudio.pause(); finish(); }, 5000);
-            omAudio.addEventListener('ended', () => { clearTimeout(cutoff); finish(); }, { once: true });
-            omAudio.play().catch(finish);
-          });
+          // Play Om via the pre-authorized AudioContext.
+          // AudioBufferSourceNode.start() does not require a user gesture — it only requires
+          // the AudioContext to be in 'running' state, which is maintained by the keep-alive
+          // MediaElementSource even while JS is frozen in iOS background.
+          const ctx = omAudioContextRef.current;
+          const buf = omAudioBufferRef.current;
+          if (ctx && buf && ctx.state === 'running') {
+            const source = ctx.createBufferSource();
+            source.buffer = buf;
+            source.connect(ctx.destination);
+            await new Promise<void>((resolve) => {
+              let done = false;
+              const finish = () => { if (done) return; done = true; resolve(); };
+              const cutoff = setTimeout(() => {
+                try { source.stop(); } catch {}
+                finish();
+              }, 5000);
+              source.onended = () => { clearTimeout(cutoff); finish(); };
+              source.start(0);
+            });
+          }
         } else {
           const sound = soundRef.current;
           if (sound) {
@@ -1617,6 +1679,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     releaseWakeLock();
     stopWebTimerAudio();
     if (notifIntervalRef.current) clearInterval(notifIntervalRef.current);
+    if (Platform.OS === 'web') {
+      omKeepAliveAudioRef.current?.pause();
+      omKeepAliveAudioRef.current = null;
+      void omAudioContextRef.current?.close();
+      omAudioContextRef.current = null;
+      omAudioBufferRef.current = null;
+    }
   }, [clearCompletionNotification, clearTimerInterval, releaseWakeLock, stopWebTimerAudio]);
 
   const start = useCallback(async () => {
