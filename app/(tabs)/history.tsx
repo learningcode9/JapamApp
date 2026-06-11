@@ -868,12 +868,12 @@ export default function HistoryScreen() {
               )}
               {Platform.OS !== 'web' && (
                 <Pressable
-                  style={({ pressed }) => [styles.deleteIconBtn, pressed && styles.deleteIconBtnPressed]}
+                  style={({ pressed }) => [styles.webDeleteCell, pressed && { opacity: 0.5 }]}
                   onPress={() => confirmDeleteDay(row)}
                   accessibilityLabel={`Delete ${row.dateLabel}`}
                   hitSlop={8}
                 >
-                  <Ionicons name="trash-outline" size={17} color="#b91c1c" />
+                  <Ionicons name="trash-outline" size={20} color="#6b7280" />
                 </Pressable>
               )}
             </Pressable>
@@ -1106,22 +1106,6 @@ const styles = StyleSheet.create({
   },
   webDeleteIcon: {
     fontSize: 18,
-  },
-
-  deleteIconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(220, 38, 38, 0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(185, 28, 28, 0.12)',
-    elevation: 1,
-  },
-  deleteIconBtnPressed: {
-    opacity: 0.8,
-    transform: [{ scale: 0.96 }],
   },
 
   emptyRow: {

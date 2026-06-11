@@ -201,18 +201,6 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       // I/O await so the user-gesture trust token is still valid when play() fires.
       const unlock = new window.Audio('/silent-timer.wav');
       await unlock.play().catch(() => undefined);
-      // Grant iOS per-element play authorization to the Om sound element.
-      // iOS blocks sound.playAsync() from a setInterval context unless the element
-      // has been played at least once within a user-gesture activation window.
-      // setIsMutedAsync(true) is used instead of setVolumeAsync(0) because iOS
-      // has been observed playing audio at low volume despite volume=0 being set.
-      await sound.setIsMutedAsync(true).catch(() => undefined);
-      await sound.setPositionAsync(0).catch(() => undefined);
-      await sound.playAsync().catch(() => undefined);
-      await sound.stopAsync().catch(() => undefined);
-      await sound.setPositionAsync(0).catch(() => undefined);
-      await sound.setIsMutedAsync(false).catch(() => undefined);
-      await sound.setVolumeAsync(0.95).catch(() => undefined);
       if ('caches' in window) {
         caches.open('japam-audio-v1')
           .then((cache) => cache.add(WEB_OM_AUDIO_SRC).catch(() => undefined))
@@ -1133,32 +1121,45 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
     if (shouldPlaySound) {
       try {
-        const sound = soundRef.current;
-        if (sound) {
-          if (Platform.OS === 'web' && !webCompletionAudioPrimedRef.current) {
-            await primeWebCompletionAudio();
-          }
-          await sound.stopAsync().catch(() => {});
-          await sound.playAsync();
+        if (Platform.OS === 'web') {
+          // Use a fresh Audio element so iOS never hits the "previously-paused" restriction.
+          // A never-paused element plays freely from setInterval when the audio session is alive
+          // (silent-timer.wav kept running via skipWebAudioCleanup).
+          const omUri = await getWebOmAudioUri();
+          const omAudio = new window.Audio(omUri);
+          omAudio.volume = 0.95;
           await new Promise<void>((resolve) => {
             let done = false;
-            const finish = () => {
-              if (done) return;
-              done = true;
-              sound.setOnPlaybackStatusUpdate(null);
-              resolve();
-            };
-            const cutoff = setTimeout(async () => {
-              await sound.stopAsync().catch(() => {});
-              finish();
-            }, 5000);
-            sound.setOnPlaybackStatusUpdate((status) => {
-              if (status.isLoaded && status.didJustFinish) {
-                clearTimeout(cutoff);
-                finish();
-              }
-            });
+            const finish = () => { if (done) return; done = true; resolve(); };
+            const cutoff = setTimeout(() => { omAudio.pause(); finish(); }, 5000);
+            omAudio.addEventListener('ended', () => { clearTimeout(cutoff); finish(); }, { once: true });
+            omAudio.play().catch(finish);
           });
+        } else {
+          const sound = soundRef.current;
+          if (sound) {
+            await sound.stopAsync().catch(() => {});
+            await sound.playAsync();
+            await new Promise<void>((resolve) => {
+              let done = false;
+              const finish = () => {
+                if (done) return;
+                done = true;
+                sound.setOnPlaybackStatusUpdate(null);
+                resolve();
+              };
+              const cutoff = setTimeout(async () => {
+                await sound.stopAsync().catch(() => {});
+                finish();
+              }, 5000);
+              sound.setOnPlaybackStatusUpdate((status) => {
+                if (status.isLoaded && status.didJustFinish) {
+                  clearTimeout(cutoff);
+                  finish();
+                }
+              });
+            });
+          }
         }
       } catch {}
     }

@@ -175,6 +175,15 @@ export default function TimerScreen() {
               0
             );
             mergedHistory = mergeHistories(localHistory, remoteHistory);
+            const rawTombData = await AsyncStorage.getItem('deletedCompletions');
+            if (rawTombData) {
+              const tombIds = new Set<string>(JSON.parse(rawTombData) as string[]);
+              if (tombIds.size > 0) {
+                mergedHistory = mergedHistory.filter(
+                  (item) => !tombIds.has(item.completionId ?? '')
+                );
+              }
+            }
             await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
             console.log('[RESTORE_REMOTE_COUNT] screen=timer count=%d', remoteHistory.length);
             console.log(
@@ -648,7 +657,7 @@ export default function TimerScreen() {
               </View>
             )}
 
-            <Text style={[styles.cardLabel, { marginTop: isShortMobile ? 12 : isMobile ? 14 : 22 }]}>AUTO-REPEAT MALAS</Text>
+            <Text style={[styles.cardLabel, { marginTop: isShortMobile ? 12 : isMobile ? 14 : 22 }]}>Auto-Repeat Malas</Text>
             <View style={styles.chips}>
               {LOOP_OPTIONS.map((l) => (
                 <Pressable
@@ -1161,10 +1170,11 @@ const styles = StyleSheet.create({
   modalClose: { position: 'absolute', right: 14, top: 10, zIndex: 10 },
   modalCloseText: { color: '#547071', fontSize: 28, fontWeight: '800' },
   cardLabel: {
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: '800',
     color: '#4a8c90',
-    letterSpacing: 1.2,
+    letterSpacing: 1.0,
+    textTransform: 'uppercase',
     marginBottom: isMobile ? 10 : 14,
   },
   chips: {
