@@ -391,13 +391,15 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const hideNotification = useCallback(() => {
+  const hideNotification = useCallback((opts?: { skipWebAudioCleanup?: boolean }) => {
     if (notifIntervalRef.current) {
       clearInterval(notifIntervalRef.current);
       notifIntervalRef.current = null;
     }
     if (Platform.OS === 'web') {
-      stopWebTimerAudio();
+      if (!opts?.skipWebAudioCleanup) {
+        stopWebTimerAudio();
+      }
       try {
         webRunningNotificationRef.current?.close();
         webRunningNotificationRef.current = null;
@@ -408,7 +410,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       try {
         if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
           navigator.mediaSession.metadata = null;
-          navigator.mediaSession.playbackState = 'none';
+          if (!opts?.skipWebAudioCleanup) {
+            navigator.mediaSession.playbackState = 'none';
+          }
         }
       } catch (error) {
         console.log('[TimerNotify] Media session clear error:', error);
@@ -1085,12 +1089,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     releaseWakeLock();
     setIsRunning(false);
     isRunningRef.current = false;
-    hideNotification();
-    // hideNotification() stops silent-timer.wav on web. Restart it immediately so the
-    // iOS audio session stays active through the saveSession() network delay below.
-    if (Platform.OS === 'web') {
-      startWebTimerAudio();
-    }
+    hideNotification(Platform.OS === 'web' ? { skipWebAudioCleanup: true } : undefined);
     const completedInBackground = appStateRef.current !== 'active';
     if (!completedInBackground) {
       clearCompletionNotification();
@@ -1116,9 +1115,6 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       webCompletionNotificationShownRef.current = true;
       showBrowserCompletionNotification(isFinal);
     }
-
-    // Await local write so stats events fire before sound plays
-    await saveSession();
 
     const shouldPlaySound = soundEnabledRef.current && !suppressNextCompletionSoundRef.current;
     suppressNextCompletionSoundRef.current = false;
@@ -1154,10 +1150,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         }
       } catch {}
     }
-    // Om has played (or was skipped). Stop the keep-alive that was restarted above.
+    // Om has played (or was skipped). Now safe to release the web audio session.
     if (Platform.OS === 'web') {
       stopWebTimerAudio();
+      try {
+        if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+          navigator.mediaSession.metadata = null;
+          navigator.mediaSession.playbackState = 'none';
+        }
+      } catch {}
     }
+    // Save session after Om: local write + stats events fire after sound completes.
+    await saveSession();
 
     if (isFinal) {
       timerSessionIdRef.current = '';
