@@ -201,6 +201,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       // I/O await so the user-gesture trust token is still valid when play() fires.
       const unlock = new window.Audio('/silent-timer.wav');
       await unlock.play().catch(() => undefined);
+      // Grant iOS per-element play authorization to the Om sound element.
+      // iOS blocks sound.playAsync() from a setInterval context unless the element
+      // has been played at least once within a user-gesture activation window.
+      // setIsMutedAsync(true) is used instead of setVolumeAsync(0) because iOS
+      // has been observed playing audio at low volume despite volume=0 being set.
+      await sound.setIsMutedAsync(true).catch(() => undefined);
+      await sound.setPositionAsync(0).catch(() => undefined);
+      await sound.playAsync().catch(() => undefined);
+      await sound.stopAsync().catch(() => undefined);
+      await sound.setPositionAsync(0).catch(() => undefined);
+      await sound.setIsMutedAsync(false).catch(() => undefined);
+      await sound.setVolumeAsync(0.95).catch(() => undefined);
       if ('caches' in window) {
         caches.open('japam-audio-v1')
           .then((cache) => cache.add(WEB_OM_AUDIO_SRC).catch(() => undefined))
