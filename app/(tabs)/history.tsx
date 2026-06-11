@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   appendCompletion,
@@ -834,7 +835,7 @@ export default function HistoryScreen() {
           <Text style={styles.tableCell}>Malas</Text>
           <Text style={styles.tableCell}>Count</Text>
           <Text style={styles.tableCell}>Total</Text>
-          {Platform.OS === 'web' && <View style={styles.webDeleteCell} />}
+          <View style={styles.webDeleteCell} />
         </View>
 
         {dailyRows.length === 0 ? (
@@ -863,6 +864,16 @@ export default function HistoryScreen() {
                   hitSlop={8}
                 >
                   <Text style={styles.webDeleteIcon}>🗑</Text>
+                </Pressable>
+              )}
+              {Platform.OS !== 'web' && (
+                <Pressable
+                  style={({ pressed }) => [styles.deleteIconBtn, pressed && styles.deleteIconBtnPressed]}
+                  onPress={() => confirmDeleteDay(row)}
+                  accessibilityLabel={`Delete ${row.dateLabel}`}
+                  hitSlop={8}
+                >
+                  <Ionicons name="trash-outline" size={17} color="#b91c1c" />
                 </Pressable>
               )}
             </Pressable>
@@ -1088,7 +1099,6 @@ const styles = StyleSheet.create({
     flex: 1.4,
   },
 
-  // Web-only: visible delete control per row (long-press isn't discoverable with a mouse).
   webDeleteCell: {
     width: 44,
     alignItems: 'center',
@@ -1096,6 +1106,22 @@ const styles = StyleSheet.create({
   },
   webDeleteIcon: {
     fontSize: 18,
+  },
+
+  deleteIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(220, 38, 38, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(185, 28, 28, 0.12)',
+    elevation: 1,
+  },
+  deleteIconBtnPressed: {
+    opacity: 0.8,
+    transform: [{ scale: 0.96 }],
   },
 
   emptyRow: {

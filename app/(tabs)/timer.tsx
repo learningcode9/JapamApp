@@ -593,7 +593,7 @@ export default function TimerScreen() {
           )}
 
           <View style={styles.card}>
-            <Text style={styles.cardLabel}>DURATION</Text>
+            <Text style={styles.cardLabel}>Select Japam duration (minutes)</Text>
             <View style={styles.chips}>
               {STD_DURATIONS.map((d) => (
                 <Pressable
