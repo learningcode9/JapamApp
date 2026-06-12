@@ -57,7 +57,7 @@ const WEB_OM_AUDIO_SRC = '/om_complete.mp3';
 const WEB_TIMER_AUDIO_SRC = '/silent-timer.wav';
 
 export const STD_DURATIONS = [1, 3, 5, 10, 15];
-export const LOOP_OPTIONS = [1, 3, 5, 10];
+export const LOOP_OPTIONS = [1, 2, 3, 5, 10];
 
 const getUserKey = (key: string, uid: string) => `${key}:${uid}`;
 export const formatTimer = (s: number) =>
