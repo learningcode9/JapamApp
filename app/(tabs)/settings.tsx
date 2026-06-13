@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, BackHandler, DeviceEventEmitter, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 
@@ -18,6 +18,7 @@ const TIMER_LOOP_KEY = 'timerLoop';
 const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
 
 export default function SettingsScreen() {
+  const router = useRouter();
   const [repetitionSoundEnabled, setRepetitionSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
@@ -197,6 +198,26 @@ export default function SettingsScreen() {
               </Pressable>
             </View>
           )}
+          {!userId && !!userName && (
+            <View style={styles.card}>
+              <View style={styles.textBlock}>
+                <Text style={styles.label}>Guest</Text>
+                <Text style={styles.description}>{userName}</Text>
+                <Text style={[styles.description, { fontSize: 14, marginTop: 6 }]}>
+                  Sign in with Google to sync across devices.
+                </Text>
+              </View>
+              <Pressable
+                style={styles.signInButton}
+                onPress={() => {
+                  DeviceEventEmitter.emit('japam-open-signin-modal');
+                  router.navigate('/');
+                }}
+              >
+                <Text style={styles.signInButtonText}>Sign in</Text>
+              </Pressable>
+            </View>
+          )}
 
           <View style={styles.card}>
             <View style={styles.textBlock}>
@@ -323,6 +344,8 @@ const styles = StyleSheet.create({
   compactButtonText: { color: 'white', fontSize: 15, fontWeight: '900' },
   logoutTextButton: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(153, 27, 27, 0.18)', backgroundColor: 'rgba(153, 27, 27, 0.06)' },
   logoutTextButtonText: { color: '#b91c1c', fontSize: 15, fontWeight: '800' },
+  signInButton: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1.5, borderColor: '#0f8a87', backgroundColor: 'transparent' },
+  signInButtonText: { color: '#0f8a87', fontSize: 15, fontWeight: '800' },
   cardStack: { gap: 12 },
   helpNote: { backgroundColor: 'rgba(255, 255, 255, 0.5)', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(15, 118, 110, 0.12)' },
   helpNoteText: { color: '#547071', fontSize: 15, lineHeight: 21, fontWeight: '700' },

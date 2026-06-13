@@ -24,7 +24,7 @@ export interface HistoryRecord {
   totalCount: number;
   duration: number;
   manual: boolean;
-  userId?: string;
+  userId?: string | null;
   userName?: string;
   userEmail?: string;
   source?: string;
@@ -116,7 +116,7 @@ export const appendCompletion = (
     totalCount: number;
     duration: number;
     manual?: boolean;
-    userId?: string;
+    userId?: string | null;
     userName?: string;
     userEmail?: string;
     source?: string;

@@ -47,7 +47,7 @@ type Session = {
   totalCount: number;
   duration: number;
   manual?: boolean;
-  userId?: string;
+  userId?: string | null;
   userName?: string;
   userEmail?: string;
   completionId?: string;
@@ -189,6 +189,9 @@ export default function JapamMain() {
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [installBannerDismissed, setInstallBannerDismissed] = useState(false);
+  const [showGuestNameModal, setShowGuestNameModal] = useState(false);
+  const [guestNameInput, setGuestNameInput] = useState('');
+  const [isGuestMode, setIsGuestMode] = useState(false);
 
   const totalRef = useRef(0);
   const timerRef = useRef({
@@ -821,6 +824,9 @@ export default function JapamMain() {
 
     const historySubscription = DeviceEventEmitter.addListener('japam-history-updated', onHistoryUpdated);
     const statsSubscription = DeviceEventEmitter.addListener('japam-stats-updated', onHistoryUpdated);
+    const openSigninSubscription = DeviceEventEmitter.addListener('japam-open-signin-modal', () => {
+      setShowUserModal(true);
+    });
 
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       window.addEventListener('japam-history-updated', onHistoryUpdated as EventListener);
@@ -830,6 +836,7 @@ export default function JapamMain() {
     return () => {
       historySubscription.remove();
       statsSubscription.remove();
+      openSigninSubscription.remove();
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.removeEventListener('japam-history-updated', onHistoryUpdated as EventListener);
         window.removeEventListener('japam-stats-updated', onHistoryUpdated as EventListener);
@@ -1035,10 +1042,18 @@ export default function JapamMain() {
       if (savedUserName && savedUserId) {
         userIdRef.current = savedUserId;
         setUserName(savedUserName);
+        setIsGuestMode(false);
         setShowUserModal(false);
         await restoreTodayTotal();
+      } else if (savedUserName && !savedUserId) {
+        // Guest mode: name set but no Google account
+        setUserName(savedUserName);
+        setIsGuestMode(true);
+        setShowUserModal(false);
+        await restoreTotal(0, { userId: null });
       } else {
         setUserName('');
+        setIsGuestMode(false);
         setIsSigningIn(authPending);
         setShowUserModal(false);
         setDayStreak(0);
@@ -1202,6 +1217,30 @@ export default function JapamMain() {
     }
   }, []);
 
+  const handleSaveGuestName = async () => {
+    const name = guestNameInput.trim();
+    if (!name) return;
+    await AsyncStorage.setItem(USER_NAME_KEY, name);
+    setUserName(name);
+    setIsGuestMode(true);
+    setShowGuestNameModal(false);
+    setShowUserModal(false);
+    setGuestNameInput('');
+    await restoreTotal(0, { userId: null });
+  };
+
+  const migrateGuestHistoryToGoogle = async (googleUserId: string) => {
+    const raw = await AsyncStorage.getItem(HISTORY_KEY);
+    const history: Session[] = raw ? JSON.parse(raw) : [];
+    const hasGuest = history.some((r) => !r.userId);
+    if (!hasGuest) return;
+    const migrated = history.map((r) =>
+      !r.userId ? { ...r, userId: googleUserId, syncStatus: 'pending' as const } : r
+    );
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(migrated));
+    console.log('[GUEST_MIGRATION] migrated guest records to userId=%s', googleUserId);
+  };
+
   const handleNativeGoogleSignIn = useCallback(async () => {
     setIsSigningIn(true);
     setShowUserModal(false);
@@ -1225,8 +1264,11 @@ export default function JapamMain() {
 
       if (!googleUserId) { setIsSigningIn(false); setShowUserModal(true); return; }
 
+      await migrateGuestHistoryToGoogle(googleUserId);
+
       setHasRestoredTimer(false);
       setUserName(googleName);
+      setIsGuestMode(false);
       setShowUserModal(false);
       setShowUserMenu(false);
       await restoreTotal(0, { userId: null });
@@ -1296,8 +1338,11 @@ export default function JapamMain() {
 
         if (!googleUserId) { setShowUserModal(true); return; }
 
+        await migrateGuestHistoryToGoogle(googleUserId);
+
         setHasRestoredTimer(false);
         setUserName(googleName);
+        setIsGuestMode(false);
         setShowUserModal(false);
         setShowUserMenu(false);
         await restoreTotal(0, { userId: null });
@@ -1467,7 +1512,7 @@ export default function JapamMain() {
         totalCount: sessionTotal,
         duration,
         manual: false,
-        userId: userId || undefined,
+        userId: userId ?? null,
       };
 
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([session, ...history]));
@@ -1855,6 +1900,7 @@ export default function JapamMain() {
     setHasRestoredTimer(false);
     setShowUserMenu(false);
     setUserName('');
+    setIsGuestMode(false);
     setJapamName('');
     setNameInput('');
     setHasSetName(false); // ✅ reset on logout
@@ -1973,9 +2019,15 @@ export default function JapamMain() {
 
             {showUserMenu && (
               <View style={styles.userMenu}>
-                <Pressable style={styles.userMenuItem} onPress={handleLogout}>
-                  <Text style={styles.userMenuText}>Logout</Text>
-                </Pressable>
+                {isGuestMode ? (
+                  <Pressable style={styles.userMenuItem} onPress={() => { setShowUserMenu(false); setShowUserModal(true); }}>
+                    <Text style={styles.userMenuText}>Sign in with Google</Text>
+                  </Pressable>
+                ) : (
+                  <Pressable style={styles.userMenuItem} onPress={handleLogout}>
+                    <Text style={styles.userMenuText}>Logout</Text>
+                  </Pressable>
+                )}
               </View>
             )}
           </View>
@@ -2207,9 +2259,9 @@ export default function JapamMain() {
               <View style={styles.modalTopMark}>
                 <View style={styles.modalTopDot} />
               </View>
-              <Text style={styles.modalTitle}>Sign in to save</Text>
+              <Text style={styles.modalTitle}>Save your Japam</Text>
               <Text style={styles.modalSubtitle}>
-                Sign in with Google to save your Japam history and sync across devices.
+                Sign in with Google to sync across devices, or continue as a guest to save locally.
               </Text>
               <Pressable
                 disabled={Platform.OS === 'web' && !request}
@@ -2218,8 +2270,6 @@ export default function JapamMain() {
                   if (Platform.OS !== 'web') {
                     void handleNativeGoogleSignIn();
                   } else {
-                    console.log('SIGNIN PATH:', Platform.OS);
-                    console.log('Using web promptAsync');
                     setIsSigningIn(true);
                     setShowUserModal(false);
                     void (async () => {
@@ -2239,9 +2289,49 @@ export default function JapamMain() {
                 </View>
                 <Text style={styles.modalButtonText}>Continue with Google</Text>
               </Pressable>
+              <Pressable
+                style={styles.guestButton}
+                onPress={() => { setShowUserModal(false); setGuestNameInput(''); setShowGuestNameModal(true); }}
+              >
+                <Text style={styles.guestButtonText}>Continue as Guest</Text>
+              </Pressable>
               <Text style={styles.modalFootnote}>
-                Your history stays separate from other users on this device.
+                Guest history is saved on this device only.
               </Text>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal visible={showGuestNameModal} transparent animationType="fade">
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Pressable style={styles.modalClose} onPress={() => setShowGuestNameModal(false)}>
+                <Text style={styles.modalCloseText}>×</Text>
+              </Pressable>
+              <View style={styles.modalTopMark}>
+                <View style={styles.modalTopDot} />
+              </View>
+              <Text style={styles.modalTitle}>What's your name?</Text>
+              <Text style={styles.modalSubtitle}>
+                Enter your name to personalise your Japam records.
+              </Text>
+              <TextInput
+                style={styles.guestNameInput}
+                placeholder="Your name"
+                placeholderTextColor="#8ab0b0"
+                value={guestNameInput}
+                onChangeText={setGuestNameInput}
+                autoFocus
+                returnKeyType="done"
+                onSubmitEditing={() => void handleSaveGuestName()}
+              />
+              <Pressable
+                style={[styles.modalButton, !guestNameInput.trim() && styles.disabledButton]}
+                disabled={!guestNameInput.trim()}
+                onPress={() => void handleSaveGuestName()}
+              >
+                <Text style={styles.modalButtonText}>Continue</Text>
+              </Pressable>
             </View>
           </View>
         </Modal>
@@ -3328,6 +3418,9 @@ const styles = StyleSheet.create({
   googleIconText: { color: '#2563eb', fontSize: 16, fontWeight: '900' },
   modalButtonText: { color: '#0f172a', fontWeight: '900', fontSize: 16 },
   modalFootnote: { color: '#547071', fontSize: 12, lineHeight: 17, textAlign: 'center', marginTop: 14 },
+  guestButton: { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: '#0f8a87', borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 10 },
+  guestButtonText: { color: '#0f8a87', fontWeight: '800', fontSize: 16 },
+  guestNameInput: { borderWidth: 1.5, borderColor: 'rgba(15, 118, 110, 0.3)', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, fontSize: 17, color: '#12383c', backgroundColor: 'rgba(255,255,255,0.7)', marginBottom: 16, marginTop: 4 },
   modalClose: { position: 'absolute', right: 14, top: 10, zIndex: 10 },
   modalCloseText: { color: '#547071', fontSize: 28, fontWeight: '800' },
   loginButton: {

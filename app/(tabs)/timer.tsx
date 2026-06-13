@@ -55,7 +55,7 @@ type Session = {
   totalCount: number;
   duration: number;
   manual?: boolean;
-  userId?: string;
+  userId?: string | null;
   userName?: string;
   userEmail?: string;
   source?: string;

@@ -34,7 +34,7 @@ type Session = {
   totalCount: number;
   duration: number;
   manual?: boolean;
-  userId?: string;
+  userId?: string | null;
   userName?: string;
   userEmail?: string;
   completionId?: string;
@@ -391,10 +391,7 @@ export default function HistoryScreen() {
 
   const saveManualEntry = async () => {
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
-    if (!currentUserId) {
-      Alert.alert('Please sign in', 'Please sign in to save history.');
-      return;
-    }
+    // Guests (currentUserId === null) are allowed — records saved locally with syncStatus 'synced'
 
     if (!manualDate || !/^\d{4}-\d{2}-\d{2}$/.test(manualDate)) {
       Alert.alert('Invalid date', 'Please enter a valid date in YYYY-MM-DD format.');
@@ -432,7 +429,7 @@ export default function HistoryScreen() {
         totalCount: finalCount,
         duration: 0,
         manual: true,
-        userId: currentUserId,
+        userId: currentUserId ?? null,
         userName,
         userEmail,
       });
@@ -446,14 +443,17 @@ export default function HistoryScreen() {
         updated[0].syncStatus
       );
 
-      void syncManualEntryToSupabase({
-        userId: currentUserId,
-        userName,
-        malas: finalMalas,
-        totalCount: finalCount,
-        createdAt,
-        completionId: newCompletionId,
-      });
+      // Only sync to Supabase for signed-in Google users
+      if (currentUserId) {
+        void syncManualEntryToSupabase({
+          userId: currentUserId,
+          userName,
+          malas: finalMalas,
+          totalCount: finalCount,
+          createdAt,
+          completionId: newCompletionId,
+        });
+      }
 
       setShowManualModal(false);
       await loadHistory();
@@ -479,13 +479,11 @@ export default function HistoryScreen() {
     const raw = await AsyncStorage.getItem('history');
     const allSessions = parseHistory(raw);
 
-    if (!currentUserId) {
-      setDailyRows([]);
-      return;
+    // Guest mode: currentUserId is null — show local records with null userId
+    if (currentUserId) {
+      const { userName } = await getStoredUserMeta();
+      void backfillMissingUserNames(currentUserId, userName);
     }
-
-    const { userName } = await getStoredUserMeta();
-    void backfillMissingUserNames(currentUserId, userName);
 
     // Local tombstones (deleted completionIds). These are honored here so a delete is reflected
     // immediately even if the remote row hasn't been removed yet — otherwise a same-tick remote
@@ -503,10 +501,12 @@ export default function HistoryScreen() {
       await AsyncStorage.setItem('history', JSON.stringify(cleanedSessions));
     }
 
-    let sessions = dedupeSessions(
-      cleanedSessions.filter((item) => item.userId === currentUserId && !isTombstoned(item))
-    );
-    const remoteSessions = await fetchRemoteSessions(currentUserId);
+    // Normalize userId comparison: undefined and null both represent "guest/no user"
+    const matchesUser = (item: Session) =>
+      (item.userId || null) === (currentUserId || null) && !isTombstoned(item);
+
+    let sessions = dedupeSessions(cleanedSessions.filter(matchesUser));
+    const remoteSessions = currentUserId ? await fetchRemoteSessions(currentUserId) : null;
 
     if (remoteSessions !== null) {
       const filteredRemoteSessions = remoteSessions.filter((item) => {
@@ -528,7 +528,7 @@ export default function HistoryScreen() {
       if (removedByTomb > 0) {
         console.log('[TOMBSTONE_APPLIED] screen=history removed=%d', removedByTomb);
       }
-      sessions = dedupeSessions(mergedForStorage.filter((item) => item.userId === currentUserId)).sort(
+      sessions = dedupeSessions(mergedForStorage.filter((item) => (item.userId || null) === (currentUserId || null))).sort(
         (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
       );
       await AsyncStorage.setItem('history', JSON.stringify(mergedForStorage));
@@ -536,7 +536,7 @@ export default function HistoryScreen() {
       console.log(
         '[MERGE_LOCAL_COUNT_BEFORE] screen=history count=%d pending=%d',
         latestCleanedSessions.length,
-        latestCleanedSessions.filter((item) => item.userId === currentUserId && item.syncStatus === 'pending').length
+        latestCleanedSessions.filter((item) => (item.userId || null) === (currentUserId || null) && item.syncStatus === 'pending').length
       );
       console.log('[MERGE_LOCAL_COUNT_AFTER] screen=history count=%d', mergedForStorage.length);
       console.log('[LOCAL_DAY_BUCKET] screen=history todayKey=%s buckets=%o',
