@@ -105,6 +105,9 @@ export default function TimerScreen() {
   const [userName, setUserName] = useState('');
   const [showUserModal, setShowUserModal] = useState(false);
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const [showGuestWarningModal, setShowGuestWarningModal] = useState(false);
+  const [showGuestNameModal, setShowGuestNameModal] = useState(false);
+  const [guestNameInput, setGuestNameInput] = useState('');
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
   const [malasToday, setMalasToday] = useState(0);
@@ -129,6 +132,26 @@ export default function TimerScreen() {
     setIsSigningIn(false);
     setShowUserModal(true);
   }, []);
+
+  const migrateGuestHistoryToGoogle = useCallback(async (googleUserId: string) => {
+    const raw = await AsyncStorage.getItem(HISTORY_KEY);
+    const history: Session[] = raw ? JSON.parse(raw) : [];
+    if (!history.some((r) => !r.userId)) return;
+    const migrated = history.map((r) =>
+      !r.userId ? { ...r, userId: googleUserId, syncStatus: 'pending' as const } : r
+    );
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(migrated));
+  }, []);
+
+  const handleSaveGuestName = useCallback(async () => {
+    const name = guestNameInput.trim();
+    if (!name) return;
+    await AsyncStorage.setItem(USER_NAME_KEY, name);
+    setUserName(name);
+    setShowGuestNameModal(false);
+    setShowUserModal(false);
+    setGuestNameInput('');
+  }, [guestNameInput]);
 
   const loadStats = useCallback(async () => {
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
@@ -330,6 +353,7 @@ export default function TimerScreen() {
       }
       await AsyncStorage.setItem(USER_NAME_KEY, googleName);
       if (googleEmail) await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
+      await migrateGuestHistoryToGoogle(googleUserId);
       await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
       setUserName(googleName);
       setShowUserModal(false);
@@ -342,7 +366,7 @@ export default function TimerScreen() {
     } finally {
       setIsSigningIn(false);
     }
-  }, [loadStats]);
+  }, [loadStats, migrateGuestHistoryToGoogle]);
 
   useEffect(() => {
     const handleGoogleLogin = async () => {
@@ -390,6 +414,7 @@ export default function TimerScreen() {
         if (googleEmail) {
           await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
         }
+        await migrateGuestHistoryToGoogle(googleUserId);
         await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
         setUserName(googleName);
         setShowUserModal(false);
@@ -692,7 +717,7 @@ export default function TimerScreen() {
         </View>
 
         <Modal
-          visible={showUserModal}
+          visible={showUserModal && !isSigningIn}
           transparent
           animationType="fade"
           onRequestClose={() => setShowUserModal(false)}
@@ -705,13 +730,13 @@ export default function TimerScreen() {
               <View style={styles.modalTopMark}>
                 <View style={styles.modalTopDot} />
               </View>
-              <Text style={styles.modalTitle}>Sign in to save</Text>
+              <Text style={styles.modalTitle}>Save your Japam</Text>
               <Text style={styles.modalSubtitle}>
-                Sign in with Google to save your Japam history and sync across devices.
+                Sign in with Google to sync across devices, or continue as a guest to save locally.
               </Text>
               <Pressable
-                disabled={isSigningIn || (Platform.OS === 'web' && !request)}
-                style={[styles.modalButton, (isSigningIn || (Platform.OS === 'web' && !request)) && styles.disabledButton]}
+                disabled={Platform.OS === 'web' && !request}
+                style={[styles.modalButton, (Platform.OS === 'web' && !request) && styles.disabledButton]}
                 onPress={() => {
                   if (Platform.OS !== 'web') {
                     void handleNativeGoogleSignIn();
@@ -744,9 +769,85 @@ export default function TimerScreen() {
                 </View>
                 <Text style={styles.modalButtonText}>Continue with Google</Text>
               </Pressable>
+              <Pressable
+                style={styles.guestButton}
+                onPress={() => { setShowUserModal(false); setShowGuestWarningModal(true); }}
+              >
+                <Text style={styles.guestButtonText}>Continue as Guest</Text>
+              </Pressable>
               <Text style={styles.modalFootnote}>
-                Your history stays separate from other users on this device.
+                Guest history is saved on this device only.
               </Text>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={showGuestWarningModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowGuestWarningModal(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Pressable style={styles.modalClose} onPress={() => setShowGuestWarningModal(false)}>
+                <Text style={styles.modalCloseText}>×</Text>
+              </Pressable>
+              <View style={styles.modalTopMark}>
+                <View style={styles.modalTopDot} />
+              </View>
+              <Text style={styles.modalTitle}>Continue as Guest</Text>
+              <Text style={styles.modalSubtitle}>
+                {'Your Japam history will be stored only on this phone. If you delete the app or change your phone, your history will not be transferred.\n\nFor backup and sync across devices, please sign in with Google.'}
+              </Text>
+              <Pressable
+                style={styles.modalButton}
+                onPress={() => { setShowGuestWarningModal(false); setShowGuestNameModal(true); }}
+              >
+                <Text style={styles.modalButtonText}>Continue as Guest</Text>
+              </Pressable>
+              <Pressable
+                style={styles.guestButton}
+                onPress={() => { setShowGuestWarningModal(false); setShowUserModal(true); }}
+              >
+                <Text style={styles.guestButtonText}>Sign in with Google</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={showGuestNameModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowGuestNameModal(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Pressable style={styles.modalClose} onPress={() => setShowGuestNameModal(false)}>
+                <Text style={styles.modalCloseText}>×</Text>
+              </Pressable>
+              <View style={styles.modalTopMark}>
+                <View style={styles.modalTopDot} />
+              </View>
+              <Text style={styles.modalTitle}>Your name</Text>
+              <Text style={styles.modalSubtitle}>Enter a name so your records are labeled correctly.</Text>
+              <TextInput
+                style={styles.guestNameInput}
+                placeholder="Enter your name"
+                placeholderTextColor="#94a3b8"
+                value={guestNameInput}
+                onChangeText={setGuestNameInput}
+                returnKeyType="done"
+                onSubmitEditing={() => void handleSaveGuestName()}
+              />
+              <Pressable
+                style={[styles.modalButton, !guestNameInput.trim() && styles.disabledButton]}
+                disabled={!guestNameInput.trim()}
+                onPress={() => void handleSaveGuestName()}
+              >
+                <Text style={styles.modalButtonText}>Continue</Text>
+              </Pressable>
             </View>
           </View>
         </Modal>
@@ -1239,5 +1340,33 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '800',
     fontSize: 14,
+  },
+  guestButton: {
+    marginTop: 10,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#dbeceb',
+  },
+  guestButtonText: {
+    color: '#0f766e',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  guestNameInput: {
+    borderWidth: 1.5,
+    borderColor: 'rgba(15,143,135,0.35)',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: '#12383c',
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    marginBottom: 14,
+    width: '100%',
   },
 });
