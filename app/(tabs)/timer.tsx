@@ -602,7 +602,7 @@ export default function TimerScreen() {
           )}
 
           <View style={styles.card}>
-            <Text style={styles.cardLabel}>Select Japam duration (minutes)</Text>
+            <Text style={styles.cardLabel}>Select Japam Time (minutes)</Text>
             <View style={styles.chips}>
               {STD_DURATIONS.map((d) => (
                 <Pressable
@@ -657,7 +657,7 @@ export default function TimerScreen() {
               </View>
             )}
 
-            <Text style={[styles.cardLabel, { marginTop: isShortMobile ? 12 : isMobile ? 14 : 22 }]}>Auto-Repeat Malas</Text>
+            <Text style={[styles.cardLabel, { marginTop: isShortMobile ? 12 : isMobile ? 14 : 22 }]}>How Many Malas?</Text>
             <View style={styles.chips}>
               {LOOP_OPTIONS.map((l) => (
                 <Pressable
