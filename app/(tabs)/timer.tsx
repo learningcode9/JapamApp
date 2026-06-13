@@ -151,6 +151,7 @@ export default function TimerScreen() {
     setShowGuestNameModal(false);
     setShowUserModal(false);
     setGuestNameInput('');
+    DeviceEventEmitter.emit('japam-auth-updated');
   }, [guestNameInput]);
 
   const loadStats = useCallback(async () => {

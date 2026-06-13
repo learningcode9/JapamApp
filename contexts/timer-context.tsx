@@ -51,6 +51,7 @@ const TIMER_SESSION_ID_KEY = 'timerSessionId';
 const HISTORY_KEY = 'history';
 const DELETED_COMPLETIONS_KEY = 'deletedCompletions';
 const USER_ID_KEY = 'userId';
+const USER_NAME_KEY = 'userName';
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
 const WEB_OM_AUDIO_SRC = '/om_complete.mp3';
@@ -135,6 +136,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
   const [userId, setUserId] = useState('');
+  const [isGuest, setIsGuest] = useState(false);
 
   const targetSeconds = selectedDuration * 60;
   const timeLeft = Math.max(0, targetSeconds - seconds);
@@ -1062,11 +1064,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
   const refreshAuthState = useCallback(async () => {
     const uid = await AsyncStorage.getItem(USER_ID_KEY) || '';
+    const guestName = await AsyncStorage.getItem(USER_NAME_KEY);
     userIdRef.current = uid;
     setUserId(uid);
+    setIsGuest(!uid && !!guestName);
     updateTimerState({ userId: uid });
 
-    if (!uid) {
+    if (!uid && !guestName) {
       clearTimerInterval();
       releaseWakeLock();
       setIsRunning(false);
@@ -1827,7 +1831,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     targetSeconds,
     isPaused,
     isCustomDuration,
-    canStart: Boolean(userId),
+    canStart: Boolean(userId) || isGuest,
     start,
     pause,
     reset,
@@ -1849,6 +1853,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     targetSeconds,
     timeLeft,
     userId,
+    isGuest,
   ]);
 
   return <TimerContext.Provider value={value}>{children}</TimerContext.Provider>;

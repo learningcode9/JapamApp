@@ -1055,6 +1055,10 @@ export default function JapamMain() {
         setUserName(savedUserName);
         setShowUserModal(false);
         await restoreTodayTotal();
+      } else if (savedUserName && !savedUserId) {
+        userIdRef.current = null;
+        setUserName(savedUserName);
+        setShowUserModal(false);
       } else {
         setUserName('');
         setShowUserModal(false);
@@ -1242,6 +1246,7 @@ export default function JapamMain() {
     setShowGuestNameModal(false);
     setShowUserModal(false);
     setGuestNameInput('');
+    DeviceEventEmitter.emit('japam-auth-updated');
   }, [guestNameInput]);
 
   const handleNativeGoogleSignIn = useCallback(async () => {
