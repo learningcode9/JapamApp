@@ -190,6 +190,7 @@ export default function JapamMain() {
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [installBannerDismissed, setInstallBannerDismissed] = useState(false);
   const [showGuestNameModal, setShowGuestNameModal] = useState(false);
+  const [showGuestWarningModal, setShowGuestWarningModal] = useState(false);
   const [guestNameInput, setGuestNameInput] = useState('');
   const [isGuestMode, setIsGuestMode] = useState(false);
 
@@ -2291,13 +2292,42 @@ export default function JapamMain() {
               </Pressable>
               <Pressable
                 style={styles.guestButton}
-                onPress={() => { setShowUserModal(false); setGuestNameInput(''); setShowGuestNameModal(true); }}
+                onPress={() => { setShowUserModal(false); setShowGuestWarningModal(true); }}
               >
                 <Text style={styles.guestButtonText}>Continue as Guest</Text>
               </Pressable>
               <Text style={styles.modalFootnote}>
                 Guest history is saved on this device only.
               </Text>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal visible={showGuestWarningModal} transparent animationType="fade">
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Pressable style={styles.modalClose} onPress={() => setShowGuestWarningModal(false)}>
+                <Text style={styles.modalCloseText}>×</Text>
+              </Pressable>
+              <View style={styles.modalTopMark}>
+                <View style={styles.modalTopDot} />
+              </View>
+              <Text style={styles.modalTitle}>Continue as Guest</Text>
+              <Text style={styles.modalSubtitle}>
+                Your Japam history will be stored only on this phone.{'\n\n'}If you delete the app or change your phone, your history will not be transferred.{'\n\n'}For backup and sync across devices, please sign in with Google.
+              </Text>
+              <Pressable
+                style={styles.modalButton}
+                onPress={() => { setShowGuestWarningModal(false); setGuestNameInput(''); setShowGuestNameModal(true); }}
+              >
+                <Text style={styles.modalButtonText}>Continue as Guest</Text>
+              </Pressable>
+              <Pressable
+                style={styles.guestButton}
+                onPress={() => { setShowGuestWarningModal(false); setShowUserModal(true); }}
+              >
+                <Text style={styles.guestButtonText}>Sign in with Google</Text>
+              </Pressable>
             </View>
           </View>
         </Modal>
