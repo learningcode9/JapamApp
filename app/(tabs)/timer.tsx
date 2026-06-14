@@ -370,6 +370,11 @@ export default function TimerScreen() {
   }, [loadStats, migrateGuestHistoryToGoogle]);
 
   useEffect(() => {
+    const signInSub = DeviceEventEmitter.addListener('japam-start-google-signin', () => void handleNativeGoogleSignIn());
+    return () => signInSub.remove();
+  }, [handleNativeGoogleSignIn]);
+
+  useEffect(() => {
     const handleGoogleLogin = async () => {
       if (!response) return;
 

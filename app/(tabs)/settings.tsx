@@ -25,6 +25,7 @@ export default function SettingsScreen() {
   const [userName, setUserName] = useState('');
   const [userEmail, setUserEmail] = useState('');
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [isSyncingGoogle, setIsSyncingGoogle] = useState(false);
 
   useEffect(() => {
     if (!showLogoutConfirm || Platform.OS !== 'android') return;
@@ -233,12 +234,17 @@ export default function SettingsScreen() {
               </View>
               <View style={styles.guestActions}>
                 <Pressable
-                  style={styles.signInButton}
+                  style={[styles.signInButton, isSyncingGoogle && { opacity: 0.55 }]}
+                  disabled={isSyncingGoogle}
                   onPress={() => {
+                    setIsSyncingGoogle(true);
                     DeviceEventEmitter.emit('japam-start-google-signin');
+                    setTimeout(() => setIsSyncingGoogle(false), 10000);
                   }}
                 >
-                  <Text style={styles.signInButtonText}>Sync with Google</Text>
+                  <Text style={styles.signInButtonText}>
+                    {isSyncingGoogle ? 'Opening Google...' : 'Sync with Google'}
+                  </Text>
                 </Pressable>
                 <Pressable style={styles.clearGuestButton} onPress={clearGuestData}>
                   <Text style={styles.clearGuestButtonText}>Exit Guest Mode</Text>
