@@ -167,15 +167,15 @@ export default function SettingsScreen() {
       router.navigate('/');
     };
     if (Platform.OS === 'web') {
-      if (window.confirm('Do you want to clear guest data from this device?')) void doClear();
+      if (window.confirm('Exit Guest Mode? Your guest history will stay on this device.')) void doClear();
       return;
     }
     Alert.alert(
-      'Clear Guest Data',
-      'Do you want to clear guest data from this device?',
+      'Exit Guest Mode?',
+      'Your guest history will stay on this device. You can access it again by continuing as guest.',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Clear Guest Data', style: 'destructive', onPress: () => void doClear() },
+        { text: 'Exit', style: 'destructive', onPress: () => void doClear() },
       ]
     );
   };
@@ -242,7 +242,7 @@ export default function SettingsScreen() {
                   <Text style={styles.signInButtonText}>Sign in</Text>
                 </Pressable>
                 <Pressable style={styles.clearGuestButton} onPress={clearGuestData}>
-                  <Text style={styles.clearGuestButtonText}>Clear data</Text>
+                  <Text style={styles.clearGuestButtonText}>Exit Guest Mode</Text>
                 </Pressable>
               </View>
             </View>
