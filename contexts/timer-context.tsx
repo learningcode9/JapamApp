@@ -443,6 +443,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       if (!audio) return;
       audio.pause();
       audio.currentTime = 0;
+      audio.src = '';
+      audio.load();
+      webTimerAudioRef.current = null;
     } catch (error) {
       console.log('[TimerNotify] Web timer audio stop error:', error);
     }
@@ -463,16 +466,6 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         webRunningNotificationShownRef.current = false;
       } catch (error) {
         console.log('[TimerNotify] Web notification close error:', error);
-      }
-      try {
-        if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-          navigator.mediaSession.metadata = null;
-          if (!opts?.skipWebAudioCleanup) {
-            navigator.mediaSession.playbackState = 'none';
-          }
-        }
-      } catch (error) {
-        console.log('[TimerNotify] Media session clear error:', error);
       }
       return;
     }
@@ -1217,12 +1210,6 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     // Om has played (or was skipped). Now safe to release the web audio session.
     if (Platform.OS === 'web') {
       stopWebTimerAudio();
-      try {
-        if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-          navigator.mediaSession.metadata = null;
-          navigator.mediaSession.playbackState = 'none';
-        }
-      } catch {}
     }
     // Save session after Om: local write + stats events fire after sound completes.
     await saveSession();
