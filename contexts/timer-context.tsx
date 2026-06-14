@@ -611,24 +611,6 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         const statusText = `${malaLabel} · ${formatTimer(left)}`;
 
         try {
-          if (
-            typeof navigator !== 'undefined' &&
-            'mediaSession' in navigator &&
-            typeof window !== 'undefined' &&
-            'MediaMetadata' in window
-          ) {
-            navigator.mediaSession.metadata = new window.MediaMetadata({
-              title: 'Japam Timer',
-              artist: statusText,
-              album: 'Mantra Japam',
-            });
-            navigator.mediaSession.playbackState = isRunningRef.current ? 'playing' : 'paused';
-          }
-        } catch (error) {
-          console.log('[TimerNotify] Media session update error:', error);
-        }
-
-        try {
           const shouldShowNotification =
             typeof Notification !== 'undefined' &&
             Notification.permission === 'granted' &&

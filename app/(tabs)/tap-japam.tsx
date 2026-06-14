@@ -857,23 +857,6 @@ export default function JapamMain() {
     document.title = isRunning ? `⏱ ${formatTime(seconds)} — Mantra Japam` : 'Mantra Japam';
   }, [isRunning, seconds]);
 
-  useEffect(() => {
-    if (Platform.OS !== 'web') return;
-    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
-    if (!isRunning) return;
-    const left = Math.max(0, targetSeconds - seconds);
-    const mm = String(Math.floor(left / 60)).padStart(2, '0');
-    const ss = String(left % 60).padStart(2, '0');
-    const artist = `Time left · ${mm}:${ss}`;
-    if (navigator.mediaSession.metadata) {
-      navigator.mediaSession.metadata.artist = artist;
-    } else {
-      navigator.mediaSession.metadata = new (window as any).MediaMetadata({
-        title: 'Japam Timer',
-        artist,
-      });
-    }
-  }, [isRunning, seconds, targetSeconds]);
 
   useEffect(() => {
     const onHistoryUpdated = () => {
