@@ -225,21 +225,20 @@ export default function SettingsScreen() {
           {!userId && !!userName && (
             <View style={styles.card}>
               <View style={styles.textBlock}>
-                <Text style={styles.label}>Guest</Text>
-                <Text style={styles.description}>{userName}</Text>
+                <Text style={styles.label}>Guest Mode</Text>
+                <Text style={styles.description}>Guest: {userName}</Text>
                 <Text style={[styles.description, { fontSize: 14, marginTop: 6 }]}>
-                  History saved on this device only.
+                  Your history is saved only on this phone.{'\n'}Sign in with Google to save permanently and sync across devices.
                 </Text>
               </View>
               <View style={styles.guestActions}>
                 <Pressable
                   style={styles.signInButton}
                   onPress={() => {
-                    DeviceEventEmitter.emit('japam-open-signin-modal');
-                    router.navigate('/');
+                    DeviceEventEmitter.emit('japam-start-google-signin');
                   }}
                 >
-                  <Text style={styles.signInButtonText}>Sign in</Text>
+                  <Text style={styles.signInButtonText}>Sync with Google</Text>
                 </Pressable>
                 <Pressable style={styles.clearGuestButton} onPress={clearGuestData}>
                   <Text style={styles.clearGuestButtonText}>Exit Guest Mode</Text>

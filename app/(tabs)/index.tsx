@@ -834,6 +834,11 @@ export default function JapamMain() {
         setShowUserModal(true);
       }
     });
+    // Dedicated event from Settings guest card — always starts Google sign-in directly,
+    // no modal, no guest-mode check needed.
+    const startGoogleSigninSubscription = DeviceEventEmitter.addListener('japam-start-google-signin', () => {
+      startGoogleSignInRef.current();
+    });
 
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       window.addEventListener('japam-history-updated', onHistoryUpdated as EventListener);
@@ -844,6 +849,7 @@ export default function JapamMain() {
       historySubscription.remove();
       statsSubscription.remove();
       openSigninSubscription.remove();
+      startGoogleSigninSubscription.remove();
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.removeEventListener('japam-history-updated', onHistoryUpdated as EventListener);
         window.removeEventListener('japam-stats-updated', onHistoryUpdated as EventListener);
