@@ -688,7 +688,7 @@ export default function TimerScreen() {
               </View>
             )}
 
-            <Text style={[styles.cardLabel, { marginTop: isShortMobile ? 12 : isMobile ? 14 : 22 }]}>How Many Malas?</Text>
+            <Text style={[styles.cardLabel, { marginTop: isShortMobile ? 12 : isMobile ? 14 : 22 }]}>Auto-Repeat Malas</Text>
             <View style={styles.chips}>
               {LOOP_OPTIONS.map((l) => (
                 <Pressable

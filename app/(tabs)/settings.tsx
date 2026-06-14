@@ -36,6 +36,30 @@ export default function SettingsScreen() {
     return () => sub.remove();
   }, [showLogoutConfirm]);
 
+  const loadAuth = useCallback(async () => {
+    const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+    const savedUserEmail = await AsyncStorage.getItem(USER_EMAIL_KEY);
+    setUserId(savedUserId);
+    setUserName(savedUserName || '');
+    setUserEmail(savedUserEmail || '');
+    setIsSyncingGoogle(false);
+  }, []);
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener('japam-auth-updated', () => void loadAuth());
+    const webHandler = () => void loadAuth();
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.addEventListener('japam-auth-updated', webHandler);
+    }
+    return () => {
+      sub.remove();
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.removeEventListener('japam-auth-updated', webHandler);
+      }
+    };
+  }, [loadAuth]);
+
   useFocusEffect(
     useCallback(() => {
       const loadSettings = async () => {
