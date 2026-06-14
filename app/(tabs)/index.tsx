@@ -193,6 +193,8 @@ export default function JapamMain() {
   const [showGuestWarningModal, setShowGuestWarningModal] = useState(false);
   const [guestNameInput, setGuestNameInput] = useState('');
   const [isGuestMode, setIsGuestMode] = useState(false);
+  const isGuestModeRef = useRef(false);
+  const startGoogleSignInRef = useRef<() => void>(() => {});
 
   const totalRef = useRef(0);
   const timerRef = useRef({
@@ -826,7 +828,11 @@ export default function JapamMain() {
     const historySubscription = DeviceEventEmitter.addListener('japam-history-updated', onHistoryUpdated);
     const statsSubscription = DeviceEventEmitter.addListener('japam-stats-updated', onHistoryUpdated);
     const openSigninSubscription = DeviceEventEmitter.addListener('japam-open-signin-modal', () => {
-      setShowUserModal(true);
+      if (isGuestModeRef.current) {
+        startGoogleSignInRef.current();
+      } else {
+        setShowUserModal(true);
+      }
     });
 
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -1043,17 +1049,20 @@ export default function JapamMain() {
       if (savedUserName && savedUserId) {
         userIdRef.current = savedUserId;
         setUserName(savedUserName);
+        isGuestModeRef.current = false;
         setIsGuestMode(false);
         setShowUserModal(false);
         await restoreTodayTotal();
       } else if (savedUserName && !savedUserId) {
         // Guest mode: name set but no Google account
         setUserName(savedUserName);
+        isGuestModeRef.current = true;
         setIsGuestMode(true);
         setShowUserModal(false);
         await restoreTotal(0, { userId: null });
       } else {
         setUserName('');
+        isGuestModeRef.current = false;
         setIsGuestMode(false);
         setIsSigningIn(authPending);
         setShowUserModal(false);
@@ -1223,6 +1232,7 @@ export default function JapamMain() {
     if (!name) return;
     await AsyncStorage.setItem(USER_NAME_KEY, name);
     setUserName(name);
+    isGuestModeRef.current = true;
     setIsGuestMode(true);
     setShowGuestNameModal(false);
     setShowUserModal(false);
@@ -1269,6 +1279,7 @@ export default function JapamMain() {
 
       setHasRestoredTimer(false);
       setUserName(googleName);
+      isGuestModeRef.current = false;
       setIsGuestMode(false);
       setShowUserModal(false);
       setShowUserMenu(false);
@@ -1298,6 +1309,27 @@ export default function JapamMain() {
     restoreTodayTotal,
     restoreTotal,
   ]);
+
+  useEffect(() => {
+    startGoogleSignInRef.current = () => {
+      if (Platform.OS !== 'web') {
+        void handleNativeGoogleSignIn();
+      } else {
+        if (!request) return;
+        setIsSigningIn(true);
+        setShowUserModal(false);
+        void (async () => {
+          await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
+          const result = await promptAsync({ showInRecents: true });
+          if (result.type !== 'success') {
+            await AsyncStorage.removeItem(AUTH_PENDING_KEY);
+            setIsSigningIn(false);
+            setShowUserModal(true);
+          }
+        })();
+      }
+    };
+  }, [handleNativeGoogleSignIn, promptAsync, request]);
 
   useEffect(() => {
     const handleGoogleLogin = async () => {
@@ -1343,6 +1375,7 @@ export default function JapamMain() {
 
         setHasRestoredTimer(false);
         setUserName(googleName);
+        isGuestModeRef.current = false;
         setIsGuestMode(false);
         setShowUserModal(false);
         setShowUserMenu(false);
@@ -1901,6 +1934,7 @@ export default function JapamMain() {
     setHasRestoredTimer(false);
     setShowUserMenu(false);
     setUserName('');
+    isGuestModeRef.current = false;
     setIsGuestMode(false);
     setJapamName('');
     setNameInput('');
