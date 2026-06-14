@@ -817,10 +817,14 @@ export default function JapamMain() {
       return;
     }
 
-    // Not logged in
+    // Not logged in (guest) — restore today's in-progress count from unkeyed manual keys
     if (!preserveManualCount) {
-      await restoreTotal(0, { userId: null });
-      totalRef.current = 0;
+      const manualDate = await AsyncStorage.getItem(MANUAL_TOTAL_DATE_KEY);
+      const guestTotal = manualDate === todayKey
+        ? Number((await AsyncStorage.getItem(MANUAL_TOTAL_KEY)) || '0')
+        : 0;
+      await restoreTotal(guestTotal, { userId: null });
+      totalRef.current = guestTotal;
     } else {
       setMalas(0);
       setTotal(0);
