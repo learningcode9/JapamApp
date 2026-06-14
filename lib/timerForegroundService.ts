@@ -1,5 +1,14 @@
 // No-op stub for web and iOS — real implementation is timerForegroundService.android.ts
-export const startForegroundService = async (): Promise<void> => {};
+export const startForegroundService = async (_params: {
+  sessionId: string;
+  durationSeconds: number;
+  completedLoops: number;
+  totalLoops: number;
+  soundEnabled: boolean;
+  vibrationEnabled: boolean;
+  userId: string;
+  startedAt: number;
+}): Promise<void> => {};
 export const pauseForegroundService = async (): Promise<void> => {};
 export const resumeForegroundService = async (): Promise<void> => {};
 export const stopForegroundService = async (): Promise<void> => {};

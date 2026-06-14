@@ -1,16 +1,63 @@
-/**
- * Android native foreground timer is intentionally disabled.
- *
- * The previous ForegroundService path introduced duplicate completion sources
- * (JS + Kotlin), stale notifications, late Om playback, and 4/3 loop states.
- * Keep this module as a safe no-op so the app uses the single JS timer source
- * of truth while native files remain untouched.
- */
-export const startForegroundService = async (): Promise<void> => {};
-export const pauseForegroundService = async (): Promise<void> => {};
-export const resumeForegroundService = async (): Promise<void> => {};
-export const stopForegroundService = async (): Promise<void> => {};
-export const setNativeAppActive = (_isActive: boolean): void => {};
+import { NativeModules } from 'react-native';
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const Native = NativeModules.JapamTimerService as any;
+
+// Dedup guard: prevents re-sending startTimer for the same mala.
+// Stores the startedAt (ms epoch) of the last successful startTimer call.
+// Reset to 0 in stopForegroundService so the next session starts fresh.
+let lastNativeStartKey = 0;
+
+export const startForegroundService = async (params: {
+  sessionId: string;
+  durationSeconds: number;
+  completedLoops: number;
+  totalLoops: number;
+  soundEnabled: boolean;
+  vibrationEnabled: boolean;
+  userId: string;
+  startedAt: number;
+}): Promise<void> => {
+  if (!Native) return;
+  if (params.startedAt === lastNativeStartKey) return;
+  lastNativeStartKey = params.startedAt;
+  try {
+    await Native.startTimer(
+      params.sessionId,
+      params.durationSeconds,
+      params.completedLoops,
+      params.totalLoops,
+      params.soundEnabled,
+      params.vibrationEnabled,
+      params.userId,
+      params.startedAt,
+    );
+  } catch (e) {
+    console.log('[NativeTimer] startForegroundService error:', e);
+    lastNativeStartKey = 0;
+  }
+};
+
+export const pauseForegroundService = async (): Promise<void> => {
+  if (!Native) return;
+  try { await Native.pauseTimer(); } catch {}
+};
+
+export const resumeForegroundService = async (): Promise<void> => {
+  if (!Native) return;
+  try { await Native.resumeTimer(); } catch {}
+};
+
+export const stopForegroundService = async (): Promise<void> => {
+  lastNativeStartKey = 0;
+  if (!Native) return;
+  try { await Native.stopTimer(); } catch {}
+};
+
+export const setNativeAppActive = (isActive: boolean): void => {
+  try { Native?.setAppActive(isActive); } catch {}
+};
+
 export const getNativeTimerState = async (): Promise<{
   sessionId: string;
   isRunning: boolean;
@@ -21,5 +68,12 @@ export const getNativeTimerState = async (): Promise<{
   completedLoops: number;
   totalLoops: number;
   userId: string;
-} | null> => null;
-export const isForegroundServiceRunning = async (): Promise<boolean> => false;
+} | null> => {
+  if (!Native) return null;
+  try { return await Native.getState(); } catch { return null; }
+};
+
+export const isForegroundServiceRunning = async (): Promise<boolean> => {
+  if (!Native) return false;
+  try { return await Native.isServiceRunning(); } catch { return false; }
+};

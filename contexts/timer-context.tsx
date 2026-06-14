@@ -18,6 +18,13 @@ import {
   type HistoryRecord,
 } from '../lib/historyStore';
 import { getWebOmAudioUri } from '../lib/webOmAudio';
+import {
+  getNativeTimerState,
+  pauseForegroundService,
+  setNativeAppActive,
+  startForegroundService,
+  stopForegroundService,
+} from '../lib/timerForegroundService';
 import React, {
   createContext,
   useCallback,
@@ -1064,6 +1071,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       timerSessionIdRef.current = '';
       updateTimerState({ sessionId: '', startedAt: null, completedLoops: 0, isCompleting: false });
       void hideNotification();
+      if (Platform.OS === 'android') void stopForegroundService();
     }
 
     // When a user just signed in (uid transitions from empty to a real value), flush any pending
@@ -1223,6 +1231,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     if (isFinal) {
       timerSessionIdRef.current = '';
       updateTimerState({ sessionId: '', isCompleting: false, startedAt: null });
+      if (Platform.OS === 'android') void stopForegroundService();
       void persistState(false);
       isCompletingRef.current = false;
       console.log('[LoopComplete] All loops done in foreground');
@@ -1249,6 +1258,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     showNotification();
     scheduleCompletionNotification(selectedDurationRef.current * 60);
     void persistState(true);
+    if (Platform.OS === 'android') {
+      void startForegroundService({
+        sessionId: timerSessionIdRef.current,
+        durationSeconds: selectedDurationRef.current * 60,
+        completedLoops: completedLoopsRef.current,
+        totalLoops: selectedLoopsRef.current,
+        soundEnabled: soundEnabledRef.current,
+        vibrationEnabled: vibrationEnabledRef.current,
+        userId: userIdRef.current,
+        startedAt: timerStartedAtRef.current!,
+      });
+    }
   }, [
     acquireWakeLock,
     claimCompletionLoop,
@@ -1325,6 +1346,28 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       }
     };
   }, [refreshAuthState]);
+
+  // Android: receive loop-complete broadcasts from Kotlin when app is backgrounded.
+  // claimCompletionLoop's Set prevents double-saves if reconcileNativeLoops already
+  // handled the same loop on foreground restore.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const sub = DeviceEventEmitter.addListener(
+      'japamTimerLoopComplete',
+      async (event: { sessionId: string; completedLoops: number; isFinal: boolean; userId: string }) => {
+        if (appStateRef.current === 'active') return; // foreground: JS or reconcile handles it
+        if (!event.sessionId || event.sessionId !== timerSessionIdRef.current) return;
+        const loop = event.completedLoops;
+        if (!claimCompletionLoop('NATIVE', loop, 0, { allowRunningNextLoop: true })) return;
+        const clamped = clampCompletedLoops(loop, selectedLoopsRef.current);
+        completedLoopsRef.current = clamped;
+        await persistCompletedLoops(clamped);
+        await saveSession();
+        console.log('[NativeTimer] japamTimerLoopComplete background save loop=%d isFinal=%s', loop, event.isFinal);
+      }
+    );
+    return () => sub.remove();
+  }, [claimCompletionLoop, persistCompletedLoops, saveSession]);
 
   useEffect(() => {
     if (Platform.OS !== 'android') return;
@@ -1567,6 +1610,64 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(iv);
   }, [isRunning, persistState]);
 
+  // Android only: on foreground restore, save any malas Kotlin completed while JS was
+  // asleep, then re-anchor the JS ticker to Kotlin's in-progress mala startedAt.
+  const reconcileNativeLoops = useCallback(async () => {
+    if (Platform.OS !== 'android') return;
+    try {
+      const native = await getNativeTimerState();
+      if (!native || !native.sessionId || native.sessionId !== timerSessionIdRef.current) return;
+
+      const jsDone = completedLoopsRef.current;
+      const nativeDone = native.completedLoops;
+      if (nativeDone > jsDone) {
+        for (let loop = jsDone + 1; loop <= nativeDone; loop++) {
+          if (!claimCompletionLoop('NATIVE', loop, 0, { allowRunningNextLoop: true })) continue;
+          const clamped = clampCompletedLoops(loop, selectedLoopsRef.current);
+          completedLoopsRef.current = clamped;
+          setCompletedLoops(clamped);
+          updateTimerState({ completedLoops: clamped });
+          await persistCompletedLoops(clamped);
+          await saveSession();
+        }
+      }
+
+      // Kotlin still has a mala in flight — re-anchor JS ticker to its startedAt
+      const moreToGo = completedLoopsRef.current < selectedLoopsRef.current;
+      if (moreToGo && native.isRunning && !native.isPaused && native.startedAt > 0) {
+        timerStartedAtRef.current = native.startedAt;
+        updateTimerState({ startedAt: native.startedAt });
+        const elapsed = Math.max(0, Math.floor((Date.now() - native.startedAt) / 1000));
+        setSeconds(elapsed);
+        secondsRef.current = elapsed;
+        setIsRunning(true);
+        isRunningRef.current = true;
+        startTimerInterval();
+        void acquireWakeLock();
+        void persistState(true);
+        console.log('[TimerBG] reconcileNativeLoops: restarted JS ticker elapsed=%ds loop=%d/%d',
+          elapsed, completedLoopsRef.current, selectedLoopsRef.current);
+      }
+
+      // All loops done and Kotlin service stopped — clear stale seconds that was
+      // snapshotted when app backgrounded mid-mala, which would otherwise leave
+      // isPaused=true and show Resume instead of Start.
+      if (!moreToGo && !native.isRunning) {
+        const targetSec = selectedDurationRef.current * 60;
+        setSeconds(targetSec);
+        secondsRef.current = targetSec;
+        timerStartedAtRef.current = null;
+        timerSessionIdRef.current = '';
+        updateTimerState({ startedAt: null, isCompleting: false, sessionId: '' });
+        void persistState(false);
+        console.log('[TimerBG] reconcileNativeLoops: final completion, cleared stale UI state loops=%d/%d',
+          completedLoopsRef.current, selectedLoopsRef.current);
+      }
+    } catch (e) {
+      console.log('[TimerBG] reconcileNativeLoops error:', e);
+    }
+  }, [acquireWakeLock, claimCompletionLoop, persistCompletedLoops, persistState, saveSession, startTimerInterval]);
+
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
       if (next === 'background' && appStateRef.current !== 'background') {
@@ -1585,13 +1686,21 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         soundRef.current?.stopAsync().catch(() => {});
         void hideNotification();
         clearCompletionNotification();
+        if (Platform.OS === 'android') setNativeAppActive(false);
         void persistState(false);
         console.log('[TimerBG] App backgrounded, simple JS timer paused wasRunning=%s seconds=%d', wasRunning, secondsRef.current);
       }
 
       if (next === 'active' && appStateRef.current !== 'active') {
         updateTimerState({ appIsActive: true });
-        if (!isRunningRef.current) void restoreRunningTimerFromStorage();
+        if (Platform.OS === 'android') {
+          setNativeAppActive(true);
+          void reconcileNativeLoops().then(() => {
+            if (!isRunningRef.current) void restoreRunningTimerFromStorage();
+          });
+        } else {
+          if (!isRunningRef.current) void restoreRunningTimerFromStorage();
+        }
       }
 
       appStateRef.current = next;
@@ -1602,6 +1711,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     clearCompletionNotification,
     hideNotification,
     persistState,
+    reconcileNativeLoops,
     releaseWakeLock,
     restoreRunningTimerFromStorage,
   ]);
@@ -1731,6 +1841,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     startTimerInterval();
     void acquireWakeLock();
     void showNotification();
+    if (Platform.OS === 'android') {
+      void startForegroundService({
+        sessionId: timerSessionIdRef.current,
+        durationSeconds: selectedDurationRef.current * 60,
+        completedLoops: completedLoopsRef.current,
+        totalLoops: selectedLoopsRef.current,
+        soundEnabled: soundEnabledRef.current,
+        vibrationEnabled: vibrationEnabledRef.current,
+        userId: userIdRef.current,
+        startedAt: timerStartedAtRef.current ?? Date.now(),
+      });
+    }
     void requestNotificationPermission().then((granted) => {
       if (!isRunningRef.current) return;
       if (!granted) {
@@ -1763,6 +1885,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     updateTimerState({ sessionId: timerSessionIdRef.current, startedAt: null, isCompleting: false });
     void hideNotification();
     clearCompletionNotification();
+    if (Platform.OS === 'android') void pauseForegroundService();
     void persistState(false);
     console.log('[TimerBG] Timer paused');
   }, [clearCompletionNotification, clearTimerInterval, hideNotification, persistState, releaseWakeLock]);
@@ -1783,6 +1906,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     updateTimerState({ sessionId: '', startedAt: null, completedLoops: 0, isCompleting: false, lastSavedCompletedLoops: 0 });
     void hideNotification();
     clearCompletionNotification();
+    if (Platform.OS === 'android') void stopForegroundService();
     void persistState(false);
     console.log('[TimerBG] Timer reset');
   }, [clearCompletionNotification, clearTimerInterval, hideNotification, persistState, releaseWakeLock]);
