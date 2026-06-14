@@ -257,6 +257,7 @@ export default function JapamMain() {
       setIsSigningIn(false);
     } else {
       userIdRef.current = null;
+      lastSavedSessionRef.current = '';
       setUserName('');
       setIsGuestMode(false);
       setIsSigningIn(authPending);
@@ -1997,6 +1998,7 @@ export default function JapamMain() {
 
     timerStartedAtRef.current = null;
     userIdRef.current = null;
+    lastSavedSessionRef.current = '';
     clearTimerHandles();
     void hideTimerNotification();
     setSeconds(0);

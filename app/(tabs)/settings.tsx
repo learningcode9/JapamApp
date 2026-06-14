@@ -164,7 +164,7 @@ export default function SettingsScreen() {
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.dispatchEvent(new Event('japam-auth-updated'));
       }
-      router.navigate('/');
+      router.navigate('/(tabs)/timer');
     };
     if (Platform.OS === 'web') {
       if (window.confirm('Exit Guest Mode? Your guest history will stay on this device.')) void doClear();
