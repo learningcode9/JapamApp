@@ -1066,6 +1066,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const refreshAuthState = useCallback(async () => {
     const uid = await AsyncStorage.getItem(USER_ID_KEY) || '';
     const guestName = await AsyncStorage.getItem(USER_NAME_KEY);
+    const prevUid = userIdRef.current;
     userIdRef.current = uid;
     isGuestRef.current = !uid && !!guestName;
     setUserId(uid);
@@ -1087,7 +1088,11 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       updateTimerState({ sessionId: '', startedAt: null, completedLoops: 0, isCompleting: false });
       void hideNotification();
     }
-  }, [clearTimerInterval, hideNotification, releaseWakeLock]);
+
+    // When a user just signed in (uid transitions from empty to a real value), flush any pending
+    // records immediately — covers Guest → Google migration records.
+    if (uid && !prevUid) void syncPendingHistory();
+  }, [clearTimerInterval, hideNotification, releaseWakeLock, syncPendingHistory]);
 
   const completeCycle = useCallback(async () => {
     if (isCompletingRef.current) {

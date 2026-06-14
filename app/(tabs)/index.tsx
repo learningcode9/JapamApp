@@ -1301,6 +1301,7 @@ export default function JapamMain() {
       await restoreHistoryFromSupabase(googleUserId);
       await restoreTimerForUser(googleUserId);
       void requestNotificationPermissionOnce();
+      DeviceEventEmitter.emit('japam-auth-updated');
     } catch (error) {
       console.log('Native Google sign-in error:', error);
       setShowUserModal(true);
@@ -1399,6 +1400,10 @@ export default function JapamMain() {
         await restoreHistoryFromSupabase(googleUserId);
         await restoreTimerForUser(googleUserId);
         void requestNotificationPermissionOnce();
+        DeviceEventEmitter.emit('japam-auth-updated');
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('japam-auth-updated'));
+        }
       } catch (error) {
         console.log('Google login error:', error);
         setShowUserModal(true);
