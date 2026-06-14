@@ -156,6 +156,30 @@ export default function SettingsScreen() {
     Alert.alert('Logged out', 'You have been logged out.');
   };
 
+  const clearGuestData = () => {
+    const doClear = async () => {
+      await AsyncStorage.removeItem(USER_NAME_KEY);
+      setUserName('');
+      DeviceEventEmitter.emit('japam-auth-updated');
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('japam-auth-updated'));
+      }
+      router.navigate('/');
+    };
+    if (Platform.OS === 'web') {
+      if (window.confirm('Do you want to clear guest data from this device?')) void doClear();
+      return;
+    }
+    Alert.alert(
+      'Clear Guest Data',
+      'Do you want to clear guest data from this device?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Clear Guest Data', style: 'destructive', onPress: () => void doClear() },
+      ]
+    );
+  };
+
   const openFeedbackForm = () => {
     const formUrl = 'https://docs.google.com/forms/d/e/1FAIpQLScYFBZqgour0aN3hFFjW2hrOAkc9vVFdN0-1NPXdouZZRsHfQ/viewform?usp=sf_link';
     Linking.openURL(formUrl).catch(() =>
@@ -204,18 +228,23 @@ export default function SettingsScreen() {
                 <Text style={styles.label}>Guest</Text>
                 <Text style={styles.description}>{userName}</Text>
                 <Text style={[styles.description, { fontSize: 14, marginTop: 6 }]}>
-                  Sign in with Google to sync across devices.
+                  History saved on this device only.
                 </Text>
               </View>
-              <Pressable
-                style={styles.signInButton}
-                onPress={() => {
-                  DeviceEventEmitter.emit('japam-open-signin-modal');
-                  router.navigate('/');
-                }}
-              >
-                <Text style={styles.signInButtonText}>Sign in</Text>
-              </Pressable>
+              <View style={styles.guestActions}>
+                <Pressable
+                  style={styles.signInButton}
+                  onPress={() => {
+                    DeviceEventEmitter.emit('japam-open-signin-modal');
+                    router.navigate('/');
+                  }}
+                >
+                  <Text style={styles.signInButtonText}>Sign in</Text>
+                </Pressable>
+                <Pressable style={styles.clearGuestButton} onPress={clearGuestData}>
+                  <Text style={styles.clearGuestButtonText}>Clear data</Text>
+                </Pressable>
+              </View>
             </View>
           )}
 
@@ -346,6 +375,9 @@ const styles = StyleSheet.create({
   logoutTextButtonText: { color: '#b91c1c', fontSize: 15, fontWeight: '800' },
   signInButton: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1.5, borderColor: '#0f8a87', backgroundColor: 'transparent' },
   signInButtonText: { color: '#0f8a87', fontSize: 15, fontWeight: '800' },
+  guestActions: { flexDirection: 'column', alignItems: 'flex-end', gap: 8 },
+  clearGuestButton: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(153, 27, 27, 0.22)', backgroundColor: 'rgba(153, 27, 27, 0.06)' },
+  clearGuestButtonText: { color: '#b91c1c', fontSize: 13, fontWeight: '700' },
   cardStack: { gap: 12 },
   helpNote: { backgroundColor: 'rgba(255, 255, 255, 0.5)', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(15, 118, 110, 0.12)' },
   helpNoteText: { color: '#547071', fontSize: 15, lineHeight: 21, fontWeight: '700' },

@@ -151,6 +151,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const soundEnabledRef = useRef(true);
   const vibrationEnabledRef = useRef(true);
   const userIdRef = useRef('');
+  const isGuestRef = useRef(false);
   const timerStartedAtRef = useRef<number | null>(null);
   const timerSessionIdRef = useRef('');
   const timerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -997,7 +998,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       totalCount: 108,
       duration,
       manual: false,
-      userId: uid || undefined,
+      userId: uid || null,
       userName: completionUserName,
       userEmail: storedUserEmail || undefined,
     };
@@ -1066,6 +1067,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     const uid = await AsyncStorage.getItem(USER_ID_KEY) || '';
     const guestName = await AsyncStorage.getItem(USER_NAME_KEY);
     userIdRef.current = uid;
+    isGuestRef.current = !uid && !!guestName;
     setUserId(uid);
     setIsGuest(!uid && !!guestName);
     updateTimerState({ userId: uid });
@@ -1696,9 +1698,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     const resume = seconds > 0 && seconds < targetSeconds;
     console.log('[TimerBG] TIMER_START_REQUEST resume=%s seconds=%d targetSeconds=%d isRunning=%s hasUser=%s',
       resume, seconds, targetSeconds, isRunning, Boolean(userIdRef.current));
-    if (!userIdRef.current || isRunning) {
+    if ((!userIdRef.current && !isGuestRef.current) || isRunning) {
       console.log('[TimerBG] TIMER_START_SKIPPED_DUPLICATE reason=%s',
-        !userIdRef.current ? 'no-user' : 'already-running');
+        (!userIdRef.current && !isGuestRef.current) ? 'no-user' : 'already-running');
       return;
     }
     console.log('[TimerBG] TIMER_START_ACCEPTED resume=%s', resume);
