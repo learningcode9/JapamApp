@@ -2096,7 +2096,7 @@ export default function JapamMain() {
             </View>
           )}
 
-          <Text style={styles.tapInstruction}>Tap the circle to count Japam</Text>
+          <Text style={styles.tapInstruction}>After each mantra japa,{'\n'}tap the circle</Text>
 
           <Animated.View style={styles.progressShell}>
             <Animated.View
