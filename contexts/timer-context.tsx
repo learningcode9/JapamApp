@@ -192,6 +192,12 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   useEffect(() => { soundEnabledRef.current = soundEnabled; }, [soundEnabled]);
   useEffect(() => { vibrationEnabledRef.current = vibrationEnabled; }, [vibrationEnabled]);
 
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    setNativeAppActive(true);
+    return () => { setNativeAppActive(false); };
+  }, []);
+
   const getCurrentRemainingSeconds = useCallback(() => (
     Math.max(0, selectedDurationRef.current * 60 - secondsRef.current)
   ), []);
