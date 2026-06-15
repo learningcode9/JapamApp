@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Startup Brief | JapamApp</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f9f9;
+      --bg-2: #e8f1f0;
+      --panel: rgba(255, 255, 255, 0.9);
+      --panel-strong: #ffffff;
+      --text: #103534;
+      --muted: #587574;
+      --line: rgba(16, 53, 52, 0.12);
+      --brand: #0f8f87;
+      --brand-soft: rgba(15, 143, 135, 0.12);
+      --warning: #9a6700;
+      --warning-soft: #fff8db;
+      --shadow: 0 18px 42px rgba(11, 70, 67, 0.11);
+      --radius-xl: 28px;
+      --radius-lg: 20px;
+      --radius-md: 16px;
+      --max: 1120px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+      margin: 0;
+      background:
+        radial-gradient(circle at top left, rgba(15, 143, 135, 0.16), transparent 30%),
+        linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 54%, #fafcfc 100%);
+      color: var(--text);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      padding: max(28px, env(safe-area-inset-top)) 14px 40px;
+    }
+
+    .page {
+      width: min(var(--max), 100%);
+      margin: 0 auto;
+    }
+
+    .hero,
+    .panel,
+    .option,
+    .brief-card {
+      background: var(--panel);
+      border: 1px solid rgba(255, 255, 255, 0.94);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow);
+    }
+
+    .hero {
+      padding: 34px;
+      margin-bottom: 18px;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--brand);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(34px, 7vw, 58px);
+      line-height: 1.02;
+      letter-spacing: -0.04em;
+    }
+
+    .hero p {
+      max-width: 820px;
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.7;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: var(--brand-soft);
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(280px, 0.95fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .stack {
+      display: grid;
+      gap: 18px;
+    }
+
+    .panel {
+      padding: 24px 26px;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 30px;
+      line-height: 1.1;
+      letter-spacing: -0.03em;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 20px;
+      line-height: 1.25;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 17px;
+      line-height: 1.7;
+    }
+
+    .options {
+      display: grid;
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .option {
+      padding: 18px;
+      border: 1px solid var(--line);
+      background: var(--panel-strong);
+    }
+
+    .option.recommended {
+      border-color: rgba(15, 143, 135, 0.28);
+      background: linear-gradient(180deg, rgba(15, 143, 135, 0.08), rgba(255, 255, 255, 0.96));
+    }
+
+    .label {
+      display: inline-flex;
+      align-items: center;
+      padding: 5px 9px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #f4f7f7;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+
+    .brief {
+      display: grid;
+      gap: 12px;
+    }
+
+    .brief-card {
+      padding: 18px 20px;
+      border: 1px solid var(--line);
+      background: var(--panel-strong);
+    }
+
+    .brief-card strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--text);
+      font-size: 15px;
+      letter-spacing: 0.01em;
+    }
+
+    ul,
+    ol {
+      margin: 12px 0 0;
+      padding-left: 20px;
+      color: var(--muted);
+    }
+
+    li {
+      margin-bottom: 10px;
+      line-height: 1.6;
+    }
+
+    .warning {
+      background: var(--warning-soft);
+      border: 1px solid rgba(154, 103, 0, 0.2);
+      color: #6e4f00;
+    }
+
+    .warning strong {
+      color: #6e4f00;
+    }
+
+    @media (max-width: 900px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .hero,
+      .panel,
+      .option,
+      .brief-card {
+        border-radius: 22px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <p class="eyebrow">Office Hours • Startup Mode</p>
+      <h1>Startup Brief</h1>
+      <p>
+        JapamApp looks like a credible niche product hypothesis for existing daily japa practitioners,
+        but it is not yet a proven startup. The current signal is strong founder pain, not real market pull.
+      </p>
+      <div class="meta">
+        <span class="pill">Mode: startup</span>
+        <span class="pill">Audience: existing daily japa practitioners</span>
+        <span class="pill">Wedge: log + reflect</span>
+      </div>
+    </section>
+
+    <section class="layout">
+      <div class="stack">
+        <section class="panel">
+          <h2>Approach Options</h2>
+          <div class="options">
+            <article class="option recommended">
+              <div class="label">Recommended</div>
+              <h3>1. Validate first</h3>
+              <p>
+                Narrow the bet to one wedge: existing daily japa practitioners who already use a
+                physical mala and a notebook, and test whether <code>log + reflect</code> is strong
+                enough to replace the notebook.
+              </p>
+              <ul>
+                <li>Best truth signal</li>
+                <li>Lowest wasted scope</li>
+                <li>Less exciting than pretending this is already a broad product</li>
+              </ul>
+            </article>
+
+            <article class="option">
+              <h3>2. Build the full practitioner app now</h3>
+              <p>
+                Keep pushing timer, tap count, sync, streaks, history, and polish as the main product.
+              </p>
+              <ul>
+                <li>Stronger-looking app</li>
+                <li>You are already ahead on building and behind on proof</li>
+              </ul>
+            </article>
+
+            <article class="option">
+              <h3>3. Broaden into a generic meditation / habit app</h3>
+              <p>
+                Go after a larger market.
+              </p>
+              <ul>
+                <li>Weakest move</li>
+                <li>Your only real edge is specificity</li>
+                <li>Broadening puts you against much stronger incumbents</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Open Questions</h2>
+          <ul>
+            <li>Is the pain strong enough to make people change behavior, not just praise the app?</li>
+            <li>Do practitioners want only logging and history, or do they actually value the digital session flow too?</li>
+            <li>Will anyone outside your immediate circle adopt it?</li>
+            <li>Is this a retention product for serious practitioners, or a nice-to-have utility?</li>
+          </ul>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="panel">
+          <h2>Startup Brief</h2>
+          <div class="brief">
+            <article class="brief-card">
+              <strong>What problem are we actually solving?</strong>
+              <p>
+                Daily japa practitioners can do the chanting fine with a physical mala, but logging it manually is
+                annoying and the notebook gives them a poor view of history, momentum, and consistency.
+              </p>
+            </article>
+
+            <article class="brief-card">
+              <strong>Who is this for?</strong>
+              <p>Existing daily japa practitioners who already have the habit and already use a physical mala.</p>
+            </article>
+
+            <article class="brief-card">
+              <strong>What do they do today?</strong>
+              <p>They chant with a physical mala and track progress manually in a notebook.</p>
+            </article>
+
+            <article class="brief-card">
+              <strong>Why this might matter now</strong>
+              <p>
+                The wedge is real and specific: <code>effortless logging + a good history view</code> for an existing practice.
+                The weak part is timing and proof: the evidence is still founder pain, not market pull.
+                Distribution risk is high because the first users come from friends and family, which is fine for validation
+                but weak as a true go-to-market signal.
+              </p>
+            </article>
+
+            <article class="brief-card">
+              <strong>Recommended direction</strong>
+              <p>
+                <code>Validate first</code>. This is a credible niche product hypothesis, not yet a proven startup.
+                Do not broaden. Do not assume “I built it” equals “they need it.” If real practitioners do not replace
+                the notebook, the idea is weaker than it feels right now.
+              </p>
+            </article>
+
+            <article class="brief-card">
+              <strong>Next concrete step</strong>
+              <p>
+                Put it in the hands of 10 real daily practitioners from your current circle and measure one thing:
+                after 1-2 weeks, did they actually replace the notebook for real sessions, or did they just say the app was nice?
+              </p>
+            </article>
+
+            <article class="brief-card warning">
+              <strong>Practical guidance</strong>
+              <p>
+                The idea is worth validating, but keep investment measured until real market demand and repeat adoption are proven.
+              </p>
+            </article>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
