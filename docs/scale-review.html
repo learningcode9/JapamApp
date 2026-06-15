@@ -1,0 +1,963 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Scale Review | JapamApp</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f9f9;
+      --bg-2: #e8f1f0;
+      --panel: rgba(255, 255, 255, 0.9);
+      --panel-strong: #ffffff;
+      --text: #103534;
+      --muted: #587574;
+      --line: rgba(16, 53, 52, 0.12);
+      --brand: #0f8f87;
+      --brand-soft: rgba(15, 143, 135, 0.12);
+      --critical: #b42318;
+      --critical-soft: #fef3f2;
+      --high: #b54708;
+      --high-soft: #fff7ed;
+      --shadow: 0 18px 42px rgba(11, 70, 67, 0.11);
+      --radius-xl: 28px;
+      --radius-lg: 20px;
+      --radius-md: 16px;
+      --max: 1180px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+      margin: 0;
+      background:
+        radial-gradient(circle at top left, rgba(15, 143, 135, 0.16), transparent 30%),
+        linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 54%, #fafcfc 100%);
+      color: var(--text);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      padding: max(28px, env(safe-area-inset-top)) 14px 40px;
+    }
+
+    a {
+      color: var(--brand);
+      text-decoration: none;
+      font-weight: 700;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background: rgba(16, 53, 52, 0.06);
+      border-radius: 8px;
+      padding: 2px 6px;
+      font-size: 0.95em;
+    }
+
+    .page {
+      width: min(var(--max), 100%);
+      margin: 0 auto;
+    }
+
+    .hero,
+    .summary,
+    .scorecard,
+    .issue,
+    .plan {
+      background: var(--panel);
+      border: 1px solid rgba(255, 255, 255, 0.94);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow);
+    }
+
+    .hero {
+      padding: 34px;
+      margin-bottom: 18px;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--brand);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(34px, 7vw, 60px);
+      line-height: 1.02;
+      letter-spacing: -0.04em;
+    }
+
+    .hero p {
+      max-width: 860px;
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.7;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: var(--brand-soft);
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .summary,
+    .scorecard,
+    .plan {
+      padding: 24px 26px;
+      margin-bottom: 18px;
+    }
+
+    h2 {
+      margin: 0 0 10px;
+      font-size: 30px;
+      line-height: 1.1;
+      letter-spacing: -0.03em;
+    }
+
+    .summary p,
+    .scorecard p,
+    .issue p,
+    .plan p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 17px;
+      line-height: 1.7;
+    }
+
+    .summary strong,
+    .issue strong,
+    .plan strong {
+      color: var(--text);
+    }
+
+    .score-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .score-item {
+      background: var(--panel-strong);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+    }
+
+    .severity {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .severity.critical {
+      color: var(--critical);
+      background: var(--critical-soft);
+    }
+
+    .severity.high {
+      color: var(--high);
+      background: var(--high-soft);
+    }
+
+    .score-item h3 {
+      margin: 12px 0 8px;
+      font-size: 18px;
+      line-height: 1.3;
+    }
+
+    .score-item p {
+      margin: 0 0 10px;
+      font-size: 15px;
+      line-height: 1.55;
+    }
+
+    .label {
+      display: inline-block;
+      padding: 5px 9px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #f4f7f7;
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 270px minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .toc {
+      position: sticky;
+      top: 16px;
+      background: rgba(255, 255, 255, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.94);
+      border-radius: var(--radius-xl);
+      box-shadow: var(--shadow);
+      padding: 18px;
+      backdrop-filter: blur(12px);
+    }
+
+    .toc h3 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+
+    .toc ol {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+    }
+
+    .toc li {
+      margin: 0 0 10px;
+      line-height: 1.45;
+    }
+
+    .issues {
+      display: grid;
+      gap: 18px;
+    }
+
+    .issue {
+      padding: 26px;
+    }
+
+    .issue-head {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: start;
+      margin-bottom: 16px;
+    }
+
+    .issue-title {
+      display: grid;
+      gap: 8px;
+    }
+
+    .issue-title h2 {
+      margin: 0;
+      font-size: 30px;
+    }
+
+    .issue-subtitle {
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.6;
+    }
+
+    .issue-grid {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: rgba(255, 255, 255, 0.84);
+      padding: 16px;
+    }
+
+    .panel h3 {
+      margin: 0 0 10px;
+      font-size: 19px;
+    }
+
+    .panel p {
+      font-size: 16px;
+      line-height: 1.65;
+    }
+
+    .panel ul {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.65;
+    }
+
+    .teach {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border-left: 4px solid var(--brand);
+      border-radius: 12px;
+      background: rgba(15, 143, 135, 0.08);
+      color: var(--text);
+      font-size: 15px;
+      line-height: 1.6;
+      font-weight: 600;
+    }
+
+    .callouts {
+      display: grid;
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .callout {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: #fff;
+      padding: 14px 16px;
+    }
+
+    .callout h4 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+
+    .callout.why h4 {
+      color: var(--critical);
+    }
+
+    .callout.recommendation h4 {
+      color: var(--brand);
+    }
+
+    .callout.tradeoff h4 {
+      color: var(--high);
+    }
+
+    .callout p {
+      font-size: 15px;
+      line-height: 1.65;
+    }
+
+    .split,
+    .flow,
+    .service-map {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .split {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .flow {
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      align-items: center;
+    }
+
+    .service-map {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .box,
+    .arrow {
+      border-radius: 14px;
+      padding: 12px;
+      text-align: center;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .box {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+    }
+
+    .box.bad {
+      border-color: rgba(180, 35, 24, 0.18);
+      background: var(--critical-soft);
+    }
+
+    .box.good {
+      border-color: rgba(15, 143, 135, 0.22);
+      background: rgba(15, 143, 135, 0.08);
+    }
+
+    .arrow {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 22px;
+      padding: 0;
+    }
+
+    .refs {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .refs strong {
+      color: var(--text);
+    }
+
+    .refs ul {
+      margin: 8px 0 0;
+      padding-left: 18px;
+    }
+
+    .plan-list {
+      display: grid;
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .plan-step {
+      display: grid;
+      grid-template-columns: 56px 1fr;
+      gap: 14px;
+      align-items: start;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: #fff;
+      padding: 16px;
+    }
+
+    .num {
+      width: 56px;
+      height: 56px;
+      border-radius: 16px;
+      display: grid;
+      place-items: center;
+      background: var(--brand-soft);
+      color: var(--brand);
+      font-size: 22px;
+      font-weight: 900;
+    }
+
+    .plan-step h3 {
+      margin: 0 0 6px;
+      font-size: 20px;
+    }
+
+    .footer-note {
+      margin-top: 16px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    @media (max-width: 1040px) {
+      .score-grid,
+      .layout,
+      .issue-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .toc {
+        position: static;
+      }
+    }
+
+    @media (max-width: 760px) {
+      body {
+        padding-inline: 10px;
+      }
+
+      .hero,
+      .summary,
+      .scorecard,
+      .issue,
+      .plan,
+      .toc {
+        padding: 20px;
+        border-radius: 22px;
+      }
+
+      .split,
+      .flow,
+      .service-map {
+        grid-template-columns: 1fr;
+      }
+
+      .arrow {
+        transform: rotate(90deg);
+      }
+
+      .plan-step {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <p class="eyebrow">Staff-Level Architecture Review</p>
+      <h1>Scale Review: What Will Break Before 10,000 Users</h1>
+      <p>
+        JapamApp has a strong early-stage product feel, but the current architecture will become
+        slower, more fragile, harder to secure, and harder to maintain as usage grows. This page is
+        meant to explain those issues clearly, in plain English, so you can see what to fix first.
+      </p>
+      <div class="meta">
+        <span class="pill">Audience: junior repo owner</span>
+        <span class="pill">Tone: coaching, not blame</span>
+        <span class="pill">Target scale: 10,000 users</span>
+      </div>
+    </section>
+
+    <section class="summary">
+      <h2>What This Means In Plain English</h2>
+      <p>
+        The biggest problem is <strong>not one bad bug</strong>. The real problem is that data loading,
+        sync, storage, and business logic are spread across large screen files and repeated in
+        several places. That creates four kinds of pain at scale: more backend cost, more device
+        work, weaker security boundaries, and slower development when you try to change anything.
+      </p>
+    </section>
+
+    <section class="scorecard">
+      <h2>The 5 Problems At A Glance</h2>
+      <p>Read this like a map: these are the main scaling blockers, and the detailed sections below explain each one.</p>
+      <div class="score-grid">
+        <article class="score-item">
+          <span class="severity critical">Critical</span>
+          <h3>Full-history reads</h3>
+          <p>Normal screens pull too much data instead of just the slice they need.</p>
+          <span class="label">Performance</span>
+        </article>
+        <article class="score-item">
+          <span class="severity critical">Critical</span>
+          <h3>Client-enforced tenancy</h3>
+          <p>The backend still trusts too much identity information from the app client.</p>
+          <span class="label">Security</span>
+        </article>
+        <article class="score-item">
+          <span class="severity critical">Critical</span>
+          <h3>AsyncStorage as database</h3>
+          <p>Large JSON blobs are acting like the main local data store.</p>
+          <span class="label">Storage</span>
+        </article>
+        <article class="score-item">
+          <span class="severity high">High</span>
+          <h3>Chatty sync</h3>
+          <p>Sync and save paths do more network work than the product value justifies.</p>
+          <span class="label">Backend Load</span>
+        </article>
+        <article class="score-item">
+          <span class="severity high">High</span>
+          <h3>Duplicated domain logic</h3>
+          <p>Important behavior lives in multiple giant files and overlapping flows.</p>
+          <span class="label">Maintainability</span>
+        </article>
+      </div>
+    </section>
+
+    <div class="layout">
+      <aside class="toc">
+        <h3>On This Page</h3>
+        <ol>
+          <li><a href="#problem-1">Problem 1: Unbounded full-history reads</a></li>
+          <li><a href="#problem-2">Problem 2: Client-enforced tenancy and anon-key access</a></li>
+          <li><a href="#problem-3">Problem 3: AsyncStorage as the main database</a></li>
+          <li><a href="#problem-4">Problem 4: Chatty sync and write amplification</a></li>
+          <li><a href="#problem-5">Problem 5: Duplicated domain logic</a></li>
+          <li><a href="#action-plan">Fix these first</a></li>
+        </ol>
+      </aside>
+
+      <div class="issues">
+        <section class="issue" id="problem-1">
+          <div class="issue-head">
+            <div class="issue-title">
+              <span class="severity critical">Critical</span>
+              <h2>Problem 1: Unbounded Full-History Reads</h2>
+              <div class="issue-subtitle">Several normal app flows fetch or rebuild an entire user's history when they only need a small slice of it.</div>
+            </div>
+            <span class="label">Main failure: performance</span>
+          </div>
+
+          <div class="issue-grid">
+            <div class="panel">
+              <h3>What is happening</h3>
+              <p>
+                Screens like the main tap flow, timer, and history screen repeatedly restore or fetch
+                full history data. That means the amount of work grows with the user's entire lifetime
+                activity, not with what the screen actually needs right now.
+              </p>
+              <div class="split">
+                <div class="box bad"><strong>Current</strong><br />Load full history to compute today stats</div>
+                <div class="box good"><strong>Better</strong><br />Fetch one page or one aggregate for today</div>
+              </div>
+              <div class="teach">Junior-dev takeaway: this is like downloading the whole spreadsheet every time you only want today's row.</div>
+            </div>
+            <div class="panel">
+              <h3>Why this breaks at 10,000 users</h3>
+              <ul>
+                <li>screen load cost grows as each user accumulates more history</li>
+                <li>network payloads get bigger over time for routine actions</li>
+                <li>backend reads become more expensive than the UI value they provide</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="callouts">
+            <div class="callout why">
+              <h4>Why This Matters</h4>
+              <p>A slow pattern repeated on every screen eventually feels like the whole app is slow, even if each query “works.”</p>
+            </div>
+            <div class="callout recommendation">
+              <h4>Recommendation</h4>
+              <p>Add paginated history reads and server-side aggregate endpoints for things like today totals and streaks. Fetch deltas since a watermark instead of reloading everything.</p>
+            </div>
+            <div class="callout tradeoff">
+              <h4>Tradeoff</h4>
+              <p>This adds backend design work, but it gives you predictable performance and lower read cost.</p>
+            </div>
+          </div>
+
+          <div class="refs">
+            <strong>Code references</strong>
+            <ul>
+              <li><code>app/(tabs)/index.tsx:633-710, 1133-1178</code></li>
+              <li><code>app/(tabs)/tap-japam.tsx:701-772, 1145-1188</code></li>
+              <li><code>app/(tabs)/timer.tsx:133-179</code></li>
+              <li><code>app/(tabs)/history.tsx:475-553</code></li>
+            </ul>
+          </div>
+        </section>
+
+        <section class="issue" id="problem-2">
+          <div class="issue-head">
+            <div class="issue-title">
+              <span class="severity critical">Critical</span>
+              <h2>Problem 2: Client-Enforced Tenancy And Anon-Key Data Access</h2>
+              <div class="issue-subtitle">The app client is still doing too much of the work that the backend should enforce for identity and data isolation.</div>
+            </div>
+            <span class="label">Main failure: security</span>
+          </div>
+
+          <div class="issue-grid">
+            <div class="panel">
+              <h3>What is happening</h3>
+              <p>
+                Many requests send a client-provided <code>user_id</code> together with the anon key.
+                That means the backend is trusting request shape more than it should. For a real
+                product, identity should be derived from authenticated backend context.
+              </p>
+              <div class="flow">
+                <div class="box bad">App sends<br /><code>user_id</code></div>
+                <div class="arrow">→</div>
+                <div class="box bad">REST call uses anon key</div>
+                <div class="arrow">→</div>
+                <div class="box bad">DB accepts client identity</div>
+              </div>
+              <div class="teach">Junior-dev takeaway: if the app tells the database who the user is, the app is holding too much security responsibility.</div>
+            </div>
+            <div class="panel">
+              <h3>Why this breaks at 10,000 users</h3>
+              <ul>
+                <li>security rules become easier to bypass accidentally or intentionally</li>
+                <li>shared tables become riskier to operate as real user data grows</li>
+                <li>debugging data access bugs gets much harder because trust boundaries are blurry</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="callouts">
+            <div class="callout why">
+              <h4>Why This Matters</h4>
+              <p>Convenient auth shortcuts are cheap early on, but expensive later because they force the client to be your security layer.</p>
+            </div>
+            <div class="callout recommendation">
+              <h4>Recommendation</h4>
+              <p>Use authenticated Supabase JWTs or Edge Functions for data access and enforce row-level security from backend user identity, not a client-supplied <code>user_id</code>.</p>
+            </div>
+            <div class="callout tradeoff">
+              <h4>Tradeoff</h4>
+              <p>You will need auth and policy cleanup, but you will have a much safer foundation for real users and real support issues.</p>
+            </div>
+          </div>
+
+          <div class="refs">
+            <strong>Code references</strong>
+            <ul>
+              <li><code>app/(tabs)/index.tsx:1101-1142, 1213-1215, 1254-1318</code></li>
+              <li><code>app/(tabs)/history.tsx:97-105</code></li>
+              <li><code>app/(tabs)/manual.tsx:54-62</code></li>
+              <li><code>db/deleted_completions_migration.sql:19-40</code></li>
+            </ul>
+          </div>
+        </section>
+
+        <section class="issue" id="problem-3">
+          <div class="issue-head">
+            <div class="issue-title">
+              <span class="severity critical">Critical</span>
+              <h2>Problem 3: AsyncStorage Is Acting Like The Main Database</h2>
+              <div class="issue-subtitle">History and tombstones are stored as growing JSON blobs, then repeatedly rewritten for normal operations.</div>
+            </div>
+            <span class="label">Main failure: local storage</span>
+          </div>
+
+          <div class="issue-grid">
+            <div class="panel">
+              <h3>What is happening</h3>
+              <p>
+                The app often reads the entire history blob, parses it, changes it, stringifies it,
+                and writes the whole thing back. That is okay for tiny prototype data and a poor fit
+                for long-lived user history.
+              </p>
+              <div class="flow">
+                <div class="box bad">Read whole blob</div>
+                <div class="arrow">→</div>
+                <div class="box bad">Parse JSON</div>
+                <div class="arrow">→</div>
+                <div class="box bad">Modify + rewrite</div>
+              </div>
+              <div class="teach">Junior-dev takeaway: when a single row changes, you should not need to rewrite the whole file-sized value.</div>
+            </div>
+            <div class="panel">
+              <h3>Why this breaks at 10,000 users</h3>
+              <ul>
+                <li>save and delete operations become O(n) in total history size</li>
+                <li>older power users get slower behavior over time</li>
+                <li>the app does more device CPU and memory work than necessary</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="callouts">
+            <div class="callout why">
+              <h4>Why This Matters</h4>
+              <p>This is one of the clearest signs that the app has outgrown a prototype storage model.</p>
+            </div>
+            <div class="callout recommendation">
+              <h4>Recommendation</h4>
+              <p>Move history and tombstones to a row-based local database such as SQLite. Keep AsyncStorage only for small settings and simple flags.</p>
+            </div>
+            <div class="callout tradeoff">
+              <h4>Tradeoff</h4>
+              <p>You will need a migration and a stronger data layer, but row-level updates will stay fast as history grows.</p>
+            </div>
+          </div>
+
+          <div class="refs">
+            <strong>Code references</strong>
+            <ul>
+              <li><code>lib/historyStore.ts:111-139, 205-212, 317-330</code></li>
+              <li><code>contexts/timer-context.tsx:754-757, 821-883, 958-961</code></li>
+              <li><code>app/(tabs)/history.tsx:568-582</code></li>
+              <li><code>app/(tabs)/manual.tsx:128-133, 230-247</code></li>
+            </ul>
+          </div>
+        </section>
+
+        <section class="issue" id="problem-4">
+          <div class="issue-head">
+            <div class="issue-title">
+              <span class="severity high">High</span>
+              <h2>Problem 4: Sync Does Too Much Work And The Write Path Is Chatty</h2>
+              <div class="issue-subtitle">The sync model does large reconciliation passes and the app performs more small writes than it should.</div>
+            </div>
+            <span class="label">Main failure: backend load</span>
+          </div>
+
+          <div class="issue-grid">
+            <div class="panel">
+              <h3>What is happening</h3>
+              <p>
+                The app fetches full tombstone or history-related sets, self-heals across large local
+                datasets, and uploads records one-by-one. It also writes timer and totals state often
+                enough to create extra backend traffic.
+              </p>
+              <div class="split">
+                <div class="box bad"><strong>Current</strong><br />Many small repeated writes + large sync passes</div>
+                <div class="box good"><strong>Better</strong><br />Delta sync + batch writes at meaningful checkpoints</div>
+              </div>
+              <div class="teach">Junior-dev takeaway: if your sync logic keeps re-checking everything, it is doing too much work for each tiny change.</div>
+            </div>
+            <div class="panel">
+              <h3>Why this breaks at 10,000 users</h3>
+              <ul>
+                <li>backend traffic grows faster than real user value</li>
+                <li>sync logic gets harder to reason about and support</li>
+                <li>mobile data usage and battery cost rise too</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="callouts">
+            <div class="callout why">
+              <h4>Why This Matters</h4>
+              <p>This is not just about cloud cost. Chatty sync also makes correctness harder, because more moving pieces means more ways to drift.</p>
+            </div>
+            <div class="callout recommendation">
+              <h4>Recommendation</h4>
+              <p>Use delta sync with <code>updated_at</code> and <code>deleted_at</code> cursors, batch uploads/deletes, and save cloud state at semantic checkpoints instead of frequent timer-driven intervals.</p>
+            </div>
+            <div class="callout tradeoff">
+              <h4>Tradeoff</h4>
+              <p>You trade simple brute-force logic for more thoughtful sync design, but the system becomes cheaper and easier to scale.</p>
+            </div>
+          </div>
+
+          <div class="refs">
+            <strong>Code references</strong>
+            <ul>
+              <li><code>contexts/timer-context.tsx:728-790, 804-883, 989-1003</code></li>
+              <li><code>app/(tabs)/history.tsx:595-620</code></li>
+              <li><code>app/(tabs)/index.tsx:926-988, 1352-1358</code></li>
+              <li><code>app/(tabs)/tap-japam.tsx:927-988, 1379-1385</code></li>
+            </ul>
+          </div>
+        </section>
+
+        <section class="issue" id="problem-5">
+          <div class="issue-head">
+            <div class="issue-title">
+              <span class="severity high">High</span>
+              <h2>Problem 5: Core Domain Logic Is Duplicated Across Giant Modules</h2>
+              <div class="issue-subtitle">Important behavior is repeated across a hidden legacy flow, the visible tap flow, and a separate timer engine.</div>
+            </div>
+            <span class="label">Main failure: maintainability</span>
+          </div>
+
+          <div class="issue-grid">
+            <div class="panel">
+              <h3>What is happening</h3>
+              <p>
+                The app has overlapping implementations for auth restore, history restore, session
+                saving, and timer behavior. That means future fixes are more likely to drift or only
+                get applied in one place.
+              </p>
+              <div class="service-map">
+                <div class="box bad">Hidden legacy flow</div>
+                <div class="box bad">Visible tap flow</div>
+                <div class="box bad">Separate timer engine</div>
+              </div>
+              <div class="service-map" style="grid-template-columns: 1fr; margin-top: 10px;">
+                <div class="box good">Better: one shared history repository + one shared timer domain layer</div>
+              </div>
+              <div class="teach">Junior-dev takeaway: duplicated business rules are a scaling problem too, because they slow the team and create regression risk.</div>
+            </div>
+            <div class="panel">
+              <h3>Why this breaks at 10,000 users</h3>
+              <ul>
+                <li>bug fixes need to be made in multiple places</li>
+                <li>behavior drifts between screens over time</li>
+                <li>feature delivery slows down as the codebase gets more fragile</li>
+              </ul>
+            </div>
+          </div>
+
+          <div class="callouts">
+            <div class="callout why">
+              <h4>Why This Matters</h4>
+              <p>Even if infrastructure scaled perfectly, this structure would still slow development and increase production bugs.</p>
+            </div>
+            <div class="callout recommendation">
+              <h4>Recommendation</h4>
+              <p>Keep one canonical tap flow and extract shared services such as a <code>historyRepository</code>, <code>syncService</code>, and timer controller so screens mostly render state instead of owning business rules.</p>
+            </div>
+            <div class="callout tradeoff">
+              <h4>Tradeoff</h4>
+              <p>This is real refactor work, but it pays back in faster development, fewer regressions, and more confidence when changing behavior.</p>
+            </div>
+          </div>
+
+          <div class="refs">
+            <strong>Code references</strong>
+            <ul>
+              <li><code>app/(tabs)/_layout.tsx:92-97</code></li>
+              <li><code>app/(tabs)/index.tsx:633-1182, 1440-1510</code></li>
+              <li><code>app/(tabs)/tap-japam.tsx:701-1192, 1470-1596</code></li>
+              <li><code>contexts/timer-context.tsx:940-987, 1038-1191, 1606-1750</code></li>
+            </ul>
+          </div>
+        </section>
+
+        <section class="plan" id="action-plan">
+          <h2>Fix These First</h2>
+          <p>
+            If you only have time to work on a few things, focus on the foundation first. These steps
+            reduce the biggest long-term risks fastest.
+          </p>
+
+          <div class="plan-list">
+            <article class="plan-step">
+              <div class="num">1</div>
+              <div>
+                <h3>Secure backend access and real tenancy</h3>
+                <p>Move data reads and writes behind authenticated backend rules so the app is not acting like the security layer.</p>
+              </div>
+            </article>
+
+            <article class="plan-step">
+              <div class="num">2</div>
+              <div>
+                <h3>Stop full-history sync and full-history reads</h3>
+                <p>Add delta sync, pagination, and aggregate reads so the app only loads what the current screen needs.</p>
+              </div>
+            </article>
+
+            <article class="plan-step">
+              <div class="num">3</div>
+              <div>
+                <h3>Move history out of raw AsyncStorage blobs</h3>
+                <p>Use a row-based local database for history and tombstones so local work stays cheap as the user keeps using the app.</p>
+              </div>
+            </article>
+
+            <article class="plan-step">
+              <div class="num">4</div>
+              <div>
+                <h3>Consolidate the duplicated business logic</h3>
+                <p>After the storage and backend layers are cleaner, unify the repeated logic into shared services so new features do not keep multiplying maintenance cost.</p>
+              </div>
+            </article>
+          </div>
+
+          <p class="footer-note">
+            Bottom line: this app does not need a huge rewrite right away. It does need a change in
+            direction. The main shift is from “screen files owning everything” to “shared data and
+            domain layers owning the hard parts.”
+          </p>
+        </section>
+      </div>
+    </div>
+  </main>
+</body>
+</html>
