@@ -8,6 +8,11 @@ import {
   todayStatsFor,
   toLocalDayKey,
 } from '../../lib/historyStore';
+import {
+  createMalaCompletionGuard,
+  detectMalaCrossing,
+  runMalaCompletion,
+} from '../../lib/malaCompletion';
 import { getWebOmAudioUri } from '../../lib/webOmAudio';
 import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
@@ -245,6 +250,7 @@ export default function JapamMain() {
   const lastSavedSessionRef = useRef('');
   const lastTapRef = useRef(0);
   const lastCompletedCycleRef = useRef<number>(0);
+  const tapMalaCompletionGuardRef = useRef(createMalaCompletionGuard());
   const startTimerIntervalRef = useRef<() => void>(() => {});
   const appStateRef = useRef(AppState.currentState);
   const restoreTodayTotalRef = useRef<() => Promise<void>>(async () => {});
@@ -1844,15 +1850,20 @@ export default function JapamMain() {
       useNativeDriver: true,
     }).start();
 
-    const newTotal = setCountersFromTotal(totalRef.current + 1);
-    const newCount = newTotal % 108;
+    const previousTotal = totalRef.current;
+    const nextTotal = previousTotal + 1;
+    const newTotal = setCountersFromTotal(nextTotal);
+    const crossing = detectMalaCrossing(previousTotal, nextTotal);
 
-    if (newCount === 0) {
-      console.log('TAP_MALA_COMPLETE_REACHED total=%d count=%d', newTotal, newCount);
-      const saved = await saveSession(0, 1, 108, newTotal, 'tap');
-      if (saved) {
-        await completeFeedback('final');
-      }
+    if (crossing.crossed) {
+      console.log('TAP_MALA_COMPLETE_REACHED total=%d count=%d', newTotal, newTotal % 108);
+      await runMalaCompletion({
+        boundaryKey: crossing.nextMala,
+        guard: tapMalaCompletionGuardRef.current,
+        save: () => saveSession(0, 1, 108, newTotal, 'tap'),
+        playFeedback: () => completeFeedback('final'),
+        onError: (stage, error) => console.log('TAP_MALA_COMPLETION_ERROR stage=%s', stage, error),
+      });
     } else {
       void tapFeedback();
     }
