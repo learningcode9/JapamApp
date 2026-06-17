@@ -34,7 +34,14 @@ import {
   useTimer,
 } from '../../contexts/timer-context';
 import { isIOSDeviceWeb, isStandaloneOrInstalledWeb } from '../../lib/pwaInstall';
-import { supabase } from '../../lib/supabase';
+import {
+  signInAsGuest,
+  getIsAnonymous,
+  setIsAnonymous,
+  signInOrLinkGoogle,
+  showGoogleAccountCollisionDialog,
+  shouldSkipRemoteSync,
+} from '../../lib/anonymousAuth';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -147,6 +154,10 @@ export default function TimerScreen() {
     const name = guestNameInput.trim();
     if (!name) return;
     await AsyncStorage.setItem(USER_NAME_KEY, name);
+    // Best-effort: creates a real Supabase anonymous user (auth.uid()) so this guest's identity
+    // can later be linked to Google without losing data. On failure (offline, disabled), this
+    // leaves USER_ID_KEY unset, identical to today's local-only guest fallback.
+    await signInAsGuest();
     setUserName(name);
     setShowGuestNameModal(false);
     setShowUserModal(false);
@@ -156,6 +167,7 @@ export default function TimerScreen() {
 
   const loadStats = useCallback(async () => {
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
+    const isAnonymous = await getIsAnonymous();
     const todayKey = getLocalDateKey();
     const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
     const localHistory = parseHistory(rawHistory);
@@ -163,7 +175,11 @@ export default function TimerScreen() {
     let rawSupabaseRows = 0;
     let rawSupabaseCount = 0;
 
-    if (userId) {
+    // Option B: anonymous guest data stays local-only until Google linking — skip the remote
+    // fetch/merge entirely for anonymous users, same as today's no-userId guest behavior.
+    // (The `userId &&` is redundant with shouldSkipRemoteSync's own null check, kept only so
+    // TypeScript narrows userId to string for the encodeURIComponent call below.)
+    if (userId && !shouldSkipRemoteSync(userId, isAnonymous)) {
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       if (url && key) {
@@ -317,6 +333,27 @@ export default function TimerScreen() {
     }
   }, []);
 
+  // Shared tail of native Google sign-in: stores the Google identity locally and (unless this was
+  // a linkIdentity success, or the user chose to sign in anyway after a collision) migrates any
+  // local guest-only history rows to this googleUserId — same storage steps as today, just
+  // factored out so the collision dialog's "Sign In" button can reach them too.
+  const finishGoogleSignIn = useCallback(async (
+    googleName: string,
+    googleEmail: string,
+    googleUserId: string,
+    skipMigration: boolean
+  ) => {
+    await AsyncStorage.setItem(USER_NAME_KEY, googleName);
+    if (googleEmail) await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
+    if (!skipMigration) await migrateGuestHistoryToGoogle(googleUserId);
+    await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
+    setUserName(googleName);
+    setShowUserModal(false);
+    DeviceEventEmitter.emit('japam-auth-updated');
+    DeviceEventEmitter.emit('japam-stats-updated');
+    void loadStats();
+  }, [loadStats, migrateGuestHistoryToGoogle]);
+
   const handleNativeGoogleSignIn = useCallback(async () => {
     console.log('SIGNIN PATH:', Platform.OS);
     console.log('Using native GoogleSignin');
@@ -348,26 +385,43 @@ export default function TimerScreen() {
 
       if (!googleUserId) { setIsSigningIn(false); setShowUserModal(true); return; }
 
+      let skipMigration = false;
+
       if (idToken) {
-        const { error: authError } = await supabase.auth.signInWithIdToken({ provider: 'google', token: idToken });
-        if (authError) console.log('Supabase signInWithIdToken error:', authError.message);
+        const isAnonymous = await getIsAnonymous();
+        const result = await signInOrLinkGoogle(idToken, isAnonymous);
+
+        if (result.kind === 'collision') {
+          // Approved UX (no merge, no silent failure): "Sign In" completes a normal direct
+          // sign-in into the existing linked account, abandoning this device's anonymous
+          // history; "Cancel" leaves the current anonymous session untouched.
+          showGoogleAccountCollisionDialog(
+            () => { void finishGoogleSignIn(googleName, googleEmail, googleUserId, true); },
+            () => { /* leave the current anonymous session untouched */ }
+          );
+          return;
+        }
+
+        if (result.kind === 'error') {
+          console.log('signInOrLinkGoogle error:', result.error);
+          // Preserve today's tolerant behavior: a Supabase auth error was always discarded and
+          // never blocked sign-in, so fall through and store the Google identity locally anyway.
+        }
+
+        if (result.kind === 'linked') {
+          skipMigration = true;
+          await setIsAnonymous(false);
+        }
       }
-      await AsyncStorage.setItem(USER_NAME_KEY, googleName);
-      if (googleEmail) await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
-      await migrateGuestHistoryToGoogle(googleUserId);
-      await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
-      setUserName(googleName);
-      setShowUserModal(false);
-      DeviceEventEmitter.emit('japam-auth-updated');
-      DeviceEventEmitter.emit('japam-stats-updated');
-      void loadStats();
+
+      await finishGoogleSignIn(googleName, googleEmail, googleUserId, skipMigration);
     } catch (error) {
       console.log('Native Google sign-in error:', error);
       setShowUserModal(true);
     } finally {
       setIsSigningIn(false);
     }
-  }, [loadStats, migrateGuestHistoryToGoogle]);
+  }, [finishGoogleSignIn]);
 
   useEffect(() => {
     const signInSub = DeviceEventEmitter.addListener('japam-start-google-signin', () => void handleNativeGoogleSignIn());
