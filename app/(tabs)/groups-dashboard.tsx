@@ -26,6 +26,19 @@ function formatLastUpdated(iso: string | null): string {
   return date.toLocaleString();
 }
 
+// Active-today members first (most malas/count today first), then everyone else alphabetically
+// — purely a display order, the underlying rows from get_group_dashboard are untouched.
+function sortDashboardRows(rows: GroupDashboardRow[]): GroupDashboardRow[] {
+  return [...rows].sort((a, b) => {
+    const aActive = a.todayMalas > 0;
+    const bActive = b.todayMalas > 0;
+    if (aActive !== bActive) return aActive ? -1 : 1;
+    if (b.todayMalas !== a.todayMalas) return b.todayMalas - a.todayMalas;
+    if (b.todayCount !== a.todayCount) return b.todayCount - a.todayCount;
+    return (a.userName || '').localeCompare(b.userName || '');
+  });
+}
+
 export default function GroupsDashboardScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ groupId?: string; groupName?: string }>();
@@ -95,33 +108,44 @@ export default function GroupsDashboardScreen() {
         ) : rows.length === 0 ? (
           <Text style={styles.emptyText}>No members found for this group.</Text>
         ) : (
-          rows.map((row) => (
-            <View key={row.userId} style={styles.memberCard}>
-              <View style={styles.memberHeaderRow}>
-                <Text style={styles.memberName}>{row.userName || 'Unknown'}</Text>
-                {row.role === 'admin' && <Text style={styles.adminBadge}>Admin</Text>}
+          sortDashboardRows(rows).map((row) => {
+            const isActiveToday = row.todayMalas > 0;
+            return (
+              <View key={row.userId} style={styles.memberCard}>
+                <View style={styles.memberHeaderRow}>
+                  <Text style={styles.memberName}>{row.userName || 'Unknown'}</Text>
+                  {row.role === 'admin' && <Text style={styles.adminBadge}>Admin</Text>}
+                  {isActiveToday && <Text style={styles.activeTodayBadge}>Active today</Text>}
+                </View>
+
+                <Text style={styles.sectionLabel}>Today</Text>
+                <View style={styles.statsRow}>
+                  <View style={styles.statBlock}>
+                    <Text style={styles.statValue}>{row.todayMalas}</Text>
+                    <Text style={styles.statLabel}>Malas</Text>
+                  </View>
+                  <View style={styles.statBlock}>
+                    <Text style={styles.statValue}>{row.todayCount}</Text>
+                    <Text style={styles.statLabel}>Count</Text>
+                  </View>
+                </View>
+
+                <Text style={[styles.sectionLabel, styles.sectionLabelSpaced]}>All Time</Text>
+                <View style={styles.statsRow}>
+                  <View style={styles.statBlock}>
+                    <Text style={styles.statValue}>{row.totalMalas}</Text>
+                    <Text style={styles.statLabel}>Malas</Text>
+                  </View>
+                  <View style={styles.statBlock}>
+                    <Text style={styles.statValue}>{row.totalCount}</Text>
+                    <Text style={styles.statLabel}>Count</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.lastUpdated}>Last updated: {formatLastUpdated(row.lastUpdated)}</Text>
               </View>
-              <View style={styles.statsRow}>
-                <View style={styles.statBlock}>
-                  <Text style={styles.statValue}>{row.todayMalas}</Text>
-                  <Text style={styles.statLabel}>Today's Malas</Text>
-                </View>
-                <View style={styles.statBlock}>
-                  <Text style={styles.statValue}>{row.todayCount}</Text>
-                  <Text style={styles.statLabel}>Today's Count</Text>
-                </View>
-                <View style={styles.statBlock}>
-                  <Text style={styles.statValue}>{row.totalMalas}</Text>
-                  <Text style={styles.statLabel}>Total Malas</Text>
-                </View>
-                <View style={styles.statBlock}>
-                  <Text style={styles.statValue}>{row.totalCount}</Text>
-                  <Text style={styles.statLabel}>Total Count</Text>
-                </View>
-              </View>
-              <Text style={styles.lastUpdated}>Last updated: {formatLastUpdated(row.lastUpdated)}</Text>
-            </View>
-          ))
+            );
+          })
         )}
       </ScrollView>
     </View>
@@ -163,11 +187,29 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 8,
   },
-  statsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 8 },
+  activeTodayBadge: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#0f766e',
+    backgroundColor: 'rgba(15,143,135,0.18)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  sectionLabel: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#547071',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  sectionLabelSpaced: { marginTop: 14 },
+  statsRow: { flexDirection: 'row', gap: 28, marginBottom: 4 },
   statBlock: { minWidth: 80 },
-  statValue: { fontSize: 22, fontWeight: '900', color: TEAL },
-  statLabel: { fontSize: 12, color: '#547071' },
-  lastUpdated: { fontSize: 12, color: '#547071', marginTop: 4 },
+  statValue: { fontSize: 30, fontWeight: '900', color: TEAL, lineHeight: 34 },
+  statLabel: { fontSize: 14, fontWeight: '700', color: '#365f61', marginTop: 2 },
+  lastUpdated: { fontSize: 12, color: '#547071', marginTop: 14 },
   signInContainer: {
     flex: 1,
     alignItems: 'center',
