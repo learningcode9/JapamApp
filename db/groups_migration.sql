@@ -288,11 +288,18 @@ set search_path = public
 as $$
 begin
   -- Membership gate: only an actual member of this group may read its roster/stats.
+  -- Table-qualified with an alias (gm_check) because this function's RETURNS TABLE defines an
+  -- output column also named user_id; PL/pgSQL exposes RETURNS TABLE columns as implicit
+  -- variables inside the function body, so an unqualified `user_id` here is genuinely ambiguous
+  -- between that variable and group_members.user_id (confirmed live: PostgreSQL error 42702,
+  -- "column reference \"user_id\" is ambiguous", caught during QA verification after the first
+  -- version of this migration was run). group_id is qualified too for the same reason/clarity,
+  -- even though it isn't itself one of the output columns.
   if not exists (
     select 1
-    from public.group_members
-    where group_id = p_group_id
-      and user_id = p_current_user_id
+    from public.group_members gm_check
+    where gm_check.group_id = p_group_id
+      and gm_check.user_id = p_current_user_id
   ) then
     raise exception 'not a member of this group';
   end if;
