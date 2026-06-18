@@ -114,7 +114,7 @@ export default function GroupsDashboardScreen() {
                 <View style={[styles.tableCell, styles.nameCell, styles.nameLine]}>
                   <Text style={styles.memberName} numberOfLines={1}>
                     {row.userName || 'Unknown'}
-                    {row.role === 'admin' ? ' ⭐' : ''}
+                    {row.role === 'admin' ? <Text style={styles.adminStar}> ★</Text> : null}
                   </Text>
                 </View>
                 <Text style={[styles.tableCell, styles.numCell, styles.statValue]}>
@@ -173,12 +173,13 @@ const styles = StyleSheet.create({
   },
   altTableRow: { backgroundColor: 'rgba(15,118,110,0.04)' },
   tableCell: { paddingVertical: 8, paddingHorizontal: 2 },
-  tableHeaderText: { fontSize: 13, fontWeight: '800', color: '#365f61', textTransform: 'uppercase', letterSpacing: 0.4, textAlign: 'center' },
+  tableHeaderText: { fontSize: 13, fontWeight: '900', color: '#12383c', textTransform: 'uppercase', letterSpacing: 0.4, textAlign: 'center' },
   nameCell: { flex: 1.3 },
   numCell: { flex: 0.85, alignItems: 'center' },
   nameLine: { flexDirection: 'row', alignItems: 'center' },
-  memberName: { fontSize: 17, fontWeight: '700', color: '#12383c', flexShrink: 1 },
-  statValue: { fontSize: 20, fontWeight: '900', color: TEAL, textAlign: 'center' },
+  memberName: { fontSize: 17, fontWeight: '700', color: '#12383c', lineHeight: 24, flexShrink: 1 },
+  adminStar: { color: '#c08a1e', fontSize: 15, fontWeight: '700' },
+  statValue: { fontSize: 20, fontWeight: '900', color: TEAL, textAlign: 'center', lineHeight: 24 },
   signInContainer: {
     flex: 1,
     alignItems: 'center',
