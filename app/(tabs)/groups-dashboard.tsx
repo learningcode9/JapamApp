@@ -112,8 +112,8 @@ export default function GroupsDashboardScreen() {
                 style={[styles.tableRow, index % 2 === 1 && styles.altTableRow]}
               >
                 <Text style={[styles.tableCell, styles.nameCell, styles.memberName]} numberOfLines={1}>
+                  {row.role === 'admin' ? <Text style={styles.adminStar}>★ </Text> : null}
                   {row.userName || 'Unknown'}
-                  {row.role === 'admin' ? <Text style={styles.adminStar}> ★</Text> : null}
                 </Text>
                 <Text style={[styles.tableCell, styles.numCell, styles.statValue]}>
                   {row.todayMalas}
