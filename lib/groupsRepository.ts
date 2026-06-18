@@ -25,7 +25,7 @@ export interface CreateGroupResult {
 }
 
 export type JoinGroupOutcome =
-  | { kind: 'joined'; groupId: string }
+  | { kind: 'joined'; groupId: string; groupName: string }
   | { kind: 'notFound' }
   | { kind: 'inactive' }
   | { kind: 'error'; message: string };
@@ -90,12 +90,12 @@ export async function joinGroupByInviteCode(
   if (insertError) {
     // 23505 = unique_violation on (group_id, user_id) -> already a member; treat as success.
     if ((insertError as any).code === '23505') {
-      return { kind: 'joined', groupId: group.id };
+      return { kind: 'joined', groupId: group.id, groupName: group.name };
     }
     return { kind: 'error', message: insertError.message };
   }
 
-  return { kind: 'joined', groupId: group.id };
+  return { kind: 'joined', groupId: group.id, groupName: group.name };
 }
 
 export async function getGroupDashboard(

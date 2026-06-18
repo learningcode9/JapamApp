@@ -127,7 +127,7 @@ export default function GroupsScreen() {
       setShowJoinModal(false);
       setJoinCode('');
       await loadGroups();
-      openGroupDashboard(outcome.groupId, '');
+      openGroupDashboard(outcome.groupId, outcome.groupName);
     } finally {
       setJoining(false);
     }
