@@ -19,13 +19,6 @@ function getLocalTodayBoundsIso(): { start: string; end: string } {
   return { start: start.toISOString(), end: end.toISOString() };
 }
 
-function formatLastUpdated(iso: string | null): string {
-  if (!iso) return 'Never';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return 'Never';
-  return date.toLocaleString();
-}
-
 // Highest Today's Malas first, then highest Today's Count, then alphabetical — purely a display
 // order, the underlying rows from get_group_dashboard are untouched.
 function sortDashboardRows(rows: GroupDashboardRow[]): GroupDashboardRow[] {
@@ -113,37 +106,28 @@ export default function GroupsDashboardScreen() {
               <Text style={[styles.tableCell, styles.numCell, styles.tableHeaderText]}>Total Count</Text>
             </View>
 
-            {sortDashboardRows(rows).map((row, index) => {
-              const isActiveToday = row.todayMalas > 0;
-              return (
-                <View
-                  key={row.userId}
-                  style={[styles.tableRow, index % 2 === 1 && styles.altTableRow]}
-                >
-                  <View style={[styles.tableCell, styles.nameCell]}>
-                    <View style={styles.nameLine}>
-                      {isActiveToday && <View style={styles.activeDot} />}
-                      <Text style={styles.memberName} numberOfLines={1}>
-                        {row.userName || 'Unknown'}
-                      </Text>
-                      {row.role === 'admin' && <Text style={styles.adminBadge}>Admin</Text>}
-                    </View>
-                    <Text style={styles.lastUpdated} numberOfLines={1}>
-                      Updated {formatLastUpdated(row.lastUpdated)}
-                    </Text>
-                  </View>
-                  <Text style={[styles.tableCell, styles.numCell, styles.statValue]}>
-                    {row.todayMalas}
-                  </Text>
-                  <Text style={[styles.tableCell, styles.numCell, styles.statValue]}>
-                    {row.todayCount}
-                  </Text>
-                  <Text style={[styles.tableCell, styles.numCell, styles.statValue]}>
-                    {row.totalCount}
+            {sortDashboardRows(rows).map((row, index) => (
+              <View
+                key={row.userId}
+                style={[styles.tableRow, index % 2 === 1 && styles.altTableRow]}
+              >
+                <View style={[styles.tableCell, styles.nameCell, styles.nameLine]}>
+                  <Text style={styles.memberName} numberOfLines={1}>
+                    {row.userName || 'Unknown'}
+                    {row.role === 'admin' ? ' ⭐' : ''}
                   </Text>
                 </View>
-              );
-            })}
+                <Text style={[styles.tableCell, styles.numCell, styles.statValue]}>
+                  {row.todayMalas}
+                </Text>
+                <Text style={[styles.tableCell, styles.numCell, styles.statValue]}>
+                  {row.todayCount}
+                </Text>
+                <Text style={[styles.tableCell, styles.numCell, styles.statValue]}>
+                  {row.totalCount}
+                </Text>
+              </View>
+            ))}
           </View>
         )}
       </ScrollView>
@@ -192,20 +176,9 @@ const styles = StyleSheet.create({
   tableHeaderText: { fontSize: 13, fontWeight: '800', color: '#365f61', textTransform: 'uppercase', letterSpacing: 0.4, textAlign: 'center' },
   nameCell: { flex: 1.3 },
   numCell: { flex: 0.85, alignItems: 'center' },
-  nameLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  nameLine: { flexDirection: 'row', alignItems: 'center' },
   memberName: { fontSize: 17, fontWeight: '700', color: '#12383c', flexShrink: 1 },
-  activeDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: TEAL },
-  adminBadge: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: TEAL,
-    backgroundColor: 'rgba(15,143,135,0.12)',
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 8,
-  },
   statValue: { fontSize: 20, fontWeight: '900', color: TEAL, textAlign: 'center' },
-  lastUpdated: { fontSize: 11, color: '#547071', marginTop: 2 },
   signInContainer: {
     flex: 1,
     alignItems: 'center',
