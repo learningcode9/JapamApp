@@ -40,7 +40,6 @@ import {
   setIsAnonymous,
   signInOrLinkGoogle,
   showGoogleAccountCollisionDialog,
-  shouldSkipRemoteSync,
 } from '../../lib/anonymousAuth';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -167,7 +166,6 @@ export default function TimerScreen() {
 
   const loadStats = useCallback(async () => {
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
-    const isAnonymous = await getIsAnonymous();
     const todayKey = getLocalDateKey();
     const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
     const localHistory = parseHistory(rawHistory);
@@ -175,11 +173,9 @@ export default function TimerScreen() {
     let rawSupabaseRows = 0;
     let rawSupabaseCount = 0;
 
-    // Option B: anonymous guest data stays local-only until Google linking — skip the remote
-    // fetch/merge entirely for anonymous users, same as today's no-userId guest behavior.
-    // (The `userId &&` is redundant with shouldSkipRemoteSync's own null check, kept only so
-    // TypeScript narrows userId to string for the encodeURIComponent call below.)
-    if (userId && !shouldSkipRemoteSync(userId, isAnonymous)) {
+    // Option A: anonymous guest data syncs to Supabase immediately, same as a signed-in user —
+    // no anonymous-specific suppression here.
+    if (userId) {
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       if (url && key) {
