@@ -10,11 +10,13 @@ import {
   appendCompletion,
   applyTombstones,
   buildSupabaseHistoryPayload,
+  dedupeByCompletionId,
   getPending,
   markSynced,
   mergeTombstones,
   selfHealSyncStatus,
   toLocalDayKey,
+  type HistoryRecord,
 } from '../lib/historyStore';
 import { getWebOmAudioUri } from '../lib/webOmAudio';
 import React, {
@@ -917,6 +919,49 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Mirrors tap-japam.tsx/index.tsx's saveUserTotalToSupabase exactly (same request shape) — the
+  // Timer flow previously only wrote japam_history, never japam_user_totals, so Groups Dashboard's
+  // Lifetime Count (sourced from japam_user_totals) stayed at 0 for Timer-only users even though
+  // Today's Count (sourced from japam_history) was correct. Computes the lifetime total the same
+  // way history.tsx computes "Total Malas"/"Total Count": dedupe by completionId, filter to this
+  // user's own records, sum totalCount. Never throws — a failed upsert must not block completion.
+  const syncLifetimeTotalToSupabase = useCallback(async (uid: string, history: HistoryRecord[]) => {
+    try {
+      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+      if (!url || !key || !uid) return;
+
+      const ownRecords = dedupeByCompletionId(history).filter(
+        (r) => (r.userId || null) === uid && r.totalCount > 0
+      );
+      const lifetimeTotalCount = ownRecords.reduce((sum, r) => sum + (Number(r.totalCount) || 0), 0);
+
+      const storedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+
+      const response = await fetch(`${url}/rest/v1/japam_user_totals?on_conflict=user_id`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          Prefer: 'resolution=merge-duplicates,return=minimal',
+        },
+        body: JSON.stringify({
+          user_id: uid,
+          user_name: storedUserName || 'User',
+          total_count: lifetimeTotalCount,
+          malas: Math.floor(lifetimeTotalCount / 108),
+          count: lifetimeTotalCount % 108,
+          updated_at: new Date().toISOString(),
+        }),
+      });
+
+      if (!response.ok) console.log('[TimerLifetimeTotal] upsert error:', await response.text());
+    } catch (err) {
+      console.log('[TimerLifetimeTotal] upsert failed (non-blocking):', err);
+    }
+  }, []);
+
   const saveSession = useCallback(async () => {
     const uid = userIdRef.current;
     const duration = selectedDurationRef.current * 60;
@@ -998,6 +1043,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         window.dispatchEvent(new Event('japam-stats-updated'));
         window.dispatchEvent(new Event('japam-history-updated'));
       }
+
+      // Fire-and-forget: keeps Groups Dashboard's Lifetime Count correct for Timer completions.
+      // syncLifetimeTotalToSupabase never throws and a failure here must never block completion.
+      if (uid) void syncLifetimeTotalToSupabase(uid, updatedHistory);
     } catch (err) {
       console.log('Timer session save error:', err);
       return;
@@ -1006,7 +1055,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     // Opportunistic sync — uploads all pending records (including this one). Offline-safe:
     // records stay 'pending' and retry on the next attempt. Never blocks completeCycle.
     void syncPendingHistory();
-  }, [readMalasTodaySnapshot, syncPendingHistory]);
+  }, [readMalasTodaySnapshot, syncPendingHistory, syncLifetimeTotalToSupabase]);
 
   // Flush any pending (offline-recorded) malas on launch and whenever the app returns to the
   // foreground — i.e. opportunistically when connectivity is likely back. No-op when offline.

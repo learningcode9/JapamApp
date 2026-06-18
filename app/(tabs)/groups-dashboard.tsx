@@ -160,6 +160,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     minHeight: 58,
+    paddingVertical: 8,
     paddingHorizontal: 6,
     borderTopWidth: 1,
     borderTopColor: 'rgba(15,118,110,0.12)',
@@ -170,7 +171,10 @@ const styles = StyleSheet.create({
     minHeight: 44,
   },
   altTableRow: { backgroundColor: 'rgba(15,118,110,0.04)' },
-  tableCell: { paddingVertical: 8, paddingHorizontal: 2, lineHeight: 26 },
+  // Every cell — Name and all three numeric columns — shares this exact height/lineHeight, with
+  // no per-cell vertical padding, so there is no way for one column's box to differ from another's
+  // and visibly sit higher or lower. Vertical breathing room lives on tableRow instead.
+  tableCell: { height: 26, lineHeight: 26, paddingHorizontal: 2 },
   tableHeaderText: {
     fontSize: 15,
     fontWeight: '900',
