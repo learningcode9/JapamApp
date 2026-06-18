@@ -100,7 +100,7 @@ export default function GroupsDashboardScreen() {
         ) : (
           <View style={styles.tableCard}>
             <View style={[styles.tableRow, styles.tableHeader]}>
-              <Text style={[styles.tableHeaderCell, styles.nameCell, styles.tableHeaderText]}>Name</Text>
+              <Text style={[styles.tableHeaderCell, styles.tableHeaderText, styles.nameCell]}>Name</Text>
               <Text style={[styles.tableHeaderCell, styles.numCell, styles.tableHeaderText]}>Today Mala</Text>
               <Text style={[styles.tableHeaderCell, styles.numCell, styles.tableHeaderText]}>Today Count</Text>
               <Text style={[styles.tableHeaderCell, styles.numCell, styles.tableHeaderText]}>Lifetime</Text>
