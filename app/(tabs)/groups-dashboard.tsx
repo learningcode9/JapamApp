@@ -100,10 +100,10 @@ export default function GroupsDashboardScreen() {
         ) : (
           <View style={styles.tableCard}>
             <View style={[styles.tableRow, styles.tableHeader]}>
-              <Text style={[styles.tableCell, styles.nameCell, styles.tableHeaderText]}>Name</Text>
-              <Text style={[styles.tableCell, styles.numCell, styles.tableHeaderText]}>Today's Malas</Text>
-              <Text style={[styles.tableCell, styles.numCell, styles.tableHeaderText]}>Today's Count</Text>
-              <Text style={[styles.tableCell, styles.numCell, styles.tableHeaderText]}>Lifetime Count</Text>
+              <Text style={[styles.tableHeaderCell, styles.nameCell, styles.tableHeaderText]}>Name</Text>
+              <Text style={[styles.tableHeaderCell, styles.numCell, styles.tableHeaderText]}>Today Mala</Text>
+              <Text style={[styles.tableHeaderCell, styles.numCell, styles.tableHeaderText]}>Today Count</Text>
+              <Text style={[styles.tableHeaderCell, styles.numCell, styles.tableHeaderText]}>Lifetime</Text>
             </View>
 
             {sortDashboardRows(rows).map((row, index) => (
@@ -168,19 +168,23 @@ const styles = StyleSheet.create({
   tableHeader: {
     backgroundColor: 'rgba(15,118,110,0.12)',
     borderTopWidth: 0,
-    minHeight: 44,
+    minHeight: 36,
   },
   altTableRow: { backgroundColor: 'rgba(15,118,110,0.04)' },
-  // Every cell — Name and all three numeric columns — shares this exact height/lineHeight, with
-  // no per-cell vertical padding, so there is no way for one column's box to differ from another's
-  // and visibly sit higher or lower. Vertical breathing room lives on tableRow instead.
+  // Every DATA cell — Name and all three numeric columns — shares this exact height/lineHeight,
+  // with no per-cell vertical padding, so there is no way for one column's box to differ from
+  // another's and visibly sit higher or lower. Vertical breathing room lives on tableRow instead.
   tableCell: { height: 26, lineHeight: 26, paddingHorizontal: 2 },
+  // Header cells size naturally instead of using the data rows' fixed height — short one-line
+  // labels (see below) fit comfortably without wrapping, so there's no need to reserve room for
+  // a second line, which is what made the header row look too tall before.
+  tableHeaderCell: { paddingVertical: 6, paddingHorizontal: 2 },
   tableHeaderText: {
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: '900',
     color: '#081a1c',
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0.4,
     textAlign: 'center',
   },
   nameCell: { flex: 1.3, textAlign: 'left' },
