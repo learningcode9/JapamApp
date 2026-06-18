@@ -88,9 +88,37 @@ create index if not exists group_members_user_id_idx on public.group_members (us
 --     rejected, since any server-side day boundary would disagree with this app's
 --     local-device-day "today" near midnight for members outside that boundary's timezone.)
 --
--- Direct table INSERT is still granted to anon (not moved to a function) for `groups` and
--- `group_members`, since Create Group and Join Group are plain row-creation operations with no
--- privileged read attached to them — only the READ paths needed the function-based redesign.
+-- Round 3 (this revision): Create Group was originally implemented as two separate client-side
+-- INSERTs — one into `groups`, then one into `group_members` with role='admin' — relying on the
+-- `anon insert group_members` policy's created_by-matching check from Round 1 to allow the
+-- second insert. That has a real atomicity problem: if the first insert succeeds and the second
+-- fails (network drop, app backgrounded mid-request, etc.), the result is a permanently orphaned
+-- group with no admin and no member, since nothing in this schema can clean that up — there is
+-- no DELETE policy on `groups`, and the client has no way to know the failure was partial rather
+-- than total. This revision replaces both client-side inserts with a single `create_group`
+-- SECURITY DEFINER function that performs both inserts as one PL/pgSQL function body. A single
+-- function invocation runs inside one implicit transaction: if anything inside it raises (e.g.
+-- the second insert failing), PostgreSQL rolls back everything the function did, including the
+-- first insert — so there is no longer a way to end up with a `groups` row and no matching admin
+-- `group_members` row. Invite code generation also moves server-side (inside this function),
+-- with a bounded retry loop on a rare unique-constraint collision.
+--
+-- Because `create_group` is now the ONLY path that ever creates a `groups` row or an admin
+-- `group_members` row, and it runs as SECURITY DEFINER (bypassing RLS entirely for its own
+-- inserts), two policies from Round 1 are no longer needed and have been removed/tightened:
+--   - `anon insert groups` is REMOVED entirely — there is no remaining legitimate reason for a
+--     client to INSERT into `groups` directly; doing so would just bypass create_group's
+--     validation and atomicity guarantees.
+--   - `anon insert group_members` is TIGHTENED to allow only `role = 'member'` — the
+--     previous `role = 'admin' and exists(...)` branch existed solely to support the old
+--     two-insert Create Group flow, which no longer exists. Removing it closes even the
+--     narrower self-promotion path Round 1 left in place, since there is now no legitimate
+--     reason for ANY direct client INSERT to ever claim role='admin'.
+--
+-- Join Group is unaffected and was reviewed for the same class of risk: it is a single INSERT
+-- (after a read-only find_group_by_invite_code call), not a two-step write, so there is no
+-- analogous orphan/partial-failure state for it to land in. It keeps using direct INSERT via the
+-- (now member-only) `anon insert group_members` policy.
 --
 -- IMPORTANT LIMITATION, restated and still true after this revision: every `current_user_id` /
 -- `p_current_user_id` parameter below is still a plain client-supplied string, NOT a verified
@@ -116,35 +144,84 @@ drop policy if exists "anon manage groups" on public.groups;
 drop policy if exists "anon manage group_members" on public.group_members;
 drop policy if exists "anon select groups" on public.groups;
 drop policy if exists "anon select group_members" on public.group_members;
+drop policy if exists "anon insert groups" on public.groups;
 
-create policy "anon insert groups"
-  on public.groups
-  for insert
-  to anon
-  with check (true);
+-- No anon INSERT policy on `groups` at all (see Round 3 above): the only legitimate way to
+-- create a group is the create_group() function below, which writes as SECURITY DEFINER and is
+-- therefore not subject to — and does not need — a table-level INSERT grant.
 
 create policy "anon insert group_members"
   on public.group_members
   for insert
   to anon
-  with check (
-    role = 'member'
-    or (
-      role = 'admin'
-      and exists (
-        select 1
-        from public.groups g
-        where g.id = group_id
-          and g.created_by = user_id
-      )
-    )
-  );
+  with check (role = 'member');
+  -- Member-only, per Round 3: admin-row creation now exclusively happens inside create_group(),
+  -- which bypasses this policy entirely (SECURITY DEFINER). There is no longer any legitimate
+  -- direct-insert path for role='admin', so it is no longer permitted by this check at all.
 
--- 4) Read-access RPCs — replace the removed blanket SELECT policies. Each is SECURITY DEFINER
--- (runs with the function owner's privileges, not the caller's), with `search_path` pinned to
--- `public` to avoid search_path-hijacking attacks on SECURITY DEFINER functions, and EXECUTE
--- explicitly revoked from PUBLIC and granted only to `anon` (matching this app's existing
--- anon-key REST model).
+-- 4) Write/Read-access RPCs. Each is SECURITY DEFINER (runs with the function owner's
+-- privileges, not the caller's), with `search_path` pinned to `public` to avoid
+-- search_path-hijacking attacks on SECURITY DEFINER functions, and EXECUTE explicitly revoked
+-- from PUBLIC and granted only to `anon` (matching this app's existing anon-key REST model).
+
+-- create_group: the sole path for creating a group (see Round 3 above for why this replaced two
+-- separate client-side inserts). Validates a non-empty name, generates a unique invite code
+-- server-side with a bounded retry loop, inserts the group, then inserts the creator as its
+-- admin — all inside one function invocation, so a failure partway rolls back everything the
+-- function did, leaving no orphaned group and no orphaned membership row.
+create or replace function public.create_group(
+  p_name text,
+  p_created_by text,
+  p_user_name text
+)
+returns table (
+  group_id     uuid,
+  group_name   text,
+  invite_code  text
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_name        text := btrim(p_name);
+  v_invite_code text;
+  v_group_id    uuid;
+  v_attempt     int := 0;
+begin
+  if v_name is null or v_name = '' then
+    raise exception 'group name must not be empty';
+  end if;
+
+  loop
+    v_attempt := v_attempt + 1;
+    -- Random 7-character uppercase alphanumeric code. Collisions are expected to be rare given
+    -- the keyspace, but are handled explicitly rather than assumed away.
+    v_invite_code := upper(substr(md5(random()::text || clock_timestamp()::text), 1, 7));
+
+    begin
+      insert into public.groups (name, invite_code, created_by)
+      values (v_name, v_invite_code, p_created_by)
+      returning id into v_group_id;
+
+      exit; -- insert succeeded, stop retrying
+    exception when unique_violation then
+      if v_attempt >= 5 then
+        raise exception 'could not generate a unique invite code, please try again';
+      end if;
+      -- otherwise loop and try a new code
+    end;
+  end loop;
+
+  insert into public.group_members (group_id, user_id, user_name, role)
+  values (v_group_id, p_created_by, p_user_name, 'admin');
+
+  return query select v_group_id, v_name, v_invite_code;
+end;
+$$;
+
+revoke all on function public.create_group(text, text, text) from public;
+grant execute on function public.create_group(text, text, text) to anon;
 
 create or replace function public.find_group_by_invite_code(p_invite_code text)
 returns table (id uuid, name text, is_active boolean)
