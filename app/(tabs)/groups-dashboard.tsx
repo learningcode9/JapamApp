@@ -180,11 +180,11 @@ const styles = StyleSheet.create({
   // a second line, which is what made the header row look too tall before.
   tableHeaderCell: { paddingVertical: 6, paddingHorizontal: 2 },
   tableHeaderText: {
-    fontSize: 13,
+    fontSize: 16,
     fontWeight: '900',
     color: '#081a1c',
     textTransform: 'uppercase',
-    letterSpacing: 0.4,
+    letterSpacing: 0.5,
     textAlign: 'center',
   },
   nameCell: { flex: 1.3, textAlign: 'left' },
