@@ -143,6 +143,17 @@ export default function TabLayout() {
 
 
         <Tabs.Screen
+          name="groups"
+          options={{
+            title: 'Groups',
+            tabBarLabel: tabLabel('Groups'),
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons name={focused ? 'people' : 'people-outline'} size={focused ? 27 : 25} color={color} />
+            ),
+          }}
+        />
+
+        <Tabs.Screen
           name="settings"
           options={{
             title: 'Settings',
@@ -150,6 +161,13 @@ export default function TabLayout() {
             tabBarIcon: ({ color, focused }) => (
               <Ionicons name="sparkles-outline" size={focused ? 27 : 25} color={color} />
             ),
+          }}
+        />
+
+        <Tabs.Screen
+          name="groups-dashboard"
+          options={{
+            href: null,
           }}
         />
 
