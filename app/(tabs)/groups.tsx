@@ -7,6 +7,7 @@ import {
   Modal,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -16,6 +17,7 @@ import {
   createGroup,
   getMyGroups,
   joinGroupByInviteCode,
+  type CreateGroupResult,
   type MyGroup,
 } from '../../lib/groupsRepository';
 
@@ -36,6 +38,7 @@ export default function GroupsScreen() {
   const [createName, setCreateName] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
+  const [createdGroup, setCreatedGroup] = useState<CreateGroupResult | null>(null);
 
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [joinCode, setJoinCode] = useState('');
@@ -90,15 +93,43 @@ export default function GroupsScreen() {
     setCreateError('');
     try {
       const result = await createGroup(name, userId, userName);
-      setShowCreateModal(false);
       setCreateName('');
       await loadGroups();
-      openGroupDashboard(result.groupId, result.groupName);
+      // Show the success view (invite code + Share) instead of navigating immediately — the
+      // user decides when to leave, after optionally sharing the code.
+      setCreatedGroup(result);
     } catch (error: any) {
       setCreateError(error?.message || 'Could not create the group. Please try again.');
     } finally {
       setCreating(false);
     }
+  };
+
+  const handleShareInviteCode = async () => {
+    if (!createdGroup) return;
+    try {
+      // Share.share opens the OS share sheet — the user picks WhatsApp/SMS/etc. themselves;
+      // nothing is ever sent automatically.
+      await Share.share({
+        message: `Join my Japam group.\nInvite code: ${createdGroup.inviteCode}`,
+      });
+    } catch {
+      // User dismissed the share sheet or it failed — no error state needed, they can retry.
+    }
+  };
+
+  const closeCreateModal = () => {
+    setShowCreateModal(false);
+    setCreateError('');
+    setCreatedGroup(null);
+  };
+
+  const handleGoToCreatedGroup = () => {
+    if (!createdGroup) return;
+    const { groupId, groupName } = createdGroup;
+    setShowCreateModal(false);
+    setCreatedGroup(null);
+    openGroupDashboard(groupId, groupName);
   };
 
   const handleJoinSubmit = async () => {
@@ -186,30 +217,52 @@ export default function GroupsScreen() {
       </ScrollView>
 
       {/* Create Group modal */}
-      <Modal visible={showCreateModal} transparent animationType="fade" onRequestClose={() => setShowCreateModal(false)}>
+      <Modal visible={showCreateModal} transparent animationType="fade" onRequestClose={closeCreateModal}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Pressable style={styles.modalClose} onPress={() => setShowCreateModal(false)}>
+            <Pressable style={styles.modalClose} onPress={closeCreateModal}>
               <Text style={styles.modalCloseText}>×</Text>
             </Pressable>
-            <Text style={styles.modalTitle}>Create a Group</Text>
-            <Text style={styles.modalSubtitle}>Start a Family Japam group and invite others.</Text>
-            <TextInput
-              style={styles.textInput}
-              placeholder="Group name"
-              value={createName}
-              onChangeText={setCreateName}
-              maxLength={40}
-              autoFocus
-            />
-            {createError ? <Text style={styles.errorText}>{createError}</Text> : null}
-            <Pressable
-              style={[styles.primaryButton, (creating || !createName.trim()) && styles.disabledButton]}
-              disabled={creating || !createName.trim()}
-              onPress={handleCreateSubmit}
-            >
-              {creating ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>Create</Text>}
-            </Pressable>
+            {createdGroup ? (
+              <>
+                <Text style={styles.modalTitle}>Group Created</Text>
+                <Text style={styles.modalSubtitle}>{createdGroup.groupName}</Text>
+                <View style={styles.inviteCodeBox}>
+                  <Text style={styles.inviteCodeLabel}>Invite code</Text>
+                  <Text style={styles.inviteCodeValue}>{createdGroup.inviteCode}</Text>
+                </View>
+                <Pressable style={styles.secondaryButton} onPress={handleShareInviteCode}>
+                  <Text style={styles.secondaryButtonText}>Share Invite Code</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.primaryButton, styles.spacedButton]}
+                  onPress={handleGoToCreatedGroup}
+                >
+                  <Text style={styles.primaryButtonText}>Go to Group</Text>
+                </Pressable>
+              </>
+            ) : (
+              <>
+                <Text style={styles.modalTitle}>Create a Group</Text>
+                <Text style={styles.modalSubtitle}>Start a Family Japam group and invite others.</Text>
+                <TextInput
+                  style={styles.textInput}
+                  placeholder="Group name"
+                  value={createName}
+                  onChangeText={setCreateName}
+                  maxLength={40}
+                  autoFocus
+                />
+                {createError ? <Text style={styles.errorText}>{createError}</Text> : null}
+                <Pressable
+                  style={[styles.primaryButton, (creating || !createName.trim()) && styles.disabledButton]}
+                  disabled={creating || !createName.trim()}
+                  onPress={handleCreateSubmit}
+                >
+                  {creating ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryButtonText}>Create</Text>}
+                </Pressable>
+              </>
+            )}
           </View>
         </View>
       </Modal>
@@ -342,4 +395,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   codeInput: { textAlign: 'center', fontWeight: '900', letterSpacing: 2 },
+  inviteCodeBox: {
+    backgroundColor: 'rgba(15,143,135,0.08)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.18)',
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  inviteCodeLabel: { fontSize: 12, color: '#547071', marginBottom: 4 },
+  inviteCodeValue: { fontSize: 28, fontWeight: '900', color: TEAL, letterSpacing: 3 },
+  spacedButton: { marginTop: 10 },
 });
