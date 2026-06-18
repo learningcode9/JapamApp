@@ -13,6 +13,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   DeviceEventEmitter,
   Dimensions,
   ImageBackground,
@@ -49,6 +50,10 @@ const isMobile = screenWidth < 768;
 const isShortMobile = isMobile && screenHeight < 760;
 const CIRCLE_SIZE = isShortMobile ? 204 : isMobile ? 224 : 296;
 const TEAL = '#0F8F87';
+// Guest Mode is temporarily hidden — Google Sign-In is the only entry point for now. Flip this
+// back to true to restore the "Continue as Guest" button; none of the underlying guest/anonymous
+// auth code is removed, only this UI entry point is gated.
+const GUEST_MODE_ENABLED = false;
 const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
@@ -98,6 +103,22 @@ const dedupeHistoryForStats = (history: Session[]): Session[] =>
   dedupeByCompletionId(history).filter(
     (item) => item.totalCount > 0 && toLocalDayKey(item.date) !== 'unknown'
   );
+
+// With Guest Mode hidden, a failed Google Sign-In leaves the user with no fallback into the app
+// — silently re-showing the same sign-in modal gives no explanation. Alert.alert is not
+// interactive in react-native-web (see the same caveat in tap-japam.tsx's handleResetCount), so
+// this branches to window.alert on web, matching this codebase's existing pattern for
+// cross-platform alerts.
+const showGoogleSignInRequiredAlert = () => {
+  if (GUEST_MODE_ENABLED) return;
+  const message =
+    'Google Sign-In is required right now. Please check your Google account or internet connection and try again.';
+  if (Platform.OS === 'web') {
+    if (typeof window !== 'undefined') window.alert(message);
+  } else {
+    Alert.alert('Sign-In Required', message);
+  }
+};
 
 export default function TimerScreen() {
   const router = useRouter();
@@ -371,6 +392,7 @@ export default function TimerScreen() {
         console.log('Native Google sign-in did not return a user.');
         setIsSigningIn(false);
         setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
         return;
       }
       const { id, name, givenName, email } = googleUser;
@@ -379,7 +401,12 @@ export default function TimerScreen() {
       const googleEmail = email || '';
       const googleUserId = String(id).trim();
 
-      if (!googleUserId) { setIsSigningIn(false); setShowUserModal(true); return; }
+      if (!googleUserId) {
+        setIsSigningIn(false);
+        setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
+        return;
+      }
 
       let skipMigration = false;
 
@@ -414,6 +441,7 @@ export default function TimerScreen() {
     } catch (error) {
       console.log('Native Google sign-in error:', error);
       setShowUserModal(true);
+      showGoogleSignInRequiredAlert();
     } finally {
       setIsSigningIn(false);
     }
@@ -432,7 +460,10 @@ export default function TimerScreen() {
         setIsSigningIn(false);
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-        if (!savedUserId) setShowUserModal(true);
+        if (!savedUserId) {
+          setShowUserModal(true);
+          showGoogleSignInRequiredAlert();
+        }
         return;
       }
 
@@ -448,6 +479,7 @@ export default function TimerScreen() {
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         setIsSigningIn(false);
         setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
         return;
       }
 
@@ -463,6 +495,7 @@ export default function TimerScreen() {
 
         if (!googleUserId) {
           setShowUserModal(true);
+          showGoogleSignInRequiredAlert();
           return;
         }
 
@@ -484,6 +517,7 @@ export default function TimerScreen() {
       } catch (error) {
         console.log('Google login error:', error);
         setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
       } finally {
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         setIsSigningIn(false);
@@ -788,7 +822,9 @@ export default function TimerScreen() {
               </View>
               <Text style={styles.modalTitle}>Save your Japam</Text>
               <Text style={styles.modalSubtitle}>
-                Sign in with Google to sync across devices, or continue as a guest to save locally.
+                {GUEST_MODE_ENABLED
+                  ? 'Sign in with Google to sync across devices, or continue as a guest to save locally.'
+                  : 'Sign in with Google to sync your Japam across devices.'}
               </Text>
               <Pressable
                 disabled={Platform.OS === 'web' && !request}
@@ -809,12 +845,14 @@ export default function TimerScreen() {
                           await AsyncStorage.removeItem(AUTH_PENDING_KEY);
                           setIsSigningIn(false);
                           setShowUserModal(true);
+                          showGoogleSignInRequiredAlert();
                         }
                       } catch (error) {
                         console.log('Google prompt error:', error);
                         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
                         setIsSigningIn(false);
                         setShowUserModal(true);
+                        showGoogleSignInRequiredAlert();
                       }
                     })();
                   }
@@ -825,15 +863,19 @@ export default function TimerScreen() {
                 </View>
                 <Text style={styles.modalButtonText}>Continue with Google</Text>
               </Pressable>
-              <Pressable
-                style={styles.guestButton}
-                onPress={() => { setShowUserModal(false); setShowGuestWarningModal(true); }}
-              >
-                <Text style={styles.guestButtonText}>Continue as Guest</Text>
-              </Pressable>
-              <Text style={styles.modalFootnote}>
-                Guest history is saved on this device only.
-              </Text>
+              {GUEST_MODE_ENABLED && (
+                <Pressable
+                  style={styles.guestButton}
+                  onPress={() => { setShowUserModal(false); setShowGuestWarningModal(true); }}
+                >
+                  <Text style={styles.guestButtonText}>Continue as Guest</Text>
+                </Pressable>
+              )}
+              {GUEST_MODE_ENABLED && (
+                <Text style={styles.modalFootnote}>
+                  Guest history is saved on this device only.
+                </Text>
+              )}
             </View>
           </View>
         </Modal>

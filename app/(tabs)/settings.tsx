@@ -197,7 +197,7 @@ export default function SettingsScreen() {
     }
     Alert.alert(
       'Exit Guest Mode?',
-      'Your guest history will stay on this device. You can access it again by continuing as guest.',
+      'Your guest history will stay on this device.',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Exit', style: 'destructive', onPress: () => void doClear() },

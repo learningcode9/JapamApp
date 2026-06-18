@@ -72,6 +72,27 @@ const LAST_OPEN_DATE_KEY = 'lastOpenDate';
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
+// Guest Mode is temporarily hidden — Google Sign-In is the only entry point for now. Flip this
+// back to true to restore the "Continue as Guest" button; none of the underlying guest/anonymous
+// auth code is removed, only this UI entry point is gated.
+const GUEST_MODE_ENABLED = false;
+
+// With Guest Mode hidden, a failed Google Sign-In leaves the user with no fallback into the app
+// — silently re-showing the same sign-in modal gives no explanation. Alert.alert is not
+// interactive in react-native-web (see the same caveat in tap-japam.tsx's handleResetCount), so
+// this branches to window.alert on web, matching this codebase's existing pattern for
+// cross-platform alerts.
+const showGoogleSignInRequiredAlert = () => {
+  if (GUEST_MODE_ENABLED) return;
+  const message =
+    'Google Sign-In is required right now. Please check your Google account or internet connection and try again.';
+  if (Platform.OS === 'web') {
+    if (typeof window !== 'undefined') window.alert(message);
+  } else {
+    Alert.alert('Sign-In Required', message);
+  }
+};
+
 const USER_NAME_KEY = 'userName';
 const USER_EMAIL_KEY = 'userEmail';
 const USER_ID_KEY = 'userId';
@@ -1260,6 +1281,7 @@ export default function JapamMain() {
       if (userInfo.type !== 'success') {
         setIsSigningIn(false);
         setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
         return;
       }
       const { id, name, givenName, email } = userInfo.data.user;
@@ -1272,7 +1294,12 @@ export default function JapamMain() {
       const googleEmail = email || '';
       const googleUserId = String(id).trim();
 
-      if (!googleUserId) { setIsSigningIn(false); setShowUserModal(true); return; }
+      if (!googleUserId) {
+        setIsSigningIn(false);
+        setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
+        return;
+      }
 
       await migrateGuestHistoryToGoogle(googleUserId);
 
@@ -1298,6 +1325,7 @@ export default function JapamMain() {
     } catch (error) {
       console.log('Native Google sign-in error:', error);
       setShowUserModal(true);
+      showGoogleSignInRequiredAlert();
     } finally {
       setIsSigningIn(false);
     }
@@ -1325,6 +1353,7 @@ export default function JapamMain() {
             await AsyncStorage.removeItem(AUTH_PENDING_KEY);
             setIsSigningIn(false);
             setShowUserModal(true);
+            showGoogleSignInRequiredAlert();
           }
         })();
       }
@@ -1340,7 +1369,10 @@ export default function JapamMain() {
         setIsSigningIn(false);
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-        if (!savedUserId) setShowUserModal(true);
+        if (!savedUserId) {
+          setShowUserModal(true);
+          showGoogleSignInRequiredAlert();
+        }
         return;
       }
 
@@ -1356,6 +1388,7 @@ export default function JapamMain() {
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         setIsSigningIn(false);
         setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
         return;
       }
 
@@ -1369,7 +1402,11 @@ export default function JapamMain() {
         const googleEmail = userInfo?.email || '';
         const googleUserId = String(userInfo?.id || '').trim();
 
-        if (!googleUserId) { setShowUserModal(true); return; }
+        if (!googleUserId) {
+          setShowUserModal(true);
+          showGoogleSignInRequiredAlert();
+          return;
+        }
 
         await migrateGuestHistoryToGoogle(googleUserId);
 
@@ -1400,6 +1437,7 @@ export default function JapamMain() {
       } catch (error) {
         console.log('Google login error:', error);
         setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
       } finally {
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         setIsSigningIn(false);
@@ -2300,7 +2338,9 @@ export default function JapamMain() {
               </View>
               <Text style={styles.modalTitle}>Save your Japam</Text>
               <Text style={styles.modalSubtitle}>
-                Sign in with Google to sync across devices, or continue as a guest to save locally.
+                {GUEST_MODE_ENABLED
+                  ? 'Sign in with Google to sync across devices, or continue as a guest to save locally.'
+                  : 'Sign in with Google to sync your Japam across devices.'}
               </Text>
               <Pressable
                 disabled={Platform.OS === 'web' && !request}
@@ -2318,6 +2358,7 @@ export default function JapamMain() {
                         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
                         setIsSigningIn(false);
                         setShowUserModal(true);
+                        showGoogleSignInRequiredAlert();
                       }
                     })();
                   }
@@ -2328,15 +2369,19 @@ export default function JapamMain() {
                 </View>
                 <Text style={styles.modalButtonText}>Continue with Google</Text>
               </Pressable>
-              <Pressable
-                style={styles.guestButton}
-                onPress={() => { setShowUserModal(false); setShowGuestWarningModal(true); }}
-              >
-                <Text style={styles.guestButtonText}>Continue as Guest</Text>
-              </Pressable>
-              <Text style={styles.modalFootnote}>
-                Guest history is saved on this device only.
-              </Text>
+              {GUEST_MODE_ENABLED && (
+                <Pressable
+                  style={styles.guestButton}
+                  onPress={() => { setShowUserModal(false); setShowGuestWarningModal(true); }}
+                >
+                  <Text style={styles.guestButtonText}>Continue as Guest</Text>
+                </Pressable>
+              )}
+              {GUEST_MODE_ENABLED && (
+                <Text style={styles.modalFootnote}>
+                  Guest history is saved on this device only.
+                </Text>
+              )}
             </View>
           </View>
         </Modal>
