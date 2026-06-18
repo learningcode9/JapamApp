@@ -103,7 +103,7 @@ export default function GroupsDashboardScreen() {
               <Text style={[styles.tableCell, styles.nameCell, styles.tableHeaderText]}>Name</Text>
               <Text style={[styles.tableCell, styles.numCell, styles.tableHeaderText]}>Today's Malas</Text>
               <Text style={[styles.tableCell, styles.numCell, styles.tableHeaderText]}>Today's Count</Text>
-              <Text style={[styles.tableCell, styles.numCell, styles.tableHeaderText]}>Total Count</Text>
+              <Text style={[styles.tableCell, styles.numCell, styles.tableHeaderText]}>Lifetime Count</Text>
             </View>
 
             {sortDashboardRows(rows).map((row, index) => (
@@ -111,12 +111,10 @@ export default function GroupsDashboardScreen() {
                 key={row.userId}
                 style={[styles.tableRow, index % 2 === 1 && styles.altTableRow]}
               >
-                <View style={[styles.tableCell, styles.nameCell, styles.nameLine]}>
-                  <Text style={styles.memberName} numberOfLines={1}>
-                    {row.userName || 'Unknown'}
-                    {row.role === 'admin' ? <Text style={styles.adminStar}> ★</Text> : null}
-                  </Text>
-                </View>
+                <Text style={[styles.tableCell, styles.nameCell, styles.memberName]} numberOfLines={1}>
+                  {row.userName || 'Unknown'}
+                  {row.role === 'admin' ? <Text style={styles.adminStar}> ★</Text> : null}
+                </Text>
                 <Text style={[styles.tableCell, styles.numCell, styles.statValue]}>
                   {row.todayMalas}
                 </Text>
@@ -172,14 +170,20 @@ const styles = StyleSheet.create({
     minHeight: 44,
   },
   altTableRow: { backgroundColor: 'rgba(15,118,110,0.04)' },
-  tableCell: { paddingVertical: 8, paddingHorizontal: 2 },
-  tableHeaderText: { fontSize: 13, fontWeight: '900', color: '#12383c', textTransform: 'uppercase', letterSpacing: 0.4, textAlign: 'center' },
-  nameCell: { flex: 1.3 },
+  tableCell: { paddingVertical: 8, paddingHorizontal: 2, lineHeight: 26 },
+  tableHeaderText: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#081a1c',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    textAlign: 'center',
+  },
+  nameCell: { flex: 1.3, textAlign: 'left' },
   numCell: { flex: 0.85, alignItems: 'center' },
-  nameLine: { flexDirection: 'row', alignItems: 'center' },
-  memberName: { fontSize: 17, fontWeight: '700', color: '#12383c', lineHeight: 24, flexShrink: 1 },
+  memberName: { fontSize: 17, fontWeight: '700', color: '#12383c' },
   adminStar: { color: '#c08a1e', fontSize: 15, fontWeight: '700' },
-  statValue: { fontSize: 20, fontWeight: '900', color: TEAL, textAlign: 'center', lineHeight: 24 },
+  statValue: { fontSize: 20, fontWeight: '900', color: TEAL, textAlign: 'center' },
   signInContainer: {
     flex: 1,
     alignItems: 'center',
