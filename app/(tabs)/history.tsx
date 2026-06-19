@@ -831,10 +831,10 @@ export default function HistoryScreen() {
 
       <View style={styles.tableCard}>
         <View style={[styles.tableRow, styles.tableHeader]}>
-          <Text style={[styles.tableCell, styles.dateCell]}>Date</Text>
-          <Text style={styles.tableCell}>Malas</Text>
-          <Text style={styles.tableCell}>Count</Text>
-          <Text style={styles.tableCell}>Total</Text>
+          <Text style={[styles.tableCell, styles.dateCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>Date</Text>
+          <Text style={[styles.tableCell, styles.numHeaderCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>Malas</Text>
+          <Text style={[styles.tableCell, styles.numHeaderCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>Count</Text>
+          <Text style={[styles.tableCell, styles.totalHeaderCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>Total</Text>
           <View style={styles.webDeleteCell} />
         </View>
 
@@ -850,12 +850,12 @@ export default function HistoryScreen() {
               delayLongPress={500}
               style={[styles.tableRow, index % 2 === 1 && styles.altTableRow]}
             >
-              <Text style={[styles.tableCell, styles.dateCell]}>
+              <Text style={[styles.tableCell, styles.dateCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
                 {row.dateLabel}
               </Text>
-              <Text style={styles.tableCell}>{row.malas}</Text>
-              <Text style={styles.tableCell}>{row.totalCount}</Text>
-              <Text style={styles.tableCell}>{row.accumulated}</Text>
+              <Text style={[styles.tableCell, styles.numCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{row.malas}</Text>
+              <Text style={[styles.tableCell, styles.numCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{row.totalCount}</Text>
+              <Text style={[styles.tableCell, styles.totalCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{row.accumulated}</Text>
               {Platform.OS === 'web' && (
                 <Pressable
                   style={styles.webDeleteCell}
@@ -1090,14 +1090,27 @@ const styles = StyleSheet.create({
   tableCell: {
     flex: 1,
     color: '#12383c',
-    fontSize: 18,
+    fontSize: 15,
     paddingVertical: 14,
-    paddingHorizontal: 8,
+    paddingHorizontal: 4,
     fontWeight: '700',
   },
   dateCell: {
-    flex: 1.4,
+    flex: 1.9,
   },
+  // Header labels are short words that never need to be as large as the data values below them —
+  // giving them their own smaller size frees up room so "Malas"/"Count"/"Total" fit on one line
+  // without clipping, even at large Android font-scale accessibility settings.
+  tableHeaderText: { fontSize: 13 },
+  // Malas/Count hold shorter values (e.g. "10", "1080") than Total's running accumulation
+  // (e.g. "26784"), so Total gets a bit more room — this, plus the reduced base fontSize and
+  // numberOfLines={1}/adjustsFontSizeToFit safety net on every header/cell above, is what stops
+  // "Malas"/"Count"/"Total"/the date and large numeric values from wrapping or clipping on narrow
+  // screens or large Android font-scale accessibility settings.
+  numHeaderCell: { flex: 0.65 },
+  numCell: { flex: 0.65 },
+  totalHeaderCell: { flex: 0.85 },
+  totalCell: { flex: 0.85 },
 
   webDeleteCell: {
     width: 44,
