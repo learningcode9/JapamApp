@@ -1,9 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, DeviceEventEmitter, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { getGroupDashboard, type GroupDashboardRow } from '../../lib/groupsRepository';
+
+// While the dashboard is focused, re-fetch this often so other members' completions show up
+// without anyone needing to leave and re-enter the screen. Kept well above the Supabase round
+// trip a single get_group_dashboard call takes, so a slow request never overlaps the next tick.
+const AUTO_REFRESH_INTERVAL_MS = 12000;
 
 const USER_ID_KEY = 'userId';
 const TEAL = '#0F8F87';
@@ -40,33 +45,79 @@ export default function GroupsDashboardScreen() {
   const [rows, setRows] = useState<GroupDashboardRow[]>([]);
   const [error, setError] = useState('');
 
-  const load = useCallback(async () => {
-    const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-    setUserId(savedUserId);
+  // Overlap guard — the 12s interval, the two event listeners, and the initial focus-triggered
+  // load can all fire close together; this ensures only one get_group_dashboard request is ever
+  // in flight at a time, exactly like the same pattern already used by syncPendingHistory.
+  const loadInFlightRef = useRef(false);
 
-    if (!savedUserId || !groupId) {
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-    setError('');
+  // Background refreshes (interval ticks, event-driven re-fetches) update the table data silently
+  // — only the very first load for this screen shows the full-screen spinner. Without this, the
+  // table would flash back to a loading state every ~12s or after every completion, which is far
+  // more disruptive than the staleness this feature is meant to fix.
+  const load = useCallback(async (options?: { silent?: boolean }) => {
+    if (loadInFlightRef.current) return;
+    loadInFlightRef.current = true;
+    const silent = options?.silent ?? false;
     try {
-      const { start, end } = getLocalTodayBoundsIso();
-      const result = await getGroupDashboard(groupId, savedUserId, start, end);
-      setRows(result);
-    } catch (err: any) {
-      setError(err?.message || 'Could not load this group.');
+      const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      setUserId(savedUserId);
+
+      if (!savedUserId || !groupId) {
+        if (!silent) setLoading(false);
+        return;
+      }
+
+      if (!silent) setLoading(true);
+      setError('');
+      try {
+        const { start, end } = getLocalTodayBoundsIso();
+        const result = await getGroupDashboard(groupId, savedUserId, start, end);
+        setRows(result);
+      } catch (err: any) {
+        if (!silent) setError(err?.message || 'Could not load this group.');
+      } finally {
+        if (!silent) setLoading(false);
+      }
     } finally {
-      setLoading(false);
+      loadInFlightRef.current = false;
     }
   }, [groupId]);
 
   useFocusEffect(
     useCallback(() => {
       void load();
+
+      // Background refresh while focused — picks up other members' completions once their data
+      // has synced to Supabase, without requiring the viewer to leave and re-enter the screen.
+      // Scoped to focus only (per requirement): no point polling Supabase for a screen no one is
+      // looking at.
+      const intervalId = setInterval(() => {
+        void load({ silent: true });
+      }, AUTO_REFRESH_INTERVAL_MS);
+
+      return () => clearInterval(intervalId);
     }, [load])
   );
+
+  // Immediate refresh when THIS device records a completion. Deliberately NOT scoped to focus —
+  // completing a mala always requires navigating to Timer/Tap Japam first, which blurs this
+  // screen (Expo Router tabs keep it mounted, just unfocused); a focus-gated listener would be
+  // torn down at exactly the moment the event it's waiting for fires. Mount-scoped instead, so the
+  // dashboard is already fresh the instant the viewer switches back to this tab — no manual
+  // refresh, no waiting for the next interval tick.
+  useEffect(() => {
+    const historySub = DeviceEventEmitter.addListener('japam-history-updated', () => {
+      void load({ silent: true });
+    });
+    const statsSub = DeviceEventEmitter.addListener('japam-stats-updated', () => {
+      void load({ silent: true });
+    });
+
+    return () => {
+      historySub.remove();
+      statsSub.remove();
+    };
+  }, [load]);
 
   if (!userId) {
     return (
