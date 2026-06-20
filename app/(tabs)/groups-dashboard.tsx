@@ -316,7 +316,7 @@ export default function GroupsDashboardScreen() {
     setLeaving(false);
     if (outcome.kind !== 'success') {
       if (outcome.kind === 'lastAdmin') {
-        setLeaveError('You are the last admin. Transfer admin rights or delete the group before leaving.');
+        setLeaveError('You are the last admin of this group.\nDelete the group before leaving.');
       } else {
         setLeaveError(outcome.message || 'Could not leave this group.');
       }
