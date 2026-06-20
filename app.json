@@ -35,7 +35,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "package": "com.japamapp.mantrajapam",
-      "versionCode": 3,
+      "versionCode": 4,
       "permissions": [
         "android.permission.VIBRATE",
         "android.permission.POST_NOTIFICATIONS",
