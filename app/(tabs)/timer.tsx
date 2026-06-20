@@ -28,6 +28,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   LOOP_OPTIONS,
   STD_DURATIONS,
@@ -48,6 +49,11 @@ WebBrowser.maybeCompleteAuthSession();
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 const isMobile = screenWidth < 768;
 const isShortMobile = isMobile && screenHeight < 760;
+// Native phones fill the real viewport via flexbox (see container/appShell)
+// instead of the static captured screenHeight, and reserve the floating tab
+// bar's true height (computed from safe-area insets) so the stats card always
+// clears the bottom bar.
+const isNativeMobile = isMobile && Platform.OS !== 'web';
 const CIRCLE_SIZE = isShortMobile ? 204 : isMobile ? 224 : 296;
 const TEAL = '#0F8F87';
 // Guest Mode is temporarily hidden — Google Sign-In is the only entry point for now. Flip this
@@ -123,6 +129,12 @@ const showGoogleSignInRequiredAlert = () => {
 export default function TimerScreen() {
   const router = useRouter();
   const timer = useTimer();
+  const insets = useSafeAreaInsets();
+  // Mirror the floating tab bar geometry from app/(tabs)/_layout.tsx — height 74,
+  // bottom offset max(12, insets.bottom + 8) — plus a small visual gap, so the
+  // bottom content reservation matches the bar's real footprint on every device
+  // instead of a hardcoded 112.
+  const tabBarClearance = 74 + Math.max(12, insets.bottom + 8) + 16;
   const visibleMala = Math.min(
     Math.max(1, timer.completedLoops + (timer.isRunning || timer.isPaused ? 1 : 0)),
     timer.selectedLoops
@@ -627,11 +639,19 @@ export default function TimerScreen() {
     <SafeAreaView style={styles.root}>
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={styles.container}
+        contentContainerStyle={[
+          styles.container,
+          isNativeMobile && { minHeight: undefined },
+        ]}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.appShell}>
+        <View
+          style={[
+            styles.appShell,
+            isNativeMobile && { flexGrow: 1, minHeight: undefined, paddingBottom: tabBarClearance },
+          ]}
+        >
           <View pointerEvents="none" style={styles.sceneLayer}>
             <ImageBackground
               source={ZEN_BACKGROUND}

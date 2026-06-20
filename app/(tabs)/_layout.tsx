@@ -4,6 +4,14 @@ import { Dimensions, Platform, StyleSheet, Text } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TimerProvider } from '../../contexts/timer-context';
 
+// Anchor the tab navigator on the Timer tab so it is the initial route.
+// Without this, the hidden `index` legacy "0/108 · Resume Japam" screen is the
+// navigator's anchor/first route, and the hardware back button reveals it. This
+// codebase's expo-router (v6) reads `anchor` (see app/_layout.tsx); paired with
+// `backBehavior="initialRoute"` and declaring `timer` first below, back from
+// Timer returns to Timer (already there) and exits/minimizes the app instead.
+export const unstable_settings = { anchor: 'timer' };
+
 const screenWidth = Dimensions.get('window').width;
 const isMobile = screenWidth < 500;
 const desktopTabWidth = 430;
@@ -55,6 +63,7 @@ export default function TabLayout() {
   return (
     <TimerProvider>
       <Tabs
+        backBehavior="initialRoute"
         screenOptions={{
           headerShown: false,
           tabBarActiveTintColor: '#0f766e',
@@ -90,13 +99,6 @@ export default function TabLayout() {
         }}
       >
         <Tabs.Screen
-          name="index"
-          options={{
-            href: null,
-          }}
-        />
-
-        <Tabs.Screen
           name="timer"
           options={{
             title: 'Timer',
@@ -104,6 +106,13 @@ export default function TabLayout() {
             tabBarIcon: ({ color, focused }) => (
               <Ionicons name={focused ? 'timer' : 'timer-outline'} size={focused ? 27 : 25} color={color} />
             ),
+          }}
+        />
+
+        <Tabs.Screen
+          name="index"
+          options={{
+            href: null,
           }}
         />
 
