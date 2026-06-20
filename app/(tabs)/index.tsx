@@ -115,7 +115,12 @@ const screenWidth = Dimensions.get('window').width;
 const screenHeight = Dimensions.get('window').height;
 const isMobile = screenWidth < 500;
 const isShortMobile = isMobile && screenHeight < 760;
-const progressCircleSize = isShortMobile ? 220 : isMobile ? 260 : 300;
+// Native phones fill the real viewport via flexbox (below) instead of a static
+// captured height. This keeps the zen background covering the full screen and
+// avoids the empty bottom gap that appeared when the Android window height
+// changed (e.g. after the hardware back button toggled the system bars).
+const isNativeMobile = isMobile && Platform.OS !== 'web';
+const progressCircleSize = isShortMobile ? 200 : isMobile ? 236 : 300;
 const progressRingSize = progressCircleSize - (isMobile ? 10 : 14);
 const malaBeadPositions = [
   { left: 10, top: 1 },
@@ -2666,19 +2671,27 @@ const styles = StyleSheet.create({
   },
   container: { flex: 1, backgroundColor: 'transparent' },
   content: {
-    flexGrow: isMobile ? 0 : 1,
+    // Native phones grow to fill the real scroll viewport so the shell (and its
+    // background) always covers the screen; web mobile keeps its prior behavior.
+    flexGrow: isNativeMobile ? 1 : isMobile ? 0 : 1,
     alignItems: 'center',
     justifyContent: isMobile ? 'flex-start' : 'center',
     width: '100%',
     alignSelf: 'center',
     paddingHorizontal: isMobile ? 0 : 24,
     paddingTop: isMobile ? scrollTopPadding : 24,
-    paddingBottom: scrollBottomPadding,
+    // The tab-bar reservation lives on appShell for native mobile (so the
+    // background extends behind the floating tab bar); web/tablet keep it here.
+    paddingBottom: isNativeMobile ? 0 : scrollBottomPadding,
     minHeight: isMobile ? undefined : shellMinHeight,
   },
   appShell: {
     width: '100%',
     maxWidth: isMobile ? undefined : 460,
+    // Native mobile stretches to fill the viewport (via content's flexGrow) so
+    // the zen background reaches the bottom edge — no empty gap. Tablet/desktop
+    // keep the fixed shell height; web mobile keeps its natural height.
+    flexGrow: isNativeMobile ? 1 : 0,
     minHeight: isMobile ? undefined : shellMinHeight,
     alignItems: 'center',
     overflow: 'hidden',
@@ -2687,7 +2700,9 @@ const styles = StyleSheet.create({
     borderRadius: isMobile ? 0 : 28,
     paddingHorizontal: isMobile ? 22 : 28,
     paddingTop: isShortMobile ? 14 : isMobile ? 20 : 34,
-    paddingBottom: isMobile ? 20 : 116,
+    // Native mobile reserves room for the floating tab bar here (content's
+    // paddingBottom is zeroed for native mobile to avoid double spacing).
+    paddingBottom: isNativeMobile ? 120 : isMobile ? 20 : 116,
     shadowColor: '#0f766e',
     shadowOpacity: isMobile ? 0 : 0.16,
     shadowRadius: 28,
@@ -2699,7 +2714,7 @@ const styles = StyleSheet.create({
     minHeight: 48,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: isShortMobile ? 10 : isMobile ? 16 : 32,
+    marginBottom: isShortMobile ? 8 : isMobile ? 12 : 32,
   },
   accountButton: {
     position: 'absolute',
@@ -2874,7 +2889,7 @@ const styles = StyleSheet.create({
     color: '#5F7F80',
     fontSize: isMobile ? 14 : 15,
     fontWeight: '700',
-    marginBottom: isShortMobile ? 14 : isMobile ? 20 : 30,
+    marginBottom: isShortMobile ? 10 : isMobile ? 14 : 30,
   },
   progressShell: {
     width: progressCircleSize,
@@ -2887,7 +2902,7 @@ const styles = StyleSheet.create({
     shadowRadius: 28,
     shadowOffset: { width: 0, height: 16 },
     elevation: 18,
-    marginBottom: isShortMobile ? 18 : isMobile ? 24 : 34,
+    marginBottom: isShortMobile ? 12 : isMobile ? 16 : 34,
   },
   progressPressable: {
     borderRadius: 999,
@@ -3062,7 +3077,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.8)',
     paddingHorizontal: 18,
     paddingVertical: 10,
-    marginBottom: isShortMobile ? 18 : isMobile ? 24 : 24,
+    marginBottom: isShortMobile ? 14 : isMobile ? 16 : 24,
     shadowColor: '#0f8f87',
     shadowOpacity: 0.1,
     shadowRadius: 18,
@@ -3176,7 +3191,7 @@ const styles = StyleSheet.create({
     shadowRadius: 22,
     shadowOffset: { width: 0, height: 12 },
     elevation: 10,
-    marginBottom: isMobile ? 20 : 28,
+    marginBottom: isMobile ? 8 : 28,
   },
   installBanner: {
     width: '100%',
