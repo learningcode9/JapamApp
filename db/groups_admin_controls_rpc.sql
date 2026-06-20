@@ -77,10 +77,13 @@ begin
 
   if not exists (
     select 1
-    from public.group_members gm
-    where gm.group_id = p_group_id
+    from public.groups g
+    left join public.group_members gm
+      on gm.group_id = g.id
       and gm.user_id = p_acting_admin_user_id
       and gm.role = 'admin'
+    where g.id = p_group_id
+      and (gm.user_id is not null or g.created_by = p_acting_admin_user_id)
   ) then
     raise exception 'not a group admin';
   end if;
