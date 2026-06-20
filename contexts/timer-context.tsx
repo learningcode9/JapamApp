@@ -1476,6 +1476,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           Math.max(0, elapsedSinceSavedStart),
           Math.max(0, restoredTarget - 1)
         );
+        const savedTimerCompleted =
+          restoredTarget > 0 && (savedCompletedLoops >= activeLoopLimit || savedSec >= restoredTarget);
+        const hasPausedProgress =
+          restoredSeconds > 0 &&
+          restoredSeconds < restoredTarget &&
+          !savedRunningStillActive &&
+          !savedTimerCompleted;
 
         if (savedRunningStillActive) {
           setSeconds(restoredSeconds);
@@ -1499,15 +1506,19 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           void persistState(true);
           console.log('[TimerBG] TIMER_RESTORE_RUNNING source=hydrate startedAt=%d elapsed=%ds target=%ds completedLoops=%d/%d',
             savedStartedAt, restoredSeconds, restoredTarget, safeCompletedLoops, activeLoopLimit);
-        } else if ((savedPaused || savedRunning) && restoredSeconds > 0 && restoredTarget > 0) {
+        } else if (
+          (savedPaused || savedRunning || hasPausedProgress) &&
+          restoredSeconds > 0 &&
+          restoredTarget > 0
+        ) {
           setSeconds(restoredSeconds);
           secondsRef.current = restoredSeconds;
           setIsRunning(false);
           isRunningRef.current = false;
           timerStartedAtRef.current = null;
           updateTimerState({ sessionId: savedSessionId });
-          console.log('[TimerBG] TIMER_RESTORE_PAUSED elapsed=%ds target=%ds completedLoops=%d/%d',
-            restoredSeconds, restoredTarget, safeCompletedLoops, activeLoopLimit);
+          console.log('[TimerBG] TIMER_RESTORE_PAUSED elapsed=%ds target=%ds completedLoops=%d/%d inferred=%s',
+            restoredSeconds, restoredTarget, safeCompletedLoops, activeLoopLimit, hasPausedProgress);
         }
       } catch {}
     })();
