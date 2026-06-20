@@ -9,6 +9,12 @@
 import { supabase } from './supabase';
 
 export type GroupRole = 'admin' | 'member';
+export type GroupAdminActionOutcome =
+  | { kind: 'success' }
+  | { kind: 'notAdmin'; message?: string }
+  | { kind: 'notFound'; message?: string }
+  | { kind: 'selfRemoval'; message?: string }
+  | { kind: 'error'; message?: string };
 
 export interface MyGroup {
   groupId: string;
@@ -146,4 +152,63 @@ export async function getGroupInviteCode(
     return row?.invite_code ?? null;
   }
   return (data as string | null) ?? null;
+}
+
+function mapGroupAdminError(error: any): Exclude<GroupAdminActionOutcome, { kind: 'success' }> {
+  const message = error?.message || 'Something went wrong. Please try again.';
+  const normalized = String(message).toLowerCase();
+  if (normalized.includes('not a group admin') || normalized.includes('only group admin')) {
+    return { kind: 'notAdmin', message };
+  }
+  if (normalized.includes('group not found') || normalized.includes('member not found')) {
+    return { kind: 'notFound', message };
+  }
+  if (normalized.includes('cannot remove yourself')) {
+    return { kind: 'selfRemoval', message };
+  }
+  return { kind: 'error', message };
+}
+
+export async function renameGroup(
+  groupId: string,
+  actingAdminUserId: string,
+  newName: string
+): Promise<{ kind: 'success'; name: string } | Exclude<GroupAdminActionOutcome, { kind: 'success' }>> {
+  const { data, error } = await supabase.rpc('rename_group', {
+    p_group_id: groupId,
+    p_acting_admin_user_id: actingAdminUserId,
+    p_new_name: newName,
+  });
+  if (error) return mapGroupAdminError(error);
+  if (Array.isArray(data)) {
+    const row = data[0] as { name?: string } | undefined;
+    return { kind: 'success', name: row?.name ?? newName };
+  }
+  return { kind: 'success', name: (data as string | null) ?? newName };
+}
+
+export async function removeGroupMember(
+  groupId: string,
+  actingAdminUserId: string,
+  targetUserId: string
+): Promise<GroupAdminActionOutcome> {
+  const { error } = await supabase.rpc('remove_group_member', {
+    p_group_id: groupId,
+    p_acting_admin_user_id: actingAdminUserId,
+    p_target_user_id: targetUserId,
+  });
+  if (error) return mapGroupAdminError(error);
+  return { kind: 'success' };
+}
+
+export async function deleteGroup(
+  groupId: string,
+  actingAdminUserId: string
+): Promise<GroupAdminActionOutcome> {
+  const { error } = await supabase.rpc('delete_group', {
+    p_group_id: groupId,
+    p_acting_admin_user_id: actingAdminUserId,
+  });
+  if (error) return mapGroupAdminError(error);
+  return { kind: 'success' };
 }

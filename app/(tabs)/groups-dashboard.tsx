@@ -3,8 +3,27 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, DeviceEventEmitter, Dimensions, Pressable, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
-import { getGroupDashboard, getGroupInviteCode, type GroupDashboardRow } from '../../lib/groupsRepository';
+import {
+  ActivityIndicator,
+  DeviceEventEmitter,
+  Dimensions,
+  Modal,
+  Pressable,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import {
+  deleteGroup,
+  getGroupDashboard,
+  getGroupInviteCode,
+  removeGroupMember,
+  renameGroup,
+  type GroupDashboardRow,
+} from '../../lib/groupsRepository';
 
 // While the dashboard is focused, re-fetch this often so other members' completions show up
 // without anyone needing to leave and re-enter the screen. Kept well above the Supabase round
@@ -64,6 +83,7 @@ export default function GroupsDashboardScreen() {
   const params = useLocalSearchParams<{ groupId?: string; groupName?: string }>();
   const groupId = params.groupId || '';
   const groupName = params.groupName || 'Group';
+  const [displayGroupName, setDisplayGroupName] = useState(groupName);
 
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -71,11 +91,31 @@ export default function GroupsDashboardScreen() {
   const [error, setError] = useState('');
   const [inviteCode, setInviteCode] = useState<string | null>(null);
   const [copyLabel, setCopyLabel] = useState('Copy');
+  const [showAdminMenu, setShowAdminMenu] = useState(false);
+
+  const [showRenameModal, setShowRenameModal] = useState(false);
+  const [renameInput, setRenameInput] = useState(groupName);
+  const [renameError, setRenameError] = useState('');
+  const [renaming, setRenaming] = useState(false);
+
+  const [showRemoveMembersModal, setShowRemoveMembersModal] = useState(false);
+  const [memberToRemove, setMemberToRemove] = useState<GroupDashboardRow | null>(null);
+  const [removeError, setRemoveError] = useState('');
+  const [removing, setRemoving] = useState(false);
+
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  const [deleting, setDeleting] = useState(false);
 
   // Overlap guard — the 12s interval, the two event listeners, and the initial focus-triggered
   // load can all fire close together; this ensures only one get_group_dashboard request is ever
   // in flight at a time, exactly like the same pattern already used by syncPendingHistory.
   const loadInFlightRef = useRef(false);
+
+  useEffect(() => {
+    setDisplayGroupName(groupName);
+    setRenameInput(groupName);
+  }, [groupName]);
 
   // Background refreshes (interval ticks, event-driven re-fetches) update the table data silently
   // — only the very first load for this screen shows the full-screen spinner. Without this, the
@@ -191,6 +231,78 @@ export default function GroupsDashboardScreen() {
     }
   };
 
+  const openRenameModal = () => {
+    setRenameInput(displayGroupName);
+    setRenameError('');
+    setShowAdminMenu(false);
+    setShowRenameModal(true);
+  };
+
+  const handleRenameGroup = async () => {
+    if (!userId) return;
+    const trimmedName = renameInput.trim();
+    if (!trimmedName) {
+      setRenameError('Please enter a group name.');
+      return;
+    }
+    setRenaming(true);
+    setRenameError('');
+    const outcome = await renameGroup(groupId, userId, trimmedName);
+    setRenaming(false);
+    if (outcome.kind !== 'success') {
+      setRenameError(outcome.message || 'Could not rename this group.');
+      return;
+    }
+    setDisplayGroupName(outcome.name);
+    setShowRenameModal(false);
+  };
+
+  const openRemoveMembersModal = () => {
+    setMemberToRemove(null);
+    setRemoveError('');
+    setShowAdminMenu(false);
+    setShowRemoveMembersModal(true);
+  };
+
+  const requestRemoveMember = (member: GroupDashboardRow) => {
+    setRemoveError('');
+    setMemberToRemove(member);
+  };
+
+  const handleRemoveMember = async () => {
+    if (!userId || !memberToRemove) return;
+    setRemoving(true);
+    setRemoveError('');
+    const outcome = await removeGroupMember(groupId, userId, memberToRemove.userId);
+    setRemoving(false);
+    if (outcome.kind !== 'success') {
+      setRemoveError(outcome.message || 'Could not remove this member.');
+      return;
+    }
+    setMemberToRemove(null);
+    await load({ silent: true });
+  };
+
+  const openDeleteModal = () => {
+    setDeleteError('');
+    setShowAdminMenu(false);
+    setShowDeleteModal(true);
+  };
+
+  const handleDeleteGroup = async () => {
+    if (!userId) return;
+    setDeleting(true);
+    setDeleteError('');
+    const outcome = await deleteGroup(groupId, userId);
+    setDeleting(false);
+    if (outcome.kind !== 'success') {
+      setDeleteError(outcome.message || 'Could not delete this group.');
+      return;
+    }
+    setShowDeleteModal(false);
+    router.replace('/groups');
+  };
+
   if (!userId) {
     return (
       <View style={styles.signInContainer}>
@@ -210,10 +322,37 @@ export default function GroupsDashboardScreen() {
         <Pressable style={styles.backButton} onPress={() => router.back()}>
           <Ionicons name="chevron-back" size={24} color={TEAL} />
         </Pressable>
-        <Text style={styles.header} numberOfLines={1}>{groupName}</Text>
+        <Text style={styles.header} numberOfLines={1}>{displayGroupName}</Text>
+        {isAdmin ? (
+          <Pressable
+            style={styles.adminMenuButton}
+            onPress={() => setShowAdminMenu((visible) => !visible)}
+            accessibilityRole="button"
+            accessibilityLabel="Open group admin menu"
+          >
+            <Ionicons name="ellipsis-horizontal" size={22} color={TEAL} />
+          </Pressable>
+        ) : null}
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
+        {isAdmin && showAdminMenu ? (
+          <View style={styles.adminMenuCard}>
+            <Pressable style={styles.adminMenuItem} onPress={openRenameModal}>
+              <Ionicons name="create-outline" size={20} color={TEAL} />
+              <Text style={styles.adminMenuItemText}>Rename Group</Text>
+            </Pressable>
+            <Pressable style={styles.adminMenuItem} onPress={openRemoveMembersModal}>
+              <Ionicons name="person-remove-outline" size={20} color={TEAL} />
+              <Text style={styles.adminMenuItemText}>Remove Members</Text>
+            </Pressable>
+            <Pressable style={styles.adminMenuItem} onPress={openDeleteModal}>
+              <Ionicons name="trash-outline" size={20} color="#b42318" />
+              <Text style={styles.deleteMenuItemText}>Delete Group</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
         {isAdmin && inviteCode ? (
           <View style={styles.inviteCodeRow}>
             <Text style={styles.inviteCodeText} numberOfLines={1}>
@@ -269,6 +408,109 @@ export default function GroupsDashboardScreen() {
           </View>
         )}
       </ScrollView>
+
+      <Modal visible={showRenameModal} transparent animationType="fade" onRequestClose={() => setShowRenameModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Rename Group</Text>
+            <Text style={styles.modalBody}>Choose a simple name everyone in the group will recognize.</Text>
+            <TextInput
+              value={renameInput}
+              onChangeText={setRenameInput}
+              style={styles.textInput}
+              placeholder="Group name"
+              maxLength={40}
+              autoFocus
+            />
+            {renameError ? <Text style={styles.modalError}>{renameError}</Text> : null}
+            <View style={styles.modalActions}>
+              <Pressable style={styles.modalSecondaryButton} onPress={() => setShowRenameModal(false)} disabled={renaming}>
+                <Text style={styles.modalSecondaryText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.modalPrimaryButton, (renaming || !renameInput.trim()) && styles.disabledButton]}
+                onPress={handleRenameGroup}
+                disabled={renaming || !renameInput.trim()}
+              >
+                <Text style={styles.modalPrimaryText}>{renaming ? 'Saving...' : 'Save'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showRemoveMembersModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowRemoveMembersModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Remove Members</Text>
+            <Text style={styles.modalBody}>Select a member to remove from this group.</Text>
+            {removeError ? <Text style={styles.modalError}>{removeError}</Text> : null}
+            <ScrollView style={styles.memberList} contentContainerStyle={styles.memberListContent}>
+              {sortDashboardRows(rows).filter((row) => row.userId !== userId).map((row) => (
+                <Pressable
+                  key={row.userId}
+                  style={styles.memberActionRow}
+                  onPress={() => requestRemoveMember(row)}
+                >
+                  <View style={styles.memberActionTextWrap}>
+                    <Text style={styles.memberActionName} numberOfLines={1}>{row.userName || 'Unknown'}</Text>
+                    <Text style={styles.memberActionRole}>{row.role === 'admin' ? 'Admin' : 'Member'}</Text>
+                  </View>
+                  <Ionicons name="remove-circle-outline" size={24} color="#b42318" />
+                </Pressable>
+              ))}
+            </ScrollView>
+            <Pressable style={styles.fullWidthSoftButton} onPress={() => setShowRemoveMembersModal(false)} disabled={removing}>
+              <Text style={styles.modalSecondaryText}>Done</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={!!memberToRemove} transparent animationType="fade" onRequestClose={() => setMemberToRemove(null)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Remove member?</Text>
+            <Text style={styles.modalBody}>
+              {memberToRemove?.userName || 'This member'} will lose access to this group. Their personal Japam history will not be deleted.
+            </Text>
+            {removeError ? <Text style={styles.modalError}>{removeError}</Text> : null}
+            <View style={styles.modalActions}>
+              <Pressable style={styles.modalSecondaryButton} onPress={() => setMemberToRemove(null)} disabled={removing}>
+                <Text style={styles.modalSecondaryText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={styles.dangerButton} onPress={handleRemoveMember} disabled={removing}>
+                <Text style={styles.dangerButtonText}>{removing ? 'Removing...' : 'Remove'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showDeleteModal} transparent animationType="fade" onRequestClose={() => setShowDeleteModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Delete group?</Text>
+            <Text style={styles.modalBody}>
+              This will permanently delete {displayGroupName} and remove all members from the group. Personal Japam history will stay safe.
+            </Text>
+            {deleteError ? <Text style={styles.modalError}>{deleteError}</Text> : null}
+            <View style={styles.modalActions}>
+              <Pressable style={styles.modalSecondaryButton} onPress={() => setShowDeleteModal(false)} disabled={deleting}>
+                <Text style={styles.modalSecondaryText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={styles.dangerButton} onPress={handleDeleteGroup} disabled={deleting}>
+                <Text style={styles.dangerButtonText}>{deleting ? 'Deleting...' : 'Delete'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -285,6 +527,16 @@ const styles = StyleSheet.create({
   },
   backButton: { padding: 6 },
   header: { fontSize: 20, fontWeight: '900', color: '#12383c', flex: 1 },
+  adminMenuButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.16)',
+  },
   scrollContent: { padding: 20, paddingBottom: 100 },
   loadingSpinner: { marginTop: 24 },
   errorText: { color: '#b91c1c', fontSize: 14, textAlign: 'center', marginTop: 24 },
@@ -358,6 +610,121 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
   },
   inviteCodeButtonText: { color: TEAL, fontWeight: '800', fontSize: 13 },
+  adminMenuCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.16)',
+    marginBottom: 16,
+    overflow: 'hidden',
+  },
+  adminMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(15,118,110,0.08)',
+  },
+  adminMenuItemText: { fontSize: 15, fontWeight: '800', color: '#12383c' },
+  deleteMenuItemText: { fontSize: 15, fontWeight: '800', color: '#b42318' },
+  modalOverlay: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(8,26,28,0.32)',
+    padding: 22,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#f8fefe',
+    borderRadius: 24,
+    padding: 22,
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.14)',
+  },
+  modalTitle: { fontSize: 22, fontWeight: '900', color: '#12383c', textAlign: 'center' },
+  modalBody: {
+    fontSize: 15,
+    lineHeight: 22,
+    color: '#365f61',
+    textAlign: 'center',
+    marginTop: 10,
+    marginBottom: 18,
+  },
+  textInput: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.18)',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#12383c',
+    fontWeight: '700',
+  },
+  modalError: { color: '#b91c1c', fontSize: 14, textAlign: 'center', marginTop: 12 },
+  modalActions: { flexDirection: 'row', gap: 12, marginTop: 20 },
+  modalSecondaryButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+    borderRadius: 16,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.14)',
+  },
+  modalSecondaryText: { color: '#365f61', fontWeight: '900', fontSize: 15 },
+  modalPrimaryButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+    borderRadius: 16,
+    backgroundColor: TEAL,
+  },
+  modalPrimaryText: { color: '#fff', fontWeight: '900', fontSize: 15 },
+  disabledButton: { opacity: 0.55 },
+  memberList: { maxHeight: 310 },
+  memberListContent: { gap: 8 },
+  memberActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.12)',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    gap: 12,
+  },
+  memberActionTextWrap: { flex: 1 },
+  memberActionName: { fontSize: 16, fontWeight: '900', color: '#12383c' },
+  memberActionRole: { fontSize: 13, fontWeight: '700', color: '#5F7F80', marginTop: 2 },
+  fullWidthSoftButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+    borderRadius: 16,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.14)',
+    marginTop: 16,
+  },
+  dangerButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+    borderRadius: 16,
+    backgroundColor: 'rgba(180,35,24,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(180,35,24,0.18)',
+  },
+  dangerButtonText: { color: '#b42318', fontWeight: '900', fontSize: 15 },
   signInContainer: {
     flex: 1,
     alignItems: 'center',
