@@ -123,3 +123,27 @@ export async function getGroupDashboard(
     lastUpdated: row.last_updated,
   }));
 }
+
+// Admin-only — reads back the invite_code already stored on the group at creation time (never
+// generates a new one). get_group_invite_code raises if the caller isn't an admin member of this
+// exact group_id, so a non-admin/non-member calling this directly gets nothing back either way;
+// the UI only ever calls this once it already knows (from getGroupDashboard's own role field)
+// that the current user is this group's admin.
+export async function getGroupInviteCode(
+  groupId: string,
+  requestingUserId: string
+): Promise<string | null> {
+  const { data, error } = await supabase.rpc('get_group_invite_code', {
+    p_group_id: groupId,
+    p_current_user_id: requestingUserId,
+  });
+  if (error) throw error;
+  // The deployed function returns its result as [{ invite_code: "..." }] (a one-row/one-column
+  // result set), not a bare scalar string — confirmed live via direct REST call. Unwrap that
+  // shape; fall back to treating `data` as a bare string defensively, in case this ever changes.
+  if (Array.isArray(data)) {
+    const row = data[0] as { invite_code?: string } | undefined;
+    return row?.invite_code ?? null;
+  }
+  return (data as string | null) ?? null;
+}
