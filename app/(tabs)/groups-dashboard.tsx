@@ -20,6 +20,7 @@ import {
   deleteGroup,
   getGroupDashboard,
   getGroupInviteCode,
+  leaveGroup,
   removeGroupMember,
   renameGroup,
   type GroupDashboardRow,
@@ -106,6 +107,10 @@ export default function GroupsDashboardScreen() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteError, setDeleteError] = useState('');
   const [deleting, setDeleting] = useState(false);
+
+  const [showLeaveModal, setShowLeaveModal] = useState(false);
+  const [leaveError, setLeaveError] = useState('');
+  const [leaving, setLeaving] = useState(false);
 
   // Overlap guard — the 12s interval, the two event listeners, and the initial focus-triggered
   // load can all fire close together; this ensures only one get_group_dashboard request is ever
@@ -303,6 +308,24 @@ export default function GroupsDashboardScreen() {
     router.replace('/groups');
   };
 
+  const handleLeaveGroup = async () => {
+    if (!userId) return;
+    setLeaving(true);
+    setLeaveError('');
+    const outcome = await leaveGroup(groupId, userId);
+    setLeaving(false);
+    if (outcome.kind !== 'success') {
+      if (outcome.kind === 'lastAdmin') {
+        setLeaveError('You are the last admin. Transfer admin rights or delete the group before leaving.');
+      } else {
+        setLeaveError(outcome.message || 'Could not leave this group.');
+      }
+      return;
+    }
+    setShowLeaveModal(false);
+    router.replace('/groups');
+  };
+
   if (!userId) {
     return (
       <View style={styles.signInContainer}>
@@ -373,39 +396,51 @@ export default function GroupsDashboardScreen() {
         ) : rows.length === 0 ? (
           <Text style={styles.emptyText}>No members found for this group.</Text>
         ) : (
-          <View style={styles.tableCard}>
-            <View style={[styles.tableRow, styles.tableHeader]}>
-              <Text style={[styles.tableHeaderCell, styles.tableHeaderText, styles.nameCell]}>Name</Text>
-              <Text style={[styles.tableHeaderCell, styles.todayMalasCell, styles.tableHeaderText]}>Today Mala</Text>
-              <Text style={[styles.tableHeaderCell, styles.todayCountCell, styles.tableHeaderText]}>Today Count</Text>
-              <Text style={[styles.tableHeaderCell, styles.lifetimeMalasCell, styles.tableHeaderText]}>Lifetime Malas</Text>
-              <Text style={[styles.tableHeaderCell, styles.lifetimeCountCell, styles.tableHeaderText]}>Lifetime Count</Text>
-            </View>
-
-            {sortDashboardRows(rows).map((row, index) => (
-              <View
-                key={row.userId}
-                style={[styles.tableRow, index % 2 === 1 && styles.altTableRow]}
-              >
-                <Text style={[styles.tableCell, styles.nameCell, styles.memberName]} numberOfLines={1}>
-                  {row.role === 'admin' ? <Text style={styles.adminStar}>★ </Text> : null}
-                  {row.userName || 'Unknown'}
-                </Text>
-                <Text style={[styles.tableCell, styles.todayMalasCell, styles.statValue]}>
-                  {row.todayMalas}
-                </Text>
-                <Text style={[styles.tableCell, styles.todayCountCell, styles.statValue]}>
-                  {row.todayCount}
-                </Text>
-                <Text style={[styles.tableCell, styles.lifetimeMalasCell, styles.statValue]}>
-                  {row.totalMalas}
-                </Text>
-                <Text style={[styles.tableCell, styles.lifetimeCountCell, styles.statValue]}>
-                  {row.totalCount}
-                </Text>
+          <>
+            <View style={styles.tableCard}>
+              <View style={[styles.tableRow, styles.tableHeader]}>
+                <Text style={[styles.tableHeaderCell, styles.tableHeaderText, styles.nameCell]}>Name</Text>
+                <Text style={[styles.tableHeaderCell, styles.todayMalasCell, styles.tableHeaderText]}>Today Mala</Text>
+                <Text style={[styles.tableHeaderCell, styles.todayCountCell, styles.tableHeaderText]}>Today Count</Text>
+                <Text style={[styles.tableHeaderCell, styles.lifetimeMalasCell, styles.tableHeaderText]}>Lifetime Malas</Text>
+                <Text style={[styles.tableHeaderCell, styles.lifetimeCountCell, styles.tableHeaderText]}>Lifetime Count</Text>
               </View>
-            ))}
-          </View>
+
+              {sortDashboardRows(rows).map((row, index) => (
+                <View
+                  key={row.userId}
+                  style={[styles.tableRow, index % 2 === 1 && styles.altTableRow]}
+                >
+                  <Text style={[styles.tableCell, styles.nameCell, styles.memberName]} numberOfLines={1}>
+                    {row.role === 'admin' ? <Text style={styles.adminStar}>★ </Text> : null}
+                    {row.userName || 'Unknown'}
+                  </Text>
+                  <Text style={[styles.tableCell, styles.todayMalasCell, styles.statValue]}>
+                    {row.todayMalas}
+                  </Text>
+                  <Text style={[styles.tableCell, styles.todayCountCell, styles.statValue]}>
+                    {row.todayCount}
+                  </Text>
+                  <Text style={[styles.tableCell, styles.lifetimeMalasCell, styles.statValue]}>
+                    {row.totalMalas}
+                  </Text>
+                  <Text style={[styles.tableCell, styles.lifetimeCountCell, styles.statValue]}>
+                    {row.totalCount}
+                  </Text>
+                </View>
+              ))}
+            </View>
+            <Pressable
+              style={styles.leaveGroupButton}
+              onPress={() => {
+                setLeaveError('');
+                setShowLeaveModal(true);
+              }}
+            >
+              <Ionicons name="exit-outline" size={20} color="#b42318" />
+              <Text style={styles.leaveGroupText}>Leave Group</Text>
+            </Pressable>
+          </>
         )}
       </ScrollView>
 
@@ -511,6 +546,26 @@ export default function GroupsDashboardScreen() {
           </View>
         </View>
       </Modal>
+
+      <Modal visible={showLeaveModal} transparent animationType="fade" onRequestClose={() => setShowLeaveModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Leave group?</Text>
+            <Text style={styles.modalBody}>
+              You will no longer see this group. Your personal Japam history and totals will not be affected.
+            </Text>
+            {leaveError ? <Text style={styles.modalError}>{leaveError}</Text> : null}
+            <View style={styles.modalActions}>
+              <Pressable style={styles.modalSecondaryButton} onPress={() => setShowLeaveModal(false)} disabled={leaving}>
+                <Text style={styles.modalSecondaryText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={styles.dangerButton} onPress={handleLeaveGroup} disabled={leaving}>
+                <Text style={styles.dangerButtonText}>{leaving ? 'Leaving...' : 'Leave'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -587,6 +642,20 @@ const styles = StyleSheet.create({
   memberName: { fontSize: NAME_FONT_SIZE, fontWeight: '700', color: '#12383c' },
   adminStar: { color: '#c08a1e', fontSize: 15, fontWeight: '700' },
   statValue: { fontSize: VALUE_FONT_SIZE, fontWeight: '900', color: TEAL, textAlign: 'center' },
+  leaveGroupButton: {
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 20,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 16,
+    backgroundColor: 'rgba(180,35,24,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(180,35,24,0.16)',
+  },
+  leaveGroupText: { color: '#b42318', fontSize: 15, fontWeight: '900' },
   inviteCodeRow: {
     flexDirection: 'row',
     alignItems: 'center',

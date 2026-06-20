@@ -13,6 +13,7 @@ export type GroupAdminActionOutcome =
   | { kind: 'success' }
   | { kind: 'notAdmin'; message?: string }
   | { kind: 'notFound'; message?: string }
+  | { kind: 'lastAdmin'; message?: string }
   | { kind: 'selfRemoval'; message?: string }
   | { kind: 'error'; message?: string };
 
@@ -163,6 +164,9 @@ function mapGroupAdminError(error: any): Exclude<GroupAdminActionOutcome, { kind
   if (normalized.includes('group not found') || normalized.includes('member not found')) {
     return { kind: 'notFound', message };
   }
+  if (normalized.includes('last admin')) {
+    return { kind: 'lastAdmin', message };
+  }
   if (normalized.includes('cannot remove yourself')) {
     return { kind: 'selfRemoval', message };
   }
@@ -208,6 +212,18 @@ export async function deleteGroup(
   const { error } = await supabase.rpc('delete_group', {
     p_group_id: groupId,
     p_acting_admin_user_id: actingAdminUserId,
+  });
+  if (error) return mapGroupAdminError(error);
+  return { kind: 'success' };
+}
+
+export async function leaveGroup(
+  groupId: string,
+  currentUserId: string
+): Promise<GroupAdminActionOutcome> {
+  const { error } = await supabase.rpc('leave_group', {
+    p_group_id: groupId,
+    p_current_user_id: currentUserId,
   });
   if (error) return mapGroupAdminError(error);
   return { kind: 'success' };
