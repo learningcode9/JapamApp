@@ -17,6 +17,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     Alert,
     DeviceEventEmitter,
+    Dimensions,
     KeyboardAvoidingView,
     Modal,
     Platform,
@@ -27,6 +28,33 @@ import {
     TextInput,
     View,
 } from 'react-native';
+
+// Same breakpoint convention already used elsewhere in this app (see timer.tsx's
+// isMobile/isShortMobile) — width-based, not a device-class guess. isNarrowPhone covers small
+// Android phones (~360dp and below); isTablet covers the same >=768dp cutoff timer.tsx already
+// uses for "not a phone."
+const { width: HISTORY_SCREEN_WIDTH } = Dimensions.get('window');
+const isNarrowPhone = HISTORY_SCREEN_WIDTH < 380;
+const isTablet = HISTORY_SCREEN_WIDTH >= 768;
+
+// Deliberately sized per breakpoint instead of relying on adjustsFontSizeToFit's minimumFontScale
+// as the primary mechanism — that previously let header text shrink as low as 13 * 0.6 ≈ 7.8px on
+// narrow screens, which is unreadable. These are the actual rendered sizes; minimumFontScale below
+// is now only a small safety margin (0.9), never the thing doing the real work.
+// Raised again from an earlier pass (13/15/17) that fixed wrapping but left headers reading as
+// too small — "Date"/"Malas"/"Count"/"Total" are short single words with plenty of headroom to
+// grow without reintroducing wrapping, unlike Groups Dashboard's longer "Lifetime Malas" labels.
+const TABLE_HEADER_FONT_SIZE = isTablet ? 20 : isNarrowPhone ? 16 : 18;
+const TABLE_VALUE_FONT_SIZE = isTablet ? 19 : isNarrowPhone ? 14 : 15;
+const TABLE_CELL_PADDING_H = isNarrowPhone ? 2 : isTablet ? 8 : 4;
+// Date is still the widest column on every breakpoint (longest realistic content: "19 Jun 2026"
+// on medium/tablet, "19 Jun" on narrow phones — see toDayLabel). All three breakpoints' Malas/
+// Count/Total flex shares were increased from their original values — at the bigger
+// TABLE_HEADER_FONT_SIZE above, the old shares left "Malas"/"Count" clipping to "Mala"/"Coun" on
+// both narrow AND medium widths (confirmed visually during QA), not just narrow as first assumed.
+const DATE_CELL_FLEX = isNarrowPhone ? 1.3 : isTablet ? 1.5 : 1.5;
+const NUM_CELL_FLEX = isNarrowPhone ? 0.85 : isTablet ? 0.95 : 0.85;
+const TOTAL_CELL_FLEX = isNarrowPhone ? 1.0 : isTablet ? 1.1 : 1.0;
 
 type Session = {
   date: string;
@@ -126,17 +154,23 @@ const toDayKey = (rawDate: string) => {
   return toLocalDayKey(rawDate);
 };
 
+const SHORT_MONTH_NAMES = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+// Built manually (not toLocaleDateString) so the format is exact and deterministic across
+// locales/platforms: "19 Jun 2026" — day-month-year, no comma, narrower than the previous
+// "Jun 19, 2026" at the same font size, which combined with the larger header font size below
+// is what keeps the Date column from wrapping or forcing the table to scroll horizontally.
+// Narrow phones drop the year ("19 Jun") — there's truly no room left for it once the header
+// font is large enough to be readable.
 const toDayLabel = (dayKey: string) => {
   if (dayKey === 'unknown') return 'Unknown Date';
 
   const [year, month, day] = dayKey.split('-').map(Number);
-  const d = new Date(year, month - 1, day);
+  const monthName = SHORT_MONTH_NAMES[month - 1];
 
-  return d.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
+  return isNarrowPhone ? `${day} ${monthName}` : `${day} ${monthName} ${year}`;
 };
 
 const parseHistory = (raw: string | null): Session[] => {
@@ -831,10 +865,10 @@ export default function HistoryScreen() {
 
       <View style={styles.tableCard}>
         <View style={[styles.tableRow, styles.tableHeader]}>
-          <Text style={[styles.tableCell, styles.dateCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>Date</Text>
-          <Text style={[styles.tableCell, styles.numHeaderCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>Malas</Text>
-          <Text style={[styles.tableCell, styles.numHeaderCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>Count</Text>
-          <Text style={[styles.tableCell, styles.totalHeaderCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>Total</Text>
+          <Text style={[styles.tableCell, styles.dateCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Date</Text>
+          <Text style={[styles.tableCell, styles.numHeaderCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Malas</Text>
+          <Text style={[styles.tableCell, styles.numHeaderCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Count</Text>
+          <Text style={[styles.tableCell, styles.totalHeaderCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Total</Text>
           <View style={styles.webDeleteCell} />
         </View>
 
@@ -850,12 +884,12 @@ export default function HistoryScreen() {
               delayLongPress={500}
               style={[styles.tableRow, index % 2 === 1 && styles.altTableRow]}
             >
-              <Text style={[styles.tableCell, styles.dateCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>
+              <Text style={[styles.tableCell, styles.dateCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>
                 {row.dateLabel}
               </Text>
-              <Text style={[styles.tableCell, styles.numCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{row.malas}</Text>
-              <Text style={[styles.tableCell, styles.numCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{row.totalCount}</Text>
-              <Text style={[styles.tableCell, styles.totalCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{row.accumulated}</Text>
+              <Text style={[styles.tableCell, styles.numCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.malas}</Text>
+              <Text style={[styles.tableCell, styles.numCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.totalCount}</Text>
+              <Text style={[styles.tableCell, styles.totalCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.accumulated}</Text>
               {Platform.OS === 'web' && (
                 <Pressable
                   style={styles.webDeleteCell}
@@ -1090,27 +1124,26 @@ const styles = StyleSheet.create({
   tableCell: {
     flex: 1,
     color: '#12383c',
-    fontSize: 15,
+    fontSize: TABLE_VALUE_FONT_SIZE,
     paddingVertical: 14,
-    paddingHorizontal: 4,
+    paddingHorizontal: TABLE_CELL_PADDING_H,
     fontWeight: '700',
   },
   dateCell: {
-    flex: 1.9,
+    flex: DATE_CELL_FLEX,
   },
   // Header labels are short words that never need to be as large as the data values below them —
-  // giving them their own smaller size frees up room so "Malas"/"Count"/"Total" fit on one line
-  // without clipping, even at large Android font-scale accessibility settings.
-  tableHeaderText: { fontSize: 13 },
+  // giving them their own smaller (but never tiny — see TABLE_HEADER_FONT_SIZE) size frees up
+  // room so "Malas"/"Count"/"Total" fit on one line without clipping, even at large Android
+  // font-scale accessibility settings.
+  tableHeaderText: { fontSize: TABLE_HEADER_FONT_SIZE },
   // Malas/Count hold shorter values (e.g. "10", "1080") than Total's running accumulation
-  // (e.g. "26784"), so Total gets a bit more room — this, plus the reduced base fontSize and
-  // numberOfLines={1}/adjustsFontSizeToFit safety net on every header/cell above, is what stops
-  // "Malas"/"Count"/"Total"/the date and large numeric values from wrapping or clipping on narrow
-  // screens or large Android font-scale accessibility settings.
-  numHeaderCell: { flex: 0.65 },
-  numCell: { flex: 0.65 },
-  totalHeaderCell: { flex: 0.85 },
-  totalCell: { flex: 0.85 },
+  // (e.g. "26784"), so Total gets a bit more room. Centered per requirement — Date stays
+  // left-aligned (its default), these three numeric columns are explicitly centered.
+  numHeaderCell: { flex: NUM_CELL_FLEX, textAlign: 'center' },
+  numCell: { flex: NUM_CELL_FLEX, textAlign: 'center' },
+  totalHeaderCell: { flex: TOTAL_CELL_FLEX, textAlign: 'center' },
+  totalCell: { flex: TOTAL_CELL_FLEX, textAlign: 'center' },
 
   webDeleteCell: {
     width: 44,
