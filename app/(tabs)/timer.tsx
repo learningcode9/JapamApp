@@ -1001,7 +1001,7 @@ const styles = StyleSheet.create({
   },
   backgroundOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(245, 250, 250, 0.32)',
+    backgroundColor: 'rgba(245, 250, 250, 0.28)',
   },
   container: {
     flexGrow: 1,
