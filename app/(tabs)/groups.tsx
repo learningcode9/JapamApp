@@ -231,11 +231,11 @@ export default function GroupsScreen() {
                   <Text style={styles.inviteCodeLabel}>Invite code</Text>
                   <Text style={styles.inviteCodeValue}>{createdGroup.inviteCode}</Text>
                 </View>
-                <Pressable style={styles.secondaryButton} onPress={handleShareInviteCode}>
+                <Pressable style={styles.modalSecondaryButton} onPress={handleShareInviteCode}>
                   <Text style={styles.secondaryButtonText}>Share Invite Code</Text>
                 </Pressable>
                 <Pressable
-                  style={[styles.primaryButton, styles.spacedButton]}
+                  style={[styles.modalPrimaryButton, styles.spacedButton]}
                   onPress={handleGoToCreatedGroup}
                 >
                   <Text style={styles.primaryButtonText}>Go to Group</Text>
@@ -255,7 +255,7 @@ export default function GroupsScreen() {
                 />
                 {createError ? <Text style={styles.errorText}>{createError}</Text> : null}
                 <Pressable
-                  style={[styles.primaryButton, (creating || !createName.trim()) && styles.disabledButton]}
+                  style={[styles.modalPrimaryButton, (creating || !createName.trim()) && styles.disabledButton]}
                   disabled={creating || !createName.trim()}
                   onPress={handleCreateSubmit}
                 >
@@ -287,7 +287,7 @@ export default function GroupsScreen() {
             />
             {joinError ? <Text style={styles.errorText}>{joinError}</Text> : null}
             <Pressable
-              style={[styles.primaryButton, (joining || !joinCode.trim()) && styles.disabledButton]}
+              style={[styles.modalPrimaryButton, (joining || !joinCode.trim()) && styles.disabledButton]}
               disabled={joining || !joinCode.trim()}
               onPress={handleJoinSubmit}
             >
@@ -368,10 +368,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 24,
+    paddingVertical: 24,
   },
   modalCard: {
     width: '100%',
     maxWidth: 380,
+    maxHeight: '88%',
     backgroundColor: '#f8ffff',
     borderRadius: 22,
     paddingHorizontal: 24,
@@ -406,5 +408,25 @@ const styles = StyleSheet.create({
   },
   inviteCodeLabel: { fontSize: 12, color: '#547071', marginBottom: 4 },
   inviteCodeValue: { fontSize: 28, fontWeight: '900', color: TEAL, letterSpacing: 3 },
+  modalPrimaryButton: {
+    width: '100%',
+    minHeight: 52,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    backgroundColor: TEAL,
+  },
+  modalSecondaryButton: {
+    width: '100%',
+    minHeight: 52,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#dbeceb',
+  },
   spacedButton: { marginTop: 10 },
 });
