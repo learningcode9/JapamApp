@@ -47,16 +47,15 @@ const VALUE_FONT_SIZE = isTablet ? 19 : isNarrowPhone ? 15 : 17;
 const NAME_FONT_SIZE = isTablet ? 17 : isNarrowPhone ? 15 : 16;
 const CELL_PADDING_H = isNarrowPhone ? 1 : isTablet ? 4 : 2;
 const NAME_CELL_FLEX = isTablet ? 1.3 : isNarrowPhone ? 0.95 : 1.0;
-// Count columns hold larger numbers than their matching Malas columns (count is always malas×108
-// at minimum), so they get slightly more width — same proportion already used for the Today
-// pair, now applied consistently to the Lifetime pair too. Lifetime columns get noticeably more
-// share than Today's — "Lifetime Malas"/"Lifetime Count" are the longest header labels, and
-// without enough width the word "Lifetime" itself was wrapping mid-word ("LIFE"/"TIME") instead
-// of breaking cleanly between "Lifetime" and "Malas"/"Count".
-const TODAY_MALAS_FLEX = isNarrowPhone ? 0.5 : isTablet ? 0.75 : 0.62;
-const TODAY_COUNT_FLEX = isNarrowPhone ? 0.6 : isTablet ? 0.85 : 0.7;
-const LIFETIME_MALAS_FLEX = isNarrowPhone ? 0.7 : isTablet ? 0.95 : 0.85;
-const LIFETIME_COUNT_FLEX = isNarrowPhone ? 0.85 : isTablet ? 1.1 : 0.95;
+// All four stat columns now share one flex value instead of each having its own. Previously
+// Today Malas/Today Count/Lifetime Malas/Lifetime Count had ascending widths tuned only to fit
+// each header label, which left the four numeric VALUES sitting in a "staircase" of different
+// box widths — visually uneven/messy even though each value was correctly centered under its
+// own header. Values are short numbers in every column; only the longer header labels ever need
+// extra room, and headers are already allowed to wrap to a second line (no numberOfLines limit
+// set on them below) so equal-width columns don't reintroduce the old "LIFE"/"TIME" mid-word
+// wrap problem — they just wrap as whole words across two lines when a column is narrow.
+const STAT_CELL_FLEX = isNarrowPhone ? 0.68 : isTablet ? 0.92 : 0.79;
 
 // Local-day boundary, matching the same "viewer's local calendar day" definition used
 // throughout the rest of this app (see lib/historyStore.ts's toLocalDayKey/todayStatsFor) —
@@ -400,7 +399,7 @@ export default function GroupsDashboardScreen() {
             <View style={styles.tableCard}>
               <View style={[styles.tableRow, styles.tableHeader]}>
                 <Text style={[styles.tableHeaderCell, styles.tableHeaderText, styles.nameCell]}>Name</Text>
-                <Text style={[styles.tableHeaderCell, styles.todayMalasCell, styles.tableHeaderText]}>Today Mala</Text>
+                <Text style={[styles.tableHeaderCell, styles.todayMalasCell, styles.tableHeaderText]}>Today Malas</Text>
                 <Text style={[styles.tableHeaderCell, styles.todayCountCell, styles.tableHeaderText]}>Today Count</Text>
                 <Text style={[styles.tableHeaderCell, styles.lifetimeMalasCell, styles.tableHeaderText]}>Lifetime Malas</Text>
                 <Text style={[styles.tableHeaderCell, styles.lifetimeCountCell, styles.tableHeaderText]}>Lifetime Count</Text>
@@ -635,10 +634,10 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   nameCell: { flex: NAME_CELL_FLEX, textAlign: 'left' },
-  todayMalasCell: { flex: TODAY_MALAS_FLEX, alignItems: 'center', textAlign: 'center' },
-  todayCountCell: { flex: TODAY_COUNT_FLEX, alignItems: 'center', textAlign: 'center' },
-  lifetimeMalasCell: { flex: LIFETIME_MALAS_FLEX, alignItems: 'center', textAlign: 'center' },
-  lifetimeCountCell: { flex: LIFETIME_COUNT_FLEX, alignItems: 'center', textAlign: 'center' },
+  todayMalasCell: { flex: STAT_CELL_FLEX, alignItems: 'center', textAlign: 'center' },
+  todayCountCell: { flex: STAT_CELL_FLEX, alignItems: 'center', textAlign: 'center' },
+  lifetimeMalasCell: { flex: STAT_CELL_FLEX, alignItems: 'center', textAlign: 'center' },
+  lifetimeCountCell: { flex: STAT_CELL_FLEX, alignItems: 'center', textAlign: 'center' },
   memberName: { fontSize: NAME_FONT_SIZE, fontWeight: '700', color: '#12383c' },
   adminStar: { color: '#c08a1e', fontSize: 15, fontWeight: '700' },
   statValue: { fontSize: VALUE_FONT_SIZE, fontWeight: '900', color: TEAL, textAlign: 'center' },

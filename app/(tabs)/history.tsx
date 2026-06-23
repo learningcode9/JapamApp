@@ -52,8 +52,12 @@ const TABLE_CELL_PADDING_H = isNarrowPhone ? 2 : isTablet ? 8 : 4;
 // Count/Total flex shares were increased from their original values — at the bigger
 // TABLE_HEADER_FONT_SIZE above, the old shares left "Malas"/"Count" clipping to "Mala"/"Coun" on
 // both narrow AND medium widths (confirmed visually during QA), not just narrow as first assumed.
-const DATE_CELL_FLEX = isNarrowPhone ? 1.3 : isTablet ? 1.5 : 1.5;
-const NUM_CELL_FLEX = isNarrowPhone ? 0.85 : isTablet ? 0.95 : 0.85;
+// "Count" still clipped to "Coun" at the previous NUM_CELL_FLEX even though "Malas" fit fine at
+// the same width — bold, round-bodied letters (C/o/u/n) render wider per-character than "Malas"'s
+// mix of narrow letters (M/a/l/a/s) despite both being 5-character words. Took the extra width
+// from Date, which already has more headroom than any other column (see comment above).
+const DATE_CELL_FLEX = isNarrowPhone ? 1.2 : isTablet ? 1.4 : 1.4;
+const NUM_CELL_FLEX = isNarrowPhone ? 0.9 : isTablet ? 1.0 : 0.9;
 const TOTAL_CELL_FLEX = isNarrowPhone ? 1.0 : isTablet ? 1.1 : 1.0;
 
 type Session = {
@@ -1136,7 +1140,10 @@ const styles = StyleSheet.create({
   // giving them their own smaller (but never tiny — see TABLE_HEADER_FONT_SIZE) size frees up
   // room so "Malas"/"Count"/"Total" fit on one line without clipping, even at large Android
   // font-scale accessibility settings.
-  tableHeaderText: { fontSize: TABLE_HEADER_FONT_SIZE },
+  // Small negative letterSpacing shaves a few px off bold header text width without shrinking
+  // fontSize — keeps the senior-friendly size while giving "Count" the room it needs to stop
+  // clipping at narrow/medium widths.
+  tableHeaderText: { fontSize: TABLE_HEADER_FONT_SIZE, letterSpacing: -0.2 },
   // Malas/Count hold shorter values (e.g. "10", "1080") than Total's running accumulation
   // (e.g. "26784"), so Total gets a bit more room. Centered per requirement — Date stays
   // left-aligned (its default), these three numeric columns are explicitly centered.
