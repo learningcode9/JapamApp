@@ -405,42 +405,22 @@ export default function GroupsDashboardScreen() {
                 >
                   Name
                 </Text>
-                <Text
-                  style={[styles.tableHeaderCell, styles.todayMalasCell, styles.tableHeaderText]}
-                  maxFontSizeMultiplier={1.4}
-                  numberOfLines={2}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.75}
-                >
-                  {'Today\nMalas'}
-                </Text>
-                <Text
-                  style={[styles.tableHeaderCell, styles.todayCountCell, styles.tableHeaderText]}
-                  maxFontSizeMultiplier={1.4}
-                  numberOfLines={2}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.75}
-                >
-                  {'Today\nCount'}
-                </Text>
-                <Text
-                  style={[styles.tableHeaderCell, styles.lifetimeMalasCell, styles.tableHeaderText]}
-                  maxFontSizeMultiplier={1.4}
-                  numberOfLines={2}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.75}
-                >
-                  {'Total\nMalas'}
-                </Text>
-                <Text
-                  style={[styles.tableHeaderCell, styles.lifetimeCountCell, styles.tableHeaderText]}
-                  maxFontSizeMultiplier={1.4}
-                  numberOfLines={2}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.75}
-                >
-                  {'Total\nCount'}
-                </Text>
+                <View style={[styles.tableHeaderCell, styles.todayMalasCell]}>
+                  <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Today</Text>
+                  <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Malas</Text>
+                </View>
+                <View style={[styles.tableHeaderCell, styles.todayCountCell]}>
+                  <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Today</Text>
+                  <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Count</Text>
+                </View>
+                <View style={[styles.tableHeaderCell, styles.lifetimeMalasCell]}>
+                  <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Total</Text>
+                  <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Malas</Text>
+                </View>
+                <View style={[styles.tableHeaderCell, styles.lifetimeCountCell]}>
+                  <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Total</Text>
+                  <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Count</Text>
+                </View>
               </View>
 
               {sortDashboardRows(rows).map((row, index) => (
@@ -659,24 +639,21 @@ const styles = StyleSheet.create({
   // with no per-cell vertical padding, so there is no way for one column's box to differ from
   // another's and visibly sit higher or lower. Vertical breathing room lives on tableRow instead.
   tableCell: { height: 26, lineHeight: 26, paddingHorizontal: CELL_PADDING_H },
-  // Header cells size naturally instead of using the data rows' fixed height — they're always
-  // exactly two lines now (see the explicit '\n' in each header label below), so this just needs
-  // to fit two lines of text, never a variable/unpredictable wrap.
+  // Header cells size naturally instead of using the data rows' fixed height — each stat header
+  // is two stacked single-word Text siblings (see JSX/comment below), so this just needs to fit
+  // two short lines, never a variable/unpredictable wrap.
   tableHeaderCell: { paddingVertical: 6, paddingHorizontal: CELL_PADDING_H },
-  // Headers are explicit two-line single-word labels (Today\nMalas, Today\nCount, Total\nMalas,
-  // Total\nCount — "Lifetime" shortened to "Total" since it was the longest word). An earlier
-  // pass assumed a single 5-6 letter word would never need to wrap again on its own line — wrong:
-  // on some Samsung phones with large accessibility font sizes, "Malas" itself still wrapped into
-  // a 3rd line ("MALA"/"S"), because nothing stopped RN from wrapping further once the scaled text
-  // didn't fit. Fixed with three layers on the Text itself (see JSX), each closing a different gap:
-  //   1. maxFontSizeMultiplier={1.4} — caps how far the OS accessibility setting can scale the
-  //      base font before any of this even has to engage.
-  //   2. adjustsFontSizeToFit + minimumFontScale={0.75} — if the capped size still doesn't fit
-  //      the column, RN shrinks the text (never re-wraps it) until "Today"/"Malas" each fit on
-  //      their own line, down to 75% of the base size.
-  //   3. numberOfLines={2} — a hard line-count cap. The label already uses both of those 2 lines
-  //      on its explicit '\n', so RN has no remaining line budget to wrap into; it shrinks to fit
-  //      instead (per layer 2) rather than ever rendering a 3rd line.
+  // Two attempts before this one relied on RN's own text layout to keep each header to two lines
+  // (first: a two-word phrase wrapping at the word boundary; then: a single Text with an explicit
+  // '\n' plus numberOfLines/adjustsFontSizeToFit/minimumFontScale). Both still mid-word-split on a
+  // real Samsung device at large accessibility font sizes ("Malas" -> "MALA"/"S") — Android's
+  // adjustsFontSizeToFit shrink-to-fit is unreliable once a Text has more than one line, explicit
+  // '\n' or not, so it never reliably stepped in before RN's wrap fallback kicked in.
+  // Fix: stopped relying on text layout entirely. Each stat header is now two SEPARATE single-word
+  // Text siblings stacked in a View (see JSX) — "Today" and "Malas" as two independent numberOfLines={1}
+  // Texts, not one Text with a line break. A single-line Text's adjustsFontSizeToFit is the
+  // well-supported case on both platforms, so each word independently shrinks to fit its column
+  // instead of ever wrapping — there's no second line for RN to wrap *into* within a given Text.
   // letterSpacing tightened from 0.3 to keep uppercase text narrower for the same reason.
   tableHeaderText: {
     fontSize: HEADER_FONT_SIZE,
@@ -688,10 +665,10 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   nameCell: { flex: NAME_CELL_FLEX, textAlign: 'left' },
-  todayMalasCell: { flex: STAT_CELL_FLEX, alignItems: 'center', textAlign: 'center' },
-  todayCountCell: { flex: STAT_CELL_FLEX, alignItems: 'center', textAlign: 'center' },
-  lifetimeMalasCell: { flex: STAT_CELL_FLEX, alignItems: 'center', textAlign: 'center' },
-  lifetimeCountCell: { flex: STAT_CELL_FLEX, alignItems: 'center', textAlign: 'center' },
+  todayMalasCell: { flex: STAT_CELL_FLEX, alignItems: 'center' },
+  todayCountCell: { flex: STAT_CELL_FLEX, alignItems: 'center' },
+  lifetimeMalasCell: { flex: STAT_CELL_FLEX, alignItems: 'center' },
+  lifetimeCountCell: { flex: STAT_CELL_FLEX, alignItems: 'center' },
   memberName: { fontSize: NAME_FONT_SIZE, fontWeight: '700', color: '#12383c' },
   adminStar: { color: '#c08a1e', fontSize: 15, fontWeight: '700' },
   statValue: { fontSize: VALUE_FONT_SIZE, fontWeight: '900', color: TEAL, textAlign: 'center' },
