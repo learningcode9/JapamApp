@@ -34,9 +34,9 @@ const AUTO_REFRESH_INTERVAL_MS = 12000;
 const USER_ID_KEY = 'userId';
 const TEAL = '#0F8F87';
 
-// Same width-based breakpoint convention as history.tsx — five columns (Name, Today's Malas,
-// Today's Count, Lifetime Malas, Lifetime Count) need noticeably tighter sizing on small phones
-// than the previous four-column layout did, without letting any text become unreadably tiny or
+// Same width-based breakpoint convention as history.tsx — five columns (Name, Today Malas,
+// Today Count, Total Malas, Total Count) need noticeably tighter sizing on small phones than
+// the previous four-column layout did, without letting any text become unreadably tiny or
 // forcing horizontal scrolling.
 const { width: DASHBOARD_SCREEN_WIDTH } = Dimensions.get('window');
 const isNarrowPhone = DASHBOARD_SCREEN_WIDTH < 380;
@@ -47,14 +47,8 @@ const VALUE_FONT_SIZE = isTablet ? 19 : isNarrowPhone ? 15 : 17;
 const NAME_FONT_SIZE = isTablet ? 17 : isNarrowPhone ? 15 : 16;
 const CELL_PADDING_H = isNarrowPhone ? 1 : isTablet ? 4 : 2;
 const NAME_CELL_FLEX = isTablet ? 1.3 : isNarrowPhone ? 0.95 : 1.0;
-// All four stat columns now share one flex value instead of each having its own. Previously
-// Today Malas/Today Count/Lifetime Malas/Lifetime Count had ascending widths tuned only to fit
-// each header label, which left the four numeric VALUES sitting in a "staircase" of different
-// box widths — visually uneven/messy even though each value was correctly centered under its
-// own header. Values are short numbers in every column; only the longer header labels ever need
-// extra room, and headers are already allowed to wrap to a second line (no numberOfLines limit
-// set on them below) so equal-width columns don't reintroduce the old "LIFE"/"TIME" mid-word
-// wrap problem — they just wrap as whole words across two lines when a column is narrow.
+// All four stat columns share one flex value instead of each having its own, so the numeric
+// VALUES line up as an even grid instead of the old "staircase" of mismatched column widths.
 const STAT_CELL_FLEX = isNarrowPhone ? 0.68 : isTablet ? 0.92 : 0.79;
 
 // Local-day boundary, matching the same "viewer's local calendar day" definition used
@@ -398,11 +392,11 @@ export default function GroupsDashboardScreen() {
           <>
             <View style={styles.tableCard}>
               <View style={[styles.tableRow, styles.tableHeader]}>
-                <Text style={[styles.tableHeaderCell, styles.tableHeaderText, styles.nameCell]}>Name</Text>
-                <Text style={[styles.tableHeaderCell, styles.todayMalasCell, styles.tableHeaderText]}>Today Malas</Text>
-                <Text style={[styles.tableHeaderCell, styles.todayCountCell, styles.tableHeaderText]}>Today Count</Text>
-                <Text style={[styles.tableHeaderCell, styles.lifetimeMalasCell, styles.tableHeaderText]}>Lifetime Malas</Text>
-                <Text style={[styles.tableHeaderCell, styles.lifetimeCountCell, styles.tableHeaderText]}>Lifetime Count</Text>
+                <Text style={[styles.tableHeaderCell, styles.tableHeaderText, styles.nameCell]} maxFontSizeMultiplier={1.4}>Name</Text>
+                <Text style={[styles.tableHeaderCell, styles.todayMalasCell, styles.tableHeaderText]} maxFontSizeMultiplier={1.4}>{'Today\nMalas'}</Text>
+                <Text style={[styles.tableHeaderCell, styles.todayCountCell, styles.tableHeaderText]} maxFontSizeMultiplier={1.4}>{'Today\nCount'}</Text>
+                <Text style={[styles.tableHeaderCell, styles.lifetimeMalasCell, styles.tableHeaderText]} maxFontSizeMultiplier={1.4}>{'Total\nMalas'}</Text>
+                <Text style={[styles.tableHeaderCell, styles.lifetimeCountCell, styles.tableHeaderText]} maxFontSizeMultiplier={1.4}>{'Total\nCount'}</Text>
               </View>
 
               {sortDashboardRows(rows).map((row, index) => (
@@ -621,16 +615,27 @@ const styles = StyleSheet.create({
   // with no per-cell vertical padding, so there is no way for one column's box to differ from
   // another's and visibly sit higher or lower. Vertical breathing room lives on tableRow instead.
   tableCell: { height: 26, lineHeight: 26, paddingHorizontal: CELL_PADDING_H },
-  // Header cells size naturally instead of using the data rows' fixed height — on narrow phones
-  // five columns' worth of labels may wrap to two lines, which is fine; there's no fixed height
-  // to overflow here, unlike the data rows above.
+  // Header cells size naturally instead of using the data rows' fixed height — they're always
+  // exactly two lines now (see the explicit '\n' in each header label below), so this just needs
+  // to fit two lines of text, never a variable/unpredictable wrap.
   tableHeaderCell: { paddingVertical: 6, paddingHorizontal: CELL_PADDING_H },
+  // Previously these were two-word phrases ("Today Malas") relying on RN to wrap at the word
+  // boundary when the column was too narrow — but RN only wraps at a word boundary if the word
+  // fits on its own line; at large Android accessibility font sizes neither word did, so RN fell
+  // back to splitting mid-word ("TODA"/"Y MA"/"LA"). Replaced with explicit two-line single-word
+  // labels (Today\nMalas, Today\nCount, Total\nMalas, Total\nCount — "Lifetime" shortened to
+  // "Total" too, since it was the longest word and the worst offender). Single 5-6 letter words
+  // are far less likely to overflow their column even when scaled up. letterSpacing tightened
+  // from 0.3 to keep uppercase text narrower for the same reason; maxFontSizeMultiplier on the
+  // Text itself (see JSX) lets large accessibility settings grow the text without scaling far
+  // enough to overflow the column again.
   tableHeaderText: {
     fontSize: HEADER_FONT_SIZE,
+    lineHeight: HEADER_FONT_SIZE * 1.2,
     fontWeight: '900',
     color: '#081a1c',
     textTransform: 'uppercase',
-    letterSpacing: 0.3,
+    letterSpacing: 0.1,
     textAlign: 'center',
   },
   nameCell: { flex: NAME_CELL_FLEX, textAlign: 'left' },
