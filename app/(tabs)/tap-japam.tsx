@@ -1314,7 +1314,6 @@ export default function JapamMain() {
       await restoreTodayTotal();
       await restoreHistoryFromSupabase(googleUserId);
       await restoreTimerForUser(googleUserId);
-      void requestNotificationPermissionOnce();
     } catch (error) {
       console.log('Native Google sign-in error:', error);
       setShowUserModal(true);
@@ -1404,7 +1403,6 @@ export default function JapamMain() {
         await restoreTodayTotal();
         await restoreHistoryFromSupabase(googleUserId);
         await restoreTimerForUser(googleUserId);
-        void requestNotificationPermissionOnce();
       } catch (error) {
         console.log('Google login error:', error);
         setShowUserModal(true);
