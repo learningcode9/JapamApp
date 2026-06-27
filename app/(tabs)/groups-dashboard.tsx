@@ -18,7 +18,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { WEB_BOTTOM_TAB_CLEARANCE } from '../../lib/webLayout';
+import { WEB_SCROLL_MARGIN_BOTTOM } from '../../lib/webLayout';
 import {
   deleteGroup,
   getGroupDashboard,
@@ -365,7 +365,7 @@ export default function GroupsDashboardScreen() {
       </View>
 
       <ScrollView
-        style={Platform.OS !== 'web' ? { marginBottom: tabBarSpaceFromBottom } : undefined}
+        style={{ marginBottom: Platform.OS !== 'web' ? tabBarSpaceFromBottom : WEB_SCROLL_MARGIN_BOTTOM }}
         contentContainerStyle={styles.scrollContent}
       >
         {isAdmin && showAdminMenu ? (
@@ -621,7 +621,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(15,118,110,0.16)',
   },
-  scrollContent: { padding: 20, paddingBottom: Platform.OS !== 'web' ? 20 : WEB_BOTTOM_TAB_CLEARANCE },
+  scrollContent: { padding: 20, paddingBottom: 20 },
   loadingSpinner: { marginTop: 24 },
   errorText: { color: '#b91c1c', fontSize: 14, textAlign: 'center', marginTop: 24 },
   emptyText: { color: '#365f61', fontSize: 15, lineHeight: 22, textAlign: 'center', marginTop: 24 },

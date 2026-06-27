@@ -40,7 +40,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { WEB_BOTTOM_TAB_CLEARANCE } from '../../lib/webLayout';
+import { WEB_BOTTOM_TAB_CLEARANCE, WEB_SCROLL_MARGIN_BOTTOM } from '../../lib/webLayout';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -2127,7 +2127,7 @@ export default function JapamMain() {
       style={{ flex: 1 }}
     >
       <ScrollView
-        style={[styles.container, Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom }]}
+        style={[styles.container, { marginBottom: Platform.OS !== 'web' ? tabBarSpaceFromBottom : WEB_SCROLL_MARGIN_BOTTOM }]}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >

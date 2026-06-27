@@ -9,7 +9,7 @@ import {
   mergeTombstones,
   toLocalDayKey,
 } from '../../lib/historyStore';
-import { WEB_BOTTOM_TAB_CLEARANCE } from '../../lib/webLayout';
+import { WEB_SCROLL_MARGIN_BOTTOM } from '../../lib/webLayout';
 import * as FileSystem from 'expo-file-system/legacy';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
@@ -806,17 +806,12 @@ export default function HistoryScreen() {
     <ScrollView
       style={[
         styles.scroll,
-        // Native: shrink the ScrollView's bounding box so it ends at the tab bar top.
-        // This clips content there; rows cannot appear behind the translucent bar during scroll.
-        // Web: marginBottom would add dead space under a position:fixed bar — use padding instead.
-        Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom },
+        // Clip the scroll viewport above the floating tab bar on both platforms.
+        { marginBottom: Platform.OS !== 'web' ? tabBarSpaceFromBottom : WEB_SCROLL_MARGIN_BOTTOM },
       ]}
       contentContainerStyle={[
         styles.content,
-        // Native: ScrollView already ends at the tab bar top, so just 16px breathing room.
-        // Web: no clip boundary available, so reserve the full tab bar height as padding so the
-        // last row can scroll into view above the fixed bar.
-        { paddingBottom: Platform.OS !== 'web' ? 16 : WEB_BOTTOM_TAB_CLEARANCE },
+        { paddingBottom: 20 },
       ]}
       bounces={Platform.OS !== 'ios'}
     >

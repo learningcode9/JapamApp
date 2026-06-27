@@ -4,7 +4,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, BackHandler, DeviceEventEmitter, Dimensions, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { WEB_BOTTOM_TAB_CLEARANCE } from '../../lib/webLayout';
+import { WEB_SCROLL_MARGIN_BOTTOM } from '../../lib/webLayout';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
@@ -239,7 +239,7 @@ export default function SettingsScreen() {
         <View key={i} pointerEvents="none" style={[styles.star, { left: `${(i * 37 + 11) % 100}%`, top: `${(i * 53 + 7) % 100}%`, opacity: i % 3 === 0 ? 0.72 : 0.28 }]} />
       ))}
       <ScrollView
-        style={[styles.scroll, Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom }]}
+        style={[styles.scroll, { marginBottom: Platform.OS !== 'web' ? tabBarSpaceFromBottom : WEB_SCROLL_MARGIN_BOTTOM }]}
         contentContainerStyle={styles.content}
       >
         <View style={styles.header}>
@@ -416,7 +416,7 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   scroll: { flex: 1 },
   star: { position: 'absolute', width: 2, height: 2, borderRadius: 99, backgroundColor: '#0f766e' },
-  content: { width: '100%', maxWidth: 820, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 28, paddingBottom: Platform.OS !== 'web' ? 24 : WEB_BOTTOM_TAB_CLEARANCE },
+  content: { width: '100%', maxWidth: 820, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 28, paddingBottom: 24 },
   header: { alignItems: 'center', marginBottom: 22 },
   title: { color: '#102f34', fontSize: 36, fontWeight: '900', textAlign: 'center' },
   section: { marginBottom: 22 },

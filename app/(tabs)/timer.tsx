@@ -42,7 +42,7 @@ import {
   signInOrLinkGoogle,
   showGoogleAccountCollisionDialog,
 } from '../../lib/anonymousAuth';
-import { WEB_BOTTOM_TAB_CLEARANCE } from '../../lib/webLayout';
+import { WEB_BOTTOM_TAB_CLEARANCE, WEB_SCROLL_MARGIN_BOTTOM } from '../../lib/webLayout';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -643,10 +643,10 @@ export default function TimerScreen() {
       <ScrollView
         style={[
           styles.scroll,
-          // Native: shrink the ScrollView's bounding box so it ends at the tab bar top.
-          // This clips content there; stats cards cannot render behind the translucent bar.
-          // Web: tab bar is position:fixed, so marginBottom would add dead space — skip it.
-          Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom },
+          // Clip the scroll viewport above the floating tab bar on both platforms.
+          // Native: tabBarSpaceFromBottom accounts for insets. Web: WEB_SCROLL_MARGIN_BOTTOM
+          // is a fixed constant (128px) that covers tab height + offset + home-indicator safe area.
+          { marginBottom: Platform.OS !== 'web' ? tabBarSpaceFromBottom : WEB_SCROLL_MARGIN_BOTTOM },
         ]}
         contentContainerStyle={[
           styles.container,

@@ -1,5 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { WEB_BOTTOM_TAB_CLEARANCE } from '../../lib/webLayout';
+import { WEB_SCROLL_MARGIN_BOTTOM } from '../../lib/webLayout';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { Dimensions, LayoutAnimation, Platform, Pressable, ScrollView, StyleSheet, Text, UIManager, View } from 'react-native';
@@ -83,11 +83,11 @@ export default function FaqScreen() {
         />
       ))}
       <ScrollView
-        style={[styles.scroll, Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom }]}
+        style={[styles.scroll, { marginBottom: Platform.OS !== 'web' ? tabBarSpaceFromBottom : WEB_SCROLL_MARGIN_BOTTOM }]}
         contentContainerStyle={[
           styles.content,
           Platform.OS !== 'web' && { paddingTop: Math.max(28, insets.top + 8) },
-          { paddingBottom: Platform.OS !== 'web' ? 24 : WEB_BOTTOM_TAB_CLEARANCE },
+          { paddingBottom: 24 },
         ]}
         showsVerticalScrollIndicator={false}
       >
