@@ -130,11 +130,14 @@ export default function TimerScreen() {
   const router = useRouter();
   const timer = useTimer();
   const insets = useSafeAreaInsets();
-  // Mirror the floating tab bar geometry from app/(tabs)/_layout.tsx — height 74,
-  // bottom offset max(12, insets.bottom + 8) — plus a small visual gap, so the
-  // bottom content reservation matches the bar's real footprint on every device
-  // instead of a hardcoded 112.
-  const tabBarClearance = 74 + Math.max(12, insets.bottom + 8) + 16;
+  // Mirror the floating tab bar geometry from _layout.tsx exactly.
+  // _layout.tsx uses screenWidth < 500 as its isMobile threshold (different from
+  // this file's < 768), so we replicate that split to get the correct bottom offset
+  // for every device width — phones vs phablets/tablets get different formulas.
+  const tabBarLayoutIsMobile = screenWidth < 500;
+  const tabBarSpaceFromBottom = 74 + (tabBarLayoutIsMobile
+    ? Math.max(12, insets.bottom + 8)   // phone: matches nativeTabBarStyle bottom in _layout.tsx
+    : Math.max(22, insets.bottom + 14)); // tablet: matches nativeTabBarStyle bottom in _layout.tsx
   const visibleMala = Math.min(
     Math.max(1, timer.completedLoops + (timer.isRunning || timer.isPaused ? 1 : 0)),
     timer.selectedLoops
@@ -638,7 +641,13 @@ export default function TimerScreen() {
   return (
     <SafeAreaView style={styles.root}>
       <ScrollView
-        style={styles.scroll}
+        style={[
+          styles.scroll,
+          // Native: shrink the ScrollView's bounding box so it ends at the tab bar top.
+          // This clips content there; stats cards cannot render behind the translucent bar.
+          // Web: tab bar is position:fixed, so marginBottom would add dead space — skip it.
+          Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom },
+        ]}
         contentContainerStyle={[
           styles.container,
           isNativeMobile && { minHeight: undefined },
@@ -649,7 +658,10 @@ export default function TimerScreen() {
         <View
           style={[
             styles.appShell,
-            isNativeMobile && { flexGrow: 1, minHeight: undefined, paddingBottom: tabBarClearance },
+            // paddingBottom: 16 provides a small visual gap below the stats cards.
+            // The large tabBarSpaceFromBottom padding is no longer needed here because
+            // the ScrollView's own marginBottom already ends at the tab bar top.
+            isNativeMobile && { flexGrow: 1, minHeight: undefined, paddingBottom: 16 },
           ]}
         >
           <View pointerEvents="none" style={styles.sceneLayer}>
@@ -792,7 +804,7 @@ export default function TimerScreen() {
               </View>
             )}
 
-            <Text style={[styles.cardLabel, { marginTop: isShortMobile ? 12 : isMobile ? 14 : 22 }]}>Auto-Repeat Malas</Text>
+            <Text style={[styles.cardLabel, { marginTop: isShortMobile ? 12 : isMobile ? 10 : 22 }]}>Auto-Repeat Malas</Text>
             <View style={styles.chips}>
               {LOOP_OPTIONS.map((l) => (
                 <Pressable
@@ -1024,15 +1036,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(238, 248, 246, 0.94)',
     borderRadius: isMobile ? 0 : 28,
     paddingHorizontal: isMobile ? 22 : 28,
-    // Keep vertical spacing inside appShell so the absolute background layer
-    // covers the scrollable page, but reserve only the fixed tab bar space.
     paddingTop: Platform.OS === 'web'
       ? (isMobile
           ? (isShortMobile
               ? ('calc(26px + env(safe-area-inset-top))' as any)
               : ('calc(32px + env(safe-area-inset-top))' as any))
           : 58)
-      : (isShortMobile ? 24 : isMobile ? 34 : 58),
+      : (isShortMobile ? 24 : isMobile ? 28 : 58),
     paddingBottom: Platform.OS === 'web'
       ? (isMobile
           ? ('calc(112px + env(safe-area-inset-bottom))' as any)
@@ -1050,7 +1060,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: isShortMobile ? 8 : isMobile ? 10 : 18,
+    marginBottom: isShortMobile ? 8 : isMobile ? 8 : 18,
     gap: 10,
   },
   headerSideSpacer: {
@@ -1105,9 +1115,9 @@ const styles = StyleSheet.create({
     color: '#4a7c80',
     textAlign: 'center',
     fontWeight: '700',
-    marginBottom: isShortMobile ? 12 : isMobile ? 16 : 26,
+    marginBottom: isShortMobile ? 12 : isMobile ? 10 : 26,
   },
-  circleWrap: { marginBottom: isShortMobile ? 14 : isMobile ? 18 : 32 },
+  circleWrap: { marginBottom: isShortMobile ? 14 : isMobile ? 12 : 32 },
   circleOuter: {
     width: CIRCLE_SIZE,
     height: CIRCLE_SIZE,
@@ -1140,7 +1150,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: isMobile ? 10 : 14,
-    marginBottom: isShortMobile ? 12 : isMobile ? 16 : 28,
+    marginBottom: isShortMobile ? 12 : isMobile ? 10 : 28,
   },
   startBtn: {
     flexDirection: 'row',
@@ -1175,7 +1185,7 @@ const styles = StyleSheet.create({
     maxWidth: 460,
     backgroundColor: 'rgba(255,255,255,0.86)',
     borderRadius: 22,
-    paddingVertical: isShortMobile ? 13 : isMobile ? 15 : 22,
+    paddingVertical: isShortMobile ? 13 : isMobile ? 11 : 22,
     paddingHorizontal: isShortMobile ? 13 : isMobile ? 15 : 22,
     shadowColor: '#0a3a3c',
     shadowOpacity: 0.07,
@@ -1191,8 +1201,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 9,
-    marginTop: isShortMobile ? 12 : isMobile ? 14 : 22,
-    marginBottom: isMobile ? 12 : 0,
+    marginTop: isShortMobile ? 12 : isMobile ? 8 : 22,
+    marginBottom: isMobile ? 6 : 0,
   },
   statCard: {
     flexGrow: 1,
@@ -1394,7 +1404,7 @@ const styles = StyleSheet.create({
     color: '#4a8c90',
     letterSpacing: 1.0,
     textTransform: 'uppercase',
-    marginBottom: isMobile ? 10 : 14,
+    marginBottom: isMobile ? 8 : 14,
   },
   chips: {
     flexDirection: 'row',
