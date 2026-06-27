@@ -12,6 +12,7 @@ import {
 import * as FileSystem from 'expo-file-system/legacy';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Sharing from 'expo-sharing';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -393,6 +394,14 @@ const syncManualEntryToSupabase = async ({
 };
 
 export default function HistoryScreen() {
+  const insets = useSafeAreaInsets();
+  // Mirror the tab bar's own positioning from _layout.tsx (height 74, bottom = max(12, insets.bottom+8))
+  // so paddingBottom always matches the actual space the floating tab bar occupies on every device.
+  // On web, insets.bottom is 0 → 74+12+24=110px. On iPhone with home indicator (insets.bottom≈34)
+  // → 74+42+24=140px. On Samsung with tall gesture bar (insets.bottom≈48) → 74+56+24=154px.
+  // No Platform.OS branching needed — the insets hook provides the right value per platform.
+  const tabBarClearance = 74 + Math.max(12, insets.bottom + 8) + 24;
+
   const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
   const [showManualModal, setShowManualModal] = useState(false);
   const [manualDate, setManualDate] = useState('');
@@ -790,7 +799,7 @@ export default function HistoryScreen() {
         ]}
       />
     ))}
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+    <ScrollView style={styles.scroll} contentContainerStyle={[styles.content, { paddingBottom: tabBarClearance }]}>
       <View style={styles.header}>
       
       <Text style={styles.title}>History</Text>
@@ -955,7 +964,8 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     paddingHorizontal: 18,
     paddingTop: 28,
-    paddingBottom: 140,
+    // paddingBottom is set dynamically via tabBarClearance (derived from useSafeAreaInsets)
+    // and applied inline on the ScrollView — see JSX. Not set here to avoid a stale constant.
   },
 
   header: {
@@ -977,18 +987,23 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
+  // Previously flexDirection:'row' + flexWrap:'wrap'. When "Total Count: 124607" grew wide enough
+  // to wrap onto a second flex row inside ScrollView, RN miscalculated the container height as
+  // only one row tall — so actionRow rendered at the same Y position as the second summary line,
+  // producing a visual overlap. Switching to column eliminates wrapping entirely: each stat always
+  // gets its own dedicated row, regardless of value length or font scale.
   simpleSummary: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 18,
-    marginBottom: 16,
-    justifyContent: 'center',
+    flexDirection: 'column',
+    gap: 6,
+    marginBottom: 20,
+    alignItems: 'center',
   },
 
   summaryText: {
     color: '#12383c',
     fontSize: 20,
     fontWeight: '700',
+    textAlign: 'center',
   },
 
   actionRow: {
