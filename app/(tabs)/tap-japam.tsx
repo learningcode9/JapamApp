@@ -1680,14 +1680,22 @@ export default function JapamMain() {
     }
 
     if (Platform.OS === 'android') {
-      // Pattern [0, 80]: 0ms delay then 80ms vibration. More perceptible than 50ms
-      // while still feeling like a tap. vibrate(50) was inaudible on some devices.
-      Vibration.vibrate([0, 80]);
+      // 100ms at default amplitude (~255/255 max on Android 8+). Previously 80ms which testers
+      // found too weak. expo-haptics Heavy is NOT stronger here — its VibrationEffect amplitude
+      // is capped at 70/255, well below the default amplitude RN's Vibration API delivers.
+      // 100ms is long enough to register clearly on all devices while staying under the ~120ms
+      // threshold where it starts feeling like a buzz instead of a crisp tap.
+      // Each new Vibration.vibrate() call cancels the previous one, so rapid tapping never
+      // accumulates overlapping buzzes — each tap gets its own clean pulse.
+      Vibration.vibrate([0, 100]);
       return;
     }
 
-    // iOS
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    // iOS: Medium gives a noticably stronger tap than Light ("collision between moderately sized
+    // UI elements" vs. Light's "small, light" objects) without being as intense as Heavy, which
+    // can feel jarring during 108 consecutive rapid taps. The Taptic Engine rate-limits calls
+    // automatically (~8–10 Hz), so very rapid tapping stays comfortable.
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
   }, [vibrationEnabled]);
 
   const playCompletionAnimation = useCallback(() => {
