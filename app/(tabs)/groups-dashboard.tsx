@@ -18,6 +18,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { WEB_BOTTOM_TAB_CLEARANCE } from '../../lib/webLayout';
 import {
   deleteGroup,
   getGroupDashboard,
@@ -620,7 +621,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(15,118,110,0.16)',
   },
-  scrollContent: { padding: 20, paddingBottom: Platform.OS !== 'web' ? 20 : 100 },
+  scrollContent: { padding: 20, paddingBottom: Platform.OS !== 'web' ? 20 : WEB_BOTTOM_TAB_CLEARANCE },
   loadingSpinner: { marginTop: 24 },
   errorText: { color: '#b91c1c', fontSize: 14, textAlign: 'center', marginTop: 24 },
   emptyText: { color: '#365f61', fontSize: 15, lineHeight: 22, textAlign: 'center', marginTop: 24 },

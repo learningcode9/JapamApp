@@ -1,4 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
+import { WEB_BOTTOM_TAB_CLEARANCE } from '../../lib/webLayout';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { Dimensions, LayoutAnimation, Platform, Pressable, ScrollView, StyleSheet, Text, UIManager, View } from 'react-native';
@@ -86,6 +87,7 @@ export default function FaqScreen() {
         contentContainerStyle={[
           styles.content,
           Platform.OS !== 'web' && { paddingTop: Math.max(28, insets.top + 8) },
+          { paddingBottom: Platform.OS !== 'web' ? 24 : WEB_BOTTOM_TAB_CLEARANCE },
         ]}
         showsVerticalScrollIndicator={false}
       >

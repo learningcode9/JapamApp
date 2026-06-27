@@ -9,6 +9,7 @@ import {
   mergeTombstones,
   toLocalDayKey,
 } from '../../lib/historyStore';
+import { WEB_BOTTOM_TAB_CLEARANCE } from '../../lib/webLayout';
 import * as FileSystem from 'expo-file-system/legacy';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
@@ -815,7 +816,7 @@ export default function HistoryScreen() {
         // Native: ScrollView already ends at the tab bar top, so just 16px breathing room.
         // Web: no clip boundary available, so reserve the full tab bar height as padding so the
         // last row can scroll into view above the fixed bar.
-        { paddingBottom: Platform.OS !== 'web' ? 16 : tabBarSpaceFromBottom + 16 },
+        { paddingBottom: Platform.OS !== 'web' ? 16 : WEB_BOTTOM_TAB_CLEARANCE },
       ]}
       bounces={Platform.OS !== 'ios'}
     >

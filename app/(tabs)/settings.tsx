@@ -4,6 +4,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, BackHandler, DeviceEventEmitter, Dimensions, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { WEB_BOTTOM_TAB_CLEARANCE } from '../../lib/webLayout';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
@@ -415,7 +416,7 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   scroll: { flex: 1 },
   star: { position: 'absolute', width: 2, height: 2, borderRadius: 99, backgroundColor: '#0f766e' },
-  content: { width: '100%', maxWidth: 820, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 28, paddingBottom: Platform.OS !== 'web' ? 24 : 140 },
+  content: { width: '100%', maxWidth: 820, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 28, paddingBottom: Platform.OS !== 'web' ? 24 : WEB_BOTTOM_TAB_CLEARANCE },
   header: { alignItems: 'center', marginBottom: 22 },
   title: { color: '#102f34', fontSize: 36, fontWeight: '900', textAlign: 'center' },
   section: { marginBottom: 22 },

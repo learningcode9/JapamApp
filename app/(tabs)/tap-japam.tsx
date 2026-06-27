@@ -40,6 +40,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { WEB_BOTTOM_TAB_CLEARANCE } from '../../lib/webLayout';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -2579,9 +2580,7 @@ const styles = StyleSheet.create({
           : 58)
       : (isShortMobile ? 14 : isMobile ? 20 : 58),
     paddingBottom: Platform.OS === 'web'
-      ? (isMobile
-          ? ('calc(112px + env(safe-area-inset-bottom))' as any)
-          : 112)
+      ? WEB_BOTTOM_TAB_CLEARANCE
       : 16,
     shadowColor: '#0f766e',
     shadowOpacity: isMobile ? 0 : 0.16,
