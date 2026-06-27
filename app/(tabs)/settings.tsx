@@ -2,7 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, BackHandler, DeviceEventEmitter, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Alert, BackHandler, DeviceEventEmitter, Dimensions, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
@@ -18,6 +19,13 @@ const TIMER_LOOP_KEY = 'timerLoop';
 const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
 
 export default function SettingsScreen() {
+  const insets = useSafeAreaInsets();
+  const { width: settingsScreenWidth } = Dimensions.get('window');
+  const tabBarLayoutIsMobile = settingsScreenWidth < 500;
+  const tabBarSpaceFromBottom = 74 + (tabBarLayoutIsMobile
+    ? Math.max(12, insets.bottom + 8)
+    : Math.max(22, insets.bottom + 14));
+
   const router = useRouter();
   const [repetitionSoundEnabled, setRepetitionSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
@@ -229,7 +237,10 @@ export default function SettingsScreen() {
       {[...Array(30)].map((_, i) => (
         <View key={i} pointerEvents="none" style={[styles.star, { left: `${(i * 37 + 11) % 100}%`, top: `${(i * 53 + 7) % 100}%`, opacity: i % 3 === 0 ? 0.72 : 0.28 }]} />
       ))}
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+      <ScrollView
+        style={[styles.scroll, Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom }]}
+        contentContainerStyle={styles.content}
+      >
         <View style={styles.header}>
           <Text style={styles.title}>Settings</Text>
         </View>
@@ -359,6 +370,21 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Help</Text>
+          <Pressable
+            style={({ pressed }) => [styles.card, pressed && { opacity: 0.7 }]}
+            onPress={() => router.push('/(tabs)/faq')}
+            accessibilityRole="button"
+          >
+            <View style={styles.textBlock}>
+              <Text style={styles.label}>FAQ</Text>
+              <Text style={styles.description}>Common questions about Japam App</Text>
+            </View>
+            <Text style={styles.navChevron}>›</Text>
+          </Pressable>
+        </View>
+
         <View style={styles.infoBox}>
           <Text style={styles.infoTitle}>Settings saved automatically</Text>
           <Text style={styles.infoText}>These options will be applied when you return to the Japam screen.</Text>
@@ -389,7 +415,7 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   scroll: { flex: 1 },
   star: { position: 'absolute', width: 2, height: 2, borderRadius: 99, backgroundColor: '#0f766e' },
-  content: { width: '100%', maxWidth: 820, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 28, paddingBottom: 140 },
+  content: { width: '100%', maxWidth: 820, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 28, paddingBottom: Platform.OS !== 'web' ? 24 : 140 },
   header: { alignItems: 'center', marginBottom: 22 },
   title: { color: '#102f34', fontSize: 36, fontWeight: '900', textAlign: 'center' },
   section: { marginBottom: 22 },
@@ -427,4 +453,5 @@ const styles = StyleSheet.create({
   confirmCancelText: { color: '#12383c', fontWeight: '700' },
   confirmLogout: { flex: 1, padding: 12, borderRadius: 99, backgroundColor: 'rgba(185, 28, 28, 0.1)', alignItems: 'center' },
   confirmLogoutText: { color: '#b91c1c', fontWeight: '800' },
+  navChevron: { color: '#0f8a87', fontSize: 30, fontWeight: '300', paddingLeft: 4 },
 });

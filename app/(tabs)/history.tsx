@@ -817,6 +817,7 @@ export default function HistoryScreen() {
         // last row can scroll into view above the fixed bar.
         { paddingBottom: Platform.OS !== 'web' ? 16 : tabBarSpaceFromBottom + 16 },
       ]}
+      bounces={Platform.OS !== 'ios'}
     >
       <View style={styles.header}>
       

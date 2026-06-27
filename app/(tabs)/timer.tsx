@@ -21,7 +21,6 @@ import {
   Modal,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -639,7 +638,7 @@ export default function TimerScreen() {
   const todayLabel = new Date().toLocaleDateString();
 
   return (
-    <SafeAreaView style={styles.root}>
+    <View style={styles.root}>
       <ScrollView
         style={[
           styles.scroll,
@@ -982,7 +981,7 @@ export default function TimerScreen() {
           </View>
         </Modal>
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 

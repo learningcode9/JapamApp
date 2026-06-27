@@ -8,6 +8,7 @@ import {
   DeviceEventEmitter,
   Dimensions,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   Share,
@@ -16,6 +17,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   deleteGroup,
   getGroupDashboard,
@@ -41,6 +43,7 @@ const TEAL = '#0F8F87';
 const { width: DASHBOARD_SCREEN_WIDTH } = Dimensions.get('window');
 const isNarrowPhone = DASHBOARD_SCREEN_WIDTH < 380;
 const isTablet = DASHBOARD_SCREEN_WIDTH >= 768;
+const tabBarLayoutIsMobile = DASHBOARD_SCREEN_WIDTH < 500;
 
 const HEADER_FONT_SIZE = isTablet ? 16 : isNarrowPhone ? 11 : 13;
 const VALUE_FONT_SIZE = isTablet ? 19 : isNarrowPhone ? 15 : 17;
@@ -77,6 +80,11 @@ function sortDashboardRows(rows: GroupDashboardRow[]): GroupDashboardRow[] {
 }
 
 export default function GroupsDashboardScreen() {
+  const insets = useSafeAreaInsets();
+  const tabBarSpaceFromBottom = 74 + (tabBarLayoutIsMobile
+    ? Math.max(12, insets.bottom + 8)
+    : Math.max(22, insets.bottom + 14));
+
   const router = useRouter();
   const params = useLocalSearchParams<{ groupId?: string; groupName?: string }>();
   const groupId = params.groupId || '';
@@ -338,7 +346,7 @@ export default function GroupsDashboardScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.headerRow}>
+      <View style={[styles.headerRow, { paddingTop: Math.max(16, insets.top + 8) }]}>
         <Pressable style={styles.backButton} onPress={() => router.back()}>
           <Ionicons name="chevron-back" size={24} color={TEAL} />
         </Pressable>
@@ -355,7 +363,10 @@ export default function GroupsDashboardScreen() {
         ) : null}
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        style={Platform.OS !== 'web' ? { marginBottom: tabBarSpaceFromBottom } : undefined}
+        contentContainerStyle={styles.scrollContent}
+      >
         {isAdmin && showAdminMenu ? (
           <View style={styles.adminMenuCard}>
             <Pressable style={styles.adminMenuItem} onPress={openRenameModal}>
@@ -609,7 +620,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(15,118,110,0.16)',
   },
-  scrollContent: { padding: 20, paddingBottom: 100 },
+  scrollContent: { padding: 20, paddingBottom: Platform.OS !== 'web' ? 20 : 100 },
   loadingSpinner: { marginTop: 24 },
   errorText: { color: '#b91c1c', fontSize: 14, textAlign: 'center', marginTop: 24 },
   emptyText: { color: '#365f61', fontSize: 15, lineHeight: 22, textAlign: 'center', marginTop: 24 },

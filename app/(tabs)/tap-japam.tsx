@@ -39,6 +39,7 @@ import {
   Vibration,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -178,6 +179,11 @@ const isAuthPending = async () => {
 };
 
 export default function JapamMain() {
+  const insets = useSafeAreaInsets();
+  const tabBarSpaceFromBottom = 74 + (isMobile
+    ? Math.max(12, insets.bottom + 8)
+    : Math.max(22, insets.bottom + 14));
+
   const params = useLocalSearchParams<{ signin?: string }>();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [count, setCount] = useState(0);
@@ -2121,7 +2127,11 @@ export default function JapamMain() {
       end={{ x: 0, y: 1 }}
       style={{ flex: 1 }}
     >
-      <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={[styles.container, Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom }]}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.appShell}>
           <View pointerEvents="none" style={styles.sceneLayer}>
             <ImageBackground
@@ -2574,7 +2584,7 @@ const styles = StyleSheet.create({
       ? (isMobile
           ? ('calc(112px + env(safe-area-inset-bottom))' as any)
           : 112)
-      : 112,
+      : 16,
     shadowColor: '#0f766e',
     shadowOpacity: isMobile ? 0 : 0.16,
     shadowRadius: 28,
