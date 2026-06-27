@@ -395,12 +395,15 @@ const syncManualEntryToSupabase = async ({
 
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
-  // Mirror the tab bar's own positioning from _layout.tsx (height 74, bottom = max(12, insets.bottom+8))
-  // so paddingBottom always matches the actual space the floating tab bar occupies on every device.
-  // On web, insets.bottom is 0 → 74+12+24=110px. On iPhone with home indicator (insets.bottom≈34)
-  // → 74+42+24=140px. On Samsung with tall gesture bar (insets.bottom≈48) → 74+56+24=154px.
-  // No Platform.OS branching needed — the insets hook provides the right value per platform.
-  const tabBarClearance = 74 + Math.max(12, insets.bottom + 8) + 24;
+  // Total screen real estate eaten by the floating tab bar from the bottom edge, mirroring
+  // _layout.tsx exactly: height 74 + bottom offset max(12, insets.bottom+8).
+  // Used as ScrollView marginBottom on native so the ScrollView's OWN CLIP BOUNDARY ends at
+  // the tab bar top — content is physically clipped there and can never render behind the
+  // translucent bar during scrolling. paddingBottom in contentContainerStyle is NOT the right
+  // tool for this: it only affects where the scroll position ends, not where content is clipped.
+  // On web the tab bar is position:fixed so it doesn't affect layout flow — marginBottom would
+  // just create dead space, so web keeps a contentContainerStyle paddingBottom instead.
+  const tabBarSpaceFromBottom = 74 + Math.max(12, insets.bottom + 8);
 
   const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
   const [showManualModal, setShowManualModal] = useState(false);
@@ -799,7 +802,22 @@ export default function HistoryScreen() {
         ]}
       />
     ))}
-    <ScrollView style={styles.scroll} contentContainerStyle={[styles.content, { paddingBottom: tabBarClearance }]}>
+    <ScrollView
+      style={[
+        styles.scroll,
+        // Native: shrink the ScrollView's bounding box so it ends at the tab bar top.
+        // This clips content there; rows cannot appear behind the translucent bar during scroll.
+        // Web: marginBottom would add dead space under a position:fixed bar — use padding instead.
+        Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom },
+      ]}
+      contentContainerStyle={[
+        styles.content,
+        // Native: ScrollView already ends at the tab bar top, so just 16px breathing room.
+        // Web: no clip boundary available, so reserve the full tab bar height as padding so the
+        // last row can scroll into view above the fixed bar.
+        { paddingBottom: Platform.OS !== 'web' ? 16 : tabBarSpaceFromBottom + 16 },
+      ]}
+    >
       <View style={styles.header}>
       
       <Text style={styles.title}>History</Text>
@@ -964,8 +982,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     paddingHorizontal: 18,
     paddingTop: 28,
-    // paddingBottom is set dynamically via tabBarClearance (derived from useSafeAreaInsets)
-    // and applied inline on the ScrollView — see JSX. Not set here to avoid a stale constant.
+    // paddingBottom is applied inline on the ScrollView (see JSX / tabBarSpaceFromBottom).
   },
 
   header: {
