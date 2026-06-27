@@ -9,7 +9,6 @@ import {
   mergeTombstones,
   toLocalDayKey,
 } from '../../lib/historyStore';
-import { WEB_SCROLL_MARGIN_BOTTOM } from '../../lib/webLayout';
 import * as FileSystem from 'expo-file-system/legacy';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
@@ -396,14 +395,6 @@ const syncManualEntryToSupabase = async ({
 
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
-  // Total screen real estate eaten by the floating tab bar from the bottom edge, mirroring
-  // _layout.tsx exactly: height 74 + bottom offset max(12, insets.bottom+8).
-  // Used as ScrollView marginBottom on native so the ScrollView's OWN CLIP BOUNDARY ends at
-  // the tab bar top — content is physically clipped there and can never render behind the
-  // translucent bar during scrolling. paddingBottom in contentContainerStyle is NOT the right
-  // tool for this: it only affects where the scroll position ends, not where content is clipped.
-  // On web the tab bar is position:fixed so it doesn't affect layout flow — marginBottom would
-  // just create dead space, so web keeps a contentContainerStyle paddingBottom instead.
   const tabBarSpaceFromBottom = 74 + Math.max(12, insets.bottom + 8);
 
   const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
@@ -806,12 +797,11 @@ export default function HistoryScreen() {
     <ScrollView
       style={[
         styles.scroll,
-        // Clip the scroll viewport above the floating tab bar on both platforms.
-        { marginBottom: Platform.OS !== 'web' ? tabBarSpaceFromBottom : WEB_SCROLL_MARGIN_BOTTOM },
+        Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom },
       ]}
       contentContainerStyle={[
         styles.content,
-        { paddingBottom: 20 },
+        { paddingBottom: 16 },
       ]}
       bounces={Platform.OS !== 'ios'}
     >

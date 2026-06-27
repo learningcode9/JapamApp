@@ -4,7 +4,6 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, BackHandler, DeviceEventEmitter, Dimensions, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { WEB_SCROLL_MARGIN_BOTTOM } from '../../lib/webLayout';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
@@ -239,7 +238,7 @@ export default function SettingsScreen() {
         <View key={i} pointerEvents="none" style={[styles.star, { left: `${(i * 37 + 11) % 100}%`, top: `${(i * 53 + 7) % 100}%`, opacity: i % 3 === 0 ? 0.72 : 0.28 }]} />
       ))}
       <ScrollView
-        style={[styles.scroll, { marginBottom: Platform.OS !== 'web' ? tabBarSpaceFromBottom : WEB_SCROLL_MARGIN_BOTTOM }]}
+        style={[styles.scroll, Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom }]}
         contentContainerStyle={styles.content}
       >
         <View style={styles.header}>

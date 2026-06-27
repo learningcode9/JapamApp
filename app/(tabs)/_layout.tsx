@@ -19,13 +19,13 @@ const desktopTabLeft = Math.max(0, (screenWidth - desktopTabWidth) / 2);
 const webTabBarStyle =
   Platform.OS === 'web'
     ? ({
-        position: 'fixed',
-        bottom: 'calc(12px + env(safe-area-inset-bottom))',
-        left: '50%',
-        right: undefined,
+        // No position:fixed — tab bar is a flex sibling to the screens container.
+        // React Navigation's screens container has flex:1 and fills the remaining
+        // height automatically. No per-screen bottom padding or margin hacks needed.
+        alignSelf: 'center',
         width: 'calc(100% - 24px)',
         maxWidth: desktopTabWidth,
-        transform: 'translateX(-50%)',
+        marginBottom: 12,
         zIndex: 999,
         backdropFilter: 'blur(16px)',
       } as any)

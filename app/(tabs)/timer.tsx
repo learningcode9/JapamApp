@@ -42,7 +42,6 @@ import {
   signInOrLinkGoogle,
   showGoogleAccountCollisionDialog,
 } from '../../lib/anonymousAuth';
-import { WEB_BOTTOM_TAB_CLEARANCE, WEB_SCROLL_MARGIN_BOTTOM } from '../../lib/webLayout';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -643,10 +642,7 @@ export default function TimerScreen() {
       <ScrollView
         style={[
           styles.scroll,
-          // Clip the scroll viewport above the floating tab bar on both platforms.
-          // Native: tabBarSpaceFromBottom accounts for insets. Web: WEB_SCROLL_MARGIN_BOTTOM
-          // is a fixed constant (128px) that covers tab height + offset + home-indicator safe area.
-          { marginBottom: Platform.OS !== 'web' ? tabBarSpaceFromBottom : WEB_SCROLL_MARGIN_BOTTOM },
+          Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom },
         ]}
         contentContainerStyle={[
           styles.container,
@@ -1022,13 +1018,13 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     paddingHorizontal: isMobile ? 0 : 24,
     alignItems: 'center',
-    minHeight: Platform.OS === 'web' ? ('100dvh' as any) : screenHeight,
+    minHeight: screenHeight,
   },
   appShell: {
     width: '100%',
     maxWidth: isMobile ? undefined : 460,
     minHeight: isMobile
-      ? (Platform.OS === 'web' ? ('100dvh' as any) : screenHeight)
+      ? (Platform.OS === 'web' ? ('100%' as any) : screenHeight)
       : Math.min(screenHeight - 48, 900),
     alignItems: 'center',
     overflow: 'hidden',
@@ -1043,9 +1039,7 @@ const styles = StyleSheet.create({
               : ('calc(32px + env(safe-area-inset-top))' as any))
           : 58)
       : (isShortMobile ? 24 : isMobile ? 28 : 58),
-    paddingBottom: Platform.OS === 'web'
-      ? WEB_BOTTOM_TAB_CLEARANCE
-      : 112,
+    paddingBottom: 112,
     shadowColor: '#0f766e',
     shadowOpacity: isMobile ? 0 : 0.16,
     shadowRadius: 28,

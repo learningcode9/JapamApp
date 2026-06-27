@@ -18,7 +18,6 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { WEB_SCROLL_MARGIN_BOTTOM } from '../../lib/webLayout';
 import {
   deleteGroup,
   getGroupDashboard,
@@ -365,7 +364,7 @@ export default function GroupsDashboardScreen() {
       </View>
 
       <ScrollView
-        style={{ marginBottom: Platform.OS !== 'web' ? tabBarSpaceFromBottom : WEB_SCROLL_MARGIN_BOTTOM }}
+        style={Platform.OS !== 'web' ? { marginBottom: tabBarSpaceFromBottom } : undefined}
         contentContainerStyle={styles.scrollContent}
       >
         {isAdmin && showAdminMenu ? (

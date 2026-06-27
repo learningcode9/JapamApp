@@ -2671,7 +2671,7 @@ const styles = StyleSheet.create({
   content: {
     // Native phones grow to fill the real scroll viewport so the shell (and its
     // background) always covers the screen; web mobile keeps its prior behavior.
-    flexGrow: isNativeMobile ? 1 : isMobile ? 0 : 1,
+    flexGrow: isNativeMobile ? 1 : 1,
     alignItems: 'center',
     justifyContent: isMobile ? 'flex-start' : 'center',
     width: '100%',
@@ -2690,7 +2690,7 @@ const styles = StyleSheet.create({
     // the zen background reaches the bottom edge — no empty gap. Tablet/desktop
     // keep the fixed shell height; web mobile keeps its natural height.
     flexGrow: isNativeMobile ? 1 : 0,
-    minHeight: isMobile ? undefined : shellMinHeight,
+    minHeight: Platform.OS === 'web' && isMobile ? ('100dvh' as any) : isMobile ? screenHeight : shellMinHeight,
     alignItems: 'center',
     overflow: 'hidden',
     position: 'relative',
@@ -2700,7 +2700,7 @@ const styles = StyleSheet.create({
     paddingTop: isShortMobile ? 14 : isMobile ? 20 : 34,
     // Native mobile reserves room for the floating tab bar here (content's
     // paddingBottom is zeroed for native mobile to avoid double spacing).
-    paddingBottom: isNativeMobile ? 120 : isMobile ? 20 : 116,
+    paddingBottom: isNativeMobile ? 120 : isMobile ? 116 : 116,
     shadowColor: '#0f766e',
     shadowOpacity: isMobile ? 0 : 0.16,
     shadowRadius: 28,

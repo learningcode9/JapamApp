@@ -40,7 +40,6 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { WEB_BOTTOM_TAB_CLEARANCE, WEB_SCROLL_MARGIN_BOTTOM } from '../../lib/webLayout';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -139,7 +138,7 @@ const progressRingSize = progressCircleSize - (isMobile ? 10 : 14);
 const shellMinHeight =
   isMobile
     ? Platform.OS === 'web'
-      ? ('100dvh' as any)
+      ? ('100%' as any)
       : screenHeight
     : Math.min(Math.max(screenHeight - 54, 820), 940);
 
@@ -2127,7 +2126,7 @@ export default function JapamMain() {
       style={{ flex: 1 }}
     >
       <ScrollView
-        style={[styles.container, { marginBottom: Platform.OS !== 'web' ? tabBarSpaceFromBottom : WEB_SCROLL_MARGIN_BOTTOM }]}
+        style={[styles.container, Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom }]}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
@@ -2579,9 +2578,7 @@ const styles = StyleSheet.create({
               : ('calc(20px + env(safe-area-inset-top))' as any))
           : 58)
       : (isShortMobile ? 14 : isMobile ? 20 : 58),
-    paddingBottom: Platform.OS === 'web'
-      ? WEB_BOTTOM_TAB_CLEARANCE
-      : 16,
+    paddingBottom: 16,
     shadowColor: '#0f766e',
     shadowOpacity: isMobile ? 0 : 0.16,
     shadowRadius: 28,
