@@ -2106,6 +2106,7 @@ export default function JapamMain() {
             paddingBottom: dynIsNativeMobile ? 120 : dynIsMobile ? 116 : 116,
             shadowOpacity: dynIsMobile ? 0 : 0.16,
             elevation: dynIsMobile ? 0 : 12,
+            justifyContent: Platform.OS === 'web' && dynIsMobile ? 'space-between' : undefined,
           },
         ]}>
           <View pointerEvents="none" style={styles.sceneLayer}>
