@@ -14,6 +14,7 @@ import {
   toLocalDayKey,
   applyTombstones,
   mergeTombstones,
+  planHistoryDayAdjustment,
   type HistoryRecord,
 } from '../historyStore';
 
@@ -163,6 +164,23 @@ describe('no data loss: mergeHistories (Supabase restore)', () => {
       [session(iso, { syncStatus: 'synced' })]
     );
     expect(merged).toHaveLength(1);
+    expect(merged[0].syncStatus).toBe('synced');
+  });
+  it('keeps an edited pending record pending while the remote copy still has stale values', () => {
+    const iso = '2026-06-03T10:00:00.000Z';
+    const merged = mergeHistories(
+      [session(iso, { malas: 3, totalCount: 324, syncStatus: 'pending' })],
+      [session(iso, { malas: 4, totalCount: 432, syncStatus: 'synced' })]
+    );
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ malas: 3, totalCount: 324, syncStatus: 'pending' });
+  });
+  it('marks an edited pending record synced once the remote values match', () => {
+    const iso = '2026-06-03T10:00:00.000Z';
+    const merged = mergeHistories(
+      [session(iso, { malas: 3, totalCount: 324, syncStatus: 'pending' })],
+      [session(iso, { malas: 3, totalCount: 324, syncStatus: 'synced' })]
+    );
     expect(merged[0].syncStatus).toBe('synced');
   });
   it('simulated sign-out then sign-in restore preserves an unsynced local mala', () => {
@@ -493,5 +511,134 @@ describe('shared selector: todayStatsFor (Main/Timer/History must agree)', () =>
     const h = appendCompletion([], session('2026-06-03T10:00:00.000Z')); // pending
     const stats = todayStatsFor(h, UID, toDayKey('2026-06-03T10:00:00.000Z'), toDayKey);
     expect(stats.malas).toBe(1);
+  });
+});
+
+describe('planHistoryDayAdjustment', () => {
+  const day = '2026-06-03';
+  const at = (hour: number) => `2026-06-03T${String(hour).padStart(2, '0')}:00:00.000Z`;
+  const idAt = (hour: number) => makeCompletionId(UID, at(hour));
+  const assertConsistentCounts = (records: HistoryRecord[]) => {
+    for (const record of records.filter(
+      (item) => item.userId === UID && toLocalDayKey(item.date) === day
+    )) {
+      expect(record.totalCount).toBe(record.malas * 108);
+    }
+  };
+
+  it('4 one-mala rows -> 3 keeps the oldest three and deletes only the latest', () => {
+    const records = [10, 11, 12, 13].map((hour) =>
+      session(at(hour), { syncStatus: 'synced' })
+    );
+    const plan = planHistoryDayAdjustment(records, UID, day, 3);
+
+    expect(plan.recordsToDelete.map((record) => record.completionId)).toEqual([idAt(13)]);
+    expect(plan.recordsToUpdate).toHaveLength(0);
+    expect(plan.updatedRecords.map((record) => record.completionId)).toEqual(
+      expect.arrayContaining([idAt(10), idAt(11), idAt(12)])
+    );
+    expect(plan.updatedRecords).toHaveLength(3);
+    assertConsistentCounts(plan.updatedRecords);
+  });
+
+  it('one 4-mala row -> 3 updates the same id and count to 324', () => {
+    const original = session(at(10), {
+      malas: 4,
+      totalCount: 432,
+      syncStatus: 'synced',
+      userName: 'Sravani',
+      userEmail: 'sravani@example.com',
+      source: 'manual',
+    });
+    const plan = planHistoryDayAdjustment([original], UID, day, 3);
+    const update = plan.recordsToUpdate[0];
+
+    expect(update.before.completionId).toBe(update.after.completionId);
+    expect(update.after).toMatchObject({
+      malas: 3,
+      totalCount: 324,
+      syncStatus: 'pending',
+      userName: 'Sravani',
+      userEmail: 'sravani@example.com',
+      source: 'manual',
+    });
+    expect(update.after.date).toBe(original.date);
+  });
+
+  it('mixed 3+1 -> 2 removes the latest row then reduces the oldest row', () => {
+    const records = [
+      session(at(10), { malas: 3, totalCount: 324, syncStatus: 'synced' }),
+      session(at(11), { malas: 1, totalCount: 108, syncStatus: 'synced' }),
+    ];
+    const plan = planHistoryDayAdjustment(records, UID, day, 2);
+
+    expect(plan.recordsToDelete.map((record) => record.completionId)).toEqual([idAt(11)]);
+    expect(plan.recordsToUpdate).toHaveLength(1);
+    expect(plan.recordsToUpdate[0].after).toMatchObject({
+      completionId: idAt(10),
+      malas: 2,
+      totalCount: 216,
+    });
+    assertConsistentCounts(plan.updatedRecords);
+  });
+
+  it('same value is a no-op', () => {
+    const plan = planHistoryDayAdjustment(
+      [session(at(10)), session(at(11))],
+      UID,
+      day,
+      2
+    );
+    expect(plan.changed).toBe(false);
+    expect(plan.recordsToUpdate).toHaveLength(0);
+    expect(plan.recordsToDelete).toHaveLength(0);
+  });
+
+  it('target 0 creates a delete-day plan containing every record for that day only', () => {
+    const otherDay = session('2026-06-02T10:00:00.000Z');
+    const plan = planHistoryDayAdjustment(
+      [session(at(10)), session(at(11)), otherDay],
+      UID,
+      day,
+      0
+    );
+    expect(plan.deleteEntireDay).toBe(true);
+    expect(plan.recordsToDelete).toHaveLength(2);
+    expect(plan.updatedRecords).toHaveLength(1);
+    expect(plan.updatedRecords[0].date).toBe(otherDay.date);
+  });
+
+  it('increase 3 -> 4 updates the earliest canonical id and count to 432', () => {
+    const original = session(at(10), { malas: 3, totalCount: 324, syncStatus: 'synced' });
+    const plan = planHistoryDayAdjustment([original], UID, day, 4);
+    expect(plan.recordsToUpdate[0].after).toMatchObject({
+      completionId: idAt(10),
+      malas: 4,
+      totalCount: 432,
+      syncStatus: 'pending',
+    });
+  });
+
+  it('preserves unrelated and pending/offline records without losing metadata', () => {
+    const pending = session(at(10), {
+      malas: 2,
+      totalCount: 216,
+      syncStatus: 'pending',
+      userName: 'Offline User',
+      source: 'timer',
+    });
+    const otherUser = session(at(11), { userId: 'other-user', syncStatus: 'pending' });
+    const plan = planHistoryDayAdjustment([pending, otherUser], UID, day, 1);
+
+    expect(plan.recordsToUpdate[0].after).toMatchObject({
+      completionId: makeCompletionId(UID, pending.date),
+      malas: 1,
+      totalCount: 108,
+      syncStatus: 'pending',
+      userName: 'Offline User',
+      source: 'timer',
+    });
+    expect(plan.updatedRecords.find((record) => record.userId === 'other-user')).toBeTruthy();
+    assertConsistentCounts(plan.updatedRecords);
   });
 });

@@ -9,8 +9,10 @@ import {
   mergeHistories,
   mergeTombstones,
   normalizeAll,
+  planHistoryDayAdjustment,
   reconcileWithServer,
   toLocalDayKey,
+  type HistoryRecord,
 } from '../../lib/historyStore';
 import { supabase } from '../../lib/supabase';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -110,6 +112,8 @@ type ManualSyncInput = {
   completionId: string;
 };
 
+type AddDateMode = 'today' | 'yesterday' | 'custom';
+
 const HISTORY_KEY = 'history';
 const DELETED_COMPLETIONS_KEY = 'deletedCompletions';
 const USER_ID_KEY = 'userId';
@@ -181,6 +185,12 @@ const toDayLabel = (dayKey: string) => {
   const monthName = SHORT_MONTH_NAMES[month - 1];
 
   return isNarrowPhone ? `${day} ${monthName}` : `${day} ${monthName} ${year}`;
+};
+
+const toEditDateLabel = (dayKey: string) => {
+  if (dayKey === getLocalDateKey()) return 'Today';
+  const [year, month, day] = dayKey.split('-').map(Number);
+  return `${SHORT_MONTH_NAMES[month - 1]} ${day}, ${year}`;
 };
 
 const parseHistory = (raw: string | null): Session[] => {
@@ -400,64 +410,103 @@ const syncManualEntryToSupabase = async ({
   }
 };
 
+const syncHistoryEditsToSupabase = async (
+  records: HistoryRecord[],
+  userId: string,
+  fallbackUserName: string,
+): Promise<{ syncedIds: string[]; rlsBlocked: boolean }> => {
+  const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+  const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key || records.length === 0) return { syncedIds: [], rlsBlocked: false };
+
+  const syncedIds: string[] = [];
+  let rlsBlocked = false;
+  for (const record of records) {
+    const payload = buildSupabaseHistoryPayload(record, userId, fallbackUserName);
+    try {
+      const response = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          Prefer: 'return=minimal,resolution=merge-duplicates',
+        },
+        body: JSON.stringify(payload),
+      });
+      if (response.ok) {
+        syncedIds.push(record.completionId);
+        console.log('[HISTORY_EDIT_SYNC_SUCCESS] completionId=%s', record.completionId);
+      } else {
+        if (response.status === 401 || response.status === 403) rlsBlocked = true;
+        console.log(
+          '[HISTORY_EDIT_SYNC_FAILED] completionId=%s status=%d',
+          record.completionId,
+          response.status
+        );
+      }
+    } catch {
+      console.log('[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=network', record.completionId);
+      break;
+    }
+  }
+  return { syncedIds, rlsBlocked };
+};
+
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
   const tabBarSpaceFromBottom = 74 + Math.max(12, insets.bottom + 8);
 
   const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
-  const [showManualModal, setShowManualModal] = useState(false);
-  const [manualDate, setManualDate] = useState('');
-  const [manualMalas, setManualMalas] = useState('');
-  const [manualCount, setManualCount] = useState('');
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [addDateMode, setAddDateMode] = useState<AddDateMode>('today');
+  const [addDate, setAddDate] = useState('');
+  const [addMalas, setAddMalas] = useState(1);
+  const [editingRow, setEditingRow] = useState<DailyRow | null>(null);
+  const [editMalas, setEditMalas] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  const openManualModal = () => {
-    setManualDate(getLocalDateKey());
-    setManualMalas('');
-    setManualCount('');
-    setShowManualModal(true);
+  const getYesterdayDateKey = () => {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    return getLocalDateKey(yesterday);
   };
 
-  const onMalasChange = (val: string) => {
-    setManualMalas(val);
-    const n = parseInt(val, 10);
-    if (!Number.isNaN(n) && n >= 0) {
-      setManualCount(String(n * 108));
-    } else if (val === '') {
-      setManualCount('');
-    }
+  const openAddModal = () => {
+    setAddDateMode('today');
+    setAddDate(getLocalDateKey());
+    setAddMalas(1);
+    setShowAddModal(true);
   };
 
-  const onCountChange = (val: string) => {
-    setManualCount(val);
-    const n = parseInt(val, 10);
-    if (!Number.isNaN(n) && n >= 0) {
-      setManualMalas(String(Math.floor(n / 108)));
-    } else if (val === '') {
-      setManualMalas('');
-    }
+  const selectAddDateMode = (mode: AddDateMode) => {
+    setAddDateMode(mode);
+    if (mode === 'today') setAddDate(getLocalDateKey());
+    if (mode === 'yesterday') setAddDate(getYesterdayDateKey());
   };
 
-  const saveManualEntry = async () => {
+  const openEditModal = (row: DailyRow) => {
+    setEditingRow(row);
+    setEditMalas(row.malas);
+  };
+
+  const saveAddJapam = async () => {
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
     // Guests (currentUserId === null) are allowed — records saved locally with syncStatus 'synced'
 
-    if (!manualDate || !/^\d{4}-\d{2}-\d{2}$/.test(manualDate)) {
+    if (!addDate || !/^\d{4}-\d{2}-\d{2}$/.test(addDate)) {
       Alert.alert('Invalid date', 'Please enter a valid date in YYYY-MM-DD format.');
       return;
     }
 
-    const malas = parseInt(manualMalas, 10) || 0;
-    const totalCount = parseInt(manualCount, 10) || 0;
-
-    if (malas <= 0 && totalCount <= 0) {
-      Alert.alert('Invalid entry', 'Please enter Total Malas or Total Count.');
+    if (addMalas <= 0) {
+      Alert.alert('Invalid entry', 'Please add at least one mala.');
       return;
     }
 
-    const finalMalas = malas > 0 ? malas : Math.floor(totalCount / 108);
-    const finalCount = totalCount > 0 ? totalCount : malas * 108;
+    const finalMalas = Math.floor(addMalas);
+    const finalCount = finalMalas * 108;
 
     setIsSaving(true);
     try {
@@ -465,7 +514,7 @@ export default function HistoryScreen() {
       // Unique timestamp per entry (selected day + current time-of-day) so multiple manual entries
       // on the SAME date don't share a completion_id (= userId:epochMs). The old fixed noon made
       // every same-date manual entry collide -> dedup/upsert collapsed them ("Saved" but no change).
-      const [mY, mM, mD] = manualDate.split('-').map(Number);
+      const [mY, mM, mD] = addDate.split('-').map(Number);
       const nowParts = new Date();
       const createdAt = new Date(
         mY, mM - 1, mD,
@@ -505,7 +554,7 @@ export default function HistoryScreen() {
         });
       }
 
-      setShowManualModal(false);
+      setShowAddModal(false);
       await loadHistory();
 
       DeviceEventEmitter.emit('japam-stats-updated');
@@ -515,10 +564,10 @@ export default function HistoryScreen() {
         window.dispatchEvent(new Event('japam-history-updated'));
       }
 
-      Alert.alert('Saved', 'Manual entry saved.');
+      Alert.alert('Added', 'Japam added to history.');
     } catch (err) {
-      console.log('Manual entry save error:', err);
-      Alert.alert('Could not save manual entry', 'Something went wrong. Please try again.');
+      console.log('Add Japam error:', err);
+      Alert.alert('Could not add Japam', 'Something went wrong. Please try again.');
     } finally {
       setIsSaving(false);
     }
@@ -713,6 +762,101 @@ export default function HistoryScreen() {
     ]);
   }, [performDelete]);
 
+  const saveEditJapam = useCallback(async () => {
+    const row = editingRow;
+    if (!row || isSaving) return;
+    if (editMalas === row.malas) {
+      setEditingRow(null);
+      return;
+    }
+    if (editMalas === 0) {
+      setEditingRow(null);
+      confirmDeleteDay(row);
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      const raw = await AsyncStorage.getItem(HISTORY_KEY);
+      const currentHistory = parseHistory(raw);
+      const plan = planHistoryDayAdjustment(
+        currentHistory,
+        currentUserId,
+        row.dateKey,
+        editMalas
+      );
+      if (!plan.changed) {
+        setEditingRow(null);
+        return;
+      }
+
+      // Reuse the existing tombstone/delete path for only the individual completions that the
+      // adjustment reduced to zero. Every other completion for the day remains untouched.
+      if (plan.recordsToDelete.length > 0) {
+        await performDelete(plan.recordsToDelete.map((record) => record.completionId));
+      }
+
+      if (plan.recordsToUpdate.length > 0) {
+        const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
+        const latest = normalizeAll(parseHistory(latestRaw));
+        const updatesById = new Map(
+          plan.recordsToUpdate.map((update) => [update.after.completionId, update.after])
+        );
+        const locallyUpdated = latest.map(
+          (record) => updatesById.get(record.completionId) || record
+        );
+        await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(locallyUpdated));
+        console.log(
+          '[HISTORY_EDIT_LOCAL_ACCEPTED] day=%s targetMalas=%d updates=%d deletes=%d',
+          row.dateKey,
+          editMalas,
+          plan.recordsToUpdate.length,
+          plan.recordsToDelete.length
+        );
+
+        if (currentUserId) {
+          const { userName } = await getStoredUserMeta();
+          void (async () => {
+            const result = await syncHistoryEditsToSupabase(
+              plan.recordsToUpdate.map((update) => update.after),
+              currentUserId,
+              userName
+            );
+            if (result.syncedIds.length > 0) {
+              const newestRaw = await AsyncStorage.getItem(HISTORY_KEY);
+              const newest = parseHistory(newestRaw);
+              await AsyncStorage.setItem(
+                HISTORY_KEY,
+                JSON.stringify(markSynced(newest, result.syncedIds))
+              );
+            }
+            if (result.rlsBlocked) {
+              Alert.alert(
+                'Could not sync edit',
+                'Supabase UPDATE permission is required. Your correction is saved on this device and remains pending.'
+              );
+            }
+          })();
+        }
+      }
+
+      setEditingRow(null);
+      await loadHistory();
+      DeviceEventEmitter.emit('japam-stats-updated');
+      DeviceEventEmitter.emit('japam-history-updated', { userId: currentUserId || 'guest' });
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('japam-stats-updated'));
+        window.dispatchEvent(new Event('japam-history-updated'));
+      }
+    } catch (error) {
+      console.log('History edit error:', error);
+      Alert.alert('Could not edit Japam', 'Something went wrong. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
+  }, [confirmDeleteDay, editMalas, editingRow, isSaving, loadHistory, performDelete]);
+
   useFocusEffect(
     useCallback(() => {
       void loadHistory();
@@ -848,9 +992,15 @@ export default function HistoryScreen() {
       }
     >
       <View style={styles.header}>
-      
-      <Text style={styles.title}>History</Text>
-      
+        <Text style={styles.title}>History</Text>
+        <Pressable
+          style={({ pressed }) => [styles.headerAddButton, pressed && { opacity: 0.7 }]}
+          onPress={openAddModal}
+          accessibilityLabel="Add Japam"
+          hitSlop={8}
+        >
+          <Ionicons name="add" size={28} color="#ffffff" />
+        </Pressable>
       </View>
       <View style={styles.simpleSummary}>
         <Text style={styles.summaryText}>📿 Total Malas: {totalMalas}</Text>
@@ -861,66 +1011,131 @@ export default function HistoryScreen() {
         <Pressable style={styles.exportBtn} onPress={exportHistory}>
           <Text style={styles.exportBtnText}>⬇ Export</Text>
         </Pressable>
-        <Pressable style={styles.addBtn} onPress={openManualModal}>
-          <Text style={styles.addBtnText}>+ Manual Entry</Text>
-        </Pressable>
       </View>
 
       <Modal
-        visible={showManualModal}
+        visible={showAddModal}
         transparent
         animationType="fade"
-        onRequestClose={() => setShowManualModal(false)}
+        onRequestClose={() => setShowAddModal(false)}
       >
         <KeyboardAvoidingView
           style={styles.modalOverlay}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Add Manual Entry</Text>
+            <Text style={styles.modalTitle}>Add Japam</Text>
 
-            <Text style={styles.modalLabel}>Date (YYYY-MM-DD)</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={manualDate}
-              onChangeText={setManualDate}
-              placeholder="2025-01-01"
-              placeholderTextColor="#8aacae"
-              maxLength={10}
-            />
+            <Text style={styles.modalLabel}>Date</Text>
+            <View style={styles.dateChoiceRow}>
+              {(['today', 'yesterday', 'custom'] as AddDateMode[]).map((mode) => (
+                <Pressable
+                  key={mode}
+                  style={[
+                    styles.dateChoice,
+                    addDateMode === mode && styles.dateChoiceSelected,
+                  ]}
+                  onPress={() => selectAddDateMode(mode)}
+                >
+                  <Text
+                    style={[
+                      styles.dateChoiceText,
+                      addDateMode === mode && styles.dateChoiceTextSelected,
+                    ]}
+                  >
+                    {mode === 'today' ? 'Today' : mode === 'yesterday' ? 'Yesterday' : 'Custom Date'}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            {addDateMode === 'custom' && (
+              <TextInput
+                style={styles.modalInput}
+                value={addDate}
+                onChangeText={setAddDate}
+                placeholder="YYYY-MM-DD"
+                placeholderTextColor="#8aacae"
+                maxLength={10}
+              />
+            )}
 
-            <Text style={styles.modalLabel}>Total Malas</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={manualMalas}
-              onChangeText={onMalasChange}
-              placeholder="e.g. 3"
-              placeholderTextColor="#8aacae"
-              keyboardType="numeric"
-              maxLength={5}
-            />
+            <Text style={styles.modalLabel}>Malas</Text>
+            <View style={styles.stepperRow}>
+              <Pressable
+                style={styles.stepperButton}
+                onPress={() => setAddMalas((value) => Math.max(1, value - 1))}
+                accessibilityLabel="Decrease malas"
+              >
+                <Ionicons name="remove" size={24} color="#0f766e" />
+              </Pressable>
+              <Text style={styles.stepperValue}>{addMalas}</Text>
+              <Pressable
+                style={styles.stepperButton}
+                onPress={() => setAddMalas((value) => value + 1)}
+                accessibilityLabel="Increase malas"
+              >
+                <Ionicons name="add" size={24} color="#0f766e" />
+              </Pressable>
+            </View>
 
-            <Text style={styles.modalLabel}>Total Count</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={manualCount}
-              onChangeText={onCountChange}
-              placeholder="e.g. 324"
-              placeholderTextColor="#8aacae"
-              keyboardType="numeric"
-              maxLength={7}
-            />
+            <Text style={styles.countPreview}>Total Count: {addMalas * 108}</Text>
 
             <View style={styles.modalActions}>
-              <Pressable style={styles.modalCancel} onPress={() => setShowManualModal(false)} disabled={isSaving}>
+              <Pressable style={styles.modalCancel} onPress={() => setShowAddModal(false)} disabled={isSaving}>
                 <Text style={styles.modalCancelText}>Cancel</Text>
               </Pressable>
-              <Pressable style={[styles.modalSave, isSaving && { opacity: 0.6 }]} onPress={saveManualEntry} disabled={isSaving}>
-                <Text style={styles.modalSaveText}>{isSaving ? 'Saving…' : 'Save'}</Text>
+              <Pressable style={[styles.modalSave, isSaving && { opacity: 0.6 }]} onPress={saveAddJapam} disabled={isSaving}>
+                <Text style={styles.modalSaveText}>{isSaving ? 'Adding…' : 'Add'}</Text>
               </Pressable>
             </View>
           </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal
+        visible={Boolean(editingRow)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEditingRow(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Edit Japam</Text>
+            <Text style={styles.modalLabel}>Date</Text>
+            <Text style={styles.readOnlyDate}>
+              {editingRow ? toEditDateLabel(editingRow.dateKey) : ''}
+            </Text>
+
+            <Text style={styles.modalLabel}>Malas</Text>
+            <View style={styles.stepperRow}>
+              <Pressable
+                style={styles.stepperButton}
+                onPress={() => setEditMalas((value) => Math.max(0, value - 1))}
+                accessibilityLabel="Decrease malas"
+              >
+                <Ionicons name="remove" size={24} color="#0f766e" />
+              </Pressable>
+              <Text style={styles.stepperValue}>{editMalas}</Text>
+              <Pressable
+                style={styles.stepperButton}
+                onPress={() => setEditMalas((value) => value + 1)}
+                accessibilityLabel="Increase malas"
+              >
+                <Ionicons name="add" size={24} color="#0f766e" />
+              </Pressable>
+            </View>
+
+            <Text style={styles.countPreview}>Total Count: {editMalas * 108}</Text>
+            <View style={styles.modalActions}>
+              <Pressable style={styles.modalCancel} onPress={() => setEditingRow(null)} disabled={isSaving}>
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable style={[styles.modalSave, isSaving && { opacity: 0.6 }]} onPress={saveEditJapam} disabled={isSaving}>
+                <Text style={styles.modalSaveText}>{isSaving ? 'Saving…' : 'Save'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
       </Modal>
 
       <View style={styles.tableCard}>
@@ -929,7 +1144,7 @@ export default function HistoryScreen() {
           <Text style={[styles.tableCell, styles.numHeaderCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Malas</Text>
           <Text style={[styles.tableCell, styles.numHeaderCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Count</Text>
           <Text style={[styles.tableCell, styles.totalHeaderCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Total</Text>
-          <View style={styles.webDeleteCell} />
+          <View style={styles.rowActions} />
         </View>
 
         {dailyRows.length === 0 ? (
@@ -950,26 +1165,24 @@ export default function HistoryScreen() {
               <Text style={[styles.tableCell, styles.numCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.malas}</Text>
               <Text style={[styles.tableCell, styles.numCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.totalCount}</Text>
               <Text style={[styles.tableCell, styles.totalCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.accumulated}</Text>
-              {Platform.OS === 'web' && (
+              <View style={styles.rowActions}>
                 <Pressable
-                  style={styles.webDeleteCell}
-                  onPress={() => confirmDeleteDay(row)}
-                  accessibilityLabel={`Delete ${row.dateLabel}`}
+                  style={({ pressed }) => [styles.rowActionButton, pressed && { opacity: 0.5 }]}
+                  onPress={() => openEditModal(row)}
+                  accessibilityLabel={`Edit ${row.dateLabel}`}
                   hitSlop={8}
                 >
-                  <Text style={styles.webDeleteIcon}>🗑</Text>
+                  <Ionicons name="pencil-outline" size={19} color="#0f766e" />
                 </Pressable>
-              )}
-              {Platform.OS !== 'web' && (
                 <Pressable
-                  style={({ pressed }) => [styles.webDeleteCell, pressed && { opacity: 0.5 }]}
+                  style={({ pressed }) => [styles.rowActionButton, pressed && { opacity: 0.5 }]}
                   onPress={() => confirmDeleteDay(row)}
                   accessibilityLabel={`Delete ${row.dateLabel}`}
                   hitSlop={8}
                 >
                   <Ionicons name="trash-outline" size={20} color="#6b7280" />
                 </Pressable>
-              )}
+              </View>
             </Pressable>
           ))
         )}
@@ -978,8 +1191,8 @@ export default function HistoryScreen() {
       {dailyRows.length > 0 && (
         <Text style={{ textAlign: 'center', color: '#5f7778', fontSize: 12, marginTop: 10 }}>
           {Platform.OS === 'web'
-            ? 'Tip: click 🗑 on a row to delete that day (syncs to all your devices).'
-            : 'Tip: long-press a row to delete that day (syncs to all your devices).'}
+            ? 'Use the row actions to edit or delete a day.'
+            : 'Use the row actions to edit, or long-press to delete a day.'}
         </Text>
       )}
 
@@ -1017,6 +1230,20 @@ const styles = StyleSheet.create({
   header: {
     alignItems: 'center',
     marginBottom: 18,
+    position: 'relative',
+    minHeight: 48,
+  },
+
+  headerAddButton: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0f8a87',
   },
 
   title: {
@@ -1072,19 +1299,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
 
-  addBtn: {
-    backgroundColor: '#2563eb',
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 999,
-  },
-
-  addBtnText: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.45)',
@@ -1126,6 +1340,88 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#102f34',
     backgroundColor: '#f5fafa',
+  },
+
+  dateChoiceRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
+  },
+
+  dateChoice: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: 'rgba(15,118,110,0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+    backgroundColor: '#f5fafa',
+  },
+
+  dateChoiceSelected: {
+    borderColor: '#0f8a87',
+    backgroundColor: 'rgba(15,138,135,0.12)',
+  },
+
+  dateChoiceText: {
+    color: '#365f61',
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+
+  dateChoiceTextSelected: {
+    color: '#0f766e',
+    fontWeight: '900',
+  },
+
+  readOnlyDate: {
+    minHeight: 46,
+    borderRadius: 12,
+    backgroundColor: '#f5fafa',
+    color: '#12383c',
+    fontSize: 17,
+    fontWeight: '800',
+    textAlign: 'center',
+    textAlignVertical: 'center',
+    paddingVertical: 12,
+  },
+
+  stepperRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 24,
+    marginTop: 4,
+  },
+
+  stepperButton: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    borderWidth: 1.5,
+    borderColor: 'rgba(15,118,110,0.35)',
+    backgroundColor: '#f5fafa',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  stepperValue: {
+    minWidth: 70,
+    color: '#102f34',
+    fontSize: 34,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+
+  countPreview: {
+    color: '#365f61',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginTop: 16,
   },
 
   modalActions: {
@@ -1213,13 +1509,19 @@ const styles = StyleSheet.create({
   totalHeaderCell: { flex: TOTAL_CELL_FLEX, textAlign: 'center' },
   totalCell: { flex: TOTAL_CELL_FLEX, textAlign: 'center' },
 
-  webDeleteCell: {
-    width: 44,
+  rowActions: {
+    width: 76,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 2,
   },
-  webDeleteIcon: {
-    fontSize: 18,
+
+  rowActionButton: {
+    width: 34,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   emptyRow: {

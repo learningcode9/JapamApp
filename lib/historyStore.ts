@@ -41,6 +41,21 @@ export type SupabaseHistoryPayload = {
   completion_id: string;
 };
 
+export type HistoryRecordUpdate = {
+  before: HistoryRecord;
+  after: HistoryRecord;
+};
+
+export type HistoryDayAdjustmentPlan = {
+  changed: boolean;
+  deleteEntireDay: boolean;
+  currentMalas: number;
+  targetMalas: number;
+  updatedRecords: HistoryRecord[];
+  recordsToUpdate: HistoryRecordUpdate[];
+  recordsToDelete: HistoryRecord[];
+};
+
 /**
  * Shared local-day bucket helper. It intentionally uses the device timezone for ISO timestamps,
  * because "today/yesterday" in the app should follow the user's local day, not UTC midnight.
@@ -177,24 +192,131 @@ export const mergeHistories = (
   remote: RawHistoryRecord[]
 ): HistoryRecord[] => {
   const localNorm = normalizeAll(local);
-  const remoteIds = new Set(normalizeAll(remote).map((r) => r.completionId));
+  const remoteNorm = normalizeAll(remote);
+  const remoteById = new Map(remoteNorm.map((r) => [r.completionId, r]));
 
   const byId = new Map<string, HistoryRecord>();
   for (const rec of localNorm) {
+    const remoteMatch = remoteById.get(rec.completionId);
+    // An edited record deliberately keeps its completionId and becomes pending again. A stale
+    // remote copy with that same id must not mark the edit synced until its values match.
+    const remoteConfirmsLocal =
+      remoteMatch &&
+      remoteMatch.malas === rec.malas &&
+      remoteMatch.totalCount === rec.totalCount &&
+      remoteMatch.date === rec.date;
     const upgraded =
-      remoteIds.has(rec.completionId) && rec.syncStatus === 'pending'
+      remoteConfirmsLocal && rec.syncStatus === 'pending'
         ? { ...rec, syncStatus: 'synced' as const }
         : rec;
     // First local wins for a given id; never overwrite a local record with a remote one.
     if (!byId.has(rec.completionId)) byId.set(rec.completionId, upgraded);
   }
-  for (const rec of normalizeAll(remote)) {
+  for (const rec of remoteNorm) {
     if (!byId.has(rec.completionId)) byId.set(rec.completionId, rec);
   }
 
   return [...byId.values()].sort(
     (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
   );
+};
+
+/**
+ * Plan a correction to one visible daily aggregate without exposing or replacing its underlying
+ * completion records. Reductions consume the newest records first so the oldest chronology stays
+ * intact. Increases update the earliest record as the stable canonical record for that day.
+ */
+export const planHistoryDayAdjustment = (
+  records: RawHistoryRecord[],
+  userId: string | null | undefined,
+  localDayKey: string,
+  requestedTargetMalas: number,
+): HistoryDayAdjustmentPlan => {
+  const normalized = dedupeByCompletionId(records);
+  const matchesUser = (record: HistoryRecord) =>
+    userId ? record.userId === userId : !record.userId;
+  const dayRecords = normalized
+    .filter((record) => matchesUser(record) && toLocalDayKey(record.date) === localDayKey)
+    .map((record) => ({
+      ...record,
+      malas: Math.max(0, Math.floor(Number(record.malas) || 0)),
+      totalCount: Math.max(0, Math.floor(Number(record.malas) || 0)) * 108,
+    }))
+    .filter((record) => record.malas > 0)
+    .sort((a, b) => {
+      const dateDiff = new Date(a.date).getTime() - new Date(b.date).getTime();
+      return dateDiff || a.completionId.localeCompare(b.completionId);
+    });
+
+  const currentMalas = dayRecords.reduce((sum, record) => sum + record.malas, 0);
+  const targetMalas = Math.max(0, Math.floor(Number(requestedTargetMalas) || 0));
+  const unchangedPlan: HistoryDayAdjustmentPlan = {
+    changed: false,
+    deleteEntireDay: false,
+    currentMalas,
+    targetMalas,
+    updatedRecords: normalized,
+    recordsToUpdate: [],
+    recordsToDelete: [],
+  };
+
+  if (dayRecords.length === 0 || targetMalas === currentMalas) return unchangedPlan;
+
+  const updates = new Map<string, HistoryRecordUpdate>();
+  const deletions = new Map<string, HistoryRecord>();
+  const pendingStatusFor = (record: HistoryRecord): SyncStatus =>
+    record.userId ? 'pending' : record.syncStatus;
+
+  if (targetMalas < currentMalas) {
+    let remainingReduction = currentMalas - targetMalas;
+    // Newest first: preserve the earliest records and their completion ids for as long as possible.
+    for (let index = dayRecords.length - 1; index >= 0 && remainingReduction > 0; index -= 1) {
+      const before = dayRecords[index];
+      const removedMalas = Math.min(before.malas, remainingReduction);
+      const nextMalas = before.malas - removedMalas;
+      remainingReduction -= removedMalas;
+
+      if (nextMalas === 0) {
+        deletions.set(before.completionId, before);
+      } else {
+        updates.set(before.completionId, {
+          before,
+          after: {
+            ...before,
+            malas: nextMalas,
+            totalCount: nextMalas * 108,
+            syncStatus: pendingStatusFor(before),
+          },
+        });
+      }
+    }
+  } else {
+    const before = dayRecords[0];
+    const nextMalas = before.malas + (targetMalas - currentMalas);
+    updates.set(before.completionId, {
+      before,
+      after: {
+        ...before,
+        malas: nextMalas,
+        totalCount: nextMalas * 108,
+        syncStatus: pendingStatusFor(before),
+      },
+    });
+  }
+
+  const updatedRecords = normalized
+    .filter((record) => !deletions.has(record.completionId))
+    .map((record) => updates.get(record.completionId)?.after || record);
+
+  return {
+    changed: true,
+    deleteEntireDay: targetMalas === 0,
+    currentMalas,
+    targetMalas,
+    updatedRecords,
+    recordsToUpdate: [...updates.values()],
+    recordsToDelete: [...deletions.values()],
+  };
 };
 
 /** Records that still need uploading: pending AND owned by a signed-in user. */
