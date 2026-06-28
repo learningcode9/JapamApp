@@ -711,7 +711,7 @@ export default function JapamMain() {
           const encodedUserId = encodeURIComponent(savedUserId);
           const res = await fetch(
             `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,completion_id&order=created_at.asc&limit=10000`,
-            { headers: { apikey: key, Authorization: `Bearer ${key}` } }
+            { headers: { apikey: key, Authorization: `Bearer ${key}` }, cache: 'no-store' }
           );
           if (res.ok) {
             const rows: {
@@ -1236,7 +1236,7 @@ export default function JapamMain() {
       const encodedUserId = encodeURIComponent(googleUserId);
       const response = await fetch(
         `${supabaseUrl}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=*&order=created_at.asc&limit=10000`,
-        { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` } }
+        { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` }, cache: 'no-store' }
       );
 
       if (!response.ok) return;

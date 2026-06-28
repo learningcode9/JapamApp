@@ -284,6 +284,7 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
           apikey: key,
           Authorization: `Bearer ${key}`,
         },
+        cache: 'no-store',
       });
 
       if (!response.ok) {
