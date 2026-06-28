@@ -343,6 +343,7 @@ const saveToSupabase = async (
   if (!url || !key) return false;
 
   try {
+    const accessToken = (await supabase.auth.getSession()).data.session?.access_token || key;
     const body = buildSupabaseHistoryPayload({
       date: createdAt,
       malas,
@@ -365,7 +366,7 @@ const saveToSupabase = async (
       headers: {
         'Content-Type': 'application/json',
         apikey: key,
-        Authorization: `Bearer ${key}`,
+        Authorization: `Bearer ${accessToken}`,
         Prefer: 'return=minimal,resolution=merge-duplicates',
       },
       body: JSON.stringify(body),
