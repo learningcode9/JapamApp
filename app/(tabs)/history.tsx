@@ -420,6 +420,7 @@ const syncHistoryEditsToSupabase = async (
   const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key || records.length === 0) return { syncedIds: [], rlsBlocked: false };
 
+  const accessToken = (await supabase.auth.getSession()).data.session?.access_token || key;
   const syncedIds: string[] = [];
   let rlsBlocked = false;
   for (const record of records) {
@@ -430,7 +431,7 @@ const syncHistoryEditsToSupabase = async (
         headers: {
           'Content-Type': 'application/json',
           apikey: key,
-          Authorization: `Bearer ${key}`,
+          Authorization: `Bearer ${accessToken}`,
           Prefer: 'return=minimal,resolution=merge-duplicates',
         },
         body: JSON.stringify(payload),
@@ -498,6 +499,11 @@ export default function HistoryScreen() {
 
     if (!addDate || !/^\d{4}-\d{2}-\d{2}$/.test(addDate)) {
       Alert.alert('Invalid date', 'Please enter a valid date in YYYY-MM-DD format.');
+      return;
+    }
+
+    if (addDate > getLocalDateKey()) {
+      Alert.alert('Invalid date', 'Future dates are not allowed. Please select today or a past date.');
       return;
     }
 
