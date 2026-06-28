@@ -7,6 +7,8 @@ import {
   markSynced,
   mergeHistories,
   mergeTombstones,
+  normalizeAll,
+  reconcileWithServer,
   toLocalDayKey,
 } from '../../lib/historyStore';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -271,6 +273,7 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
         select: 'id,created_at,malas,count,user_name,completion_id',
         [field]: `eq.${value}`,
         order: 'created_at.asc',
+        limit: '10000',
       });
 
       const response = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
@@ -565,10 +568,31 @@ export default function HistoryScreen() {
       const mergedHistory = mergeHistories(latestCleanedSessions, filteredRemoteSessions);
       // Honor tombstones on the merged result so a remote row that hasn't been deleted yet (or a
       // remote delete still in flight) does NOT resurrect a locally-deleted record.
-      const mergedForStorage = mergedHistory.filter((item) => !isTombstoned(item as Session));
-      const removedByTomb = mergedHistory.length - mergedForStorage.length;
+      const tombFiltered = mergedHistory.filter((item) => !isTombstoned(item as Session));
+      const removedByTomb = mergedHistory.length - tombFiltered.length;
       if (removedByTomb > 0) {
         console.log('[TOMBSTONE_APPLIED] screen=history removed=%d', removedByTomb);
+      }
+      const remoteCount = remoteSessions.length;
+      const localSynced = latestCleanedSessions.filter(
+        (r) => (r.userId || null) === currentUserId && r.syncStatus === 'synced'
+      ).length;
+      const localPending = latestCleanedSessions.filter(
+        (r) => (r.userId || null) === currentUserId && r.syncStatus === 'pending'
+      ).length;
+      console.log(
+        '[RECONCILE_PRE] screen=history remote_count=%d local_synced=%d local_pending=%d',
+        remoteCount, localSynced, localPending
+      );
+      const remoteIds = new Set(normalizeAll(filteredRemoteSessions).map((r) => r.completionId));
+      let mergedForStorage = tombFiltered;
+      if (!currentUserId || remoteCount >= 10000) {
+        console.log('[RECONCILE_SKIPPED] screen=history reason=%s count=%d',
+          !currentUserId ? 'no-user' : 'possible-truncation', remoteCount);
+      } else {
+        const before = tombFiltered.length;
+        mergedForStorage = reconcileWithServer(tombFiltered, remoteIds, currentUserId);
+        console.log('[RECONCILE_APPLIED] screen=history removed=%d', before - mergedForStorage.length);
       }
       sessions = dedupeSessions(mergedForStorage.filter((item) => (item.userId || null) === (currentUserId || null))).sort(
         (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()

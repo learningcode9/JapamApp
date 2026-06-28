@@ -4,6 +4,7 @@ import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import {
   dedupeByCompletionId,
   mergeHistories,
+  normalizeAll,
   todayStatsFor,
   toLocalDayKey,
 } from '../../lib/historyStore';
@@ -219,7 +220,7 @@ export default function TimerScreen() {
         try {
           const encodedUserId = encodeURIComponent(userId);
           const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,completion_id&order=created_at.asc`,
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,completion_id&order=created_at.asc&limit=10000`,
             { headers: { apikey: key, Authorization: `Bearer ${key}` } }
           );
           if (res.ok) {
@@ -256,6 +257,27 @@ export default function TimerScreen() {
                   (item) => !tombIds.has(item.completionId ?? '')
                 );
               }
+            }
+            const remoteCount = rows.length;
+            const localSynced = localHistory.filter(
+              (r) => r.userId === userId && r.syncStatus === 'synced'
+            ).length;
+            const localPending = localHistory.filter(
+              (r) => r.userId === userId && r.syncStatus === 'pending'
+            ).length;
+            console.log(
+              '[RECONCILE_PRE] screen=timer remote_count=%d local_synced=%d local_pending=%d',
+              remoteCount, localSynced, localPending
+            );
+            const remoteIds = new Set(normalizeAll(remoteHistory).map((r) => r.completionId));
+            if (remoteCount >= 10000) {
+              console.log('[RECONCILE_SKIPPED] screen=timer reason=possible-truncation count=%d', remoteCount);
+            } else {
+              const before = mergedHistory.length;
+              mergedHistory = mergedHistory.filter((r) =>
+                !r.completionId || (r.userId || null) !== userId || r.syncStatus !== 'synced' || remoteIds.has(r.completionId)
+              );
+              console.log('[RECONCILE_APPLIED] screen=timer removed=%d', before - mergedHistory.length);
             }
             await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
             console.log('[RESTORE_REMOTE_COUNT] screen=timer count=%d', remoteHistory.length);

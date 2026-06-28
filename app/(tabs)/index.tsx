@@ -1,10 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+  appendCompletion,
   buildSupabaseHistoryPayload,
+  markSynced,
   mergeHistories,
+  normalizeAll,
+  reconcileWithServer,
   todayStatsFor,
-  makeCompletionId,
   toLocalDayKey,
 } from '../../lib/historyStore';
 import * as Google from 'expo-auth-session/providers/google';
@@ -707,7 +710,7 @@ export default function JapamMain() {
         if (url && key) {
           const encodedUserId = encodeURIComponent(savedUserId);
           const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,completion_id&order=created_at.asc`,
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,completion_id&order=created_at.asc&limit=10000`,
             { headers: { apikey: key, Authorization: `Bearer ${key}` } }
           );
           if (res.ok) {
@@ -745,6 +748,26 @@ export default function JapamMain() {
             const day = toLocalDayKey(s.date);
             return (day === 'unknown' || day <= todayKey) && !tombSet.has(s.completionId as string);
           });
+          const remoteCount = remoteSessions.length;
+          const localSynced = localHistory.filter(
+            (s) => s.userId === savedUserId && s.syncStatus === 'synced'
+          ).length;
+          const localPending = localHistory.filter(
+            (s) => s.userId === savedUserId && s.syncStatus === 'pending'
+          ).length;
+          console.log(
+            '[RECONCILE_PRE] screen=main remote_count=%d local_synced=%d local_pending=%d',
+            remoteCount, localSynced, localPending
+          );
+          const remoteIds = new Set(normalizeAll(remoteSessions).map((r) => r.completionId));
+          let reconciledHistory = mergedHistory;
+          if (remoteCount >= 10000) {
+            console.log('[RECONCILE_SKIPPED] screen=main reason=possible-truncation count=%d', remoteCount);
+          } else {
+            const before = mergedHistory.length;
+            reconciledHistory = reconcileWithServer(mergedHistory, remoteIds, savedUserId);
+            console.log('[RECONCILE_APPLIED] screen=main removed=%d', before - reconciledHistory.length);
+          }
 
           console.log('[RESTORE_REMOTE_COUNT] screen=main count=%d', remoteSessions.length);
           console.log(
@@ -752,16 +775,16 @@ export default function JapamMain() {
             localHistory.length,
             localHistory.filter((s) => s.userId === savedUserId && s.syncStatus === 'pending').length
           );
-          console.log('[MERGE_LOCAL_COUNT_AFTER] screen=main count=%d', mergedHistory.length);
+          console.log('[MERGE_LOCAL_COUNT_AFTER] screen=main count=%d', reconciledHistory.length);
           console.log('[LOCAL_DAY_BUCKET] screen=main todayKey=%s buckets=%o',
             todayKey,
-            mergedHistory.map((s) => ({ completionId: s.completionId, day: toLocalDayKey(s.date) }))
+            reconciledHistory.map((s) => ({ completionId: s.completionId, day: toLocalDayKey(s.date) }))
           );
 
-          await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
+          await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(reconciledHistory));
 
           const { totalCount: safeTotal } = todayStatsFor(
-            mergedHistory,
+            reconciledHistory,
             savedUserId,
             todayKey,
             toLocalDayKey
@@ -1212,7 +1235,7 @@ export default function JapamMain() {
 
       const encodedUserId = encodeURIComponent(googleUserId);
       const response = await fetch(
-        `${supabaseUrl}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=*&order=created_at.asc`,
+        `${supabaseUrl}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=*&order=created_at.asc&limit=10000`,
         { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` } }
       );
 
@@ -1240,15 +1263,35 @@ export default function JapamMain() {
       // upgraded to 'synced'. This replaces the old behavior that discarded the current user's
       // local entries and could lose unsynced malas on sign-in.
       const mergedHistory = mergeHistories(localHistory, remoteHistory);
+      const remoteCount = rows.length;
+      const localSynced = localHistory.filter(
+        (item) => item.userId === googleUserId && item.syncStatus === 'synced'
+      ).length;
+      const localPending = localHistory.filter(
+        (item) => item.userId === googleUserId && item.syncStatus === 'pending'
+      ).length;
+      console.log(
+        '[RECONCILE_PRE] screen=main-login remote_count=%d local_synced=%d local_pending=%d',
+        remoteCount, localSynced, localPending
+      );
+      const remoteIds = new Set(normalizeAll(remoteHistory).map((r) => r.completionId));
+      let reconciledHistory = mergedHistory;
+      if (remoteCount >= 10000) {
+        console.log('[RECONCILE_SKIPPED] screen=main-login reason=possible-truncation count=%d', remoteCount);
+      } else {
+        const before = mergedHistory.length;
+        reconciledHistory = reconcileWithServer(mergedHistory, remoteIds, googleUserId);
+        console.log('[RECONCILE_APPLIED] screen=main-login removed=%d', before - reconciledHistory.length);
+      }
       console.log('[RESTORE_REMOTE_COUNT] screen=main-login count=%d', remoteHistory.length);
       console.log(
         '[MERGE_LOCAL_COUNT_BEFORE] screen=main-login count=%d pending=%d',
         localHistory.length,
         localHistory.filter((item) => item.userId === googleUserId && item.syncStatus === 'pending').length
       );
-      console.log('[MERGE_LOCAL_COUNT_AFTER] screen=main-login count=%d', mergedHistory.length);
+      console.log('[MERGE_LOCAL_COUNT_AFTER] screen=main-login count=%d', reconciledHistory.length);
 
-      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(reconciledHistory));
       await restoreTodayTotal();
     } catch (error) {
       console.log('History restore error:', error);
@@ -1604,16 +1647,20 @@ export default function JapamMain() {
       const savedUserEmail = await AsyncStorage.getItem(USER_EMAIL_KEY);
       const historyUserName = savedUserName || userName || savedUserEmail || 'Unknown User';
 
-      const session: Session = {
-        date: new Date().toISOString(),
+      const sessionDate = new Date().toISOString();
+      const updatedHistory = appendCompletion(history, {
+        date: sessionDate,
         malas: sessionMalas,
         totalCount: sessionTotal,
         duration,
         manual: false,
         userId: userId ?? null,
-      };
+        userName: userId ? historyUserName : undefined,
+        userEmail: userId ? savedUserEmail || undefined : undefined,
+      });
+      const savedRecord = updatedHistory[0];
 
-      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([session, ...history]));
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
       await AsyncStorage.setItem(HISTORY_SYNC_VERSION_KEY, String(Date.now()));
 
       // Emit immediately after local save — Home and History update without waiting for Supabase
@@ -1628,27 +1675,29 @@ export default function JapamMain() {
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
       if (url && key) {
-        const payload = buildSupabaseHistoryPayload({
-          ...session,
-          userName: historyUserName,
-          completionId: makeCompletionId(userId, session.date),
-        }, userId, historyUserName);
+        const payload = buildSupabaseHistoryPayload(savedRecord, userId, historyUserName);
         console.log(
           '[SYNC_PAYLOAD_CREATED_AT] source=legacy-main completionId=%s created_at=%s localDay=%s',
           payload.completion_id,
           payload.created_at,
           toLocalDayKey(payload.created_at)
         );
-        const postHistory = async (body: Record<string, unknown>) => {
+        try {
           const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal,resolution=merge-duplicates' },
-            body: JSON.stringify(body),
+            body: JSON.stringify(payload),
           });
-          return res.ok;
-        };
-        const savedWithUserId = await postHistory(payload);
-        if (!savedWithUserId) console.log('[SYNC_FAILED] source=legacy-main completionId=%s', payload.completion_id);
+          if (res.ok) {
+            const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
+            const latest = latestRaw ? JSON.parse(latestRaw) : [];
+            await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, [savedRecord.completionId])));
+          } else {
+            console.log('[SYNC_FAILED] source=legacy-main completionId=%s status=%d', payload.completion_id, res.status);
+          }
+        } catch {
+          console.log('[SYNC_FAILED] source=legacy-main completionId=%s reason=network', payload.completion_id);
+        }
       }
     } catch (error) {
       console.log('Supabase save error:', error);

@@ -213,6 +213,25 @@ export const markSynced = (
 };
 
 /**
+ * Remove local synced records for the current user if they are absent from the server.
+ * Only drops records that are ALL of: this user's, syncStatus==='synced', have a completionId,
+ * and whose completionId is not in remoteCompletionIds.
+ * Always keeps: pending/offline records, guest records, other-user records, id-less records.
+ * Only call after a confirmed HTTP 200 from a complete (limit=10000) Supabase fetch.
+ */
+export const reconcileWithServer = (
+  merged: HistoryRecord[],
+  remoteCompletionIds: Set<string>,
+  currentUserId: string,
+): HistoryRecord[] =>
+  merged.filter((r) => {
+    if (r.userId !== currentUserId) return true;
+    if (!r.completionId) return true;
+    if (r.syncStatus !== 'synced') return true;
+    return remoteCompletionIds.has(r.completionId);
+  });
+
+/**
  * Build the Supabase row from the local record. The important bit is `created_at: record.date`:
  * offline completions must upload with their actual completion time, not the later sync time.
  */
