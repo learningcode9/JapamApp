@@ -24,7 +24,6 @@ import {
   Animated,
   AppState,
   DeviceEventEmitter,
-  Dimensions,
   ImageBackground,
   Modal,
   Platform,
@@ -34,6 +33,7 @@ import {
   Switch,
   Text,
   TextInput,
+  useWindowDimensions,
   Vibration,
   View,
 } from 'react-native';
@@ -111,17 +111,31 @@ const DELETED_COMPLETIONS_KEY = 'deletedCompletions';
 const DEFAULT_TIMER_MINUTES = 5;
 const SESSION_TIME_OPTIONS = [5, 10, 15];
 
-const screenWidth = Dimensions.get('window').width;
-const screenHeight = Dimensions.get('window').height;
+// Module-level fallback dimensions (used by StyleSheet.create and decorative elements).
+// The component also reads useWindowDimensions() for live responsive overrides.
+const _dims = { width: 390, height: 844 }; // safe defaults; overwritten below
+try {
+  const d = require('react-native').Dimensions.get('window');
+  _dims.width = d.width;
+  _dims.height = d.height;
+} catch {}
+const screenWidth = _dims.width;
+const screenHeight = _dims.height;
 const isMobile = screenWidth < 500;
 const isShortMobile = isMobile && screenHeight < 760;
-// Native phones fill the real viewport via flexbox (below) instead of a static
-// captured height. This keeps the zen background covering the full screen and
-// avoids the empty bottom gap that appeared when the Android window height
-// changed (e.g. after the hardware back button toggled the system bars).
 const isNativeMobile = isMobile && Platform.OS !== 'web';
 const progressCircleSize = isShortMobile ? 200 : isMobile ? 236 : 300;
 const progressRingSize = progressCircleSize - (isMobile ? 10 : 14);
+const shellMinHeight = isMobile
+  ? undefined
+  : Math.min(Math.max(screenHeight - 54, 820), 940);
+const scrollTopPadding =
+  Platform.OS === 'web' ? ('env(safe-area-inset-top)' as any) : 0;
+const scrollBottomPadding =
+  Platform.OS === 'web'
+    ? ('calc(125px + env(safe-area-inset-bottom))' as any)
+    : 125;
+
 const malaBeadPositions = [
   { left: 10, top: 1 },
   { left: 15, top: 3 },
@@ -133,18 +147,6 @@ const malaBeadPositions = [
   { left: 1, top: 11 },
   { left: 3, top: 5 },
 ];
-const shellMinHeight =
-  isMobile
-    ? Platform.OS === 'web'
-      ? ('100dvh' as any)
-      : screenHeight
-    : Math.min(Math.max(screenHeight - 54, 820), 940);
-const scrollTopPadding =
-  Platform.OS === 'web' ? ('env(safe-area-inset-top)' as any) : 0;
-const scrollBottomPadding =
-  Platform.OS === 'web'
-    ? ('calc(125px + env(safe-area-inset-bottom))' as any)
-    : 125;
 
 const getLocalDateKey = (date = new Date()) => {
   const y = date.getFullYear();
@@ -183,6 +185,23 @@ const isAuthPending = async () => {
 };
 
 export default function JapamMain() {
+  // Live responsive dimensions — recomputes on rotation / resize for all screen sizes
+  const { width: dynW, height: dynH } = useWindowDimensions();
+  const dynIsMobile = dynW < 500;
+  const dynIsShortMobile = dynIsMobile && dynH < 760;
+  const dynIsNativeMobile = dynIsMobile && Platform.OS !== 'web';
+  const dynProgressCircleSize = dynIsShortMobile ? 200 : dynIsMobile ? 236 : 300;
+  const dynProgressRingSize = dynProgressCircleSize - (dynIsMobile ? 10 : 14);
+  const dynShellMinHeight = dynIsMobile
+    ? undefined
+    : Math.min(Math.max(dynH - 54, 820), 940);
+  const dynScrollTopPadding =
+    Platform.OS === 'web' ? ('env(safe-area-inset-top)' as any) : 0;
+  const dynScrollBottomPadding =
+    Platform.OS === 'web'
+      ? ('calc(125px + env(safe-area-inset-bottom))' as any)
+      : 125;
+
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [count, setCount] = useState(0);
   const [malas, setMalas] = useState(0);
@@ -2061,8 +2080,34 @@ export default function JapamMain() {
       end={{ x: 0, y: 1 }}
       style={{ flex: 1 }}
     >
-      <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.appShell}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[
+          styles.content,
+          {
+            flexGrow: 1,
+            paddingTop: dynIsMobile ? dynScrollTopPadding : 24,
+            paddingBottom: dynIsNativeMobile ? 0 : dynScrollBottomPadding,
+            minHeight: dynIsMobile ? undefined : dynShellMinHeight,
+          },
+        ]}
+        showsVerticalScrollIndicator={false}
+        bounces={Platform.OS !== 'web'}
+      >
+        <View style={[
+          styles.appShell,
+          {
+            maxWidth: dynIsMobile ? undefined : 460,
+            flexGrow: dynIsMobile ? 1 : 0,
+            minHeight: dynIsMobile ? undefined : dynShellMinHeight,
+            borderRadius: dynIsMobile ? 0 : 28,
+            paddingHorizontal: dynIsMobile ? 22 : 28,
+            paddingTop: dynIsShortMobile ? 14 : dynIsMobile ? 20 : 34,
+            paddingBottom: dynIsNativeMobile ? 120 : dynIsMobile ? 116 : 116,
+            shadowOpacity: dynIsMobile ? 0 : 0.16,
+            elevation: dynIsMobile ? 0 : 12,
+          },
+        ]}>
           <View pointerEvents="none" style={styles.sceneLayer}>
             <ImageBackground
               source={require('../../assets/images/zen-background.png')}
@@ -2670,42 +2715,29 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: 'transparent' },
   content: {
     // Native phones grow to fill the real scroll viewport so the shell (and its
-    // background) always covers the screen; web mobile keeps its prior behavior.
-    flexGrow: isNativeMobile ? 1 : 1,
+    // Dynamic overrides applied via inline style in JSX (dynIsMobile etc.)
+    // These base values are fallbacks only.
+    flexGrow: 1,
     alignItems: 'center',
-    justifyContent: isMobile ? 'flex-start' : 'center',
+    justifyContent: 'flex-start',
     width: '100%',
     alignSelf: 'center',
-    paddingHorizontal: isMobile ? 0 : 24,
-    paddingTop: isMobile ? scrollTopPadding : 24,
-    // The tab-bar reservation lives on appShell for native mobile (so the
-    // background extends behind the floating tab bar); web/tablet keep it here.
-    paddingBottom: isNativeMobile ? 0 : scrollBottomPadding,
-    minHeight: isMobile ? undefined : shellMinHeight,
+    paddingHorizontal: 0,
+    paddingTop: 0,
+    paddingBottom: 0,
+    minHeight: undefined,
   },
   appShell: {
     width: '100%',
-    maxWidth: isMobile ? undefined : 460,
-    // Native mobile stretches to fill the viewport (via content's flexGrow) so
-    // the zen background reaches the bottom edge — no empty gap. Tablet/desktop
-    // keep the fixed shell height; web mobile keeps its natural height.
-    flexGrow: isNativeMobile ? 1 : 0,
-    minHeight: Platform.OS === 'web' && isMobile ? ('100dvh' as any) : isMobile ? screenHeight : shellMinHeight,
+    // Dynamic overrides (maxWidth, flexGrow, minHeight, padding, shadow) applied
+    // via inline style in JSX using dynIsMobile / dynIsShortMobile / dynIsNativeMobile.
     alignItems: 'center',
     overflow: 'hidden',
     position: 'relative',
     backgroundColor: 'rgba(238, 248, 246, 0.94)',
-    borderRadius: isMobile ? 0 : 28,
-    paddingHorizontal: isMobile ? 22 : 28,
-    paddingTop: isShortMobile ? 14 : isMobile ? 20 : 34,
-    // Native mobile reserves room for the floating tab bar here (content's
-    // paddingBottom is zeroed for native mobile to avoid double spacing).
-    paddingBottom: isNativeMobile ? 120 : isMobile ? 116 : 116,
     shadowColor: '#0f766e',
-    shadowOpacity: isMobile ? 0 : 0.16,
     shadowRadius: 28,
     shadowOffset: { width: 0, height: 16 },
-    elevation: isMobile ? 0 : 12,
   },
   topControls: {
     width: '100%',
