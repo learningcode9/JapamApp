@@ -285,45 +285,6 @@ export const todayStatsFor = (
 };
 
 /**
- * Self-heal "phantom synced" records. After a FULL remote fetch for `userId`, any local record
- * owned by that user that is marked 'synced' but whose completionId is NOT present remotely must
- * have failed to persist (or was removed) — re-mark it 'pending' so the normal sync re-uploads it.
- * The idempotent upsert (on_conflict=completion_id) means a re-upload never creates a duplicate.
- *
- * Safety: only this user's records are touched; other users, guest (no userId) records, and
- * already-pending records are left exactly as-is, and no record is ever dropped. Pass the COMPLETE
- * remote completionId set — a partial set would re-mark real synced rows pending, but that is still
- * harmless (idempotent re-upload).
- */
-export const selfHealSyncStatus = (
-  records: RawHistoryRecord[],
-  userId: string | null | undefined,
-  remoteCompletionIds: Iterable<string>,
-  tombstones: Iterable<string> = []
-): { records: HistoryRecord[]; markedPending: string[] } => {
-  const remoteIds =
-    remoteCompletionIds instanceof Set
-      ? remoteCompletionIds
-      : new Set<string>(remoteCompletionIds);
-  const tomb = tombstones instanceof Set ? tombstones : new Set<string>(tombstones);
-  const markedPending: string[] = [];
-  const result = normalizeAll(records).map((r) => {
-    if (
-      userId &&
-      r.userId === userId &&
-      r.syncStatus === 'synced' &&
-      !remoteIds.has(r.completionId) &&
-      !tomb.has(r.completionId) // never resurrect a record the user explicitly deleted
-    ) {
-      markedPending.push(r.completionId);
-      return { ...r, syncStatus: 'pending' as const };
-    }
-    return r;
-  });
-  return { records: result, markedPending };
-};
-
-/**
  * Tombstone support — explicit deletions that propagate to every device and survive sync.
  *
  * A deletion is recorded as a tombstone (the deleted completionId), NOT inferred from "absent

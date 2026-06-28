@@ -4,6 +4,7 @@ import {
   appendCompletion,
   buildSupabaseHistoryPayload,
   dedupeByCompletionId,
+  makeCompletionId,
   markSynced,
   mergeHistories,
   mergeTombstones,
@@ -11,6 +12,7 @@ import {
   reconcileWithServer,
   toLocalDayKey,
 } from '../../lib/historyStore';
+import { supabase } from '../../lib/supabase';
 import * as FileSystem from 'expo-file-system/legacy';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect } from 'expo-router';
@@ -25,6 +27,7 @@ import {
     Modal,
     Platform,
     Pressable,
+    RefreshControl,
     ScrollView,
     StyleSheet,
     Text,
@@ -302,7 +305,7 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
           manual: false,
           userId,
           userName: row.user_name || undefined,
-          completionId: row.completion_id || undefined,
+          completionId: row.completion_id || makeCompletionId(userId, row.created_at || new Date().toISOString()),
           syncStatus: 'synced' as const,
         };
       });
@@ -406,6 +409,7 @@ export default function HistoryScreen() {
   const [manualMalas, setManualMalas] = useState('');
   const [manualCount, setManualCount] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const openManualModal = () => {
     setManualDate(getLocalDateKey());
@@ -676,9 +680,10 @@ export default function HistoryScreen() {
             },
             body: JSON.stringify({ completion_id: id, user_id: currentUserId }),
           });
+          const accessToken = (await supabase.auth.getSession()).data.session?.access_token || key;
           await fetch(`${url}/rest/v1/japam_history?completion_id=eq.${encodeURIComponent(id)}`, {
             method: 'DELETE',
-            headers: { apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal' },
+            headers: { apikey: key, Authorization: `Bearer ${accessToken}`, Prefer: 'return=minimal' },
           });
           console.log('[DELETE_REMOTE_REMOVED] completionId=%s', id);
         } catch {
@@ -828,6 +833,18 @@ export default function HistoryScreen() {
         { paddingBottom: 16 },
       ]}
       bounces={Platform.OS !== 'ios'}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={async () => {
+            setRefreshing(true);
+            await loadHistory();
+            setRefreshing(false);
+          }}
+          tintColor="#0f766e"
+          colors={['#0f766e']}
+        />
+      }
     >
       <View style={styles.header}>
       
