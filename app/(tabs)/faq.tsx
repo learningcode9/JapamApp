@@ -93,7 +93,7 @@ export default function FaqScreen() {
         <View style={styles.header}>
           <Pressable
             style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.6 }]}
-            onPress={() => router.back()}
+            onPress={() => router.navigate('/(tabs)/settings')}
             accessibilityRole="button"
             accessibilityLabel="Back to Settings"
           >

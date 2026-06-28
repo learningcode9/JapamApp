@@ -53,7 +53,8 @@ const isShortMobile = isMobile && screenHeight < 760;
 // bar's true height (computed from safe-area insets) so the stats card always
 // clears the bottom bar.
 const isNativeMobile = isMobile && Platform.OS !== 'web';
-const CIRCLE_SIZE = isShortMobile ? 204 : isMobile ? 224 : 296;
+const isWebMobile = Platform.OS === 'web' && isMobile;
+const CIRCLE_SIZE = (isWebMobile && isShortMobile) ? 176 : isShortMobile ? 204 : isMobile ? 224 : 296;
 const TEAL = '#0F8F87';
 // Guest Mode is temporarily hidden — Google Sign-In is the only entry point for now. Flip this
 // back to true to restore the "Continue as Guest" button; none of the underlying guest/anonymous
@@ -156,6 +157,7 @@ export default function TimerScreen() {
   const [dayStreak, setDayStreak] = useState(0);
   const deferredInstallPromptRef = useRef<any>(null);
   const isIosDeviceWeb = isIOSDeviceWeb();
+
 
   const [request, response, promptAsync] = Google.useAuthRequest({
     webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
@@ -648,6 +650,7 @@ export default function TimerScreen() {
           styles.container,
           isNativeMobile && { minHeight: undefined },
         ]}
+        onLayout={undefined}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
@@ -658,6 +661,7 @@ export default function TimerScreen() {
             // The large tabBarSpaceFromBottom padding is no longer needed here because
             // the ScrollView's own marginBottom already ends at the tab bar top.
             isNativeMobile && { flexGrow: 1, minHeight: undefined, paddingBottom: 16 },
+            Platform.OS === 'web' && isMobile && { paddingBottom: 16 },
           ]}
         >
           <View pointerEvents="none" style={styles.sceneLayer}>
@@ -800,7 +804,7 @@ export default function TimerScreen() {
               </View>
             )}
 
-            <Text style={[styles.cardLabel, { marginTop: isShortMobile ? 12 : isMobile ? 10 : 22 }]}>Auto-Repeat Malas</Text>
+            <Text style={[styles.cardLabel, { marginTop: (isWebMobile && isShortMobile) ? 8 : isShortMobile ? 12 : isMobile ? 10 : 22 }]}>Auto-Repeat Malas</Text>
             <View style={styles.chips}>
               {LOOP_OPTIONS.map((l) => (
                 <Pressable
@@ -978,6 +982,7 @@ export default function TimerScreen() {
           </View>
         </Modal>
       </ScrollView>
+
     </View>
   );
 }
@@ -1107,9 +1112,9 @@ const styles = StyleSheet.create({
     color: '#4a7c80',
     textAlign: 'center',
     fontWeight: '700',
-    marginBottom: isShortMobile ? 12 : isMobile ? 10 : 26,
+    marginBottom: (isWebMobile && isShortMobile) ? 6 : isShortMobile ? 12 : isMobile ? 10 : 26,
   },
-  circleWrap: { marginBottom: isShortMobile ? 14 : isMobile ? 12 : 32 },
+  circleWrap: { marginBottom: (isWebMobile && isShortMobile) ? 8 : isShortMobile ? 14 : isMobile ? 12 : 32 },
   circleOuter: {
     width: CIRCLE_SIZE,
     height: CIRCLE_SIZE,
@@ -1127,7 +1132,7 @@ const styles = StyleSheet.create({
   },
   circleInner: { alignItems: 'center' },
   timerText: {
-    fontSize: isShortMobile ? 44 : isMobile ? 50 : 72,
+    fontSize: (isWebMobile && isShortMobile) ? 38 : isShortMobile ? 44 : isMobile ? 50 : 72,
     fontWeight: '800',
     color: TEAL,
     letterSpacing: -2,
@@ -1142,7 +1147,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: isMobile ? 10 : 14,
-    marginBottom: isShortMobile ? 12 : isMobile ? 10 : 28,
+    marginBottom: (isWebMobile && isShortMobile) ? 8 : isShortMobile ? 12 : isMobile ? 10 : 28,
   },
   startBtn: {
     flexDirection: 'row',
@@ -1177,7 +1182,7 @@ const styles = StyleSheet.create({
     maxWidth: 460,
     backgroundColor: 'rgba(255,255,255,0.86)',
     borderRadius: 22,
-    paddingVertical: isShortMobile ? 13 : isMobile ? 11 : 22,
+    paddingVertical: (isWebMobile && isShortMobile) ? 9 : isShortMobile ? 13 : isMobile ? 11 : 22,
     paddingHorizontal: isShortMobile ? 13 : isMobile ? 15 : 22,
     shadowColor: '#0a3a3c',
     shadowOpacity: 0.07,
@@ -1193,16 +1198,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 9,
-    marginTop: isShortMobile ? 12 : isMobile ? 8 : 22,
+    marginTop: (isWebMobile && isShortMobile) ? 8 : isShortMobile ? 12 : isMobile ? 8 : 22,
     marginBottom: isMobile ? 6 : 0,
   },
   statCard: {
     flexGrow: 1,
     flexBasis: '30%',
-    minHeight: isShortMobile ? 88 : isMobile ? 96 : 104,
+    minHeight: (isWebMobile && isShortMobile) ? 68 : isShortMobile ? 88 : isMobile ? 96 : 104,
     backgroundColor: 'rgba(255,255,255,0.94)',
     borderRadius: 18,
-    paddingVertical: isShortMobile ? 12 : isMobile ? 14 : 16,
+    paddingVertical: (isWebMobile && isShortMobile) ? 8 : isShortMobile ? 12 : isMobile ? 14 : 16,
     paddingHorizontal: isShortMobile ? 8 : 10,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1396,7 +1401,7 @@ const styles = StyleSheet.create({
     color: '#4a8c90',
     letterSpacing: 1.0,
     textTransform: 'uppercase',
-    marginBottom: isMobile ? 8 : 14,
+    marginBottom: (isWebMobile && isShortMobile) ? 6 : isMobile ? 8 : 14,
   },
   chips: {
     flexDirection: 'row',
@@ -1405,7 +1410,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   chip: {
-    paddingVertical: isShortMobile ? 7 : isMobile ? 8 : 9,
+    paddingVertical: (isWebMobile && isShortMobile) ? 6 : isShortMobile ? 7 : isMobile ? 8 : 9,
     paddingHorizontal: isShortMobile ? 13 : isMobile ? 15 : 18,
     borderRadius: 50,
     borderWidth: 1.5,

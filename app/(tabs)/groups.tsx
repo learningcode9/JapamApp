@@ -1,10 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   Share,
@@ -166,14 +168,14 @@ export default function GroupsScreen() {
 
   if (!userId) {
     return (
-      <View style={styles.signInContainer}>
+      <LinearGradient colors={['#e7f5f5', '#c7e2e0', '#eef8f5']} style={styles.signInContainer}>
         <Ionicons name="people-outline" size={48} color={TEAL} />
         <Text style={styles.signInTitle}>Sign in required</Text>
         <Text style={styles.signInBody}>
           Groups require a Google account. Please sign in with Google from another tab to use
           Family Japam Groups.
         </Text>
-      </View>
+      </LinearGradient>
     );
   }
 
@@ -302,7 +304,7 @@ export default function GroupsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5fafa' },
-  scrollContent: { padding: 20, paddingBottom: 100 },
+  scrollContent: { padding: 20, paddingBottom: Platform.OS === 'web' ? 20 : 100 },
   header: { fontSize: 24, fontWeight: '900', color: '#12383c', marginBottom: 16 },
   actionsRow: { flexDirection: 'row', gap: 12, marginBottom: 20 },
   primaryButton: {
@@ -358,7 +360,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: 32,
-    backgroundColor: '#f5fafa',
   },
   signInTitle: { fontSize: 20, fontWeight: '900', color: '#12383c', marginTop: 16, marginBottom: 8 },
   signInBody: { fontSize: 15, lineHeight: 22, color: '#365f61', textAlign: 'center' },
