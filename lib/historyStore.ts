@@ -28,6 +28,7 @@ export interface HistoryRecord {
   userName?: string;
   userEmail?: string;
   source?: string;
+  remoteId?: number | string;
   completionId: string;
   syncStatus: SyncStatus;
 }
@@ -77,6 +78,7 @@ export type RawHistoryRecord = Partial<HistoryRecord> & {
   date: string;
   user_name?: string;
   user_email?: string;
+  remote_id?: number | string;
 };
 
 /**
@@ -111,6 +113,7 @@ export const normalizeRecord = (raw: RawHistoryRecord): HistoryRecord => {
     userName,
     userEmail,
     source: raw.source,
+    remoteId: raw.remoteId ?? raw.remote_id,
     completionId: raw.completionId || makeCompletionId(userId, raw.date),
     syncStatus: raw.syncStatus === 'pending' ? 'pending' : 'synced',
   };
@@ -173,6 +176,7 @@ export const dedupeByCompletionId = (records: RawHistoryRecord[]): HistoryRecord
         ...result[idx],
         userName: result[idx].userName || raw.userName,
         userEmail: result[idx].userEmail || raw.userEmail,
+        remoteId: result[idx].remoteId ?? raw.remoteId,
         syncStatus: 'synced',
       };
     }
@@ -207,7 +211,11 @@ export const mergeHistories = (
       remoteMatch.date === rec.date;
     const upgraded =
       remoteConfirmsLocal && rec.syncStatus === 'pending'
-        ? { ...rec, syncStatus: 'synced' as const }
+        ? {
+            ...rec,
+            remoteId: rec.remoteId ?? remoteMatch.remoteId,
+            syncStatus: 'synced' as const,
+          }
         : rec;
     // First local wins for a given id; never overwrite a local record with a remote one.
     if (!byId.has(rec.completionId)) byId.set(rec.completionId, upgraded);

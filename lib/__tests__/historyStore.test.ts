@@ -72,6 +72,19 @@ describe('offline-first: appendCompletion', () => {
     expect(n.completionId).toBe(makeCompletionId(UID, legacy.date));
     expect(n.syncStatus).toBe('synced'); // legacy assumed already handled
   });
+  it('preserves remoteId metadata for fetched Supabase rows', () => {
+    const legacy = {
+      date: '2026-06-01T08:00:00.000Z',
+      malas: 1,
+      totalCount: 108,
+      duration: 60,
+      manual: false,
+      userId: UID,
+      remoteId: 42,
+    };
+    const n = normalizeRecord(legacy);
+    expect(n.remoteId).toBe(42);
+  });
   it('preserves a logged-in manual entry user name while pending', () => {
     const h = appendCompletion([], session('2026-06-03T10:00:00.000Z', {
       manual: true,
@@ -204,6 +217,15 @@ describe('no data loss: mergeHistories (Supabase restore)', () => {
     expect(merged.find((r) => r.completionId === makeCompletionId(UID, yesterday.date))?.syncStatus).toBe('pending');
     expect(merged.find((r) => r.completionId === makeCompletionId(UID, today.date))?.syncStatus).toBe('pending');
     expect(merged).toHaveLength(3);
+  });
+  it('preserves a remote row id when local and remote copies share the same completionId', () => {
+    const iso = '2026-06-03T10:00:00.000Z';
+    const merged = mergeHistories(
+      [session(iso, { syncStatus: 'pending' })],
+      [{ ...session(iso, { syncStatus: 'synced' }), remoteId: 99 }]
+    );
+
+    expect(merged.find((r) => r.completionId === makeCompletionId(UID, iso))?.remoteId).toBe(99);
   });
 });
 
@@ -549,6 +571,7 @@ describe('planHistoryDayAdjustment', () => {
       userName: 'Sravani',
       userEmail: 'sravani@example.com',
       source: 'manual',
+      remoteId: 12,
     });
     const plan = planHistoryDayAdjustment([original], UID, day, 3);
     const update = plan.recordsToUpdate[0];
@@ -557,6 +580,7 @@ describe('planHistoryDayAdjustment', () => {
     expect(update.after).toMatchObject({
       malas: 3,
       totalCount: 324,
+      remoteId: 12,
       syncStatus: 'pending',
       userName: 'Sravani',
       userEmail: 'sravani@example.com',

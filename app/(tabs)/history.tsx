@@ -77,6 +77,7 @@ type Session = {
   userId?: string | null;
   userName?: string;
   userEmail?: string;
+  remoteId?: string | number;
   completionId?: string;
   syncStatus?: 'pending' | 'synced';
 };
@@ -316,6 +317,7 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
           manual: false,
           userId,
           userName: row.user_name || undefined,
+          remoteId: row.id,
           completionId: row.completion_id || makeCompletionId(userId, row.created_at || new Date().toISOString()),
           syncStatus: 'synced' as const,
         };
@@ -426,17 +428,42 @@ const syncHistoryEditsToSupabase = async (
   for (const record of records) {
     const payload = buildSupabaseHistoryPayload(record, userId, fallbackUserName);
     try {
-      const response = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: key,
-          Authorization: `Bearer ${accessToken}`,
-          Prefer: 'return=minimal,resolution=merge-duplicates',
-        },
-        body: JSON.stringify(payload),
-      });
+      const remoteId = record.remoteId;
+      const response = remoteId != null
+        ? await fetch(`${url}/rest/v1/japam_history?id=eq.${encodeURIComponent(String(remoteId))}`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: key,
+              Authorization: `Bearer ${accessToken}`,
+              Prefer: 'return=representation',
+            },
+            body: JSON.stringify({
+              malas: payload.malas,
+              count: payload.count,
+              user_name: payload.user_name,
+              created_at: payload.created_at,
+              completion_id: payload.completion_id,
+            }),
+          })
+        : await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: key,
+              Authorization: `Bearer ${accessToken}`,
+              Prefer: 'return=minimal,resolution=merge-duplicates',
+            },
+            body: JSON.stringify(payload),
+          });
       if (response.ok) {
+        if (remoteId != null) {
+          const patchedRows = (await response.json().catch(() => [])) as { id?: number | string }[];
+          if (patchedRows.length === 0) {
+            console.log('[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=zero-rows remoteId=%s', record.completionId, String(remoteId));
+            continue;
+          }
+        }
         syncedIds.push(record.completionId);
         console.log('[HISTORY_EDIT_SYNC_SUCCESS] completionId=%s', record.completionId);
       } else {
