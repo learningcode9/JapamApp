@@ -1383,9 +1383,7 @@ export default function HistoryScreen() {
             <Text style={[styles.cellText, styles.numericText, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Total</Text>
           </View>
           <View style={[styles.columnCell, styles.actionsColumn]}>
-            <Text style={[styles.cellText, styles.actionsHeaderText, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>
-              Actions
-            </Text>
+            {/* intentionally blank — column alignment maintained by actionsColumn width */}
           </View>
         </View>
 
