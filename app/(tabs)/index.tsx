@@ -1459,6 +1459,23 @@ export default function JapamMain() {
       }
 
       try {
+        const session = (await supabase.auth.getSession()).data.session;
+        const sessionIsAnonymous =
+          !!((session?.user as { is_anonymous?: boolean } | undefined)?.is_anonymous);
+        console.log(
+          '[SUPABASE_AUTH] index session.user.id=%s session.user.email=%s hasAccessToken=%s tokenLength=%s isAnonymous=%s',
+          session?.user?.id || 'none',
+          session?.user?.email || 'none',
+          !!session?.access_token,
+          session?.access_token?.length || 0,
+          sessionIsAnonymous
+        );
+        if (!session?.access_token || sessionIsAnonymous) {
+          console.log('[SUPABASE_AUTH] index missing non-anonymous Supabase session after Google login');
+          showGoogleSignInRequiredAlert();
+          return;
+        }
+
         const userInfoResponse = await fetch('https://www.googleapis.com/userinfo/v2/me', {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
