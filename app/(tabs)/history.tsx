@@ -434,8 +434,29 @@ const syncHistoryEditsToSupabase = async (
     const payload = buildSupabaseHistoryPayload(record, userId, fallbackUserName);
     try {
       const remoteId = record.remoteId;
+      const requestUrl = remoteId != null
+        ? `${url}/rest/v1/japam_history?id=eq.${encodeURIComponent(String(remoteId))}`
+        : `${url}/rest/v1/japam_history?on_conflict=completion_id`;
+      const requestMethod = remoteId != null ? 'PATCH' : 'POST';
+      const requestBody = remoteId != null
+        ? {
+            malas: payload.malas,
+            count: payload.count,
+            user_name: payload.user_name,
+            created_at: payload.created_at,
+            completion_id: payload.completion_id,
+          }
+        : payload;
+      console.log(
+        '[HISTORY_EDIT_REQUEST] method=%s remoteId=%s completionId=%s url=%s body=%s',
+        requestMethod,
+        remoteId != null ? String(remoteId) : 'none',
+        record.completionId,
+        requestUrl,
+        JSON.stringify(requestBody),
+      );
       const response = remoteId != null
-        ? await fetch(`${url}/rest/v1/japam_history?id=eq.${encodeURIComponent(String(remoteId))}`, {
+        ? await fetch(requestUrl, {
             method: 'PATCH',
             headers: {
               'Content-Type': 'application/json',
@@ -443,15 +464,9 @@ const syncHistoryEditsToSupabase = async (
               Authorization: `Bearer ${accessToken}`,
               Prefer: 'return=representation',
             },
-            body: JSON.stringify({
-              malas: payload.malas,
-              count: payload.count,
-              user_name: payload.user_name,
-              created_at: payload.created_at,
-              completion_id: payload.completion_id,
-            }),
+            body: JSON.stringify(requestBody),
           })
-        : await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
+        : await fetch(requestUrl, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -459,7 +474,7 @@ const syncHistoryEditsToSupabase = async (
               Authorization: `Bearer ${accessToken}`,
               Prefer: 'return=representation,resolution=merge-duplicates',
             },
-            body: JSON.stringify(payload),
+            body: JSON.stringify(requestBody),
           });
       if (response.ok) {
         const responseText = await response.text().catch(() => '');
@@ -508,11 +523,76 @@ const syncHistoryEditsToSupabase = async (
           );
           continue;
         }
+        const returnedId = returned?.id ?? remoteId;
+        const verifyUrl = returnedId != null
+          ? `${url}/rest/v1/japam_history?id=eq.${encodeURIComponent(String(returnedId))}&select=id,completion_id,malas,count,created_at,user_id,user_name`
+          : `${url}/rest/v1/japam_history?completion_id=eq.${encodeURIComponent(payload.completion_id)}&select=id,completion_id,malas,count,created_at,user_id,user_name`;
+        const verifyResponse = await fetch(verifyUrl, {
+          method: 'GET',
+          headers: {
+            apikey: key,
+            Authorization: `Bearer ${accessToken}`,
+          },
+          cache: 'no-store',
+        });
+        const verifyText = await verifyResponse.text().catch(() => '');
+        let verifyBody: unknown = [];
+        try {
+          verifyBody = verifyText ? JSON.parse(verifyText) : [];
+        } catch {
+          verifyBody = verifyText;
+        }
+        console.log(
+          '[HISTORY_EDIT_VERIFY_RESPONSE] remoteId=%s completionId=%s status=%d body=%s',
+          returnedId != null ? String(returnedId) : 'none',
+          record.completionId,
+          verifyResponse.status,
+          typeof verifyBody === 'string' ? verifyBody : JSON.stringify(verifyBody),
+        );
+        if (!verifyResponse.ok) {
+          if (verifyResponse.status === 401 || verifyResponse.status === 403) rlsBlocked = true;
+          console.log(
+            '[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=verify-read-failed remoteId=%s status=%d',
+            record.completionId,
+            returnedId != null ? String(returnedId) : 'none',
+            verifyResponse.status,
+          );
+          continue;
+        }
+        const verifyRows = Array.isArray(verifyBody) ? verifyBody as Array<{
+          id?: number | string;
+          completion_id?: string;
+          malas?: number | string;
+          count?: number | string;
+        }> : [];
+        if (verifyRows.length === 0) {
+          console.log(
+            '[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=verify-zero-rows remoteId=%s',
+            record.completionId,
+            returnedId != null ? String(returnedId) : 'none',
+          );
+          continue;
+        }
+        const verified = verifyRows[0];
+        const verifiedMalas = Number(verified?.malas) || 0;
+        const verifiedCount = Number(verified?.count) || 0;
+        if (verifiedMalas !== payload.malas || verifiedCount !== payload.count) {
+          console.log(
+            '[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=verify-mismatch remoteId=%s expectedMalas=%d expectedCount=%d dbMalas=%d dbCount=%d',
+            record.completionId,
+            returnedId != null ? String(returnedId) : 'none',
+            payload.malas,
+            payload.count,
+            verifiedMalas,
+            verifiedCount,
+          );
+          continue;
+        }
         syncedIds.push(record.completionId);
         console.log(
           '[HISTORY_EDIT_SYNC_SUCCESS] completionId=%s remoteId=%s malas=%d count=%d',
           record.completionId,
-          remoteId != null ? String(remoteId) : 'none',
+          returnedId != null ? String(returnedId) : 'none',
           payload.malas,
           payload.count,
         );
