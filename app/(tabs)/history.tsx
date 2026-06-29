@@ -1228,9 +1228,11 @@ export default function HistoryScreen() {
           style={({ pressed }) => [styles.headerAddButton, pressed && { opacity: 0.7 }]}
           onPress={openAddModal}
           accessibilityLabel="Add Japam"
+          accessibilityRole="button"
           hitSlop={8}
         >
-          <Ionicons name="add" size={28} color="#ffffff" />
+          <Ionicons name="add" size={20} color="#ffffff" />
+          <Text style={styles.headerAddButtonText}>Add Japam</Text>
         </Pressable>
       </View>
       <View style={styles.simpleSummary}>
@@ -1375,7 +1377,14 @@ export default function HistoryScreen() {
           <Text style={[styles.tableCell, styles.numHeaderCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Malas</Text>
           <Text style={[styles.tableCell, styles.numHeaderCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Count</Text>
           <Text style={[styles.tableCell, styles.totalHeaderCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Total</Text>
-          <View style={styles.rowActions} />
+          <Text
+            style={[styles.tableCell, styles.actionsHeaderCell, styles.tableHeaderText]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.9}
+          >
+            Actions
+          </Text>
         </View>
 
         {dailyRows.length === 0 ? (
@@ -1395,21 +1404,33 @@ export default function HistoryScreen() {
                 <Text style={[styles.tableCell, styles.totalCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.accumulated}</Text>
                 <View style={styles.rowActions}>
                   <Pressable
-                    style={({ pressed }) => [styles.rowActionButton, pressed && { opacity: 0.5 }]}
+                    style={({ pressed }) => [
+                      styles.rowActionButton,
+                      styles.rowActionEditButton,
+                      pressed && { opacity: 0.5 },
+                    ]}
                     onPress={() => {
                       console.log('[EDIT_ICON_PRESS] dateKey=%s malas=%d', row.dateKey, row.malas);
                       openEditModal(row);
                     }}
                     accessibilityLabel={`Edit ${row.dateLabel}`}
-                    hitSlop={8}
+                    accessibilityHint="Opens this day's malas for editing"
+                    accessibilityRole="button"
+                    hitSlop={4}
                   >
                     <Ionicons name="pencil-outline" size={19} color="#0f766e" />
                   </Pressable>
                   <Pressable
-                    style={({ pressed }) => [styles.rowActionButton, pressed && { opacity: 0.5 }]}
+                    style={({ pressed }) => [
+                      styles.rowActionButton,
+                      styles.rowActionDeleteButton,
+                      pressed && { opacity: 0.5 },
+                    ]}
                     onPress={() => confirmDeleteDay(row)}
                     accessibilityLabel={`Delete ${row.dateLabel}`}
-                    hitSlop={8}
+                    accessibilityHint="Deletes this day's history rows"
+                    accessibilityRole="button"
+                    hitSlop={4}
                   >
                     <Ionicons name="trash-outline" size={20} color="#6b7280" />
                   </Pressable>
@@ -1489,12 +1510,20 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 0,
     top: 0,
-    width: 46,
-    height: 46,
+    minHeight: 46,
     borderRadius: 23,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#0f8a87',
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 14,
+  },
+
+  headerAddButtonText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '800',
   },
 
   title: {
@@ -1759,20 +1788,39 @@ const styles = StyleSheet.create({
   numCell: { flex: NUM_CELL_FLEX, textAlign: 'center' },
   totalHeaderCell: { flex: TOTAL_CELL_FLEX, textAlign: 'center' },
   totalCell: { flex: TOTAL_CELL_FLEX, textAlign: 'center' },
+  actionsHeaderCell: {
+    width: 112,
+    flexGrow: 0,
+    flexShrink: 0,
+    textAlign: 'center',
+  },
 
   rowActions: {
-    width: 76,
+    width: 112,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 2,
+    gap: 8,
   },
 
   rowActionButton: {
-    width: 34,
+    width: 44,
     height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+
+  rowActionEditButton: {
+    backgroundColor: 'rgba(15, 138, 135, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(15, 118, 110, 0.22)',
+  },
+
+  rowActionDeleteButton: {
+    backgroundColor: 'rgba(107, 114, 128, 0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(107, 114, 128, 0.18)',
   },
 
   emptyRow: {

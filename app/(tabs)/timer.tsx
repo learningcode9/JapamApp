@@ -43,6 +43,7 @@ import {
   signInOrLinkGoogle,
   showGoogleAccountCollisionDialog,
 } from '../../lib/anonymousAuth';
+import { supabase } from '../../lib/supabase';
 
 WebBrowser.maybeCompleteAuthSession();
 
