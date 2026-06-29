@@ -28,13 +28,16 @@ create policy "anon manage deleted_completions"
   using (true)
   with check (true);
 
--- 3) Allow the app (anon) to DELETE rows from japam_history.
---    Without this, japam_history.DELETE is blocked by RLS and a deleted mala would stay in
---    Supabase (only tombstoned). With it, the row is actually removed so Supabase deduped
---    counts match the app exactly.
+-- 3) Allow authenticated users to DELETE only their own rows from japam_history.
+--    This mirrors the ownership-based UPDATE check and prevents authenticated app deletes from
+--    silently affecting zero rows under RLS.
 drop policy if exists "anon delete japam_history" on public.japam_history;
-create policy "anon delete japam_history"
+drop policy if exists "Users can delete their own history" on public.japam_history;
+create policy "Users can delete their own history"
   on public.japam_history
   for delete
-  to anon
-  using (true);
+  to authenticated
+  using (
+    (auth.uid()::text = user_id)
+    or ((auth.jwt() -> 'user_metadata' ->> 'sub') = user_id)
+  );
