@@ -1519,7 +1519,7 @@ const styles = StyleSheet.create({
   header: {
     width: '100%',
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'center',
     justifyContent: 'space-between',
     gap: 12,
     marginBottom: 18,
@@ -1589,9 +1589,11 @@ const styles = StyleSheet.create({
 
   exportBtn: {
     backgroundColor: '#0f8a87',
-    paddingVertical: 8,
-    paddingHorizontal: 14,
+    minHeight: 44,
+    paddingHorizontal: 18,
     borderRadius: 999,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 
   exportBtnText: {
