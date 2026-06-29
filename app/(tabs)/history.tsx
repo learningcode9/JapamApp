@@ -779,10 +779,6 @@ export default function HistoryScreen() {
       }
     }
 
-    console.log('[DIAG_BEFORE_SET_ROWS] session_count=%d malas_per_session=%o',
-      sessions.length,
-      sessions.map((s) => ({ completionId: s.completionId, date: s.date, malas: s.malas, syncStatus: s.syncStatus }))
-    );
     setDailyRows(buildDailyRows(sessions));
   }, []);
 
@@ -939,16 +935,12 @@ export default function HistoryScreen() {
 
   const saveEditJapam = useCallback(async () => {
     const row = editingRow;
-    console.log('[DIAG_SAVE_START] row=%s editMalas=%d rowMalas=%d isSaving=%s hasRow=%s',
-      row?.dateKey, editMalas, row?.malas, isSaving, Boolean(row));
     if (!row || isSaving) return;
     if (editMalas === row.malas) {
-      console.log('[DIAG_SAVE_EARLY_RETURN] reason=no_change editMalas=%d rowMalas=%d', editMalas, row.malas);
       setEditingRow(null);
       return;
     }
     if (editMalas === 0) {
-      console.log('[DIAG_SAVE_EARLY_RETURN] reason=zero_triggers_delete');
       setEditingRow(null);
       confirmDeleteDay(row);
       return;
@@ -959,28 +951,13 @@ export default function HistoryScreen() {
       const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
       const currentHistory = parseHistory(raw);
-      console.log('[DIAG_PLAN_INPUT] currentUserId=%s dayKey=%s editMalas=%d historyLen=%d dayRecords=%o',
-        currentUserId,
-        row.dateKey,
-        editMalas,
-        currentHistory.length,
-        currentHistory
-          .filter((r) => {
-            const rDate = (r as Session).date;
-            return rDate ? rDate.startsWith(row.dateKey) : false;
-          })
-          .map((r) => ({ completionId: (r as Session).completionId, userId: (r as Session).userId, malas: (r as Session).malas, date: (r as Session).date, syncStatus: (r as Session).syncStatus }))
-      );
       const plan = planHistoryDayAdjustment(
         currentHistory,
         currentUserId,
         row.dateKey,
         editMalas
       );
-      console.log('[DIAG_PLAN_RESULT] changed=%s currentMalas=%d targetMalas=%d updates=%d deletes=%d',
-        plan.changed, plan.currentMalas, plan.targetMalas, plan.recordsToUpdate.length, plan.recordsToDelete.length);
       if (!plan.changed) {
-        console.log('[DIAG_SAVE_EARLY_RETURN] reason=plan_unchanged');
         setEditingRow(null);
         return;
       }
@@ -1011,20 +988,6 @@ export default function HistoryScreen() {
           plan.recordsToUpdate.length,
           plan.recordsToDelete.length
         );
-        // Verify what was actually written
-        const writeVerifyRaw = await AsyncStorage.getItem(HISTORY_KEY);
-        const writeVerifyHistory = parseHistory(writeVerifyRaw);
-        const dayKey = row.dateKey;
-        console.log('[DIAG_AFTER_LOCAL_WRITE] dayKey=%s writtenRecords=%o',
-          dayKey,
-          writeVerifyHistory
-            .filter((r) => {
-              const rDate = (r as Session).date;
-              return rDate ? rDate.startsWith(dayKey) : false;
-            })
-            .map((r) => ({ completionId: (r as Session).completionId, malas: (r as Session).malas, syncStatus: (r as Session).syncStatus }))
-        );
-
         if (currentUserId) {
           const { userName } = await getStoredUserMeta();
           // Close modal immediately so the user sees the local update while sync runs.
@@ -1329,11 +1292,7 @@ export default function HistoryScreen() {
             <View style={styles.stepperRow}>
               <Pressable
                 style={styles.stepperButton}
-                onPress={() => setEditMalas((value) => {
-                  const next = Math.max(0, value - 1);
-                  console.log('[DIAG_STEPPER] dec %d->%d', value, next);
-                  return next;
-                })}
+                onPress={() => setEditMalas((value) => Math.max(0, value - 1))}
                 accessibilityLabel="Decrease malas"
               >
                 <Ionicons name="remove" size={24} color="#0f766e" />
@@ -1341,11 +1300,7 @@ export default function HistoryScreen() {
               <Text style={styles.stepperValue}>{editMalas}</Text>
               <Pressable
                 style={styles.stepperButton}
-                onPress={() => setEditMalas((value) => {
-                  const next = value + 1;
-                  console.log('[DIAG_STEPPER] inc %d->%d', value, next);
-                  return next;
-                })}
+                onPress={() => setEditMalas((value) => value + 1)}
                 accessibilityLabel="Increase malas"
               >
                 <Ionicons name="add" size={24} color="#0f766e" />
