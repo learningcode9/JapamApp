@@ -52,9 +52,9 @@ const isTablet = HISTORY_SCREEN_WIDTH >= 768;
 // Raised again from an earlier pass (13/15/17) that fixed wrapping but left headers reading as
 // too small — "Date"/"Malas"/"Count"/"Total" are short single words with plenty of headroom to
 // grow without reintroducing wrapping, unlike Groups Dashboard's longer "Lifetime Malas" labels.
-const TABLE_HEADER_FONT_SIZE = isTablet ? 20 : isNarrowPhone ? 16 : 18;
-const TABLE_VALUE_FONT_SIZE = isTablet ? 19 : isNarrowPhone ? 14 : 15;
-const TABLE_CELL_PADDING_H = isNarrowPhone ? 2 : isTablet ? 8 : 4;
+const TABLE_HEADER_FONT_SIZE = isTablet ? 20 : isNarrowPhone ? 14 : 18;
+const TABLE_VALUE_FONT_SIZE = isTablet ? 19 : isNarrowPhone ? 13 : 15;
+const TABLE_CELL_PADDING_H = isNarrowPhone ? 1 : isTablet ? 8 : 4;
 // Date is still the widest column on every breakpoint (longest realistic content: "19 Jun 2026"
 // on medium/tablet, "19 Jun" on narrow phones — see toDayLabel). All three breakpoints' Malas/
 // Count/Total flex shares were increased from their original values — at the bigger
@@ -64,11 +64,11 @@ const TABLE_CELL_PADDING_H = isNarrowPhone ? 2 : isTablet ? 8 : 4;
 // the same width — bold, round-bodied letters (C/o/u/n) render wider per-character than "Malas"'s
 // mix of narrow letters (M/a/l/a/s) despite both being 5-character words. Took the extra width
 // from Date, which already has more headroom than any other column (see comment above).
-const DATE_CELL_FLEX = isNarrowPhone ? 1.45 : isTablet ? 1.7 : 1.6;
-const NUM_CELL_FLEX = isNarrowPhone ? 0.82 : isTablet ? 0.92 : 0.86;
-const TOTAL_CELL_FLEX = isNarrowPhone ? 0.94 : isTablet ? 1.04 : 0.98;
-const DATE_MIN_WIDTH = isNarrowPhone ? 104 : isTablet ? 156 : 128;
-const ACTIONS_COLUMN_WIDTH = isNarrowPhone ? 96 : isTablet ? 120 : 104;
+const DATE_CELL_FLEX = isNarrowPhone ? 1.28 : isTablet ? 1.7 : 1.6;
+const NUM_CELL_FLEX = isNarrowPhone ? 0.8 : isTablet ? 0.92 : 0.86;
+const TOTAL_CELL_FLEX = isNarrowPhone ? 0.88 : isTablet ? 1.04 : 0.98;
+const DATE_MIN_WIDTH = isNarrowPhone ? 78 : isTablet ? 156 : 128;
+const ACTIONS_COLUMN_WIDTH = isNarrowPhone ? 92 : isTablet ? 120 : 104;
 
 type Session = {
   date: string;
@@ -1388,8 +1388,8 @@ export default function HistoryScreen() {
             <Text style={[styles.cellText, styles.numericText, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Total</Text>
           </View>
           <View style={[styles.columnCell, styles.actionsColumn]}>
-            <Text style={[styles.cellText, styles.numericText, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>
-              {' '}
+            <Text style={[styles.cellText, styles.actionsHeaderText, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>
+              Actions
             </Text>
           </View>
         </View>
@@ -1517,16 +1517,17 @@ const styles = StyleSheet.create({
   },
 
   header: {
-    alignItems: 'center',
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: 12,
     marginBottom: 18,
-    position: 'relative',
-    minHeight: 48,
+    minHeight: 52,
   },
 
   headerAddButton: {
-    position: 'absolute',
-    right: 0,
-    top: 0,
+    flexShrink: 0,
     minHeight: 46,
     borderRadius: 23,
     alignItems: 'center',
@@ -1534,21 +1535,24 @@ const styles = StyleSheet.create({
     backgroundColor: '#0f8a87',
     flexDirection: 'row',
     gap: 6,
-    paddingHorizontal: 14,
+    paddingHorizontal: isNarrowPhone ? 16 : 18,
+    minWidth: isNarrowPhone ? 176 : 0,
   },
 
   headerAddButtonText: {
     color: '#ffffff',
-    fontSize: 15,
+    fontSize: isNarrowPhone ? 14 : 15,
     fontWeight: '800',
   },
 
   title: {
     color: '#102f34',
-    fontSize: 36,
+    flexShrink: 1,
+    fontSize: isNarrowPhone ? 32 : 36,
     fontWeight: '900',
-    marginBottom: 4,
-    textAlign: 'center',
+    marginBottom: 0,
+    paddingBottom: 2,
+    textAlign: 'left',
   },
 
   subtitle: {
@@ -1580,7 +1584,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     gap: 10,
-    marginBottom: 14,
+    marginBottom: 18,
   },
 
   exportBtn: {
@@ -1802,11 +1806,12 @@ const styles = StyleSheet.create({
   // Small negative letterSpacing shaves a few px off bold header text width without shrinking
   // fontSize — keeps the senior-friendly size while giving "Count" the room it needs to stop
   // clipping at narrow/medium widths.
-  tableHeaderText: { fontSize: TABLE_HEADER_FONT_SIZE, letterSpacing: -0.2 },
+  tableHeaderText: { fontSize: TABLE_HEADER_FONT_SIZE, letterSpacing: isNarrowPhone ? -0.1 : -0.2 },
   // Malas/Count hold shorter values (e.g. "10", "1080") than Total's running accumulation
   // (e.g. "26784"), so Total gets a bit more room. Centered per requirement — Date stays
   // left-aligned (its default), these three numeric columns are explicitly centered.
   numericText: { textAlign: 'center' },
+  actionsHeaderText: { textAlign: 'center' },
   numColumn: {
     flexBasis: 0,
     flexGrow: NUM_CELL_FLEX,
@@ -1828,13 +1833,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    gap: isNarrowPhone ? 4 : 8,
   },
 
   rowActionButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: isNarrowPhone ? 40 : 44,
+    height: isNarrowPhone ? 40 : 44,
+    borderRadius: isNarrowPhone ? 20 : 22,
     alignItems: 'center',
     justifyContent: 'center',
   },
