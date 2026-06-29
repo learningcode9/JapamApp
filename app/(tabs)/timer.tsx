@@ -35,6 +35,7 @@ import {
   formatTimer,
   useTimer,
 } from '../../contexts/timer-context';
+import { ResponseType } from 'expo-auth-session';
 import { isIOSDeviceWeb, isStandaloneOrInstalledWeb } from '../../lib/pwaInstall';
 import {
   signInAsGuest,
@@ -160,13 +161,31 @@ export default function TimerScreen() {
   const deferredInstallPromptRef = useRef<any>(null);
   const isIosDeviceWeb = isIOSDeviceWeb();
 
+  const rawNonceRef = useRef<string>('');
+  const [hashedNonce, setHashedNonce] = useState<string>('');
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const arr = new Uint8Array(16);
+    crypto.getRandomValues(arr);
+    const raw = Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('');
+    rawNonceRef.current = raw;
+    console.log('[NONCE_GEN] timer raw_prefix=%s', raw.slice(0, 8));
+    void crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw)).then((buf) => {
+      const hashed = Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
+      console.log('[NONCE_GEN] timer hashed_prefix=%s', hashed.slice(0, 8));
+      setHashedNonce(hashed);
+    });
+  }, []);
+
 
   const [request, response, promptAsync] = Google.useAuthRequest({
     webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
     androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
     clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
-    scopes: ['profile', 'email'],
+    scopes: ['openid', 'profile', 'email'],
     redirectUri: Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : undefined,
+    responseType: Platform.OS === 'web' ? ResponseType.IdToken : undefined,
+    extraParams: Platform.OS === 'web' && hashedNonce ? { nonce: hashedNonce } : undefined,
   });
 
   const loadUser = useCallback(async () => {
@@ -495,6 +514,7 @@ export default function TimerScreen() {
     const handleGoogleLogin = async () => {
       if (!response) return;
 
+      console.log('[AUTH_CALLBACK] source=timer-web response.type=%s', response.type);
       if (response.type !== 'success') {
         setIsSigningIn(false);
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
@@ -513,8 +533,15 @@ export default function TimerScreen() {
       const accessToken =
         authentication?.accessToken ||
         ('params' in response ? response.params?.access_token : undefined);
+      const idToken =
+        authentication?.idToken ||
+        ('params' in response ? (response.params as Record<string, string>)?.id_token : undefined);
 
-      if (!accessToken) {
+      console.log('[AUTH_CALLBACK] source=timer-web hasIdToken=%s hasAccessToken=%s paramKeys=%s',
+        !!idToken, !!accessToken,
+        'params' in response ? Object.keys(response.params ?? {}).join(',') : 'none');
+
+      if (!accessToken && !idToken) {
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         setIsSigningIn(false);
         setShowUserModal(true);
@@ -523,6 +550,19 @@ export default function TimerScreen() {
       }
 
       try {
+        if (idToken) {
+          console.log('[SUPABASE_AUTH] timer nonce_prefix=%s', rawNonceRef.current.slice(0, 8));
+          const { error: supaAuthError } = await supabase.auth.signInWithIdToken({
+            provider: 'google',
+            token: idToken,
+            nonce: rawNonceRef.current,
+          });
+          if (supaAuthError) console.log('[SUPABASE_AUTH] timer signInWithIdToken error:', supaAuthError.message);
+          else console.log('[SUPABASE_AUTH] timer web session established');
+        } else {
+          console.log('[SUPABASE_AUTH] timer no id_token — session not established');
+        }
+
         const session = (await supabase.auth.getSession()).data.session;
         const sessionIsAnonymous =
           !!((session?.user as { is_anonymous?: boolean } | undefined)?.is_anonymous);
@@ -541,14 +581,31 @@ export default function TimerScreen() {
           return;
         }
 
-        const userInfoResponse = await fetch('https://www.googleapis.com/userinfo/v2/me', {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
+        let googleUserId: string;
+        let googleName: string;
+        let googleEmail: string;
 
-        const userInfo = await userInfoResponse.json();
-        const googleName = userInfo?.given_name || userInfo?.name || userInfo?.email || 'User';
-        const googleEmail = userInfo?.email || '';
-        const googleUserId = String(userInfo?.id || '').trim();
+        if (accessToken) {
+          const userInfoResponse = await fetch('https://www.googleapis.com/userinfo/v2/me', {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          const userInfo = await userInfoResponse.json();
+          googleName = userInfo?.given_name || userInfo?.name || userInfo?.email || 'User';
+          googleEmail = userInfo?.email || '';
+          googleUserId = String(userInfo?.id || '').trim();
+        } else {
+          const claims = JSON.parse(
+            decodeURIComponent(
+              atob(idToken!.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))
+                .split('')
+                .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+                .join('')
+            )
+          ) as Record<string, unknown>;
+          googleUserId = String(claims.sub || '');
+          googleName = String(claims.given_name || claims.name || claims.email || 'User');
+          googleEmail = String(claims.email || '');
+        }
 
         if (!googleUserId) {
           setShowUserModal(true);

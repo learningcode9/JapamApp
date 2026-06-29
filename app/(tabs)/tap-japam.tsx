@@ -16,6 +16,7 @@ import {
 import { getWebOmAudioUri } from '../../lib/webOmAudio';
 import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
+import { ResponseType } from 'expo-auth-session';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import * as Notifications from 'expo-notifications';
@@ -551,11 +552,29 @@ export default function JapamMain() {
   }, [clearTimerHandles]);
   startTimerIntervalRef.current = startTimerInterval;
 
+  const rawNonceRef = useRef<string>('');
+  const [hashedNonce, setHashedNonce] = useState<string>('');
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const arr = new Uint8Array(16);
+    crypto.getRandomValues(arr);
+    const raw = Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('');
+    rawNonceRef.current = raw;
+    console.log('[NONCE_GEN] tap-japam raw_prefix=%s', raw.slice(0, 8));
+    void crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw)).then((buf) => {
+      const hashed = Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
+      console.log('[NONCE_GEN] tap-japam hashed_prefix=%s', hashed.slice(0, 8));
+      setHashedNonce(hashed);
+    });
+  }, []);
+
   const [request, response, promptAsync] = Google.useAuthRequest({
     webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
     clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
-    scopes: ['profile', 'email'],
+    scopes: ['openid', 'profile', 'email'],
     redirectUri: Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : undefined,
+    responseType: Platform.OS === 'web' ? ResponseType.IdToken : undefined,
+    extraParams: Platform.OS === 'web' && hashedNonce ? { nonce: hashedNonce } : undefined,
   });
 
   useFocusEffect(
@@ -1342,6 +1361,7 @@ export default function JapamMain() {
       if (Platform.OS !== 'web') return; // native platforms use handleNativeGoogleSignIn
       if (!response) return;
 
+      console.log('[AUTH_CALLBACK] source=tap-japam-web response.type=%s', response.type);
       if (response.type !== 'success') {
         setIsSigningIn(false);
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
@@ -1360,8 +1380,15 @@ export default function JapamMain() {
       const accessToken =
         authentication?.accessToken ||
         ('params' in response ? response.params?.access_token : undefined);
+      const idToken =
+        authentication?.idToken ||
+        ('params' in response ? (response.params as Record<string, string>)?.id_token : undefined);
 
-      if (!accessToken) {
+      console.log('[AUTH_CALLBACK] source=tap-japam-web hasIdToken=%s hasAccessToken=%s paramKeys=%s',
+        !!idToken, !!accessToken,
+        'params' in response ? Object.keys(response.params ?? {}).join(',') : 'none');
+
+      if (!accessToken && !idToken) {
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         setIsSigningIn(false);
         setShowUserModal(true);
@@ -1370,6 +1397,19 @@ export default function JapamMain() {
       }
 
       try {
+        if (idToken) {
+          console.log('[SUPABASE_AUTH] tap-japam nonce_prefix=%s', rawNonceRef.current.slice(0, 8));
+          const { error: supaAuthError } = await supabase.auth.signInWithIdToken({
+            provider: 'google',
+            token: idToken,
+            nonce: rawNonceRef.current,
+          });
+          if (supaAuthError) console.log('[SUPABASE_AUTH] tap-japam signInWithIdToken error:', supaAuthError.message);
+          else console.log('[SUPABASE_AUTH] tap-japam web session established');
+        } else {
+          console.log('[SUPABASE_AUTH] tap-japam no id_token — session not established');
+        }
+
         const session = (await supabase.auth.getSession()).data.session;
         const sessionIsAnonymous =
           !!((session?.user as { is_anonymous?: boolean } | undefined)?.is_anonymous);
@@ -1387,14 +1427,31 @@ export default function JapamMain() {
           return;
         }
 
-        const userInfoResponse = await fetch('https://www.googleapis.com/userinfo/v2/me', {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
+        let googleUserId: string;
+        let googleName: string;
+        let googleEmail: string;
 
-        const userInfo = await userInfoResponse.json();
-        const googleName = userInfo?.given_name || userInfo?.name || userInfo?.email || 'User';
-        const googleEmail = userInfo?.email || '';
-        const googleUserId = String(userInfo?.id || '').trim();
+        if (accessToken) {
+          const userInfoResponse = await fetch('https://www.googleapis.com/userinfo/v2/me', {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          const userInfo = await userInfoResponse.json();
+          googleName = userInfo?.given_name || userInfo?.name || userInfo?.email || 'User';
+          googleEmail = userInfo?.email || '';
+          googleUserId = String(userInfo?.id || '').trim();
+        } else {
+          const claims = JSON.parse(
+            decodeURIComponent(
+              atob(idToken!.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))
+                .split('')
+                .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+                .join('')
+            )
+          ) as Record<string, unknown>;
+          googleUserId = String(claims.sub || '');
+          googleName = String(claims.given_name || claims.name || claims.email || 'User');
+          googleEmail = String(claims.email || '');
+        }
 
         if (!googleUserId) {
           setShowUserModal(true);
