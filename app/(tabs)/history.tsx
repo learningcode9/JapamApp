@@ -113,6 +113,11 @@ type ManualSyncInput = {
   completionId: string;
 };
 
+type DeleteTarget = {
+  completionId: string;
+  remoteId?: string | number;
+};
+
 type AddDateMode = 'today' | 'yesterday' | 'custom';
 
 const HISTORY_KEY = 'history';
@@ -757,14 +762,24 @@ export default function HistoryScreen() {
   // Tombstone-based delete: remove the records locally, record a tombstone (so self-heal never
   // re-uploads them and other devices delete their copy on sync), and best-effort delete remote
   // now. If offline, the local tombstone is pushed by syncPendingHistory on the next sync.
-  const performDelete = useCallback(async (completionIds: string[]) => {
+  const performDelete = useCallback(async (completionIds: string[], options?: { day?: string }) => {
     if (!completionIds.length) {
       console.log('[DELETE_SKIPPED_REASON] reason=no-completion-ids');
       return;
     }
-    console.log('[DELETE_START] count=%d ids=%s', completionIds.length, completionIds.join(','));
+    console.log(
+      '[HISTORY_DELETE_START] day=%s ids=%s',
+      options?.day || 'unknown',
+      completionIds.join(',')
+    );
     const ids = new Set(completionIds);
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    const raw = await AsyncStorage.getItem(HISTORY_KEY);
+    const local = parseHistory(raw);
+    const deleteTargets: DeleteTarget[] = completionIds.map((completionId) => {
+      const match = local.find((item) => item.completionId === completionId);
+      return { completionId, remoteId: match?.remoteId };
+    });
 
     // 1) Write the tombstone FIRST. loadHistory honors this set, so even a same-tick remote
     //    fetch can never resurrect the record while the remote delete is still in flight.
@@ -777,8 +792,6 @@ export default function HistoryScreen() {
     console.log('[DELETE_TOMBSTONE_CREATED] count=%d ids=%s', completionIds.length, completionIds.join(','));
 
     // 2) Remove the records from local history.
-    const raw = await AsyncStorage.getItem(HISTORY_KEY);
-    const local = parseHistory(raw);
     const filtered = local.filter((item) => !ids.has((item as Session).completionId as string));
     await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(filtered));
     console.log('[DELETE_LOCAL_REMOVED] removed=%d remaining=%d', local.length - filtered.length, filtered.length);
@@ -798,30 +811,85 @@ export default function HistoryScreen() {
     const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
     const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
     if (url && key && currentUserId) {
-      for (const id of completionIds) {
+      const deleteToken = (await supabase.auth.getSession()).data.session?.access_token;
+      if (!deleteToken) {
+        console.log('[DELETE_REMOTE_FAILED] reason=no-session-jwt queued=via-tombstone');
+        return;
+      }
+      for (const target of deleteTargets) {
+        const deleteUrl = target.remoteId != null
+          ? `${url}/rest/v1/japam_history?id=eq.${encodeURIComponent(String(target.remoteId))}`
+          : `${url}/rest/v1/japam_history?completion_id=eq.${encodeURIComponent(target.completionId)}`;
         try {
           await fetch(`${url}/rest/v1/deleted_completions?on_conflict=completion_id`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               apikey: key,
-              Authorization: `Bearer ${key}`,
+              Authorization: `Bearer ${deleteToken}`,
               Prefer: 'return=minimal,resolution=merge-duplicates',
             },
-            body: JSON.stringify({ completion_id: id, user_id: currentUserId }),
+            body: JSON.stringify({ completion_id: target.completionId, user_id: currentUserId }),
           });
-          const accessToken = (await supabase.auth.getSession()).data.session?.access_token || key;
-          await fetch(`${url}/rest/v1/japam_history?completion_id=eq.${encodeURIComponent(id)}`, {
+          console.log(
+            '[HISTORY_DELETE_REQUEST] completionId=%s remoteId=%s auth=%s',
+            target.completionId,
+            target.remoteId != null ? String(target.remoteId) : 'none',
+            'jwt'
+          );
+          const response = await fetch(deleteUrl, {
             method: 'DELETE',
-            headers: { apikey: key, Authorization: `Bearer ${accessToken}`, Prefer: 'return=minimal' },
+            headers: { apikey: key, Authorization: `Bearer ${deleteToken}`, Prefer: 'return=representation' },
           });
-          console.log('[DELETE_REMOTE_REMOVED] completionId=%s', id);
+          const contentRange = response.headers.get('content-range') || '';
+          const responseText = await response.text().catch(() => '');
+          let responseBody: unknown = [];
+          try {
+            responseBody = responseText ? JSON.parse(responseText) : [];
+          } catch {
+            responseBody = responseText;
+          }
+          console.log(
+            '[HISTORY_DELETE_RESPONSE] status=%d body=%s contentRange=%s',
+            response.status,
+            typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody),
+            contentRange
+          );
+          if (!response.ok) {
+            console.log(
+              '[DELETE_REMOTE_FAILED] completionId=%s remoteId=%s status=%d',
+              target.completionId,
+              target.remoteId != null ? String(target.remoteId) : 'none',
+              response.status
+            );
+            continue;
+          }
+          const returnedRows = Array.isArray(responseBody) ? responseBody as Array<{ id?: string | number }> : [];
+          if (returnedRows.length === 0) {
+            console.log(
+              '[HISTORY_DELETE_ZERO_ROWS] completionId=%s remoteId=%s status=%d body=%s',
+              target.completionId,
+              target.remoteId != null ? String(target.remoteId) : 'none',
+              response.status,
+              typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)
+            );
+            continue;
+          }
+          console.log(
+            '[HISTORY_DELETE_SUCCESS] completionId=%s remoteId=%s',
+            target.completionId,
+            target.remoteId != null ? String(target.remoteId) : 'none'
+          );
         } catch {
-          console.log('[DELETE_REMOTE_FAILED] completionId=%s reason=network (queued via tombstone)', id);
+          console.log(
+            '[DELETE_REMOTE_FAILED] completionId=%s remoteId=%s reason=network (queued via tombstone)',
+            target.completionId,
+            target.remoteId != null ? String(target.remoteId) : 'none'
+          );
         }
       }
     } else {
-      console.log('[DELETE_REMOTE_REMOVED] skipped=offline-or-guest queued=via-tombstone');
+      console.log('[DELETE_REMOTE_FAILED] reason=offline-or-guest queued=via-tombstone');
     }
   }, []);
 
@@ -832,13 +900,13 @@ export default function HistoryScreen() {
     // react-native-web does not render Alert.alert, so use the browser's confirm dialog on web.
     if (Platform.OS === 'web') {
       if (typeof window !== 'undefined' && window.confirm(`${title}\n\n${message}`)) {
-        void performDelete(row.completionIds);
+        void performDelete(row.completionIds, { day: row.dateKey });
       }
       return;
     }
     Alert.alert(title, message, [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: () => void performDelete(row.completionIds) },
+      { text: 'Delete', style: 'destructive', onPress: () => void performDelete(row.completionIds, { day: row.dateKey }) },
     ]);
   }, [performDelete]);
 
@@ -874,7 +942,10 @@ export default function HistoryScreen() {
       // Reuse the existing tombstone/delete path for only the individual completions that the
       // adjustment reduced to zero. Every other completion for the day remains untouched.
       if (plan.recordsToDelete.length > 0) {
-        await performDelete(plan.recordsToDelete.map((record) => record.completionId));
+        await performDelete(
+          plan.recordsToDelete.map((record) => record.completionId),
+          { day: row.dateKey }
+        );
       }
 
       if (plan.recordsToUpdate.length > 0) {
