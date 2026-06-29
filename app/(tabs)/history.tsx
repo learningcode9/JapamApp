@@ -474,55 +474,11 @@ const syncHistoryEditsToSupabase = async (
             body: JSON.stringify(requestBody),
           });
       if (response.ok) {
-        const responseText = await response.text().catch(() => '');
-        let responseBody: unknown = [];
-        try {
-          responseBody = responseText ? JSON.parse(responseText) : [];
-        } catch {
-          responseBody = responseText;
-        }
-        console.log(
-          '[HISTORY_EDIT_REMOTE_RESPONSE] remoteId=%s completionId=%s status=%d body=%s',
-          remoteId != null ? String(remoteId) : 'none',
-          record.completionId,
-          response.status,
-          typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody),
-        );
-
-        const returnedRows = Array.isArray(responseBody) ? responseBody as Array<{
-          id?: number | string;
-          malas?: number | string;
-          count?: number | string;
-        }> : [];
-        if (returnedRows.length === 0) {
-          console.log(
-            '[HISTORY_EDIT_ZERO_ROWS] remoteId=%s completionId=%s status=%d body=%s',
-            remoteId != null ? String(remoteId) : 'none',
-            record.completionId,
-            response.status,
-            typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody),
-          );
-          continue;
-        }
-
-        const returned = returnedRows[0];
-        const returnedMalas = Number(returned?.malas) || 0;
-        const returnedCount = Number(returned?.count) || 0;
-        if (returnedMalas !== payload.malas || returnedCount !== payload.count) {
-          console.log(
-            '[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=mismatch remoteId=%s expectedMalas=%d expectedCount=%d actualMalas=%d actualCount=%d',
-            record.completionId,
-            remoteId != null ? String(remoteId) : 'none',
-            payload.malas,
-            payload.count,
-            returnedMalas,
-            returnedCount,
-          );
-          continue;
-        }
-        const returnedId = returned?.id ?? remoteId;
-        const verifyUrl = returnedId != null
-          ? `${url}/rest/v1/japam_history?id=eq.${encodeURIComponent(String(returnedId))}&select=id,completion_id,malas,count,created_at,user_id,user_name`
+        // Always verify via a separate GET — do not trust the PATCH response body alone.
+        // Supabase can return 200 with [] when RLS blocks SELECT-back even though the UPDATE
+        // succeeded, or when the id filter matched nothing. The verify GET is the ground truth.
+        const verifyUrl = remoteId != null
+          ? `${url}/rest/v1/japam_history?id=eq.${encodeURIComponent(String(remoteId))}&select=id,completion_id,malas,count,created_at,user_id,user_name`
           : `${url}/rest/v1/japam_history?completion_id=eq.${encodeURIComponent(payload.completion_id)}&select=id,completion_id,malas,count,created_at,user_id,user_name`;
         const verifyResponse = await fetch(verifyUrl, {
           method: 'GET',
@@ -532,30 +488,19 @@ const syncHistoryEditsToSupabase = async (
           },
           cache: 'no-store',
         });
-        const verifyText = await verifyResponse.text().catch(() => '');
-        let verifyBody: unknown = [];
-        try {
-          verifyBody = verifyText ? JSON.parse(verifyText) : [];
-        } catch {
-          verifyBody = verifyText;
-        }
-        console.log(
-          '[HISTORY_EDIT_VERIFY_RESPONSE] remoteId=%s completionId=%s status=%d body=%s',
-          returnedId != null ? String(returnedId) : 'none',
-          record.completionId,
-          verifyResponse.status,
-          typeof verifyBody === 'string' ? verifyBody : JSON.stringify(verifyBody),
-        );
         if (!verifyResponse.ok) {
           if (verifyResponse.status === 401 || verifyResponse.status === 403) rlsBlocked = true;
           console.log(
             '[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=verify-read-failed remoteId=%s status=%d',
             record.completionId,
-            returnedId != null ? String(returnedId) : 'none',
+            remoteId != null ? String(remoteId) : 'none',
             verifyResponse.status,
           );
           continue;
         }
+        const verifyText = await verifyResponse.text().catch(() => '');
+        let verifyBody: unknown = [];
+        try { verifyBody = verifyText ? JSON.parse(verifyText) : []; } catch { verifyBody = []; }
         const verifyRows = Array.isArray(verifyBody) ? verifyBody as Array<{
           id?: number | string;
           completion_id?: string;
@@ -566,18 +511,19 @@ const syncHistoryEditsToSupabase = async (
           console.log(
             '[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=verify-zero-rows remoteId=%s',
             record.completionId,
-            returnedId != null ? String(returnedId) : 'none',
+            remoteId != null ? String(remoteId) : 'none',
           );
           continue;
         }
         const verified = verifyRows[0];
+        const verifiedId = verified?.id ?? remoteId;
         const verifiedMalas = Number(verified?.malas) || 0;
         const verifiedCount = Number(verified?.count) || 0;
         if (verifiedMalas !== payload.malas || verifiedCount !== payload.count) {
           console.log(
             '[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=verify-mismatch remoteId=%s expectedMalas=%d expectedCount=%d dbMalas=%d dbCount=%d',
             record.completionId,
-            returnedId != null ? String(returnedId) : 'none',
+            remoteId != null ? String(remoteId) : 'none',
             payload.malas,
             payload.count,
             verifiedMalas,
@@ -589,7 +535,7 @@ const syncHistoryEditsToSupabase = async (
         console.log(
           '[HISTORY_EDIT_SYNC_SUCCESS] completionId=%s remoteId=%s malas=%d count=%d',
           record.completionId,
-          returnedId != null ? String(returnedId) : 'none',
+          verifiedId != null ? String(verifiedId) : 'none',
           payload.malas,
           payload.count,
         );
@@ -1045,31 +991,38 @@ export default function HistoryScreen() {
 
         if (currentUserId) {
           const { userName } = await getStoredUserMeta();
-          void (async () => {
-            const result = await syncHistoryEditsToSupabase(
-              plan.recordsToUpdate.map((update) => update.after),
-              currentUserId,
-              userName
+          // Close modal immediately so the user sees the local update while sync runs.
+          setEditingRow(null);
+          const result = await syncHistoryEditsToSupabase(
+            plan.recordsToUpdate.map((update) => update.after),
+            currentUserId,
+            userName
+          );
+          if (result.syncedIds.length > 0) {
+            const newestRaw = await AsyncStorage.getItem(HISTORY_KEY);
+            const newest = parseHistory(newestRaw);
+            await AsyncStorage.setItem(
+              HISTORY_KEY,
+              JSON.stringify(markSynced(newest, result.syncedIds))
             );
-            if (result.syncedIds.length > 0) {
-              const newestRaw = await AsyncStorage.getItem(HISTORY_KEY);
-              const newest = parseHistory(newestRaw);
-              await AsyncStorage.setItem(
-                HISTORY_KEY,
-                JSON.stringify(markSynced(newest, result.syncedIds))
-              );
-            }
-            if (result.rlsBlocked) {
-              Alert.alert(
-                'Could not sync edit',
-                'Supabase UPDATE permission is required. Your correction is saved on this device and remains pending.'
-              );
-            }
-          })();
+          } else if (result.rlsBlocked) {
+            Alert.alert(
+              'Could not sync edit',
+              'Permission denied. Your correction is saved on this device and will retry when you reload.'
+            );
+          } else {
+            Alert.alert(
+              'Edit not saved to database',
+              'The update reached the server but the row was not changed. This may be a temporary issue — please try again or reload.'
+            );
+          }
+        } else {
+          setEditingRow(null);
         }
+      } else {
+        setEditingRow(null);
       }
 
-      setEditingRow(null);
       await loadHistory();
       DeviceEventEmitter.emit('japam-stats-updated');
       DeviceEventEmitter.emit('japam-history-updated', { userId: currentUserId || 'guest' });
