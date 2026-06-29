@@ -45,30 +45,25 @@ const { width: HISTORY_SCREEN_WIDTH } = Dimensions.get('window');
 const isNarrowPhone = HISTORY_SCREEN_WIDTH < 380;
 const isTablet = HISTORY_SCREEN_WIDTH >= 768;
 
-// Deliberately sized per breakpoint instead of relying on adjustsFontSizeToFit's minimumFontScale
-// as the primary mechanism — that previously let header text shrink as low as 13 * 0.6 ≈ 7.8px on
-// narrow screens, which is unreadable. These are the actual rendered sizes; minimumFontScale below
-// is now only a small safety margin (0.9), never the thing doing the real work.
-// Raised again from an earlier pass (13/15/17) that fixed wrapping but left headers reading as
-// too small — "Date"/"Malas"/"Count"/"Total" are short single words with plenty of headroom to
-// grow without reintroducing wrapping, unlike Groups Dashboard's longer "Lifetime Malas" labels.
-const TABLE_HEADER_FONT_SIZE = isTablet ? 20 : isNarrowPhone ? 14 : 18;
+// Header font is sized so "Count" (widest 5-char header, because bold round letters C/o/u/n
+// render wider than M/a/l/a/s) never needs truncation at any supported breakpoint.
+// Cell padding is kept tight on phone widths so numeric columns have enough room for both
+// the header label and the data value below it. minimumFontScale={0.9} is a last-resort
+// safety net on native; on web text wrapping/overflow is prevented by the column widths below.
+const TABLE_HEADER_FONT_SIZE = isTablet ? 20 : isNarrowPhone ? 14 : 16;
 const TABLE_VALUE_FONT_SIZE = isTablet ? 19 : isNarrowPhone ? 13 : 15;
-const TABLE_CELL_PADDING_H = isNarrowPhone ? 1 : isTablet ? 8 : 4;
-// Date is still the widest column on every breakpoint (longest realistic content: "19 Jun 2026"
-// on medium/tablet, "19 Jun" on narrow phones — see toDayLabel). All three breakpoints' Malas/
-// Count/Total flex shares were increased from their original values — at the bigger
-// TABLE_HEADER_FONT_SIZE above, the old shares left "Malas"/"Count" clipping to "Mala"/"Coun" on
-// both narrow AND medium widths (confirmed visually during QA), not just narrow as first assumed.
-// "Count" still clipped to "Coun" at the previous NUM_CELL_FLEX even though "Malas" fit fine at
-// the same width — bold, round-bodied letters (C/o/u/n) render wider per-character than "Malas"'s
-// mix of narrow letters (M/a/l/a/s) despite both being 5-character words. Took the extra width
-// from Date, which already has more headroom than any other column (see comment above).
+const TABLE_CELL_PADDING_H = isNarrowPhone ? 1 : isTablet ? 8 : 2;
+// DATE_MIN_WIDTH must not crowd numeric columns. Longest realistic date label is "29 Jun 2026"
+// (~87dp at 15px bold SF/Roboto). Medium minWidth 96dp covers that with a small margin.
+// The previous value of 128dp forced date to claim 128dp even when its flex share was only
+// ~93dp, leaving only 30-44dp text space for numeric columns — causing "Coun..." clipping.
+// ACTIONS_COLUMN_WIDTH is sized to exactly fit Edit+Delete buttons plus minimal padding:
+// narrow 40+4+40=84dp, medium/tablet 44+8+44=96dp (+8dp breathing room on tablet).
 const DATE_CELL_FLEX = isNarrowPhone ? 1.28 : isTablet ? 1.7 : 1.6;
 const NUM_CELL_FLEX = isNarrowPhone ? 0.8 : isTablet ? 0.92 : 0.86;
 const TOTAL_CELL_FLEX = isNarrowPhone ? 0.88 : isTablet ? 1.04 : 0.98;
-const DATE_MIN_WIDTH = isNarrowPhone ? 78 : isTablet ? 156 : 128;
-const ACTIONS_COLUMN_WIDTH = isNarrowPhone ? 92 : isTablet ? 120 : 104;
+const DATE_MIN_WIDTH = isNarrowPhone ? 78 : isTablet ? 156 : 96;
+const ACTIONS_COLUMN_WIDTH = isNarrowPhone ? 84 : isTablet ? 104 : 96;
 
 type Session = {
   date: string;
