@@ -64,9 +64,11 @@ const TABLE_CELL_PADDING_H = isNarrowPhone ? 2 : isTablet ? 8 : 4;
 // the same width — bold, round-bodied letters (C/o/u/n) render wider per-character than "Malas"'s
 // mix of narrow letters (M/a/l/a/s) despite both being 5-character words. Took the extra width
 // from Date, which already has more headroom than any other column (see comment above).
-const DATE_CELL_FLEX = isNarrowPhone ? 1.2 : isTablet ? 1.4 : 1.4;
-const NUM_CELL_FLEX = isNarrowPhone ? 0.9 : isTablet ? 1.0 : 0.9;
-const TOTAL_CELL_FLEX = isNarrowPhone ? 1.0 : isTablet ? 1.1 : 1.0;
+const DATE_CELL_FLEX = isNarrowPhone ? 1.45 : isTablet ? 1.7 : 1.6;
+const NUM_CELL_FLEX = isNarrowPhone ? 0.82 : isTablet ? 0.92 : 0.86;
+const TOTAL_CELL_FLEX = isNarrowPhone ? 0.94 : isTablet ? 1.04 : 0.98;
+const DATE_MIN_WIDTH = isNarrowPhone ? 104 : isTablet ? 156 : 128;
+const ACTIONS_COLUMN_WIDTH = isNarrowPhone ? 96 : isTablet ? 120 : 104;
 
 type Session = {
   date: string;
@@ -1227,12 +1229,12 @@ export default function HistoryScreen() {
         <Pressable
           style={({ pressed }) => [styles.headerAddButton, pressed && { opacity: 0.7 }]}
           onPress={openAddModal}
-          accessibilityLabel="Add Japam"
+          accessibilityLabel="Add Japam Count"
           accessibilityRole="button"
           hitSlop={8}
         >
           <Ionicons name="add" size={20} color="#ffffff" />
-          <Text style={styles.headerAddButtonText}>Add Japam</Text>
+          <Text style={styles.headerAddButtonText}>Add Japam Count</Text>
         </Pressable>
       </View>
       <View style={styles.simpleSummary}>
@@ -1373,18 +1375,23 @@ export default function HistoryScreen() {
 
       <View style={styles.tableCard}>
         <View style={[styles.tableRow, styles.tableHeader]}>
-          <Text style={[styles.tableCell, styles.dateCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Date</Text>
-          <Text style={[styles.tableCell, styles.numHeaderCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Malas</Text>
-          <Text style={[styles.tableCell, styles.numHeaderCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Count</Text>
-          <Text style={[styles.tableCell, styles.totalHeaderCell, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Total</Text>
-          <Text
-            style={[styles.tableCell, styles.actionsHeaderCell, styles.tableHeaderText]}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.9}
-          >
-            Actions
-          </Text>
+          <View style={[styles.columnCell, styles.dateColumn]}>
+            <Text style={[styles.cellText, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Date</Text>
+          </View>
+          <View style={[styles.columnCell, styles.numColumn]}>
+            <Text style={[styles.cellText, styles.numericText, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Malas</Text>
+          </View>
+          <View style={[styles.columnCell, styles.numColumn]}>
+            <Text style={[styles.cellText, styles.numericText, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Count</Text>
+          </View>
+          <View style={[styles.columnCell, styles.totalColumn]}>
+            <Text style={[styles.cellText, styles.numericText, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Total</Text>
+          </View>
+          <View style={[styles.columnCell, styles.actionsColumn]}>
+            <Text style={[styles.cellText, styles.numericText, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>
+              {' '}
+            </Text>
+          </View>
         </View>
 
         {dailyRows.length === 0 ? (
@@ -1396,44 +1403,54 @@ export default function HistoryScreen() {
             const rowStyle = [styles.tableRow, index % 2 === 1 && styles.altTableRow];
             const rowContent = (
               <>
-                <Text style={[styles.tableCell, styles.dateCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>
-                  {row.dateLabel}
-                </Text>
-                <Text style={[styles.tableCell, styles.numCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.malas}</Text>
-                <Text style={[styles.tableCell, styles.numCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.totalCount}</Text>
-                <Text style={[styles.tableCell, styles.totalCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.accumulated}</Text>
-                <View style={styles.rowActions}>
-                  <Pressable
-                    style={({ pressed }) => [
-                      styles.rowActionButton,
-                      styles.rowActionEditButton,
-                      pressed && { opacity: 0.5 },
-                    ]}
-                    onPress={() => {
-                      console.log('[EDIT_ICON_PRESS] dateKey=%s malas=%d', row.dateKey, row.malas);
-                      openEditModal(row);
-                    }}
-                    accessibilityLabel={`Edit ${row.dateLabel}`}
-                    accessibilityHint="Opens this day's malas for editing"
-                    accessibilityRole="button"
-                    hitSlop={4}
-                  >
-                    <Ionicons name="pencil-outline" size={19} color="#0f766e" />
-                  </Pressable>
-                  <Pressable
-                    style={({ pressed }) => [
-                      styles.rowActionButton,
-                      styles.rowActionDeleteButton,
-                      pressed && { opacity: 0.5 },
-                    ]}
-                    onPress={() => confirmDeleteDay(row)}
-                    accessibilityLabel={`Delete ${row.dateLabel}`}
-                    accessibilityHint="Deletes this day's history rows"
-                    accessibilityRole="button"
-                    hitSlop={4}
-                  >
-                    <Ionicons name="trash-outline" size={20} color="#6b7280" />
-                  </Pressable>
+                <View style={[styles.columnCell, styles.dateColumn]}>
+                  <Text style={styles.cellText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>
+                    {row.dateLabel}
+                  </Text>
+                </View>
+                <View style={[styles.columnCell, styles.numColumn]}>
+                  <Text style={[styles.cellText, styles.numericText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.malas}</Text>
+                </View>
+                <View style={[styles.columnCell, styles.numColumn]}>
+                  <Text style={[styles.cellText, styles.numericText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.totalCount}</Text>
+                </View>
+                <View style={[styles.columnCell, styles.totalColumn]}>
+                  <Text style={[styles.cellText, styles.numericText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.accumulated}</Text>
+                </View>
+                <View style={[styles.columnCell, styles.actionsColumn]}>
+                  <View style={styles.rowActions}>
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.rowActionButton,
+                        styles.rowActionEditButton,
+                        pressed && { opacity: 0.5 },
+                      ]}
+                      onPress={() => {
+                        console.log('[EDIT_ICON_PRESS] dateKey=%s malas=%d', row.dateKey, row.malas);
+                        openEditModal(row);
+                      }}
+                      accessibilityLabel={`Edit ${row.dateLabel}`}
+                      accessibilityHint="Opens this day's malas for editing"
+                      accessibilityRole="button"
+                      hitSlop={4}
+                    >
+                      <Ionicons name="pencil-outline" size={19} color="#0f766e" />
+                    </Pressable>
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.rowActionButton,
+                        styles.rowActionDeleteButton,
+                        pressed && { opacity: 0.5 },
+                      ]}
+                      onPress={() => confirmDeleteDay(row)}
+                      accessibilityLabel={`Delete ${row.dateLabel}`}
+                      accessibilityHint="Deletes this day's history rows"
+                      accessibilityRole="button"
+                      hitSlop={4}
+                    >
+                      <Ionicons name="trash-outline" size={20} color="#6b7280" />
+                    </Pressable>
+                  </View>
                 </View>
               </>
             );
@@ -1762,16 +1779,21 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.34)',
   },
 
-  tableCell: {
-    flex: 1,
-    color: '#12383c',
-    fontSize: TABLE_VALUE_FONT_SIZE,
+  columnCell: {
+    justifyContent: 'center',
     paddingVertical: 14,
     paddingHorizontal: TABLE_CELL_PADDING_H,
+  },
+  cellText: {
+    color: '#12383c',
+    fontSize: TABLE_VALUE_FONT_SIZE,
     fontWeight: '700',
   },
-  dateCell: {
-    flex: DATE_CELL_FLEX,
+  dateColumn: {
+    flexBasis: 0,
+    flexGrow: DATE_CELL_FLEX,
+    flexShrink: 1,
+    minWidth: DATE_MIN_WIDTH,
   },
   // Header labels are short words that never need to be as large as the data values below them —
   // giving them their own smaller (but never tiny — see TABLE_HEADER_FONT_SIZE) size frees up
@@ -1784,19 +1806,25 @@ const styles = StyleSheet.create({
   // Malas/Count hold shorter values (e.g. "10", "1080") than Total's running accumulation
   // (e.g. "26784"), so Total gets a bit more room. Centered per requirement — Date stays
   // left-aligned (its default), these three numeric columns are explicitly centered.
-  numHeaderCell: { flex: NUM_CELL_FLEX, textAlign: 'center' },
-  numCell: { flex: NUM_CELL_FLEX, textAlign: 'center' },
-  totalHeaderCell: { flex: TOTAL_CELL_FLEX, textAlign: 'center' },
-  totalCell: { flex: TOTAL_CELL_FLEX, textAlign: 'center' },
-  actionsHeaderCell: {
-    width: 112,
+  numericText: { textAlign: 'center' },
+  numColumn: {
+    flexBasis: 0,
+    flexGrow: NUM_CELL_FLEX,
+    flexShrink: 1,
+  },
+  totalColumn: {
+    flexBasis: 0,
+    flexGrow: TOTAL_CELL_FLEX,
+    flexShrink: 1,
+  },
+  actionsColumn: {
+    width: ACTIONS_COLUMN_WIDTH,
     flexGrow: 0,
     flexShrink: 0,
-    textAlign: 'center',
   },
 
   rowActions: {
-    width: 112,
+    width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
