@@ -452,20 +452,65 @@ const syncHistoryEditsToSupabase = async (
               'Content-Type': 'application/json',
               apikey: key,
               Authorization: `Bearer ${accessToken}`,
-              Prefer: 'return=minimal,resolution=merge-duplicates',
+              Prefer: 'return=representation,resolution=merge-duplicates',
             },
             body: JSON.stringify(payload),
           });
       if (response.ok) {
-        if (remoteId != null) {
-          const patchedRows = (await response.json().catch(() => [])) as { id?: number | string }[];
-          if (patchedRows.length === 0) {
-            console.log('[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=zero-rows remoteId=%s', record.completionId, String(remoteId));
-            continue;
-          }
+        const responseText = await response.text().catch(() => '');
+        let responseBody: unknown = [];
+        try {
+          responseBody = responseText ? JSON.parse(responseText) : [];
+        } catch {
+          responseBody = responseText;
+        }
+        console.log(
+          '[HISTORY_EDIT_REMOTE_RESPONSE] remoteId=%s completionId=%s status=%d body=%s',
+          remoteId != null ? String(remoteId) : 'none',
+          record.completionId,
+          response.status,
+          typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody),
+        );
+
+        const returnedRows = Array.isArray(responseBody) ? responseBody as Array<{
+          id?: number | string;
+          malas?: number | string;
+          count?: number | string;
+        }> : [];
+        if (returnedRows.length === 0) {
+          console.log(
+            '[HISTORY_EDIT_ZERO_ROWS] remoteId=%s completionId=%s status=%d body=%s',
+            remoteId != null ? String(remoteId) : 'none',
+            record.completionId,
+            response.status,
+            typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody),
+          );
+          continue;
+        }
+
+        const returned = returnedRows[0];
+        const returnedMalas = Number(returned?.malas) || 0;
+        const returnedCount = Number(returned?.count) || 0;
+        if (returnedMalas !== payload.malas || returnedCount !== payload.count) {
+          console.log(
+            '[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=mismatch remoteId=%s expectedMalas=%d expectedCount=%d actualMalas=%d actualCount=%d',
+            record.completionId,
+            remoteId != null ? String(remoteId) : 'none',
+            payload.malas,
+            payload.count,
+            returnedMalas,
+            returnedCount,
+          );
+          continue;
         }
         syncedIds.push(record.completionId);
-        console.log('[HISTORY_EDIT_SYNC_SUCCESS] completionId=%s', record.completionId);
+        console.log(
+          '[HISTORY_EDIT_SYNC_SUCCESS] completionId=%s remoteId=%s malas=%d count=%d',
+          record.completionId,
+          remoteId != null ? String(remoteId) : 'none',
+          payload.malas,
+          payload.count,
+        );
       } else {
         if (response.status === 401 || response.status === 403) rlsBlocked = true;
         console.log(
