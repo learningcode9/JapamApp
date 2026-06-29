@@ -512,6 +512,7 @@ export default function TimerScreen() {
 
   useEffect(() => {
     const handleGoogleLogin = async () => {
+      if (Platform.OS !== 'web') return; // native platforms use handleNativeGoogleSignIn
       if (!response) return;
 
       console.log('[AUTH_CALLBACK] source=timer-web response.type=%s', response.type);
