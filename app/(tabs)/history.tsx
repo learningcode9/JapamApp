@@ -489,6 +489,7 @@ export default function HistoryScreen() {
   };
 
   const openEditModal = (row: DailyRow) => {
+    console.log('[EDIT_MODAL_OPEN] dateKey=%s malas=%d', row.dateKey, row.malas);
     setEditingRow(row);
     setEditMalas(row.malas);
   };
@@ -1159,39 +1160,59 @@ export default function HistoryScreen() {
             <Text style={styles.emptyText}>No Japam history yet</Text>
           </View>
         ) : (
-          dailyRows.map((row, index) => (
-            <Pressable
-              key={`${row.dateKey}-${index}`}
-              onLongPress={() => confirmDeleteDay(row)}
-              delayLongPress={500}
-              style={[styles.tableRow, index % 2 === 1 && styles.altTableRow]}
-            >
-              <Text style={[styles.tableCell, styles.dateCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>
-                {row.dateLabel}
-              </Text>
-              <Text style={[styles.tableCell, styles.numCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.malas}</Text>
-              <Text style={[styles.tableCell, styles.numCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.totalCount}</Text>
-              <Text style={[styles.tableCell, styles.totalCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.accumulated}</Text>
-              <View style={styles.rowActions}>
-                <Pressable
-                  style={({ pressed }) => [styles.rowActionButton, pressed && { opacity: 0.5 }]}
-                  onPress={() => openEditModal(row)}
-                  accessibilityLabel={`Edit ${row.dateLabel}`}
-                  hitSlop={8}
-                >
-                  <Ionicons name="pencil-outline" size={19} color="#0f766e" />
-                </Pressable>
-                <Pressable
-                  style={({ pressed }) => [styles.rowActionButton, pressed && { opacity: 0.5 }]}
-                  onPress={() => confirmDeleteDay(row)}
-                  accessibilityLabel={`Delete ${row.dateLabel}`}
-                  hitSlop={8}
-                >
-                  <Ionicons name="trash-outline" size={20} color="#6b7280" />
-                </Pressable>
-              </View>
-            </Pressable>
-          ))
+          dailyRows.map((row, index) => {
+            const rowStyle = [styles.tableRow, index % 2 === 1 && styles.altTableRow];
+            const rowContent = (
+              <>
+                <Text style={[styles.tableCell, styles.dateCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>
+                  {row.dateLabel}
+                </Text>
+                <Text style={[styles.tableCell, styles.numCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.malas}</Text>
+                <Text style={[styles.tableCell, styles.numCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.totalCount}</Text>
+                <Text style={[styles.tableCell, styles.totalCell]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.accumulated}</Text>
+                <View style={styles.rowActions}>
+                  <Pressable
+                    style={({ pressed }) => [styles.rowActionButton, pressed && { opacity: 0.5 }]}
+                    onPress={() => {
+                      console.log('[EDIT_ICON_PRESS] dateKey=%s malas=%d', row.dateKey, row.malas);
+                      openEditModal(row);
+                    }}
+                    accessibilityLabel={`Edit ${row.dateLabel}`}
+                    hitSlop={8}
+                  >
+                    <Ionicons name="pencil-outline" size={19} color="#0f766e" />
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [styles.rowActionButton, pressed && { opacity: 0.5 }]}
+                    onPress={() => confirmDeleteDay(row)}
+                    accessibilityLabel={`Delete ${row.dateLabel}`}
+                    hitSlop={8}
+                  >
+                    <Ionicons name="trash-outline" size={20} color="#6b7280" />
+                  </Pressable>
+                </View>
+              </>
+            );
+            // On web the outer Pressable's pointer-event handling blocks nested Pressable onPress.
+            // Long-press delete is not used on web (the hint text already says "Use row actions").
+            if (Platform.OS === 'web') {
+              return (
+                <View key={`${row.dateKey}-${index}`} style={rowStyle}>
+                  {rowContent}
+                </View>
+              );
+            }
+            return (
+              <Pressable
+                key={`${row.dateKey}-${index}`}
+                onLongPress={() => confirmDeleteDay(row)}
+                delayLongPress={500}
+                style={rowStyle}
+              >
+                {rowContent}
+              </Pressable>
+            );
+          })
         )}
       </View>
 
