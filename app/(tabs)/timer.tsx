@@ -420,8 +420,17 @@ export default function TimerScreen() {
   ) => {
     await AsyncStorage.setItem(USER_NAME_KEY, googleName);
     if (googleEmail) await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
-    if (!skipMigration) await migrateGuestHistoryToGoogle(googleUserId);
-    await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
+    if (!skipMigration) {
+      // Direct Google sign-in (no prior anonymous session): use the Supabase UUID that
+      // signInWithIdToken / signInOrLinkGoogle just established, falling back to the Google
+      // numeric ID only if the session is unexpectedly unavailable.
+      const session = (await supabase.auth.getSession()).data.session;
+      const userId = session?.user?.id ?? googleUserId;
+      await migrateGuestHistoryToGoogle(userId);
+      await AsyncStorage.setItem(USER_ID_KEY, userId);
+    }
+    // skipMigration=true means linkIdentity was used: USER_ID_KEY already holds the anonymous
+    // Supabase UUID (set by signInAsGuest). Do not overwrite it with the Google numeric ID.
     setUserName(googleName);
     setShowUserModal(false);
     DeviceEventEmitter.emit('japam-auth-updated');
@@ -614,12 +623,14 @@ export default function TimerScreen() {
           return;
         }
 
+        // session is non-null: the guard above returns early if access_token is missing.
+        const userId = session!.user.id;
         await AsyncStorage.setItem(USER_NAME_KEY, googleName);
         if (googleEmail) {
           await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
         }
-        await migrateGuestHistoryToGoogle(googleUserId);
-        await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
+        await migrateGuestHistoryToGoogle(userId);
+        await AsyncStorage.setItem(USER_ID_KEY, userId);
         setUserName(googleName);
         setShowUserModal(false);
         DeviceEventEmitter.emit('japam-auth-updated');

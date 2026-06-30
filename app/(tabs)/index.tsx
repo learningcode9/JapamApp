@@ -1372,9 +1372,11 @@ export default function JapamMain() {
       }
       const { id, name, givenName, email } = userInfo.data.user;
       const { idToken } = userInfo.data;
+      let supabaseUuid: string | undefined;
       if (idToken) {
-        const { error: authError } = await supabase.auth.signInWithIdToken({ provider: 'google', token: idToken });
+        const { data: authData, error: authError } = await supabase.auth.signInWithIdToken({ provider: 'google', token: idToken });
         if (authError) console.log('Supabase signInWithIdToken error:', authError.message);
+        else supabaseUuid = authData?.user?.id;
       }
       const googleName = givenName || name || email || 'User';
       const googleEmail = email || '';
@@ -1387,7 +1389,8 @@ export default function JapamMain() {
         return;
       }
 
-      await migrateGuestHistoryToGoogle(googleUserId);
+      const userId = supabaseUuid ?? googleUserId;
+      await migrateGuestHistoryToGoogle(userId);
 
       setHasRestoredTimer(false);
       setUserName(googleName);
@@ -1399,13 +1402,13 @@ export default function JapamMain() {
       totalRef.current = 0;
       await AsyncStorage.setItem(USER_NAME_KEY, googleName);
       if (googleEmail) await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
-      await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
-      userIdRef.current = googleUserId;
+      await AsyncStorage.setItem(USER_ID_KEY, userId);
+      userIdRef.current = userId;
 
-      await loadJapamNameFromSupabase(googleUserId);
+      await loadJapamNameFromSupabase(userId);
       await restoreTodayTotal();
-      await restoreHistoryFromSupabase(googleUserId);
-      await restoreTimerForUser(googleUserId);
+      await restoreHistoryFromSupabase(userId);
+      await restoreTimerForUser(userId);
       DeviceEventEmitter.emit('japam-auth-updated');
     } catch (error) {
       console.log('Native Google sign-in error:', error);
@@ -1548,7 +1551,9 @@ export default function JapamMain() {
           return;
         }
 
-        await migrateGuestHistoryToGoogle(googleUserId);
+        // session is non-null: the guard above returns early if access_token is missing.
+        const userId = session!.user.id;
+        await migrateGuestHistoryToGoogle(userId);
 
         setHasRestoredTimer(false);
         setUserName(googleName);
@@ -1562,13 +1567,13 @@ export default function JapamMain() {
         if (googleEmail) {
           await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
         }
-        await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
-        userIdRef.current = googleUserId;
+        await AsyncStorage.setItem(USER_ID_KEY, userId);
+        userIdRef.current = userId;
 
-        await loadJapamNameFromSupabase(googleUserId);
+        await loadJapamNameFromSupabase(userId);
         await restoreTodayTotal();
-        await restoreHistoryFromSupabase(googleUserId);
-        await restoreTimerForUser(googleUserId);
+        await restoreHistoryFromSupabase(userId);
+        await restoreTimerForUser(userId);
         DeviceEventEmitter.emit('japam-auth-updated');
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new Event('japam-auth-updated'));
