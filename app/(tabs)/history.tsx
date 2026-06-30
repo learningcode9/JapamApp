@@ -424,7 +424,11 @@ const syncHistoryEditsToSupabase = async (
   const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key || records.length === 0) return { syncedIds: [], rlsBlocked: false };
 
-  const accessToken = (await supabase.auth.getSession()).data.session?.access_token || key;
+  // Require a real session JWT. Without one the request would run as `anon` role, which has
+  // no UPDATE policy — guaranteed 403. Leave records as `pending` for retry on next sign-in.
+  const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
+  if (!sessionToken) return { syncedIds: [], rlsBlocked: false };
+  const accessToken = sessionToken;
   const syncedIds: string[] = [];
   let rlsBlocked = false;
   for (const record of records) {
