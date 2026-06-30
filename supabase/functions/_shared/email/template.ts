@@ -16,9 +16,7 @@ function statRow(bg: string, icon: string, label: string, value: string): string
   </tr>`;
 }
 
-export function buildEmailHtml(stats: SummaryStats): string {
-  const appUrl = process.env.APP_URL ?? '';
-
+export function buildEmailHtml(stats: SummaryStats, appUrl = ''): string {
   const ctaButton = appUrl
     ? `<tr><td align="center" style="padding:28px 0 8px;">
         <a href="${appUrl}"
@@ -134,9 +132,7 @@ export function buildEmailHtml(stats: SummaryStats): string {
 </html>`;
 }
 
-export function buildEmailText(stats: SummaryStats): string {
-  const appUrl = process.env.APP_URL ?? '';
-
+export function buildEmailText(stats: SummaryStats, appUrl = ''): string {
   const bestDayText = stats.bestDay
     ? `${stats.bestDay.date}  (${stats.bestDay.malas} malas)`
     : '—';

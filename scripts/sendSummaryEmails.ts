@@ -3,19 +3,25 @@
  *
  * Usage:
  *   # Dry-run (default — no emails sent, stats logged):
- *   DRY_RUN=true npx ts-node --project server/tsconfig.json scripts/sendSummaryEmails.ts
+ *   DRY_RUN=true npx tsx scripts/sendSummaryEmails.ts
  *
  *   # Real send (requires RESEND_API_KEY):
- *   DRY_RUN=false RESEND_API_KEY=re_xxx npx ts-node --project server/tsconfig.json scripts/sendSummaryEmails.ts
+ *   DRY_RUN=false RESEND_API_KEY=re_xxx npx tsx scripts/sendSummaryEmails.ts
  *
  * Required env vars — see SUMMARY_EMAIL_SETUP.md for full list.
+ * Reads .env.local automatically if present.
  */
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-require('dotenv').config({ path: '.env.local' });
+import { createSummaryEmailService } from '../supabase/functions/_shared/email/summaryService';
+import { createEmailProvider } from '../supabase/functions/_shared/email/emailProvider';
 
-import { createSummaryEmailService } from '../server/email/summaryService';
-import { createEmailProvider } from '../server/email/emailProvider';
+// Load .env.local if present (optional — production callers set env vars directly)
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require('dotenv').config({ path: '.env.local' });
+} catch {
+  // dotenv is optional; ignore if not installed
+}
 
 async function main(): Promise<void> {
   const dryRun = process.env.DRY_RUN !== 'false';

@@ -4,6 +4,4 @@
 module.exports = {
   preset: 'jest-expo',
   testMatch: ['**/__tests__/**/*.test.ts'],
-  // Exclude server tests — they run under server/jest.config.js with ts-jest/Node
-  testPathIgnorePatterns: ['/node_modules/', '/server/'],
 };

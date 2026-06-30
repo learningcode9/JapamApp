@@ -20,6 +20,7 @@ export class SummaryEmailService {
     private readonly supabase: SupabaseClient,
     private readonly emailProvider: EmailProvider | null,
     private readonly fromAddress: string,
+    private readonly appUrl: string = '',
   ) {}
 
   async run(options: SummaryRunOptions): Promise<SummaryRunResult[]> {
@@ -195,8 +196,8 @@ export class SummaryEmailService {
         error: null,
       });
 
-      const html = buildEmailHtml(stats);
-      const text = buildEmailText(stats);
+      const html = buildEmailHtml(stats, this.appUrl);
+      const text = buildEmailText(stats, this.appUrl);
 
       const { messageId } = await this.emailProvider.sendEmail({
         to: user.email,
@@ -245,6 +246,7 @@ export function createSummaryEmailService(
   const url = process.env.EXPO_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const from = process.env.EMAIL_FROM_ADDRESS ?? 'Japam App <noreply@japamapp.com>';
+  const appUrl = process.env.APP_URL ?? '';
 
   if (!url) throw new Error('SUPABASE_URL (or EXPO_PUBLIC_SUPABASE_URL) env var is required');
   if (!serviceKey) throw new Error('SUPABASE_SERVICE_ROLE_KEY env var is required');
@@ -253,5 +255,5 @@ export function createSummaryEmailService(
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  return new SummaryEmailService(supabase, emailProvider, from);
+  return new SummaryEmailService(supabase, emailProvider, from, appUrl);
 }

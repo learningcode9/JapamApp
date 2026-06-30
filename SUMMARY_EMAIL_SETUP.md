@@ -1,9 +1,32 @@
 # Japam App — 15-Day Summary Email Setup
 
-## Overview
+## Architecture
 
-`server/email/` contains the backend logic for sending 15-day Japam progress summary emails.
-The script reads from Supabase, calculates stats, and delivers via Resend (or any swappable provider).
+Email logic lives in `supabase/functions/_shared/email/` — the standard Supabase location for
+shared code between Edge Functions. This keeps all email features (15-day summary, monthly
+summary, milestones, etc.) co-located with Supabase and ready for Edge Function deployment.
+
+```
+supabase/
+  functions/
+    _shared/
+      email/
+        types.ts          ← All shared TypeScript types
+        calculator.ts     ← Pure stats calculation (no side effects)
+        emailProvider.ts  ← EmailProvider interface + ResendProvider
+        template.ts       ← HTML + plain-text email builders
+        summaryService.ts ← Orchestration: fetch → deduplicate → send
+      __tests__/
+        calculator.test.ts
+        summaryService.test.ts
+    send-summary-email/
+      index.ts            ← Future Supabase Edge Function entry point
+  migrations/
+    20260630_add_user_email_summaries.sql
+scripts/
+  sendSummaryEmails.ts    ← Local CLI runner
+```
+
 **Dry-run mode is the default.** No emails are sent unless `DRY_RUN=false` is set explicitly.
 
 ---
@@ -50,11 +73,8 @@ This creates the `user_email_summaries` table with:
 echo "EXPO_PUBLIC_SUPABASE_URL=https://xxx.supabase.co" >> .env.local
 echo "SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOi..." >> .env.local
 
-# 2. Install server dependencies:
-cd server && npm install && cd ..
-
-# 3. Run dry-run (default — no emails sent):
-DRY_RUN=true npx ts-node --project server/tsconfig.json scripts/sendSummaryEmails.ts
+# 2. Run dry-run (default — no emails sent):
+DRY_RUN=true npx tsx scripts/sendSummaryEmails.ts
 ```
 
 You will see per-user stats logged to stdout. Nothing is sent. A `dry_run` row is written
@@ -70,16 +90,29 @@ echo "RESEND_API_KEY=re_xxxxxxxxxxxx" >> .env.local
 echo "APP_URL=https://mantra-japam.vercel.app" >> .env.local
 
 # Send for real (DRY_RUN=false):
-DRY_RUN=false npx ts-node --project server/tsconfig.json scripts/sendSummaryEmails.ts
+DRY_RUN=false npx tsx scripts/sendSummaryEmails.ts
 ```
 
 The script exits with code 1 if any delivery fails, so it integrates cleanly with a CI/cron job.
 
 ---
 
+## Running Tests
+
+Tests are co-located with the source and run through the existing root jest config — no separate
+test runner or config needed:
+
+```bash
+npm test
+```
+
+The 35 email tests run alongside the existing app tests in one pass.
+
+---
+
 ## Swapping the Email Provider
 
-The `EmailProvider` interface is in `server/email/emailProvider.ts`:
+The `EmailProvider` interface is in `supabase/functions/_shared/email/emailProvider.ts`:
 
 ```typescript
 export interface EmailProvider {
@@ -90,20 +123,19 @@ export interface EmailProvider {
 To use a different provider (SendGrid, AWS SES, Postmark, etc.):
 
 1. Create a class that implements `EmailProvider`
-2. Return it from `createEmailProvider()` (or pass it directly to `createSummaryEmailService()`)
+2. Return it from `createEmailProvider()`, or pass it directly to `new SummaryEmailService(...)`
 3. No other files need to change
 
 ---
 
-## Running Tests
+## Adding Future Email Types
 
-```bash
-# Server tests (calculator + service logic):
-cd server && npm test
+The `_shared/email/` directory is designed to grow. To add a monthly summary or milestone email:
 
-# Root app tests (must continue to pass unchanged):
-cd .. && npm test
-```
+1. Add the new `email_type` string constant in `summaryService.ts` (or create a new service class)
+2. Reuse `calculator.ts`, `template.ts`, and `emailProvider.ts` as-is
+3. Create a new Edge Function folder: `supabase/functions/send-monthly-email/index.ts`
+4. The `user_email_summaries` table already supports any `email_type` value
 
 ---
 
@@ -111,14 +143,14 @@ cd .. && npm test
 
 Once validated, the script can be scheduled via:
 
-- **GitHub Actions**: `schedule: cron: '0 6 * * *'` (runs daily; only sends if a 15-day period boundary is reached)
-- **Vercel Cron Jobs**: Add a `/api/send-summary` serverless route calling the same service
-- **Supabase Edge Functions**: Port `summaryService.ts` to Deno (types are compatible)
+- **Supabase Cron**: `SELECT cron.schedule('send-summary-emails', '0 6 */15 * *', $$...$$)`
+- **Supabase Edge Functions**: Deploy `supabase/functions/send-summary-email/` — see `index.ts` for adaptation notes
+- **GitHub Actions**: `schedule: cron: '0 6 * * *'` running `npx tsx scripts/sendSummaryEmails.ts`
 
 Do not schedule until:
 1. The SQL migration has been applied to production Supabase
 2. At least one successful dry-run has been verified against real data
-3. `RESEND_API_KEY` is stored securely (GitHub Actions secret / Vercel env var)
+3. `RESEND_API_KEY` is stored securely (GitHub Actions secret / Vercel env var / Supabase secret)
 
 ---
 
