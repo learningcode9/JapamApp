@@ -1173,6 +1173,13 @@ export default function HistoryScreen() {
     >
       <View style={styles.header}>
         <Text style={styles.title}>History</Text>
+      </View>
+      <View style={styles.simpleSummary}>
+        <Text style={styles.summaryText}>📿 Total Malas: {totalMalas}</Text>
+        <Text style={styles.summaryText}>🔢 Total Count: {totalCount}</Text>
+      </View>
+
+      <View style={styles.actionRow}>
         <Pressable
           style={({ pressed }) => [styles.headerAddButton, pressed && { opacity: 0.7 }]}
           onPress={openAddModal}
@@ -1183,13 +1190,6 @@ export default function HistoryScreen() {
           <Ionicons name="add" size={20} color="#ffffff" />
           <Text style={styles.headerAddButtonText}>Add Japam Count</Text>
         </Pressable>
-      </View>
-      <View style={styles.simpleSummary}>
-        <Text style={styles.summaryText}>📿 Total Malas: {totalMalas}</Text>
-        <Text style={styles.summaryText}>🔢 Total Count: {totalCount}</Text>
-      </View>
-
-      <View style={styles.actionRow}>
         <Pressable style={styles.exportBtn} onPress={exportHistory}>
           <Text style={styles.exportBtnText}>⬇ Export</Text>
         </Pressable>
@@ -1463,10 +1463,8 @@ const styles = StyleSheet.create({
 
   header: {
     width: '100%',
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
+    justifyContent: 'center',
     marginBottom: 18,
     minHeight: 52,
   },
@@ -1497,7 +1495,8 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     marginBottom: 0,
     paddingBottom: 2,
-    textAlign: 'left',
+    textAlign: 'center',
+    width: '100%',
   },
 
   subtitle: {
@@ -1528,7 +1527,9 @@ const styles = StyleSheet.create({
   actionRow: {
     flexDirection: 'row',
     justifyContent: 'center',
-    gap: 10,
+    alignItems: 'center',
+    gap: 12,
+    flexWrap: 'wrap',
     marginBottom: 18,
   },
 
@@ -1536,6 +1537,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#0f8a87',
     minHeight: 44,
     paddingHorizontal: 18,
+    minWidth: isNarrowPhone ? 132 : 120,
     borderRadius: 999,
     justifyContent: 'center',
     alignItems: 'center',
