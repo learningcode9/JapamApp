@@ -6,6 +6,7 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import * as Notifications from 'expo-notifications';
 import { usePathname, useRouter } from 'expo-router';
 import { getTimerState, updateTimerState } from '../lib/timerState';
+import { supabase } from '../lib/supabase';
 import {
   appendCompletion,
   applyTombstones,
@@ -799,30 +800,37 @@ export function TimerProvider({ children }: { children: ReactNode }) {
             window.dispatchEvent(new Event('japam-history-updated'));
           }
         }
-        // Propagate local-only tombstones to Supabase: record tombstone + delete the history rows.
+        // Propagate local-only tombstones to Supabase atomically: a single SECURITY DEFINER RPC
+        // writes the tombstone(s) AND deletes the japam_history row(s) in one transaction — see
+        // db/atomic_delete_history_rpc.sql. This requires a real authenticated session (the RPC is
+        // authenticated-only, no anon-key delete path); if none exists yet, skip the remote push
+        // for this pass and retry on a later sync once a session is available.
         const localOnly = localTomb.filter((id) => !remoteTomb.includes(id));
-        for (const id of localOnly) {
-          try {
-            await fetch(`${url}/rest/v1/deleted_completions?on_conflict=completion_id`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                apikey: key,
-                Authorization: `Bearer ${key}`,
-                Prefer: 'return=minimal,resolution=merge-duplicates',
-              },
-              body: JSON.stringify({ completion_id: id, user_id: uid }),
-            });
-            await fetch(
-              `${url}/rest/v1/japam_history?completion_id=eq.${encodeURIComponent(id)}`,
-              {
-                method: 'DELETE',
-                headers: { apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal' },
-              }
+        if (localOnly.length > 0) {
+          const { data: sessionData } = await supabase.auth.getSession();
+          const sessionToken = sessionData.session?.access_token;
+          if (!sessionToken) {
+            console.log(
+              '[TOMBSTONE_PUSH_SKIPPED] reason=no-session count=%d retry=next-sync',
+              localOnly.length
             );
-            console.log('[TOMBSTONE_PUSHED] completionId=%s', id);
-          } catch {
-            console.log('[TOMBSTONE_PUSH_FAILED] completionId=%s reason=network', id);
+          } else {
+            try {
+              const { error } = await supabase.rpc('delete_history_completions', {
+                p_completion_ids: localOnly,
+              });
+              if (error) {
+                console.log(
+                  '[TOMBSTONE_PUSH_FAILED] count=%d reason=rpc-error message=%s',
+                  localOnly.length,
+                  error.message
+                );
+              } else {
+                console.log('[TOMBSTONE_PUSHED_BATCH] count=%d', localOnly.length);
+              }
+            } catch {
+              console.log('[TOMBSTONE_PUSH_FAILED] count=%d reason=network', localOnly.length);
+            }
           }
         }
       } catch {

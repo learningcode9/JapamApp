@@ -128,11 +128,6 @@ type ManualSyncInput = {
   completionId: string;
 };
 
-type DeleteTarget = {
-  completionId: string;
-  remoteId?: string | number;
-};
-
 type AddDateMode = 'today' | 'yesterday' | 'custom';
 
 const HISTORY_KEY = 'history';
@@ -898,10 +893,6 @@ export default function HistoryScreen() {
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
     const raw = await AsyncStorage.getItem(HISTORY_KEY);
     const local = parseHistory(raw);
-    const deleteTargets: DeleteTarget[] = completionIds.map((completionId) => {
-      const match = local.find((item) => item.completionId === completionId);
-      return { completionId, remoteId: match?.remoteId };
-    });
 
     // 1) Write the tombstone FIRST. loadHistory honors this set, so even a same-tick remote
     //    fetch can never resurrect the record while the remote delete is still in flight.
@@ -928,8 +919,10 @@ export default function HistoryScreen() {
     }
     console.log('[DELETE_UI_REFRESHED] ids=%s', completionIds.join(','));
 
-    // 4) Best-effort remote delete now. If offline / failed, the tombstone is pushed by
-    //    syncPendingHistory on the next sync (so the remote row is removed later).
+    // 4) Atomic remote delete: a single SECURITY DEFINER RPC writes the tombstone(s) AND deletes
+    //    the japam_history row(s) in one transaction, so a tombstone can never exist without the
+    //    row actually being deleted (or vice versa) — see db/atomic_delete_history_rpc.sql. If
+    //    offline / failed, the tombstone is pushed by syncPendingHistory on the next sync.
     const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
     const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
     if (url && key && currentUserId) {
@@ -938,77 +931,20 @@ export default function HistoryScreen() {
         console.log('[DELETE_REMOTE_FAILED] reason=no-session-jwt queued=via-tombstone');
         return;
       }
-      for (const target of deleteTargets) {
-        const deleteUrl = target.remoteId != null
-          ? `${url}/rest/v1/japam_history?id=eq.${encodeURIComponent(String(target.remoteId))}`
-          : `${url}/rest/v1/japam_history?completion_id=eq.${encodeURIComponent(target.completionId)}`;
-        try {
-          await fetch(`${url}/rest/v1/deleted_completions?on_conflict=completion_id`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              apikey: key,
-              Authorization: `Bearer ${deleteToken}`,
-              Prefer: 'return=minimal,resolution=merge-duplicates',
-            },
-            body: JSON.stringify({ completion_id: target.completionId, user_id: currentUserId }),
-          });
+      try {
+        const { error } = await supabase.rpc('delete_history_completions', {
+          p_completion_ids: completionIds,
+        });
+        if (error) {
           console.log(
-            '[HISTORY_DELETE_REQUEST] completionId=%s remoteId=%s auth=%s',
-            target.completionId,
-            target.remoteId != null ? String(target.remoteId) : 'none',
-            'jwt'
+            '[DELETE_REMOTE_FAILED] reason=rpc-error message=%s queued=via-tombstone',
+            error.message
           );
-          const response = await fetch(deleteUrl, {
-            method: 'DELETE',
-            headers: { apikey: key, Authorization: `Bearer ${deleteToken}`, Prefer: 'return=representation' },
-          });
-          const contentRange = response.headers.get('content-range') || '';
-          const responseText = await response.text().catch(() => '');
-          let responseBody: unknown = [];
-          try {
-            responseBody = responseText ? JSON.parse(responseText) : [];
-          } catch {
-            responseBody = responseText;
-          }
-          console.log(
-            '[HISTORY_DELETE_RESPONSE] status=%d body=%s contentRange=%s',
-            response.status,
-            typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody),
-            contentRange
-          );
-          if (!response.ok) {
-            console.log(
-              '[DELETE_REMOTE_FAILED] completionId=%s remoteId=%s status=%d',
-              target.completionId,
-              target.remoteId != null ? String(target.remoteId) : 'none',
-              response.status
-            );
-            continue;
-          }
-          const returnedRows = Array.isArray(responseBody) ? responseBody as Array<{ id?: string | number }> : [];
-          if (returnedRows.length === 0) {
-            console.log(
-              '[HISTORY_DELETE_ZERO_ROWS] completionId=%s remoteId=%s status=%d body=%s',
-              target.completionId,
-              target.remoteId != null ? String(target.remoteId) : 'none',
-              response.status,
-              typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)
-            );
-            continue;
-          }
-          console.log(
-            '[HISTORY_DELETE_SUCCESS] completionId=%s remoteId=%s',
-            target.completionId,
-            target.remoteId != null ? String(target.remoteId) : 'none'
-          );
-        } catch {
-          console.log(
-            '[DELETE_REMOTE_FAILED] completionId=%s remoteId=%s reason=network (queued via tombstone)',
-            target.completionId,
-            target.remoteId != null ? String(target.remoteId) : 'none'
-          );
+        } else {
+          console.log('[HISTORY_DELETE_SUCCESS] ids=%s', completionIds.join(','));
         }
+      } catch {
+        console.log('[DELETE_REMOTE_FAILED] reason=network (queued via tombstone)');
       }
     } else {
       console.log('[DELETE_REMOTE_FAILED] reason=offline-or-guest queued=via-tombstone');
