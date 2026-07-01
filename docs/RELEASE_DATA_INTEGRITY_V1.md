@@ -33,6 +33,9 @@ Both call sites were updated to use this RPC instead of two independent REST cal
 - `app/(tabs)/history.tsx` — the immediate, user-initiated delete (requires an active session; skips the remote step and queues via tombstone if none).
 - `contexts/timer-context.tsx` — the background retry path (`syncPendingHistory`), which previously used the anon key exclusively. It now checks for a real authenticated session first; if none exists, the remote push is skipped for that pass and retried automatically on a later sync (app foreground/reconnect/sign-in) rather than ever attempting an anon-key delete.
 
+### 4. `get_group_dashboard` tombstone-awareness (defense-in-depth)
+The live deployed function (confirmed via `pg_get_functiondef` — it had already drifted from `db/groups_migration.sql`'s on-disk version, which reads totals from a join to `japam_user_totals`; the live version instead sums `japam_history` directly) summed both its "today" and "lifetime total" subqueries directly from `japam_history` with no awareness of `deleted_completions`. `db/update_group_dashboard_tombstone_aware.sql` adds a `not exists (select 1 from public.deleted_completions dc where dc.completion_id = h.completion_id)` filter to both subqueries, so the dashboard can never overstate totals relative to History even if a future delete's remote step is delayed (e.g. an offline window before the atomic delete RPC completes remotely). Groups dashboard now excludes tombstoned/deleted completions, matching History's own client-side filtering exactly.
+
 ## Database migrations executed (production, via Supabase SQL Editor)
 
 All run manually by the user after dry-run (`rollback`) verification, per this project's established migration discipline (backup first, transaction, post-verification before commit, rollback section retained).
@@ -40,6 +43,7 @@ All run manually by the user after dry-run (`rollback`) verification, per this p
 1. **Groups UUID migration** — `db/migrate_groups_numeric_user_ids_to_uuid.sql`. Backup tables retained: `groups_backup_pre_uuid_migration`, `group_members_backup_pre_uuid_migration`.
 2. **Zombie row cleanup** — `db/cleanup_zombie_history_rows.sql`. Backup table retained: `japam_history_zombie_backup`.
 3. **Atomic delete RPC creation** — `db/atomic_delete_history_rpc.sql`. Additive (`create or replace function`), no data changes.
+4. **`get_group_dashboard` tombstone-awareness** — `db/update_group_dashboard_tombstone_aware.sql`. Additive (`create or replace function`), no data changes. Applied directly via the SQL Editor; the migration file was written and committed afterward to capture it in source control.
 
 ## Validation performed
 
@@ -50,11 +54,11 @@ All run manually by the user after dry-run (`rollback`) verification, per this p
   - Background sync path (`timer-context.tsx`) — the path that was previously guaranteed to create a zombie — completed the same delete correctly using a real authenticated session; both the tombstone insert and the row delete share the exact same DB timestamp, confirming one atomic transaction.
   - History screen total updated correctly after deletion (37/3996 → 31/3348, exactly the deleted day's contribution).
   - Post-test system-wide re-check: zero zombie rows.
+- **`get_group_dashboard` tombstone-awareness**: confirmed via `pg_get_functiondef(...) like '%deleted_completions%'` → `true`. Direct RPC call and raw `japam_history` sum matched exactly (31/3348) for bsravani89. Validated end-to-end in the real app UI (not just direct SQL/RPC calls): History total = Groups Dashboard total = **31 malas / 3348 count** for bsravani89, with today's malas/count also matching between both screens (0/0). Zero RPC/permission/"not a member" errors observed in logcat during validation.
 
 ## Remaining known work
 
 - **13 `japam_history` rows still legacy-numeric-keyed** (3 users; 12 map cleanly to existing `auth.users` UUIDs, 1 row — id 952, legacy sub `113106083586126585402` — has no matching account and needs a manual decision before any cleanup). A migration for the 12 mappable rows has been proposed but not implemented. Once it lands, the atomic delete RPC's legacy-sub fallback becomes provably dead code and can be simplified away.
-- **`get_group_dashboard` is not yet tombstone-aware.** It no longer has zombie rows to read today, but if a completion is deleted in the future and the delete RPC's remote step hasn't run yet (offline window), the dashboard could theoretically show a stale total until sync completes. Proposed as defense-in-depth, not yet implemented.
 - **`japam_user_totals`** was found to be a dead/stale table for at least the accounts investigated (showing 0/0, unrelated to either History's or the dashboard's actual totals). Not touched by this milestone; worth a future decision on whether to fix or remove.
 - Carried over from `release-history-stable-v1`: "Today's count investigation" and cleanup of the temporary `[LOCAL_FIX_BUILD_MARKER]` diagnostic log.
 
@@ -63,6 +67,7 @@ All run manually by the user after dry-run (`rollback`) verification, per this p
 - Groups migration: restore from `groups_backup_pre_uuid_migration` / `group_members_backup_pre_uuid_migration` (see the rollback section in `db/migrate_groups_numeric_user_ids_to_uuid.sql`).
 - Zombie cleanup: restore from `japam_history_zombie_backup` (see the rollback section in `db/cleanup_zombie_history_rows.sql`).
 - Atomic delete RPC: additive only; rollback is `drop function public.delete_history_completions(text[]);` if ever needed, though this would revert to the non-atomic, zombie-prone delete behavior in the app code as well.
+- `get_group_dashboard` tombstone-awareness: additive only (`create or replace function`); rollback would mean re-applying the prior function body (recoverable via `pg_get_functiondef` if ever captured again, or by reverting to `db/groups_migration.sql`'s original definition, noting that one is stale relative to what was actually live before this fix).
 - Code: if a future release causes delete/history regressions, compare against this tag (`release-data-integrity-v1`) or, for anything predating this work, `release-history-stable-v1` first.
 
 ## Git reference
