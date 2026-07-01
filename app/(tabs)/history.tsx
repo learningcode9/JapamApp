@@ -129,6 +129,28 @@ type ManualSyncInput = {
 };
 
 type AddDateMode = 'today' | 'yesterday' | 'custom';
+type AddEntryMode = 'malas' | 'count';
+
+const MALAS_TO_COUNT = 108;
+
+// Pure validation for Total Count entry mode. Count must be a positive multiple of 108; if not,
+// returns the friendly "add N more counts" message instead of allowing save.
+function validateCountEntry(countText: string): { valid: boolean; malas?: number; message?: string } {
+  const parsed = parseInt(countText, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return { valid: false };
+  }
+  if (parsed % MALAS_TO_COUNT === 0) {
+    return { valid: true, malas: parsed / MALAS_TO_COUNT };
+  }
+  const nextMultiple = Math.ceil(parsed / MALAS_TO_COUNT) * MALAS_TO_COUNT;
+  const shortfall = nextMultiple - parsed;
+  const malas = nextMultiple / MALAS_TO_COUNT;
+  return {
+    valid: false,
+    message: `Add ${shortfall} more counts to make ${malas} malas (${nextMultiple} total).`,
+  };
+}
 
 const HISTORY_KEY = 'history';
 const DELETED_COMPLETIONS_KEY = 'deletedCompletions';
@@ -645,6 +667,8 @@ export default function HistoryScreen() {
   const [addDateMode, setAddDateMode] = useState<AddDateMode>('today');
   const [addDate, setAddDate] = useState('');
   const [addMalas, setAddMalas] = useState(1);
+  const [addEntryMode, setAddEntryMode] = useState<AddEntryMode>('malas');
+  const [addCountText, setAddCountText] = useState('108');
   const [editingRow, setEditingRow] = useState<DailyRow | null>(null);
   const [editMalas, setEditMalas] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
@@ -660,6 +684,8 @@ export default function HistoryScreen() {
     setAddDateMode('today');
     setAddDate(getLocalDateKey());
     setAddMalas(1);
+    setAddEntryMode('malas');
+    setAddCountText('108');
     setShowAddModal(true);
   };
 
@@ -690,13 +716,24 @@ export default function HistoryScreen() {
       return;
     }
 
-    if (addMalas <= 0) {
-      Alert.alert('Invalid entry', 'Please add at least one mala.');
-      return;
+    let finalMalas: number;
+    let finalCount: number;
+    if (addEntryMode === 'count') {
+      const countValidation = validateCountEntry(addCountText);
+      if (!countValidation.valid || countValidation.malas === undefined) {
+        Alert.alert('Invalid entry', countValidation.message || 'Please enter a valid total count.');
+        return;
+      }
+      finalMalas = countValidation.malas;
+      finalCount = finalMalas * MALAS_TO_COUNT;
+    } else {
+      if (addMalas <= 0) {
+        Alert.alert('Invalid entry', 'Please add at least one mala.');
+        return;
+      }
+      finalMalas = Math.floor(addMalas);
+      finalCount = finalMalas * MALAS_TO_COUNT;
     }
-
-    const finalMalas = Math.floor(addMalas);
-    const finalCount = finalMalas * 108;
 
     setIsSaving(true);
     try {
@@ -1282,32 +1319,83 @@ export default function HistoryScreen() {
               />
             )}
 
-            <Text style={styles.modalLabel}>Malas</Text>
-            <View style={styles.stepperRow}>
-              <Pressable
-                style={styles.stepperButton}
-                onPress={() => setAddMalas((value) => Math.max(1, value - 1))}
-                accessibilityLabel="Decrease malas"
-              >
-                <Ionicons name="remove" size={24} color="#0f766e" />
-              </Pressable>
-              <Text style={styles.stepperValue}>{addMalas}</Text>
-              <Pressable
-                style={styles.stepperButton}
-                onPress={() => setAddMalas((value) => value + 1)}
-                accessibilityLabel="Increase malas"
-              >
-                <Ionicons name="add" size={24} color="#0f766e" />
-              </Pressable>
+            <Text style={styles.modalLabel}>Entry Mode</Text>
+            <View style={styles.dateChoiceRow}>
+              {(['malas', 'count'] as AddEntryMode[]).map((mode) => (
+                <Pressable
+                  key={mode}
+                  style={[
+                    styles.dateChoice,
+                    addEntryMode === mode && styles.dateChoiceSelected,
+                  ]}
+                  onPress={() => setAddEntryMode(mode)}
+                >
+                  <Text
+                    style={[
+                      styles.dateChoiceText,
+                      addEntryMode === mode && styles.dateChoiceTextSelected,
+                    ]}
+                  >
+                    {mode === 'malas' ? 'Malas' : 'Total Count'}
+                  </Text>
+                </Pressable>
+              ))}
             </View>
 
-            <Text style={styles.countPreview}>Total Count: {addMalas * 108}</Text>
+            {addEntryMode === 'malas' ? (
+              <>
+                <Text style={styles.modalLabel}>Malas</Text>
+                <View style={styles.stepperRow}>
+                  <Pressable
+                    style={styles.stepperButton}
+                    onPress={() => setAddMalas((value) => Math.max(1, value - 1))}
+                    accessibilityLabel="Decrease malas"
+                  >
+                    <Ionicons name="remove" size={24} color="#0f766e" />
+                  </Pressable>
+                  <Text style={styles.stepperValue}>{addMalas}</Text>
+                  <Pressable
+                    style={styles.stepperButton}
+                    onPress={() => setAddMalas((value) => value + 1)}
+                    accessibilityLabel="Increase malas"
+                  >
+                    <Ionicons name="add" size={24} color="#0f766e" />
+                  </Pressable>
+                </View>
+
+                <Text style={styles.countPreview}>Total Count: {addMalas * MALAS_TO_COUNT}</Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.modalLabel}>Total Count</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  value={addCountText}
+                  onChangeText={setAddCountText}
+                  placeholder="e.g. 216"
+                  placeholderTextColor="#8aacae"
+                  keyboardType="numeric"
+                />
+                {(() => {
+                  const countValidation = validateCountEntry(addCountText);
+                  return countValidation.valid ? (
+                    <Text style={styles.countPreview}>Malas: {countValidation.malas}</Text>
+                  ) : countValidation.message ? (
+                    <Text style={styles.validationErrorText}>{countValidation.message}</Text>
+                  ) : null;
+                })()}
+              </>
+            )}
 
             <View style={styles.modalActions}>
               <Pressable style={styles.modalCancel} onPress={() => setShowAddModal(false)} disabled={isSaving}>
                 <Text style={styles.modalCancelText}>Cancel</Text>
               </Pressable>
-              <Pressable style={[styles.modalSave, isSaving && { opacity: 0.6 }]} onPress={saveAddJapam} disabled={isSaving}>
+              <Pressable
+                style={[styles.modalSave, isSaving && { opacity: 0.6 }]}
+                onPress={saveAddJapam}
+                disabled={isSaving || (addEntryMode === 'count' && !validateCountEntry(addCountText).valid)}
+              >
                 <Text style={styles.modalSaveText}>{isSaving ? 'Adding…' : 'Add'}</Text>
               </Pressable>
             </View>
@@ -1711,6 +1799,14 @@ const styles = StyleSheet.create({
     color: '#365f61',
     fontSize: 16,
     fontWeight: '700',
+    textAlign: 'center',
+    marginTop: 16,
+  },
+
+  validationErrorText: {
+    color: '#c0392b',
+    fontSize: 14,
+    fontWeight: '600',
     textAlign: 'center',
     marginTop: 16,
   },
