@@ -843,6 +843,11 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       const storedUserName = (await AsyncStorage.getItem('userName')) || '';
       const storedUserEmail = (await AsyncStorage.getItem('userEmail')) || '';
       const fallbackUserName = storedUserName || storedUserEmail || 'Unknown User';
+      // Prefer the authenticated session's access token so this upload is subject to the
+      // authenticated RLS policy on japam_history (mirrors history.tsx's saveToSupabase and the
+      // tombstone-push path above); fall back to the anon key only when genuinely signed out.
+      const { data: sessionData } = await supabase.auth.getSession();
+      const uploadToken = sessionData.session?.access_token || key;
       const syncedIds: string[] = [];
       for (const rec of pending) {
         const payload = buildSupabaseHistoryPayload(rec, uid, fallbackUserName);
@@ -861,7 +866,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
             headers: {
               'Content-Type': 'application/json',
               apikey: key,
-              Authorization: `Bearer ${key}`,
+              Authorization: `Bearer ${uploadToken}`,
               Prefer: 'return=minimal,resolution=merge-duplicates',
             },
             body: JSON.stringify(payload),
