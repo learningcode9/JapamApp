@@ -46,25 +46,42 @@ const { width: HISTORY_SCREEN_WIDTH } = Dimensions.get('window');
 const isNarrowPhone = HISTORY_SCREEN_WIDTH < 380;
 const isTablet = HISTORY_SCREEN_WIDTH >= 768;
 
-// Header font is sized so "Count" (widest 5-char header, because bold round letters C/o/u/n
-// render wider than M/a/l/a/s) never needs truncation at any supported breakpoint.
+// Every header (Date/Malas/Count/Total) and every row value shares the exact same font size
+// and weight (TABLE_HEADER_FONT_SIZE / TABLE_VALUE_FONT_SIZE + cellText's fontWeight) — no
+// per-column size differences.
 // Cell padding is kept tight on phone widths so numeric columns have enough room for both
-// the header label and the data value below it. minimumFontScale={0.9} is a last-resort
-// safety net on native; on web text wrapping/overflow is prevented by the column widths below.
-const TABLE_HEADER_FONT_SIZE = isTablet ? 20 : isNarrowPhone ? 14 : 16;
-const TABLE_VALUE_FONT_SIZE = isTablet ? 19 : isNarrowPhone ? 13 : 15;
-const TABLE_CELL_PADDING_H = isNarrowPhone ? 1 : isTablet ? 8 : 2;
-// DATE_MIN_WIDTH must not crowd numeric columns. Longest realistic date label is "29 Jun 2026"
-// (~87dp at 15px bold SF/Roboto). Medium minWidth 96dp covers that with a small margin.
-// The previous value of 128dp forced date to claim 128dp even when its flex share was only
-// ~93dp, leaving only 30-44dp text space for numeric columns — causing "Coun..." clipping.
-// ACTIONS_COLUMN_WIDTH is sized to exactly fit Edit+Delete buttons plus minimal padding:
-// narrow 40+4+40=84dp, medium/tablet 44+8+44=96dp (+8dp breathing room on tablet).
-const DATE_CELL_FLEX = isNarrowPhone ? 1.28 : isTablet ? 1.7 : 1.6;
-const NUM_CELL_FLEX = isNarrowPhone ? 0.8 : isTablet ? 0.92 : 0.86;
-const TOTAL_CELL_FLEX = isNarrowPhone ? 0.88 : isTablet ? 1.04 : 0.98;
-const DATE_MIN_WIDTH = isNarrowPhone ? 78 : isTablet ? 156 : 96;
-const ACTIONS_COLUMN_WIDTH = isNarrowPhone ? 84 : isTablet ? 104 : 96;
+// the header label and the data value below it. minimumFontScale is a last-resort safety net
+// (only for genuinely long values, e.g. a 6-digit running Total) so numeric text is never
+// forced tiny in the common case; on web text wrapping/overflow is prevented by column widths.
+const TABLE_HEADER_FONT_SIZE = isTablet ? 20 : isNarrowPhone ? 15 : 17;
+const TABLE_VALUE_FONT_SIZE = isTablet ? 19 : isNarrowPhone ? 14 : 16;
+const IS_ANDROID = Platform.OS === 'android';
+const TABLE_CELL_PADDING_H = IS_ANDROID ? 0 : isNarrowPhone ? 1 : isTablet ? 8 : 2;
+// Web/iOS keep the existing proportional (flex-ratio) column sizing below — reported as working
+// fine. Android gets its own deterministic, fixed-dp column widths instead (see the Android
+// block further down): measured-glyph-width math for "Malas" kept under-predicting the real
+// truncation point on a real device (this one has a custom system font — Samsung's
+// FlipFont — that renders wider than the standard font used to estimate these), so rather than
+// keep guessing a precise number, Android gives Malas a deliberately large fixed allowance.
+const DATE_CELL_FLEX = isNarrowPhone ? 1.4 : isTablet ? 1.8 : 1.6;
+const MALAS_CELL_FLEX = isNarrowPhone ? 0.85 : isTablet ? 1.05 : 1.0;
+const COUNT_CELL_FLEX = isNarrowPhone ? 0.95 : isTablet ? 1.15 : 1.05;
+const TOTAL_CELL_FLEX = isNarrowPhone ? 0.9 : isTablet ? 1.1 : 1.0;
+const DATE_MIN_WIDTH = isNarrowPhone ? 84 : isTablet ? 156 : 98;
+// Android-only fixed widths (dp). Date is sized just for "30 Jun 2026" (tight, not huge, per
+// request). Malas gets the single largest numeric-column allowance — deliberately more than
+// Count/Total — because it's the one that's repeatedly truncated in practice.
+const ANDROID_DATE_WIDTH = isNarrowPhone ? 78 : isTablet ? 130 : 92;
+const ANDROID_MALAS_WIDTH = isNarrowPhone ? 72 : isTablet ? 100 : 85;
+const ANDROID_COUNT_WIDTH = isNarrowPhone ? 50 : isTablet ? 70 : 58;
+const ANDROID_TOTAL_WIDTH = isNarrowPhone ? 48 : isTablet ? 68 : 56;
+// Edit + Delete both stay visible on every platform. Android's buttons are a bit more compact
+// (still a safe tap size) with a trimmed gap, to help free room for the header columns above.
+const ROW_ACTION_BUTTON_SIZE = IS_ANDROID
+  ? (isNarrowPhone ? 36 : isTablet ? 44 : 40)
+  : (isNarrowPhone ? 40 : 44);
+const ROW_ACTIONS_GAP = IS_ANDROID ? 2 : (isNarrowPhone ? 4 : 8);
+const ACTIONS_COLUMN_WIDTH = ROW_ACTION_BUTTON_SIZE * 2 + ROW_ACTIONS_GAP;
 
 type Session = {
   date: string;
@@ -188,7 +205,9 @@ const toDayLabel = (dayKey: string) => {
   const [year, month, day] = dayKey.split('-').map(Number);
   const monthName = SHORT_MONTH_NAMES[month - 1];
 
-  return isNarrowPhone ? `${day} ${monthName}` : `${day} ${monthName} ${year}`;
+  // The year must always be visible, on every row, on every screen size — no narrow-phone
+  // shorthand that drops it.
+  return `${day} ${monthName} ${year}`;
 };
 
 const toEditDateLabel = (dayKey: string) => {
@@ -440,18 +459,29 @@ const syncHistoryEditsToSupabase = async (
   records: HistoryRecord[],
   userId: string,
   fallbackUserName: string,
-): Promise<{ syncedIds: string[]; rlsBlocked: boolean }> => {
+): Promise<{ syncedIds: string[]; rlsBlocked: boolean; inconclusive: boolean }> => {
   const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
   const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !key || records.length === 0) return { syncedIds: [], rlsBlocked: false };
+  if (!url || !key || records.length === 0) return { syncedIds: [], rlsBlocked: false, inconclusive: false };
 
   // Require a real session JWT. Without one the request would run as `anon` role, which has
   // no UPDATE policy — guaranteed 403. Leave records as `pending` for retry on next sign-in.
   const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
-  if (!sessionToken) return { syncedIds: [], rlsBlocked: false };
+  if (!sessionToken) return { syncedIds: [], rlsBlocked: false, inconclusive: false };
   const accessToken = sessionToken;
   const syncedIds: string[] = [];
   let rlsBlocked = false;
+  let inconclusive = false;
+  const runVerify = async (token: string, remoteId: string | number | null | undefined, completionId: string) => {
+    const verifyUrl = remoteId != null
+      ? `${url}/rest/v1/japam_history?id=eq.${encodeURIComponent(String(remoteId))}&select=id,completion_id,malas,count,created_at,user_id,user_name`
+      : `${url}/rest/v1/japam_history?completion_id=eq.${encodeURIComponent(completionId)}&select=id,completion_id,malas,count,created_at,user_id,user_name`;
+    return fetch(verifyUrl, {
+      method: 'GET',
+      headers: { apikey: key, Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    });
+  };
   for (const record of records) {
     const payload = buildSupabaseHistoryPayload(record, userId, fallbackUserName);
     try {
@@ -498,86 +528,117 @@ const syncHistoryEditsToSupabase = async (
             },
             body: JSON.stringify(requestBody),
           });
-      if (response.ok) {
-        // Always verify via a separate GET — do not trust the PATCH response body alone.
-        // Supabase can return 200 with [] when RLS blocks SELECT-back even though the UPDATE
-        // succeeded, or when the id filter matched nothing. The verify GET is the ground truth.
-        const verifyUrl = remoteId != null
-          ? `${url}/rest/v1/japam_history?id=eq.${encodeURIComponent(String(remoteId))}&select=id,completion_id,malas,count,created_at,user_id,user_name`
-          : `${url}/rest/v1/japam_history?completion_id=eq.${encodeURIComponent(payload.completion_id)}&select=id,completion_id,malas,count,created_at,user_id,user_name`;
-        const verifyResponse = await fetch(verifyUrl, {
-          method: 'GET',
-          headers: {
-            apikey: key,
-            Authorization: `Bearer ${accessToken}`,
-          },
-          cache: 'no-store',
-        });
-        if (!verifyResponse.ok) {
-          if (verifyResponse.status === 401 || verifyResponse.status === 403) rlsBlocked = true;
-          console.log(
-            '[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=verify-read-failed remoteId=%s status=%d',
-            record.completionId,
-            remoteId != null ? String(remoteId) : 'none',
-            verifyResponse.status,
-          );
-          continue;
-        }
-        const verifyText = await verifyResponse.text().catch(() => '');
-        let verifyBody: unknown = [];
-        try { verifyBody = verifyText ? JSON.parse(verifyText) : []; } catch { verifyBody = []; }
-        const verifyRows = Array.isArray(verifyBody) ? verifyBody as Array<{
-          id?: number | string;
-          completion_id?: string;
-          malas?: number | string;
-          count?: number | string;
-        }> : [];
-        if (verifyRows.length === 0) {
-          console.log(
-            '[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=verify-zero-rows remoteId=%s',
-            record.completionId,
-            remoteId != null ? String(remoteId) : 'none',
-          );
-          continue;
-        }
-        const verified = verifyRows[0];
-        const verifiedId = verified?.id ?? remoteId;
-        const verifiedMalas = Number(verified?.malas) || 0;
-        const verifiedCount = Number(verified?.count) || 0;
-        if (verifiedMalas !== payload.malas || verifiedCount !== payload.count) {
-          console.log(
-            '[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=verify-mismatch remoteId=%s expectedMalas=%d expectedCount=%d dbMalas=%d dbCount=%d',
-            record.completionId,
-            remoteId != null ? String(remoteId) : 'none',
-            payload.malas,
-            payload.count,
-            verifiedMalas,
-            verifiedCount,
-          );
-          continue;
-        }
-        syncedIds.push(record.completionId);
-        console.log(
-          '[HISTORY_EDIT_SYNC_SUCCESS] completionId=%s remoteId=%s malas=%d count=%d',
-          record.completionId,
-          verifiedId != null ? String(verifiedId) : 'none',
-          payload.malas,
-          payload.count,
-        );
-      } else {
+      if (!response.ok) {
         if (response.status === 401 || response.status === 403) rlsBlocked = true;
         console.log(
           '[HISTORY_EDIT_SYNC_FAILED] completionId=%s status=%d',
           record.completionId,
           response.status
         );
+        continue;
       }
+
+      // The write itself succeeded (2xx). Trust the returned row (Prefer: return=representation)
+      // as the primary evidence of success — if it already reflects the values we sent, there's
+      // no need for a separate verify GET (whose own failure previously caused a false "not
+      // saved" alert even though the write had gone through).
+      const writeText = await response.text().catch(() => '');
+      let writeRows: Array<{ completion_id?: string; malas?: number | string; count?: number | string }> = [];
+      try {
+        const parsed = writeText ? JSON.parse(writeText) : [];
+        writeRows = Array.isArray(parsed) ? parsed : [];
+      } catch { writeRows = []; }
+      const writtenRow = writeRows.find((r) => r.completion_id === payload.completion_id) ?? writeRows[0];
+      if (
+        writtenRow &&
+        Number(writtenRow.malas) === payload.malas &&
+        Number(writtenRow.count) === payload.count
+      ) {
+        syncedIds.push(record.completionId);
+        console.log(
+          '[HISTORY_EDIT_SYNC_SUCCESS] completionId=%s source=write-response malas=%d count=%d',
+          record.completionId,
+          payload.malas,
+          payload.count,
+        );
+        continue;
+      }
+
+      // Write response didn't already confirm it (e.g. RLS blocks SELECT-back on the write, so
+      // return=representation comes back empty) — fall back to a separate verify GET, retrying
+      // once with a freshly-fetched session token if the first attempt 400s (a stale/near-expiry
+      // token failing auth validation, not an RLS permission block).
+      let verifyResponse = await runVerify(accessToken, remoteId, payload.completion_id);
+      if (verifyResponse.status === 400) {
+        const freshToken = (await supabase.auth.getSession()).data.session?.access_token;
+        if (freshToken) {
+          verifyResponse = await runVerify(freshToken, remoteId, payload.completion_id);
+        }
+      }
+      if (!verifyResponse.ok) {
+        if (verifyResponse.status === 401 || verifyResponse.status === 403) {
+          rlsBlocked = true;
+        } else {
+          // The write already returned 2xx — a failed verify-read is inconclusive, not proof
+          // the edit didn't save.
+          inconclusive = true;
+        }
+        console.log(
+          '[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=verify-read-failed remoteId=%s status=%d',
+          record.completionId,
+          remoteId != null ? String(remoteId) : 'none',
+          verifyResponse.status,
+        );
+        continue;
+      }
+      const verifyText = await verifyResponse.text().catch(() => '');
+      let verifyBody: unknown = [];
+      try { verifyBody = verifyText ? JSON.parse(verifyText) : []; } catch { verifyBody = []; }
+      const verifyRows = Array.isArray(verifyBody) ? verifyBody as Array<{
+        id?: number | string;
+        completion_id?: string;
+        malas?: number | string;
+        count?: number | string;
+      }> : [];
+      if (verifyRows.length === 0) {
+        console.log(
+          '[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=verify-zero-rows remoteId=%s',
+          record.completionId,
+          remoteId != null ? String(remoteId) : 'none',
+        );
+        inconclusive = true;
+        continue;
+      }
+      const verified = verifyRows[0];
+      const verifiedId = verified?.id ?? remoteId;
+      const verifiedMalas = Number(verified?.malas) || 0;
+      const verifiedCount = Number(verified?.count) || 0;
+      if (verifiedMalas !== payload.malas || verifiedCount !== payload.count) {
+        console.log(
+          '[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=verify-mismatch remoteId=%s expectedMalas=%d expectedCount=%d dbMalas=%d dbCount=%d',
+          record.completionId,
+          remoteId != null ? String(remoteId) : 'none',
+          payload.malas,
+          payload.count,
+          verifiedMalas,
+          verifiedCount,
+        );
+        continue;
+      }
+      syncedIds.push(record.completionId);
+      console.log(
+        '[HISTORY_EDIT_SYNC_SUCCESS] completionId=%s remoteId=%s malas=%d count=%d',
+        record.completionId,
+        verifiedId != null ? String(verifiedId) : 'none',
+        payload.malas,
+        payload.count,
+      );
     } catch {
       console.log('[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=network', record.completionId);
       break;
     }
   }
-  return { syncedIds, rlsBlocked };
+  return { syncedIds, rlsBlocked, inconclusive };
 };
 
 export default function HistoryScreen() {
@@ -713,6 +774,7 @@ export default function HistoryScreen() {
     }
   };
   const loadHistory = useCallback(async () => {
+    console.log('[LOCAL_FIX_BUILD_MARKER] history-table-v3 edit-confirm-v1');
     await repairLegacyStoredUserId();
     const todayKey = getLocalDateKey();
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
@@ -1047,6 +1109,11 @@ export default function HistoryScreen() {
               'Could not sync edit',
               'Permission denied. Your correction is saved on this device and will retry when you reload.'
             );
+          } else if (result.inconclusive) {
+            Alert.alert(
+              'Edit saved, but confirmation failed',
+              'Please refresh to verify.'
+            );
           } else {
             Alert.alert(
               'Edit not saved to database',
@@ -1361,16 +1428,16 @@ export default function HistoryScreen() {
       <View style={styles.tableCard}>
         <View style={[styles.tableRow, styles.tableHeader]}>
           <View style={[styles.columnCell, styles.dateColumn]}>
-            <Text style={[styles.cellText, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Date</Text>
+            <Text style={[styles.cellText, styles.tableHeaderText]} numberOfLines={1}>Date</Text>
           </View>
           <View style={[styles.columnCell, styles.numColumn]}>
-            <Text style={[styles.cellText, styles.numericText, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Malas</Text>
+            <Text style={[styles.cellText, styles.numericText, styles.tableHeaderText]} numberOfLines={1}>Malas</Text>
           </View>
-          <View style={[styles.columnCell, styles.numColumn]}>
-            <Text style={[styles.cellText, styles.numericText, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Count</Text>
+          <View style={[styles.columnCell, styles.countColumn]}>
+            <Text style={[styles.cellText, styles.numericText, styles.tableHeaderText]} numberOfLines={1}>Count</Text>
           </View>
           <View style={[styles.columnCell, styles.totalColumn]}>
-            <Text style={[styles.cellText, styles.numericText, styles.tableHeaderText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>Total</Text>
+            <Text style={[styles.cellText, styles.numericText, styles.tableHeaderText]} numberOfLines={1}>Total</Text>
           </View>
           <View style={[styles.columnCell, styles.actionsColumn]}>
             {/* intentionally blank — column alignment maintained by actionsColumn width */}
@@ -1392,13 +1459,13 @@ export default function HistoryScreen() {
                   </Text>
                 </View>
                 <View style={[styles.columnCell, styles.numColumn]}>
-                  <Text style={[styles.cellText, styles.numericText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.malas}</Text>
+                  <Text style={[styles.cellText, styles.numericText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.92}>{row.malas}</Text>
                 </View>
-                <View style={[styles.columnCell, styles.numColumn]}>
-                  <Text style={[styles.cellText, styles.numericText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.totalCount}</Text>
+                <View style={[styles.columnCell, styles.countColumn]}>
+                  <Text style={[styles.cellText, styles.numericText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.92}>{row.totalCount}</Text>
                 </View>
                 <View style={[styles.columnCell, styles.totalColumn]}>
-                  <Text style={[styles.cellText, styles.numericText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>{row.accumulated}</Text>
+                  <Text style={[styles.cellText, styles.numericText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.92}>{row.accumulated}</Text>
                 </View>
                 <View style={[styles.columnCell, styles.actionsColumn]}>
                   <View style={styles.rowActions}>
@@ -1780,39 +1847,44 @@ const styles = StyleSheet.create({
     fontSize: TABLE_VALUE_FONT_SIZE,
     fontWeight: '700',
   },
-  dateColumn: {
-    flexBasis: 0,
-    flexGrow: DATE_CELL_FLEX,
-    flexShrink: 1,
-    minWidth: DATE_MIN_WIDTH,
-  },
-  // Header labels are short words that never need to be as large as the data values below them —
-  // giving them their own smaller (but never tiny — see TABLE_HEADER_FONT_SIZE) size frees up
-  // room so "Malas"/"Count"/"Total" fit on one line without clipping, even at large Android
-  // font-scale accessibility settings.
-  // Small negative letterSpacing shaves a few px off bold header text width without shrinking
-  // fontSize — keeps the senior-friendly size while giving "Count" the room it needs to stop
-  // clipping at narrow/medium widths.
+  dateColumn: IS_ANDROID
+    ? { width: ANDROID_DATE_WIDTH, flexGrow: 0, flexShrink: 0 }
+    : { flexBasis: 0, flexGrow: DATE_CELL_FLEX, flexShrink: 1, minWidth: DATE_MIN_WIDTH },
+  // Same fontSize/letterSpacing for every header cell (Date/Malas/Count/Total) — no per-column
+  // size difference. Small negative letterSpacing shaves a few px off bold header text width
+  // without shrinking fontSize.
   tableHeaderText: { fontSize: TABLE_HEADER_FONT_SIZE, letterSpacing: isNarrowPhone ? -0.1 : -0.2 },
-  // Malas/Count hold shorter values (e.g. "10", "1080") than Total's running accumulation
-  // (e.g. "26784"), so Total gets a bit more room. Centered per requirement — Date stays
-  // left-aligned (its default), these three numeric columns are explicitly centered.
-  numericText: { textAlign: 'center' },
+  // Centered per requirement — Date stays left-aligned (its default), these three numeric
+  // columns are explicitly centered.
+  // width: '100%' forces the Text to occupy the column's full width before centering — without
+  // it, numberOfLines={1}+adjustsFontSizeToFit can shrink-wrap short values (e.g. a single-digit
+  // "1") to their own tight intrinsic width on Android, so textAlign:'center' centers within that
+  // tiny box instead of the real column, drifting short values toward the left of wider ones.
+  numericText: { textAlign: 'center', width: '100%' },
   actionsHeaderText: { textAlign: 'center' },
-  numColumn: {
-    flexBasis: 0,
-    flexGrow: NUM_CELL_FLEX,
-    flexShrink: 1,
-  },
-  totalColumn: {
-    flexBasis: 0,
-    flexGrow: TOTAL_CELL_FLEX,
-    flexShrink: 1,
-  },
+  // On Android this is deliberately the single largest numeric-column width (see
+  // ANDROID_MALAS_WIDTH) — not "small" — because the "Malas" header word is the one that's
+  // repeatedly truncated in practice. On web/iOS it keeps the original small flex share.
+  numColumn: IS_ANDROID
+    ? { width: ANDROID_MALAS_WIDTH, flexGrow: 0, flexShrink: 0 }
+    : { flexBasis: 0, flexGrow: MALAS_CELL_FLEX, flexShrink: 1 },
+  countColumn: IS_ANDROID
+    ? { width: ANDROID_COUNT_WIDTH, flexGrow: 0, flexShrink: 0 }
+    : { flexBasis: 0, flexGrow: COUNT_CELL_FLEX, flexShrink: 1 },
+  // Total is the one column left with a little elasticity on Android (flexGrow/flexShrink, not
+  // a strict fixed width like the others) — it's never been the one that truncates, so it's the
+  // safest place to absorb any leftover/short space if the other columns' exact dp totals don't
+  // add up perfectly to the real device width.
+  totalColumn: IS_ANDROID
+    ? { flexBasis: ANDROID_TOTAL_WIDTH, flexGrow: 1, flexShrink: 1 }
+    : { flexBasis: 0, flexGrow: TOTAL_CELL_FLEX, flexShrink: 1 },
   actionsColumn: {
     width: ACTIONS_COLUMN_WIDTH,
     flexGrow: 0,
     flexShrink: 0,
+    // No horizontal padding here (unlike other columns) — the column width is already sized to
+    // exactly fit the two buttons plus their gap, so padding on top would force an overflow.
+    paddingHorizontal: 0,
   },
 
   rowActions: {
@@ -1820,13 +1892,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: isNarrowPhone ? 4 : 8,
+    gap: ROW_ACTIONS_GAP,
   },
 
   rowActionButton: {
-    width: isNarrowPhone ? 40 : 44,
-    height: isNarrowPhone ? 40 : 44,
-    borderRadius: isNarrowPhone ? 20 : 22,
+    width: ROW_ACTION_BUTTON_SIZE,
+    height: ROW_ACTION_BUTTON_SIZE,
+    borderRadius: ROW_ACTION_BUTTON_SIZE / 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
