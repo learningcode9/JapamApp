@@ -15,6 +15,37 @@ import { supabase } from './supabase';
 
 export const USER_ID_KEY = 'userId';
 export const IS_ANONYMOUS_KEY = 'isAnonymousUser';
+// TEMPORARY BRIDGE KEY — remove once db/migrate_numeric_user_ids_to_uuid.sql has been run and its
+// post-verification query confirms zero mappable numeric-id rows remain (see that file's header).
+// Holds the pre-repair legacy numeric id so history fetch can dual-query it until the DB is clean.
+export const LEGACY_USER_ID_KEY = 'legacyUserId';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * If a valid, non-anonymous Supabase session exists and its UUID differs from the
+ * stored USER_ID_KEY (a legacy numeric Google subject id), repairs USER_ID_KEY to the
+ * session's UUID, remembering the old id under LEGACY_USER_ID_KEY. No-ops for guests,
+ * already-UUID ids, or when no session exists. Never touches history rows. Returns the
+ * effective userId (repaired or unchanged).
+ */
+export async function repairLegacyStoredUserId(): Promise<string | null> {
+  const storedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+  if (!storedUserId || UUID_RE.test(storedUserId)) return storedUserId;
+
+  const { data } = await supabase.auth.getSession();
+  const session = data.session;
+  const isAnonymous = !!(session?.user as { is_anonymous?: boolean } | undefined)?.is_anonymous;
+  const sessionUserId = session?.user?.id;
+  if (!sessionUserId || isAnonymous || !UUID_RE.test(sessionUserId) || sessionUserId === storedUserId) {
+    return storedUserId;
+  }
+
+  await AsyncStorage.setItem(LEGACY_USER_ID_KEY, storedUserId);
+  await AsyncStorage.setItem(USER_ID_KEY, sessionUserId);
+  console.log('[LEGACY_IDENTITY_UPGRADED] from=%s to=%s', storedUserId, sessionUserId);
+  return sessionUserId;
+}
 
 /**
  * "Continue as Guest" entry point. On success, writes USER_ID_KEY (the new anonymous auth.uid())

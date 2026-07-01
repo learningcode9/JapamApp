@@ -14,6 +14,7 @@ import {
   toLocalDayKey,
   type HistoryRecord,
 } from '../../lib/historyStore';
+import { repairLegacyStoredUserId, LEGACY_USER_ID_KEY } from '../../lib/anonymousAuth';
 import { supabase } from '../../lib/supabase';
 import * as FileSystem from 'expo-file-system/legacy';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -277,14 +278,21 @@ const buildDailyRows = (sessions: Session[]) => {
   return rowsWithAccumulated.reverse();
 };
 
-const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> => {
+// TEMPORARY BRIDGE — the legacyUserId parameter and the second fetchBy call below exist only to
+// bridge users whose old numeric-Google-ID rows haven't been migrated to their Supabase UUID yet.
+// Remove legacyUserId support here (and its call site in loadHistory) once
+// db/migrate_numeric_user_ids_to_uuid.sql has been run and its post-verification query confirms
+// zero mappable numeric-id rows remain.
+const fetchRemoteSessions = async (userId: string, legacyUserId?: string | null): Promise<Session[] | null> => {
   const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
   const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!url || !key || !userId) return null;
 
   try {
-    const fetchBy = async (field: 'user_id' | 'user_name', value: string) => {
+    // taggedUserId lets a legacy-id query's rows be tagged as belonging to the canonical UUID, so
+    // they merge/display/reconcile identically to rows fetched by the UUID itself.
+    const fetchBy = async (field: 'user_id' | 'user_name', value: string, taggedUserId: string) => {
       const query = new URLSearchParams({
         select: 'id,created_at,malas,count,user_name,completion_id',
         [field]: `eq.${value}`,
@@ -317,17 +325,28 @@ const fetchRemoteSessions = async (userId: string): Promise<Session[] | null> =>
           totalCount,
           duration: 0,
           manual: false,
-          userId,
+          userId: taggedUserId,
           userName: row.user_name || undefined,
           remoteId: row.id,
-          completionId: row.completion_id || makeCompletionId(userId, row.created_at || new Date().toISOString()),
+          completionId: row.completion_id || makeCompletionId(taggedUserId, row.created_at || new Date().toISOString()),
           syncStatus: 'synced' as const,
         };
       });
     };
 
-    const byUserId = await fetchBy('user_id', userId);
-    return byUserId;
+    const primary = await fetchBy('user_id', userId, userId);
+    if (primary === null) return null;
+
+    if (legacyUserId && legacyUserId !== userId) {
+      const legacyRows = await fetchBy('user_id', legacyUserId, userId);
+      console.log(
+        '[DUAL_FETCH_BRIDGE] canonicalUserId=%s legacyUserId=%s primaryCount=%d legacyCount=%d',
+        userId, legacyUserId, primary.length, legacyRows?.length ?? 0
+      );
+      if (legacyRows && legacyRows.length > 0) return [...primary, ...legacyRows];
+    }
+
+    return primary;
   } catch (error) {
     console.log('Supabase history fetch error:', error);
     return null;
@@ -403,15 +422,17 @@ const syncManualEntryToSupabase = async ({
       completionId
     );
 
-    if (!supabaseOk) return;
+    if (!supabaseOk) return false;
 
     await backfillMissingUserNames(userId, userName);
     const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
     const latest = parseHistory(latestRaw);
     await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, [completionId])));
     console.log('[MARK_SYNCED] source=history-manual completionId=%s', completionId);
+    return true;
   } catch (error) {
     console.log('Supabase manual entry background sync error:', error);
+    return false;
   }
 };
 
@@ -599,6 +620,7 @@ export default function HistoryScreen() {
   };
 
   const saveAddJapam = async () => {
+    await repairLegacyStoredUserId();
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
     // Guests (currentUserId === null) are allowed — records saved locally with syncStatus 'synced'
 
@@ -655,8 +677,9 @@ export default function HistoryScreen() {
       );
 
       // Only sync to Supabase for signed-in Google users
+      let remoteOk = true; // guests: nothing to sync, not a failure
       if (currentUserId) {
-        void syncManualEntryToSupabase({
+        remoteOk = await syncManualEntryToSupabase({
           userId: currentUserId,
           userName,
           malas: finalMalas,
@@ -676,7 +699,12 @@ export default function HistoryScreen() {
         window.dispatchEvent(new Event('japam-history-updated'));
       }
 
-      Alert.alert('Added', 'Japam added to history.');
+      Alert.alert(
+        remoteOk ? 'Added' : 'Saved locally',
+        remoteOk
+          ? 'Japam added to history.'
+          : 'Japam saved on this device but could not be synced yet. It will sync automatically later.'
+      );
     } catch (err) {
       console.log('Add Japam error:', err);
       Alert.alert('Could not add Japam', 'Something went wrong. Please try again.');
@@ -685,6 +713,7 @@ export default function HistoryScreen() {
     }
   };
   const loadHistory = useCallback(async () => {
+    await repairLegacyStoredUserId();
     const todayKey = getLocalDateKey();
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
     const raw = await AsyncStorage.getItem('history');
@@ -717,7 +746,10 @@ export default function HistoryScreen() {
       (item.userId || null) === (currentUserId || null) && !isTombstoned(item);
 
     let sessions = dedupeSessions(cleanedSessions.filter(matchesUser));
-    const remoteSessions = currentUserId ? await fetchRemoteSessions(currentUserId) : null;
+    // TEMPORARY BRIDGE: dual-fetch by legacy numeric id too — see fetchRemoteSessions's header
+    // comment and db/migrate_numeric_user_ids_to_uuid.sql for the removal trigger.
+    const legacyUserId = await AsyncStorage.getItem(LEGACY_USER_ID_KEY);
+    const remoteSessions = currentUserId ? await fetchRemoteSessions(currentUserId, legacyUserId) : null;
 
     if (remoteSessions !== null) {
       const filteredRemoteSessions = remoteSessions.filter((item) => {
@@ -799,6 +831,7 @@ export default function HistoryScreen() {
       options?.day || 'unknown',
       completionIds.join(',')
     );
+    await repairLegacyStoredUserId();
     const ids = new Set(completionIds);
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
     const raw = await AsyncStorage.getItem(HISTORY_KEY);
@@ -952,6 +985,7 @@ export default function HistoryScreen() {
 
     setIsSaving(true);
     try {
+      await repairLegacyStoredUserId();
       const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
       const currentHistory = parseHistory(raw);

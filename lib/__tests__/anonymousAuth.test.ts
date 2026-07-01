@@ -12,6 +12,7 @@ jest.mock('../supabase', () => ({
       signInAnonymously: jest.fn(),
       linkIdentity: jest.fn(),
       signInWithIdToken: jest.fn(),
+      getSession: jest.fn(),
     },
   },
 }));
@@ -22,6 +23,7 @@ import { supabase } from '../supabase';
 import {
   USER_ID_KEY,
   IS_ANONYMOUS_KEY,
+  LEGACY_USER_ID_KEY,
   signInAsGuest,
   getIsAnonymous,
   setIsAnonymous,
@@ -29,13 +31,21 @@ import {
   signInOrLinkGoogle,
   showGoogleAccountCollisionDialog,
   shouldSkipRemoteSync,
+  repairLegacyStoredUserId,
 } from '../anonymousAuth';
 
 const mockedAuth = supabase.auth as unknown as {
   signInAnonymously: jest.Mock;
   linkIdentity: jest.Mock;
   signInWithIdToken: jest.Mock;
+  getSession: jest.Mock;
 };
+
+const sessionWith = (userId: string | undefined, isAnonymous = false) => ({
+  data: {
+    session: userId ? { user: { id: userId, is_anonymous: isAnonymous } } : null,
+  },
+});
 
 beforeEach(async () => {
   await AsyncStorage.clear();
@@ -183,6 +193,82 @@ describe('signInOrLinkGoogle', () => {
     const result = await signInOrLinkGoogle('id-token-abc', true);
 
     expect(result.kind).toBe('error');
+  });
+});
+
+describe('repairLegacyStoredUserId', () => {
+  const NUMERIC_ID = '108347881408167165195';
+  const UUID = '2793fca2-38fa-4c9e-9856-26c2b34d0acb';
+
+  it('no stored USER_ID_KEY (guest): returns null, writes nothing, never calls getSession', async () => {
+    const result = await repairLegacyStoredUserId();
+
+    expect(result).toBeNull();
+    expect(mockedAuth.getSession).not.toHaveBeenCalled();
+  });
+
+  it('already a UUID: returns it unchanged, never calls getSession', async () => {
+    await AsyncStorage.setItem(USER_ID_KEY, UUID);
+
+    const result = await repairLegacyStoredUserId();
+
+    expect(result).toBe(UUID);
+    expect(mockedAuth.getSession).not.toHaveBeenCalled();
+  });
+
+  it('numeric id + no session: leaves USER_ID_KEY untouched, no LEGACY_USER_ID_KEY written', async () => {
+    await AsyncStorage.setItem(USER_ID_KEY, NUMERIC_ID);
+    mockedAuth.getSession.mockResolvedValue(sessionWith(undefined));
+
+    const result = await repairLegacyStoredUserId();
+
+    expect(result).toBe(NUMERIC_ID);
+    expect(await AsyncStorage.getItem(USER_ID_KEY)).toBe(NUMERIC_ID);
+    expect(await AsyncStorage.getItem(LEGACY_USER_ID_KEY)).toBeNull();
+  });
+
+  it('numeric id + anonymous session: leaves USER_ID_KEY untouched (guest session, not a real account)', async () => {
+    await AsyncStorage.setItem(USER_ID_KEY, NUMERIC_ID);
+    mockedAuth.getSession.mockResolvedValue(sessionWith(UUID, true));
+
+    const result = await repairLegacyStoredUserId();
+
+    expect(result).toBe(NUMERIC_ID);
+    expect(await AsyncStorage.getItem(USER_ID_KEY)).toBe(NUMERIC_ID);
+  });
+
+  it('numeric id + session whose user.id is not UUID-shaped: leaves USER_ID_KEY untouched', async () => {
+    await AsyncStorage.setItem(USER_ID_KEY, NUMERIC_ID);
+    mockedAuth.getSession.mockResolvedValue(sessionWith('not-a-uuid'));
+
+    const result = await repairLegacyStoredUserId();
+
+    expect(result).toBe(NUMERIC_ID);
+    expect(await AsyncStorage.getItem(USER_ID_KEY)).toBe(NUMERIC_ID);
+  });
+
+  it('numeric id + valid non-anonymous UUID session: repairs USER_ID_KEY and remembers the old id', async () => {
+    await AsyncStorage.setItem(USER_ID_KEY, NUMERIC_ID);
+    mockedAuth.getSession.mockResolvedValue(sessionWith(UUID, false));
+
+    const result = await repairLegacyStoredUserId();
+
+    expect(result).toBe(UUID);
+    expect(await AsyncStorage.getItem(USER_ID_KEY)).toBe(UUID);
+    expect(await AsyncStorage.getItem(LEGACY_USER_ID_KEY)).toBe(NUMERIC_ID);
+  });
+
+  it('is idempotent: calling it again after a repair is a no-op (no duplicate log-worthy upgrade)', async () => {
+    await AsyncStorage.setItem(USER_ID_KEY, NUMERIC_ID);
+    mockedAuth.getSession.mockResolvedValue(sessionWith(UUID, false));
+    await repairLegacyStoredUserId();
+
+    mockedAuth.getSession.mockClear();
+    const second = await repairLegacyStoredUserId();
+
+    expect(second).toBe(UUID);
+    expect(mockedAuth.getSession).not.toHaveBeenCalled(); // short-circuits: already a UUID
+    expect(await AsyncStorage.getItem(LEGACY_USER_ID_KEY)).toBe(NUMERIC_ID); // untouched, not cleared
   });
 });
 

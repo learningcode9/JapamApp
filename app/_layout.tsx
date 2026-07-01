@@ -11,6 +11,7 @@ import 'react-native-reanimated';
 import { PaperProvider } from 'react-native-paper';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { ZEN_BACKGROUND } from '@/constants/assets';
+import { repairLegacyStoredUserId } from '@/lib/anonymousAuth';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -18,6 +19,14 @@ export const unstable_settings = {
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+
+  // Startup identity canonicalization: if a valid Supabase session already exists but the cached
+  // USER_ID_KEY is still a legacy numeric Google subject id, repair it to the session's UUID. A
+  // no-op when there's no session, the id is already a UUID, or the user is a guest — see
+  // lib/anonymousAuth.ts's repairLegacyStoredUserId for the exact gating conditions.
+  useEffect(() => {
+    void repairLegacyStoredUserId();
+  }, []);
 
   // Warm the background image cache in the background only. This must NEVER gate app render:
   // gating on downloadAsync() froze startup when offline (the call can hang without network and
