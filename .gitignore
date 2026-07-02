@@ -44,5 +44,9 @@ app-example
 
 # Secret config files
 .env
+.env.staging
 firebaseConfig.ts
 .vercel
+
+# Supabase CLI local cache (contains project ref / pooler connection info)
+supabase/.temp/
