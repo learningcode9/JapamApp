@@ -20,6 +20,66 @@ precedence without editing or deleting anything production uses.
 scripts/run-with-env.js  ← loads an arbitrary .env file before spawning a command
 ```
 
+## EAS Cloud Builds & OTA Channel for Staging
+
+Everything above covers **local** dev (`expo start`/`expo run:android`). This section covers
+**cloud builds** (`eas build`) and **OTA updates** (`eas update`) for staging.
+
+### Architecture
+
+```
+eas.json "staging" build profile
+  → channel: "staging"                (dedicated OTA channel, created via `eas channel:create staging`)
+  → environment: "preview"            (pulls Supabase URL/keys from the EAS "preview" Environment)
+```
+
+### Important: the built-in "preview" EAS Environment now holds staging's values
+
+EAS Environments (the server-side env-var store `eas build`/`eas update` pull from — separate
+from `eas.json` itself) only support **custom names on paid EAS plans**. This project's current
+plan doesn't support a custom `"staging"` Environment (`eas env:create staging ...` fails with
+*"Custom environments are supported on Production and Enterprise plans"*).
+
+Given that, and given the audit below found `preview` fully redundant with the new `staging`
+profile for its original purpose, we deliberately **repurposed the built-in `"preview"`
+Environment to hold staging's Supabase values** rather than hardcoding them into the git-tracked
+`eas.json` file. The new `staging` build profile explicitly declares `"environment": "preview"`
+so `eas build --profile staging` correctly pulls from it.
+
+**What changed, exactly** (2026-07-02):
+- `EXPO_PUBLIC_SUPABASE_URL`: `https://rftlqybgnbixotnpanec.supabase.co` (production) →
+  `https://nhacglvxdypevrbvvkhn.supabase.co` (staging)
+- `EXPO_PUBLIC_SUPABASE_ANON_KEY`: production publishable key → staging publishable key
+- `EXPO_PUBLIC_GOOGLE_CLIENT_ID` / `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`: **unchanged** — reused
+  as-is, same reasoning as the local setup above (native Google Sign-In isn't tied to a Supabase
+  project).
+- The **`production`** Environment was not touched at all.
+
+**Consequence — read this before running any preview build**: `eas build --profile preview`
+now produces a build wired to the **staging** backend, not production. This is intentional
+(see deprecation notice below) but is a real behavior change from what `preview` builds did
+before this date. Existing devices already running an installed preview build are unaffected —
+env vars are baked in at build time, not changed by OTA — this only affects **new** preview
+builds going forward.
+
+### `preview` OTA channel — deprecated
+
+- `preview` (channel + build profile) is **not removed**, but is deprecated as of 2026-07-02.
+- `staging` is now the **only** pre-production OTA channel going forward.
+- Do not publish new OTA updates to `preview`. Use `eas update --branch staging --channel staging
+  --platform android` instead.
+- See "Preview deprecation" below for the full audit and migration plan.
+
+### Commands (not yet run — for when you're ready)
+
+```bash
+# Cloud build, shareable APK, wired to staging backend:
+eas build --profile staging --platform android
+
+# OTA update to staging channel (after a staging build is installed on a device):
+eas update --branch staging --channel staging --platform android
+```
+
 ## Files
 
 - **`.env.staging`** (gitignored, already created with real values):
@@ -143,5 +203,84 @@ variant. Production commands are completely unchanged.
   code or Google Cloud Console change is needed, only that one Dashboard step.
 - Anonymous sign-in must also be enabled in staging if testing the guest-mode →
   Google-linking collision path specifically (not needed for a direct Google sign-in).
-- No staging EAS build/OTA channel exists — this setup is for **local development
-  only** (`expo start` / `expo run:android`), not for building or publishing.
+- Staging EAS build profile + OTA channel now exist (see above) but have not yet been
+  used — no `eas build --profile staging` or `eas update --channel staging` has been
+  run. First real use of that pipeline is still pending.
+
+## Preview profile — audit and deprecation plan (2026-07-02)
+
+### Audit findings
+
+- **Is `preview` still providing unique value?** Historically yes — it's been the
+  project's "build an installable APK for on-device QA" pipeline since early in the
+  project (see `FIRST_BUILD.md`, `NATIVE_TEST_CHECKLIST.md`,
+  `ANDROID_GOOGLE_SIGNIN_SETUP.md`, all of which reference it explicitly), with real,
+  recent build and OTA-publish activity (multiple builds within the last day at the
+  time of this audit). It has never been described in any doc as production-adjacent
+  or customer-facing.
+- **Is it now redundant after introducing `staging`?** Yes, for its original purpose.
+  `staging` does everything `preview` did (installable internal APK, its own OTA
+  channel) while additionally providing an isolated backend — something `preview`
+  never had (it always pointed at production Supabase, meaning every "preview" test
+  historically ran against real production data).
+- **Any production dependency on `preview`?** None found structurally — `eas.json`'s
+  `production` profile never references `preview`, no CI/CD automation exists in this
+  repo referencing either build profile, and the `production` EAS Environment/channel
+  were untouched by this work. One **unconfirmed, unresolved item**: whether the
+  Android signing keystore currently used by `production` builds was originally
+  generated via a `preview` build (`FIRST_BUILD.md` describes generating the keystore
+  via a preview build if none exists yet) and whether EAS's credential management
+  ties that keystore to the `preview` profile specifically or manages it at the
+  project level (the more common default). **This must be verified via `eas
+  credentials` before `preview` is ever fully removed** — not done here as it wasn't
+  needed for today's change (we only repurposed environment variables, not
+  credentials).
+- **Has `preview` historically been used only as internal QA?** Yes, confirmed by
+  build history and every doc reference — never anything else.
+
+### Migration plan (do not execute yet — `preview` is deprecated, not removed)
+
+**Safe to do now (already done, 2026-07-02):**
+- Repurpose the `preview` EAS Environment's Supabase values to staging's (done).
+- Stop publishing new OTA updates to the `preview` channel (documented above).
+- Treat `staging` as the sole pre-production channel going forward.
+
+**Must remain temporarily:**
+- The `preview` build profile and channel themselves — not deleted. Any device
+  currently running an installed preview build still needs `preview` to exist as a
+  concept (even if no new updates are published to it) until those devices are
+  migrated or retired.
+- The `eas.json` `preview` block — unchanged, still valid, still buildable if ever
+  needed as a fallback.
+
+**Risks:**
+- Android signing-credential entanglement with `preview` — unverified (see audit
+  above). Removing `preview` before checking this could, in the worst case, affect
+  credential resolution for `production` builds if EAS ever ties them together
+  (uncommon, but unverified here — treat as a hard blocker on full removal until
+  checked).
+- `preview` channel currently supports **iOS** (`android, ios` per `eas
+  channel:list`); the new `staging` channel/profile in this change is **Android
+  only**. If iOS internal testing is ever needed again, `staging` doesn't yet cover
+  it — would need an explicit iOS section added to the `staging` build profile
+  first.
+- Anyone with muscle memory for `eas build --profile preview` will now get a
+  staging-wired build instead of a production-wired one — a behavior change that
+  needs to be communicated, not just documented here.
+
+**Rollback plan:**
+- If repurposing `preview`'s Environment causes a problem, its original (production-
+  mirroring) values are recorded above under "What changed, exactly" and can be
+  restored with the same `eas env:create preview --name ... --value ... --force`
+  commands, swapped back to the original values.
+- No git changes are needed to roll back the Environment-variable change — it's
+  entirely server-side EAS state, independent of this branch/commit.
+
+**Recommended timeline:**
+1. Now → next few weeks: `staging` becomes the default for all new pre-production
+   testing; `preview` stays available but unused, purely as a safety net.
+2. Before any full removal: verify the Android credentials question via `eas
+   credentials`, and confirm whether iOS staging coverage is needed.
+3. Once both are resolved and `staging` has proven itself in real use: remove the
+   `preview` block from `eas.json` and `eas channel:delete preview` in a dedicated,
+   explicitly-approved follow-up — not part of this change.

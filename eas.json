@@ -25,6 +25,17 @@
         "EXPO_PUBLIC_APP_ENV": "preview"
       }
     },
+    "staging": {
+      "distribution": "internal",
+      "channel": "staging",
+      "environment": "preview",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_APP_ENV": "staging"
+      }
+    },
     "production": {
       "android": {
         "buildType": "app-bundle"
