@@ -1668,10 +1668,15 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           elapsed, completedLoopsRef.current, selectedLoopsRef.current);
       }
 
-      // All loops done and Kotlin service stopped — clear stale seconds that was
-      // snapshotted when app backgrounded mid-mala, which would otherwise leave
-      // isPaused=true and show Resume instead of Start.
-      if (!moreToGo && !native.isRunning) {
+      // All loops done — clear stale seconds that was snapshotted when app backgrounded
+      // mid-mala, which would otherwise leave isPaused=true and show Resume instead of
+      // Start. Gated on !moreToGo alone (not native.isRunning): once every loop is
+      // complete there is no legitimate in-progress session left to preserve, regardless
+      // of whether the native service has finished playing its completion sound and
+      // called stopSelf() yet (that can lag up to ~6s behind completedLoops being final,
+      // during which native.isRunning still reads true — see
+      // docs/BUGFIX_TIMER_RESTORE_STALE_SESSION.md for the full root-cause writeup).
+      if (!moreToGo) {
         const targetSec = selectedDurationRef.current * 60;
         setSeconds(targetSec);
         secondsRef.current = targetSec;
