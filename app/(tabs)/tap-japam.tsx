@@ -1769,14 +1769,17 @@ export default function JapamMain() {
     }
 
     if (Platform.OS === 'android') {
-      // 100ms at default amplitude (~255/255 max on Android 8+). Previously 80ms which testers
-      // found too weak. expo-haptics Heavy is NOT stronger here — its VibrationEffect amplitude
-      // is capped at 70/255, well below the default amplitude RN's Vibration API delivers.
-      // 100ms is long enough to register clearly on all devices while staying under the ~120ms
-      // threshold where it starts feeling like a buzz instead of a crisp tap.
+      // Double-pulse (35ms buzz, 15ms gap, 40ms buzz = 90ms total) at default amplitude
+      // (~255/255 max on Android 8+, still the strongest JS-reachable option — see prior note
+      // on expo-haptics Heavy capping at 70/255). A single flat pulse of similar total length
+      // reads as a smear/buzz on modern Samsung LRA motors; a short buzz-gap-buzz reads as a
+      // firmer, more distinct "thump-thump" at the same perceived intensity budget.
+      // Total duration (90ms) is kept strictly under the 100ms tap debounce (lastTapRef) so the
+      // pattern always finishes and goes silent before the next legal tap's vibrate() call can
+      // land — no overlap/clipping even at the fastest tap rate the counting logic allows.
       // Each new Vibration.vibrate() call cancels the previous one, so rapid tapping never
       // accumulates overlapping buzzes — each tap gets its own clean pulse.
-      Vibration.vibrate([0, 100]);
+      Vibration.vibrate([0, 35, 15, 40]);
       return;
     }
 

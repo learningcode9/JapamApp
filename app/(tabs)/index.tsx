@@ -1797,7 +1797,11 @@ export default function JapamMain() {
     }
 
     if (Platform.OS === 'android') {
-      Vibration.vibrate(200);
+      // Double-pulse (35ms buzz, 15ms gap, 40ms buzz = 90ms total) at default amplitude — see
+      // app/(tabs)/tap-japam.tsx's tapFeedback for the full rationale (matches this screen's tap
+      // widget, kept in sync). Total duration is kept strictly under the 100ms tap debounce
+      // (lastTapRef) so the pattern always finishes before the next legal tap can land.
+      Vibration.vibrate([0, 35, 15, 40]);
       return;
     }
 
