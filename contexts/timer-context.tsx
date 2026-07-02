@@ -13,6 +13,7 @@ import {
   buildSupabaseHistoryPayload,
   dedupeByCompletionId,
   getPending,
+  makeLoopCompletionId,
   markSynced,
   mergeTombstones,
   toLocalDayKey,
@@ -991,6 +992,12 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         ])
       : [null, null];
     const completionUserName = storedUserName || storedUserEmail || (uid ? 'Unknown User' : undefined);
+    // Deterministic per-(session,loop) id: a loop re-claimed after a process restart (JS-side
+    // "already saved" guards are in-memory only and reset on restart — see
+    // docs/BUGFIX_DUPLICATE_COMPLETION_ID.md) recomputes the SAME id here and collapses onto the
+    // same record via appendCompletion's existing-id guard, instead of creating a duplicate keyed
+    // by wall-clock save time. Falls back to the date-based id if sessionId is unexpectedly empty.
+    const sessionId = timerSessionIdRef.current;
     const completion = {
       date: now.toISOString(),
       malas: 1,
@@ -1000,6 +1007,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       userId: uid || null,
       userName: completionUserName,
       userEmail: storedUserEmail || undefined,
+      completionId: sessionId
+        ? makeLoopCompletionId(uid || null, sessionId, completedLoopsRef.current)
+        : undefined,
     };
 
     // Local save FIRST (offline-first) + event emission — awaited by completeCycle so stats

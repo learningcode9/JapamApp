@@ -1,5 +1,6 @@
 import {
   makeCompletionId,
+  makeLoopCompletionId,
   normalizeRecord,
   appendCompletion,
   dedupeByCompletionId,
@@ -51,6 +52,122 @@ describe('makeCompletionId', () => {
     expect(makeCompletionId('a', '2026-06-03T10:00:00.000Z')).not.toBe(
       makeCompletionId('b', '2026-06-03T10:00:00.000Z')
     );
+  });
+});
+
+describe('makeLoopCompletionId', () => {
+  it('is stable for the same (userId, sessionId, loopNumber) no matter when computed', () => {
+    const a = makeLoopCompletionId(UID, 'timer-1000-abc', 2);
+    // Simulate a process restart: same session/loop, computed much later (different Date.now()).
+    const b = makeLoopCompletionId(UID, 'timer-1000-abc', 2);
+    expect(a).toBe(b);
+  });
+  it('is distinct across different loop numbers in the same session', () => {
+    expect(makeLoopCompletionId(UID, 'timer-1000-abc', 1)).not.toBe(
+      makeLoopCompletionId(UID, 'timer-1000-abc', 2)
+    );
+  });
+  it('is distinct across different sessions with the same loop number', () => {
+    expect(makeLoopCompletionId(UID, 'timer-1000-abc', 1)).not.toBe(
+      makeLoopCompletionId(UID, 'timer-2000-def', 1)
+    );
+  });
+  it('is distinct across different users with the same session/loop', () => {
+    expect(makeLoopCompletionId('user-a', 'timer-1000-abc', 1)).not.toBe(
+      makeLoopCompletionId('user-b', 'timer-1000-abc', 1)
+    );
+  });
+  it('scopes guest sessions under the literal "guest" prefix, same as makeCompletionId', () => {
+    expect(makeLoopCompletionId(null, 'timer-1000-abc', 1)).toBe('guest:timer-1000-abc:loop-1');
+  });
+});
+
+describe('bug reproduction: process-restart duplicate save collapses to one record', () => {
+  it('a loop re-claimed after a restart (same sessionId/loopNumber, different save-time date) does not duplicate', () => {
+    const sessionId = 'timer-1750000000000-xyz123';
+    // First save: native broadcast received while app is alive, loop 1 completes normally.
+    const firstSaveId = makeLoopCompletionId(UID, sessionId, 1);
+    let history = appendCompletion([], {
+      date: '2026-06-25T10:00:00.000Z', // true completion time
+      malas: 1,
+      totalCount: 108,
+      duration: 600,
+      userId: UID,
+      completionId: firstSaveId,
+    });
+    expect(history).toHaveLength(1);
+
+    // Process dies here (force-kill/OS kill/crash) -- in-memory guards (processedCompletionLoopsRef,
+    // lastSavedSessionRef, timerState.lastSavedCompletedLoops) are lost, but sessionId (persisted)
+    // and the native-reported loopNumber survive and are read back identically on restart.
+
+    // Second save: fresh process restart, reconcileNativeLoops() re-detects native completedLoops=1
+    // and re-claims it, calling saveSession() again for the SAME (sessionId, loopNumber) -- but at
+    // a LATER wall-clock moment (reconciliation time, not true completion time).
+    const secondSaveId = makeLoopCompletionId(UID, sessionId, 1);
+    expect(secondSaveId).toBe(firstSaveId); // deterministic: identical id, not a new one
+    history = appendCompletion(history, {
+      date: '2026-06-26T14:30:00.000Z', // reconciliation time -- a DIFFERENT calendar day
+      malas: 1,
+      totalCount: 108,
+      duration: 600,
+      userId: UID,
+      completionId: secondSaveId,
+    });
+
+    // The fix: exactly one record survives, not two.
+    expect(history).toHaveLength(1);
+    expect(history[0].date).toBe('2026-06-25T10:00:00.000Z'); // first save wins, true completion time kept
+    expect(todayCountFor(history, UID, '2026-06-25', toLocalDayKey)).toBe(108);
+    expect(todayCountFor(history, UID, '2026-06-26', toLocalDayKey)).toBe(0); // no phantom second day
+  });
+
+  it('legitimate multiple loops in one session still produce separate records', () => {
+    const sessionId = 'timer-1750000000000-xyz123';
+    let history: HistoryRecord[] = [];
+    for (let loop = 1; loop <= 3; loop++) {
+      history = appendCompletion(history, {
+        date: `2026-06-25T10:0${loop}:00.000Z`,
+        malas: 1,
+        totalCount: 108,
+        duration: 600,
+        userId: UID,
+        completionId: makeLoopCompletionId(UID, sessionId, loop),
+      });
+    }
+    expect(history).toHaveLength(3);
+    expect(new Set(history.map((r) => r.completionId)).size).toBe(3);
+  });
+
+  it('legitimate multiple sessions on the same day still produce separate records', () => {
+    let history: HistoryRecord[] = [];
+    history = appendCompletion(history, {
+      date: '2026-06-25T09:00:00.000Z',
+      malas: 1,
+      totalCount: 108,
+      duration: 600,
+      userId: UID,
+      completionId: makeLoopCompletionId(UID, 'timer-session-A', 1),
+    });
+    history = appendCompletion(history, {
+      date: '2026-06-25T15:00:00.000Z',
+      malas: 1,
+      totalCount: 108,
+      duration: 600,
+      userId: UID,
+      completionId: makeLoopCompletionId(UID, 'timer-session-B', 1),
+    });
+    expect(history).toHaveLength(2);
+    expect(todayCountFor(history, UID, '2026-06-25', toLocalDayKey)).toBe(216);
+  });
+
+  it('does not drop a legitimately different completion that happens to share a date-based fallback moment', () => {
+    // Tap Japam / Add Japam still use the date-based fallback (no sessionId) -- confirm the new
+    // existing-id guard in appendCompletion does not regress their existing distinct-id behavior.
+    let history: HistoryRecord[] = [];
+    history = appendCompletion(history, session('2026-06-25T09:00:00.000Z'));
+    history = appendCompletion(history, session('2026-06-25T09:00:00.001Z')); // 1ms later, distinct id
+    expect(history).toHaveLength(2);
   });
 });
 

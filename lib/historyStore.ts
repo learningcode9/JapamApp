@@ -92,6 +92,19 @@ export const makeCompletionId = (userId: string | undefined | null, dateISO: str
 };
 
 /**
+ * Deterministic id for one loop of one timer session — same (userId, sessionId, loopNumber)
+ * always yields the same id, regardless of how many times or how late it's computed. Used so a
+ * loop re-claimed after a process restart (native/JS in-memory "already saved" guards reset on
+ * restart, but sessionId and loopNumber don't) collapses onto the same record instead of a
+ * duplicate one keyed by wall-clock save time. See docs/BUGFIX_DUPLICATE_COMPLETION_ID.md.
+ */
+export const makeLoopCompletionId = (
+  userId: string | undefined | null,
+  sessionId: string,
+  loopNumber: number
+): string => `${userId || 'guest'}:${sessionId}:loop-${loopNumber}`;
+
+/**
  * Ensure a raw/legacy/remote record has a completionId and a syncStatus.
  * - completionId: kept if present, else derived deterministically (backfills legacy rows).
  * - syncStatus: kept if present; otherwise legacy/remote rows default to 'synced' and guest
@@ -125,6 +138,17 @@ export const normalizeAll = (records: RawHistoryRecord[]): HistoryRecord[] =>
 /**
  * Build a new local record for a freshly completed mala. Records owned by a signed-in user start
  * as 'pending' (awaiting upload); guest records are 'synced' (local-only, no remote target).
+ *
+ * completionId: uses the caller-supplied value if given (e.g. the timer's deterministic
+ * (sessionId, loopNumber)-based id — see makeLoopCompletionId), else falls back to the
+ * date-based makeCompletionId (unchanged behavior for Tap Japam / Add Japam, which have no
+ * session/loop concept).
+ *
+ * Guard: if a record with the resulting completionId already exists in history, this is by
+ * construction the same real completion being saved again (see the collision-freedom proof in
+ * docs/BUGFIX_DUPLICATE_COMPLETION_ID.md) — skip appending a second local row rather than
+ * duplicating it. A caller-supplied completionId always wins this check even when a fallback
+ * date-based id would differ, since it's the more precise identity.
  */
 export const appendCompletion = (
   history: RawHistoryRecord[],
@@ -138,8 +162,14 @@ export const appendCompletion = (
     userName?: string;
     userEmail?: string;
     source?: string;
+    completionId?: string;
   }
 ): HistoryRecord[] => {
+  const completionId = completion.completionId || makeCompletionId(completion.userId, completion.date);
+  const normalized = normalizeAll(history);
+  if (normalized.some((r) => r.completionId === completionId)) {
+    return normalized;
+  }
   const record: HistoryRecord = {
     date: completion.date,
     malas: Number(completion.malas) || 0,
@@ -150,10 +180,10 @@ export const appendCompletion = (
     userName: completion.userName,
     userEmail: completion.userEmail,
     source: completion.source,
-    completionId: makeCompletionId(completion.userId, completion.date),
+    completionId,
     syncStatus: completion.userId ? 'pending' : 'synced',
   };
-  return [record, ...normalizeAll(history)];
+  return [record, ...normalized];
 };
 
 /**
