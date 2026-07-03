@@ -1390,6 +1390,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         if (!claimCompletionLoop('NATIVE', loop, 0, { allowRunningNextLoop: true })) return;
         const clamped = clampCompletedLoops(loop, selectedLoopsRef.current);
         completedLoopsRef.current = clamped;
+        setCompletedLoops(clamped);
         await persistCompletedLoops(clamped);
         await saveSession();
         console.log('[NativeTimer] japamTimerLoopComplete background save loop=%d isFinal=%s', loop, event.isFinal);
@@ -1692,6 +1693,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         secondsRef.current = targetSec;
         timerStartedAtRef.current = null;
         timerSessionIdRef.current = '';
+        setCompletedLoops(0);
+        completedLoopsRef.current = 0;
+        void persistCompletedLoops(0);
         updateTimerState({ startedAt: null, isCompleting: false, sessionId: '' });
         void persistState(false);
         console.log('[TimerBG] reconcileNativeLoops: final completion, cleared stale UI state loops=%d/%d',
