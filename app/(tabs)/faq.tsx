@@ -26,8 +26,8 @@ const FAQ_ITEMS = [
     a: 'Export creates a CSV file of your japam history. You can save it as a personal backup or open it in Excel, Google Sheets, or Apple Numbers.',
   },
   {
-    q: 'What is Manual Entry?',
-    a: 'Manual Entry lets you add japam sessions that were completed outside the app.',
+    q: 'What is "Add Japam"?',
+    a: 'Add Japam lets you record Japam that you completed without using the app. For example, if you completed Japam using a physical mala, forgot to use Timer or Tap Japam, or completed Japam earlier and want to record it now. Simply tap Add Japam, enter the number of malas you completed, and save. Your History and overall statistics will be updated automatically. Note: Use Add Japam only for Japam that has already been completed. If you are currently doing Japam, use Timer or Tap Japam to track your session.',
   },
   {
     q: 'Can I use the app offline?',
