@@ -8,12 +8,12 @@ const sections = [
   },
   {
     title: 'Contact Email',
-    items: ['learningcode9@gmail.com'],
+    items: ['mantrajapamapp@gmail.com'],
   },
   {
     title: 'Instructions',
     items: [
-      '1. Send an email to learningcode9@gmail.com with subject "Delete My Account".',
+      '1. Send an email to mantrajapamapp@gmail.com with subject "Delete My Account".',
       '2. Include the Google account email used in Mantra Japam.',
       '3. We will delete the account and associated Japam data.',
     ],

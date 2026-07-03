@@ -24,10 +24,11 @@ export interface HistoryRecord {
   totalCount: number;
   duration: number;
   manual: boolean;
-  userId?: string;
+  userId?: string | null;
   userName?: string;
   userEmail?: string;
   source?: string;
+  remoteId?: number | string;
   completionId: string;
   syncStatus: SyncStatus;
 }
@@ -39,6 +40,21 @@ export type SupabaseHistoryPayload = {
   count: number;
   created_at: string;
   completion_id: string;
+};
+
+export type HistoryRecordUpdate = {
+  before: HistoryRecord;
+  after: HistoryRecord;
+};
+
+export type HistoryDayAdjustmentPlan = {
+  changed: boolean;
+  deleteEntireDay: boolean;
+  currentMalas: number;
+  targetMalas: number;
+  updatedRecords: HistoryRecord[];
+  recordsToUpdate: HistoryRecordUpdate[];
+  recordsToDelete: HistoryRecord[];
 };
 
 /**
@@ -62,6 +78,7 @@ export type RawHistoryRecord = Partial<HistoryRecord> & {
   date: string;
   user_name?: string;
   user_email?: string;
+  remote_id?: number | string;
 };
 
 /**
@@ -73,6 +90,19 @@ export const makeCompletionId = (userId: string | undefined | null, dateISO: str
   const stamp = Number.isNaN(t) ? String(dateISO) : String(t);
   return `${userId || 'guest'}:${stamp}`;
 };
+
+/**
+ * Deterministic id for one loop of one timer session — same (userId, sessionId, loopNumber)
+ * always yields the same id, regardless of how many times or how late it's computed. Used so a
+ * loop re-claimed after a process restart (native/JS in-memory "already saved" guards reset on
+ * restart, but sessionId and loopNumber don't) collapses onto the same record instead of a
+ * duplicate one keyed by wall-clock save time. See docs/BUGFIX_DUPLICATE_COMPLETION_ID.md.
+ */
+export const makeLoopCompletionId = (
+  userId: string | undefined | null,
+  sessionId: string,
+  loopNumber: number
+): string => `${userId || 'guest'}:${sessionId}:loop-${loopNumber}`;
 
 /**
  * Ensure a raw/legacy/remote record has a completionId and a syncStatus.
@@ -96,6 +126,7 @@ export const normalizeRecord = (raw: RawHistoryRecord): HistoryRecord => {
     userName,
     userEmail,
     source: raw.source,
+    remoteId: raw.remoteId ?? raw.remote_id,
     completionId: raw.completionId || makeCompletionId(userId, raw.date),
     syncStatus: raw.syncStatus === 'pending' ? 'pending' : 'synced',
   };
@@ -107,6 +138,17 @@ export const normalizeAll = (records: RawHistoryRecord[]): HistoryRecord[] =>
 /**
  * Build a new local record for a freshly completed mala. Records owned by a signed-in user start
  * as 'pending' (awaiting upload); guest records are 'synced' (local-only, no remote target).
+ *
+ * completionId: uses the caller-supplied value if given (e.g. the timer's deterministic
+ * (sessionId, loopNumber)-based id — see makeLoopCompletionId), else falls back to the
+ * date-based makeCompletionId (unchanged behavior for Tap Japam / Add Japam, which have no
+ * session/loop concept).
+ *
+ * Guard: if a record with the resulting completionId already exists in history, this is by
+ * construction the same real completion being saved again (see the collision-freedom proof in
+ * docs/BUGFIX_DUPLICATE_COMPLETION_ID.md) — skip appending a second local row rather than
+ * duplicating it. A caller-supplied completionId always wins this check even when a fallback
+ * date-based id would differ, since it's the more precise identity.
  */
 export const appendCompletion = (
   history: RawHistoryRecord[],
@@ -116,12 +158,18 @@ export const appendCompletion = (
     totalCount: number;
     duration: number;
     manual?: boolean;
-    userId?: string;
+    userId?: string | null;
     userName?: string;
     userEmail?: string;
     source?: string;
+    completionId?: string;
   }
 ): HistoryRecord[] => {
+  const completionId = completion.completionId || makeCompletionId(completion.userId, completion.date);
+  const normalized = normalizeAll(history);
+  if (normalized.some((r) => r.completionId === completionId)) {
+    return normalized;
+  }
   const record: HistoryRecord = {
     date: completion.date,
     malas: Number(completion.malas) || 0,
@@ -132,10 +180,10 @@ export const appendCompletion = (
     userName: completion.userName,
     userEmail: completion.userEmail,
     source: completion.source,
-    completionId: makeCompletionId(completion.userId, completion.date),
+    completionId,
     syncStatus: completion.userId ? 'pending' : 'synced',
   };
-  return [record, ...normalizeAll(history)];
+  return [record, ...normalized];
 };
 
 /**
@@ -158,6 +206,7 @@ export const dedupeByCompletionId = (records: RawHistoryRecord[]): HistoryRecord
         ...result[idx],
         userName: result[idx].userName || raw.userName,
         userEmail: result[idx].userEmail || raw.userEmail,
+        remoteId: result[idx].remoteId ?? raw.remoteId,
         syncStatus: 'synced',
       };
     }
@@ -177,24 +226,135 @@ export const mergeHistories = (
   remote: RawHistoryRecord[]
 ): HistoryRecord[] => {
   const localNorm = normalizeAll(local);
-  const remoteIds = new Set(normalizeAll(remote).map((r) => r.completionId));
+  const remoteNorm = normalizeAll(remote);
+  const remoteById = new Map(remoteNorm.map((r) => [r.completionId, r]));
 
   const byId = new Map<string, HistoryRecord>();
   for (const rec of localNorm) {
+    const remoteMatch = remoteById.get(rec.completionId);
+    // An edited record deliberately keeps its completionId and becomes pending again. A stale
+    // remote copy with that same id must not mark the edit synced until its values match.
+    const remoteConfirmsLocal =
+      remoteMatch &&
+      remoteMatch.malas === rec.malas &&
+      remoteMatch.totalCount === rec.totalCount &&
+      remoteMatch.date === rec.date;
     const upgraded =
-      remoteIds.has(rec.completionId) && rec.syncStatus === 'pending'
-        ? { ...rec, syncStatus: 'synced' as const }
+      remoteConfirmsLocal && rec.syncStatus === 'pending'
+        ? {
+            ...rec,
+            remoteId: rec.remoteId ?? remoteMatch.remoteId,
+            syncStatus: 'synced' as const,
+          }
         : rec;
     // First local wins for a given id; never overwrite a local record with a remote one.
     if (!byId.has(rec.completionId)) byId.set(rec.completionId, upgraded);
   }
-  for (const rec of normalizeAll(remote)) {
+  for (const rec of remoteNorm) {
     if (!byId.has(rec.completionId)) byId.set(rec.completionId, rec);
   }
 
   return [...byId.values()].sort(
     (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
   );
+};
+
+/**
+ * Plan a correction to one visible daily aggregate without exposing or replacing its underlying
+ * completion records. Reductions consume the newest records first so the oldest chronology stays
+ * intact. Increases update the earliest record as the stable canonical record for that day.
+ */
+export const planHistoryDayAdjustment = (
+  records: RawHistoryRecord[],
+  userId: string | null | undefined,
+  localDayKey: string,
+  requestedTargetMalas: number,
+): HistoryDayAdjustmentPlan => {
+  const normalized = dedupeByCompletionId(records);
+  const matchesUser = (record: HistoryRecord) =>
+    userId ? record.userId === userId : !record.userId;
+  const dayRecords = normalized
+    .filter((record) => matchesUser(record) && toLocalDayKey(record.date) === localDayKey)
+    .map((record) => ({
+      ...record,
+      malas: Math.max(0, Math.floor(Number(record.malas) || 0)),
+      totalCount: Math.max(0, Math.floor(Number(record.malas) || 0)) * 108,
+    }))
+    .filter((record) => record.malas > 0)
+    .sort((a, b) => {
+      const dateDiff = new Date(a.date).getTime() - new Date(b.date).getTime();
+      return dateDiff || a.completionId.localeCompare(b.completionId);
+    });
+
+  const currentMalas = dayRecords.reduce((sum, record) => sum + record.malas, 0);
+  const targetMalas = Math.max(0, Math.floor(Number(requestedTargetMalas) || 0));
+  const unchangedPlan: HistoryDayAdjustmentPlan = {
+    changed: false,
+    deleteEntireDay: false,
+    currentMalas,
+    targetMalas,
+    updatedRecords: normalized,
+    recordsToUpdate: [],
+    recordsToDelete: [],
+  };
+
+  if (dayRecords.length === 0 || targetMalas === currentMalas) return unchangedPlan;
+
+  const updates = new Map<string, HistoryRecordUpdate>();
+  const deletions = new Map<string, HistoryRecord>();
+  const pendingStatusFor = (record: HistoryRecord): SyncStatus =>
+    record.userId ? 'pending' : record.syncStatus;
+
+  if (targetMalas < currentMalas) {
+    let remainingReduction = currentMalas - targetMalas;
+    // Newest first: preserve the earliest records and their completion ids for as long as possible.
+    for (let index = dayRecords.length - 1; index >= 0 && remainingReduction > 0; index -= 1) {
+      const before = dayRecords[index];
+      const removedMalas = Math.min(before.malas, remainingReduction);
+      const nextMalas = before.malas - removedMalas;
+      remainingReduction -= removedMalas;
+
+      if (nextMalas === 0) {
+        deletions.set(before.completionId, before);
+      } else {
+        updates.set(before.completionId, {
+          before,
+          after: {
+            ...before,
+            malas: nextMalas,
+            totalCount: nextMalas * 108,
+            syncStatus: pendingStatusFor(before),
+          },
+        });
+      }
+    }
+  } else {
+    const before = dayRecords[0];
+    const nextMalas = before.malas + (targetMalas - currentMalas);
+    updates.set(before.completionId, {
+      before,
+      after: {
+        ...before,
+        malas: nextMalas,
+        totalCount: nextMalas * 108,
+        syncStatus: pendingStatusFor(before),
+      },
+    });
+  }
+
+  const updatedRecords = normalized
+    .filter((record) => !deletions.has(record.completionId))
+    .map((record) => updates.get(record.completionId)?.after || record);
+
+  return {
+    changed: true,
+    deleteEntireDay: targetMalas === 0,
+    currentMalas,
+    targetMalas,
+    updatedRecords,
+    recordsToUpdate: [...updates.values()],
+    recordsToDelete: [...deletions.values()],
+  };
 };
 
 /** Records that still need uploading: pending AND owned by a signed-in user. */
@@ -211,6 +371,25 @@ export const markSynced = (
     ids.has(r.completionId) && r.syncStatus === 'pending' ? { ...r, syncStatus: 'synced' } : r
   );
 };
+
+/**
+ * Remove local synced records for the current user if they are absent from the server.
+ * Only drops records that are ALL of: this user's, syncStatus==='synced', have a completionId,
+ * and whose completionId is not in remoteCompletionIds.
+ * Always keeps: pending/offline records, guest records, other-user records, id-less records.
+ * Only call after a confirmed HTTP 200 from a complete (limit=10000) Supabase fetch.
+ */
+export const reconcileWithServer = (
+  merged: HistoryRecord[],
+  remoteCompletionIds: Set<string>,
+  currentUserId: string,
+): HistoryRecord[] =>
+  merged.filter((r) => {
+    if (r.userId !== currentUserId) return true;
+    if (!r.completionId) return true;
+    if (r.syncStatus !== 'synced') return true;
+    return remoteCompletionIds.has(r.completionId);
+  });
 
 /**
  * Build the Supabase row from the local record. The important bit is `created_at: record.date`:
@@ -263,45 +442,6 @@ export const todayStatsFor = (
 ): { malas: number; totalCount: number } => {
   const totalCount = todayCountFor(records, userId, todayKey, toDayKey);
   return { malas: Math.floor(totalCount / 108), totalCount };
-};
-
-/**
- * Self-heal "phantom synced" records. After a FULL remote fetch for `userId`, any local record
- * owned by that user that is marked 'synced' but whose completionId is NOT present remotely must
- * have failed to persist (or was removed) — re-mark it 'pending' so the normal sync re-uploads it.
- * The idempotent upsert (on_conflict=completion_id) means a re-upload never creates a duplicate.
- *
- * Safety: only this user's records are touched; other users, guest (no userId) records, and
- * already-pending records are left exactly as-is, and no record is ever dropped. Pass the COMPLETE
- * remote completionId set — a partial set would re-mark real synced rows pending, but that is still
- * harmless (idempotent re-upload).
- */
-export const selfHealSyncStatus = (
-  records: RawHistoryRecord[],
-  userId: string | null | undefined,
-  remoteCompletionIds: Iterable<string>,
-  tombstones: Iterable<string> = []
-): { records: HistoryRecord[]; markedPending: string[] } => {
-  const remoteIds =
-    remoteCompletionIds instanceof Set
-      ? remoteCompletionIds
-      : new Set<string>(remoteCompletionIds);
-  const tomb = tombstones instanceof Set ? tombstones : new Set<string>(tombstones);
-  const markedPending: string[] = [];
-  const result = normalizeAll(records).map((r) => {
-    if (
-      userId &&
-      r.userId === userId &&
-      r.syncStatus === 'synced' &&
-      !remoteIds.has(r.completionId) &&
-      !tomb.has(r.completionId) // never resurrect a record the user explicitly deleted
-    ) {
-      markedPending.push(r.completionId);
-      return { ...r, syncStatus: 'pending' as const };
-    }
-    return r;
-  });
-  return { records: result, markedPending };
 };
 
 /**

@@ -1,8 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, BackHandler, DeviceEventEmitter, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Alert, BackHandler, DeviceEventEmitter, Dimensions, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
@@ -18,12 +19,21 @@ const TIMER_LOOP_KEY = 'timerLoop';
 const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
 
 export default function SettingsScreen() {
+  const insets = useSafeAreaInsets();
+  const { width: settingsScreenWidth } = Dimensions.get('window');
+  const tabBarLayoutIsMobile = settingsScreenWidth < 500;
+  const tabBarSpaceFromBottom = 74 + (tabBarLayoutIsMobile
+    ? Math.max(12, insets.bottom + 8)
+    : Math.max(22, insets.bottom + 14));
+
+  const router = useRouter();
   const [repetitionSoundEnabled, setRepetitionSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
   const [userName, setUserName] = useState('');
   const [userEmail, setUserEmail] = useState('');
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [isSyncingGoogle, setIsSyncingGoogle] = useState(false);
 
   useEffect(() => {
     if (!showLogoutConfirm || Platform.OS !== 'android') return;
@@ -33,6 +43,30 @@ export default function SettingsScreen() {
     });
     return () => sub.remove();
   }, [showLogoutConfirm]);
+
+  const loadAuth = useCallback(async () => {
+    const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+    const savedUserEmail = await AsyncStorage.getItem(USER_EMAIL_KEY);
+    setUserId(savedUserId);
+    setUserName(savedUserName || '');
+    setUserEmail(savedUserEmail || '');
+    setIsSyncingGoogle(false);
+  }, []);
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener('japam-auth-updated', () => void loadAuth());
+    const webHandler = () => void loadAuth();
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.addEventListener('japam-auth-updated', webHandler);
+    }
+    return () => {
+      sub.remove();
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.removeEventListener('japam-auth-updated', webHandler);
+      }
+    };
+  }, [loadAuth]);
 
   useFocusEffect(
     useCallback(() => {
@@ -155,8 +189,32 @@ export default function SettingsScreen() {
     Alert.alert('Logged out', 'You have been logged out.');
   };
 
+  const clearGuestData = () => {
+    const doClear = async () => {
+      await AsyncStorage.removeItem(USER_NAME_KEY);
+      setUserName('');
+      DeviceEventEmitter.emit('japam-auth-updated');
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('japam-auth-updated'));
+      }
+      router.navigate('/(tabs)/timer');
+    };
+    if (Platform.OS === 'web') {
+      if (window.confirm('Exit Guest Mode? Your guest history will stay on this device.')) void doClear();
+      return;
+    }
+    Alert.alert(
+      'Exit Guest Mode?',
+      'Your guest history will stay on this device.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Exit', style: 'destructive', onPress: () => void doClear() },
+      ]
+    );
+  };
+
   const openFeedbackForm = () => {
-    const formUrl = 'https://docs.google.com/forms/d/e/1FAIpQLScYFBZqgour0aN3hFFjW2hrOAkc9vVFdN0-1NPXdouZZRsHfQ/viewform?usp=sf_link';
+    const formUrl = 'https://docs.google.com/forms/d/e/1FAIpQLScxRkt9Iz1JLhjMmGHC3HtUxDDQUJK0FG-qX65m5n26p3gRdw/viewform?pli=1';
     Linking.openURL(formUrl).catch(() =>
       Alert.alert("Error", "Could not open the feedback form. Please try again.")
     );
@@ -179,7 +237,10 @@ export default function SettingsScreen() {
       {[...Array(30)].map((_, i) => (
         <View key={i} pointerEvents="none" style={[styles.star, { left: `${(i * 37 + 11) % 100}%`, top: `${(i * 53 + 7) % 100}%`, opacity: i % 3 === 0 ? 0.72 : 0.28 }]} />
       ))}
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
+      <ScrollView
+        style={[styles.scroll, Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom }]}
+        contentContainerStyle={styles.content}
+      >
         <View style={styles.header}>
           <Text style={styles.title}>Settings</Text>
         </View>
@@ -195,6 +256,35 @@ export default function SettingsScreen() {
               <Pressable style={styles.logoutTextButton} onPress={() => setShowLogoutConfirm(true)}>
                 <Text style={styles.logoutTextButtonText}>Logout</Text>
               </Pressable>
+            </View>
+          )}
+          {!userId && !!userName && (
+            <View style={styles.card}>
+              <View style={styles.textBlock}>
+                <Text style={styles.label}>Guest Mode</Text>
+                <Text style={styles.description}>Guest: {userName}</Text>
+                <Text style={[styles.description, { fontSize: 14, marginTop: 6 }]}>
+                  Your history is saved only on this phone.{'\n'}Sign in with Google to save permanently and sync across devices.
+                </Text>
+              </View>
+              <View style={styles.guestActions}>
+                <Pressable
+                  style={[styles.signInButton, isSyncingGoogle && { opacity: 0.55 }]}
+                  disabled={isSyncingGoogle}
+                  onPress={() => {
+                    setIsSyncingGoogle(true);
+                    DeviceEventEmitter.emit('japam-start-google-signin');
+                    setTimeout(() => setIsSyncingGoogle(false), 10000);
+                  }}
+                >
+                  <Text style={styles.signInButtonText}>
+                    {isSyncingGoogle ? 'Opening Google...' : 'Sync with Google'}
+                  </Text>
+                </Pressable>
+                <Pressable style={styles.clearGuestButton} onPress={clearGuestData}>
+                  <Text style={styles.clearGuestButtonText}>Exit Guest Mode</Text>
+                </Pressable>
+              </View>
             </View>
           )}
 
@@ -280,6 +370,21 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Help</Text>
+          <Pressable
+            style={({ pressed }) => [styles.card, pressed && { opacity: 0.7 }]}
+            onPress={() => router.push('/(tabs)/faq')}
+            accessibilityRole="button"
+          >
+            <View style={styles.textBlock}>
+              <Text style={styles.label}>FAQ</Text>
+              <Text style={styles.description}>Common questions about Japam App</Text>
+            </View>
+            <Text style={styles.navChevron}>›</Text>
+          </Pressable>
+        </View>
+
         <View style={styles.infoBox}>
           <Text style={styles.infoTitle}>Settings saved automatically</Text>
           <Text style={styles.infoText}>These options will be applied when you return to the Japam screen.</Text>
@@ -310,7 +415,7 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   scroll: { flex: 1 },
   star: { position: 'absolute', width: 2, height: 2, borderRadius: 99, backgroundColor: '#0f766e' },
-  content: { width: '100%', maxWidth: 820, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 28, paddingBottom: 140 },
+  content: { width: '100%', maxWidth: 820, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 28, paddingBottom: 24 },
   header: { alignItems: 'center', marginBottom: 22 },
   title: { color: '#102f34', fontSize: 36, fontWeight: '900', textAlign: 'center' },
   section: { marginBottom: 22 },
@@ -323,6 +428,11 @@ const styles = StyleSheet.create({
   compactButtonText: { color: 'white', fontSize: 15, fontWeight: '900' },
   logoutTextButton: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(153, 27, 27, 0.18)', backgroundColor: 'rgba(153, 27, 27, 0.06)' },
   logoutTextButtonText: { color: '#b91c1c', fontSize: 15, fontWeight: '800' },
+  signInButton: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1.5, borderColor: '#0f8a87', backgroundColor: 'transparent' },
+  signInButtonText: { color: '#0f8a87', fontSize: 15, fontWeight: '800' },
+  guestActions: { flexDirection: 'column', alignItems: 'flex-end', gap: 8 },
+  clearGuestButton: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(153, 27, 27, 0.22)', backgroundColor: 'rgba(153, 27, 27, 0.06)' },
+  clearGuestButtonText: { color: '#b91c1c', fontSize: 13, fontWeight: '700' },
   cardStack: { gap: 12 },
   helpNote: { backgroundColor: 'rgba(255, 255, 255, 0.5)', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(15, 118, 110, 0.12)' },
   helpNoteText: { color: '#547071', fontSize: 15, lineHeight: 21, fontWeight: '700' },
@@ -343,4 +453,5 @@ const styles = StyleSheet.create({
   confirmCancelText: { color: '#12383c', fontWeight: '700' },
   confirmLogout: { flex: 1, padding: 12, borderRadius: 99, backgroundColor: 'rgba(185, 28, 28, 0.1)', alignItems: 'center' },
   confirmLogoutText: { color: '#b91c1c', fontWeight: '800' },
+  navChevron: { color: '#0f8a87', fontSize: 30, fontWeight: '300', paddingLeft: 4 },
 });

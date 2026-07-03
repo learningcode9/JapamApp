@@ -1,48 +1,69 @@
 import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Dimensions, LayoutAnimation, Platform, Pressable, ScrollView, StyleSheet, Text, UIManager, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const faqs = [
-    {
-      q: 'What is Japam?',
-      a: 'Japam is the repetitive chanting of a mantra with devotion, focus, and spiritual intention.',
-    },
-    {
-      q: 'What is a mala?',
-      a: 'A mala is a string of prayer beads used to count mantra repetitions. One full mala usually contains 108 chants.',
-    },
-    {
-      q: 'Why is 108 important?',
-      a: 'The number 108 is spiritually significant in many traditions and is treated as one complete cycle of chanting.',
-    },
-    {
-      q: 'How does the count circle work?',
-      a: 'Each tap on the calm progress circle increases the count by 1. When the count reaches 108, the app completes one mala and starts the next cycle.',
-    },
-    {
-      q: 'How do I use the timer?',
-      a: 'Enter the number of minutes and tap Start. When the timer finishes, one mala is automatically added to your progress.',
-    },
-    {
-      q: 'What is Auto Repeat Timer?',
-      a: 'Auto Repeat Timer is useful for continuous chanting sessions. After each timer completes, the app automatically adds one mala and starts the next session until paused.',
-    },
-    {
-      q: 'Does the app save my progress?',
-      a: 'Yes. After signing in, your japam count, timer progress, and history sync across devices using cloud storage.',
-    },
-    {
-      q: 'Can I add Japam manually?',
-      a: 'Yes. Open the Manual tab to add malas or counts completed outside the app.',
-    },
-    {
-      q: 'Does the app work offline?',
-      a: 'Yes. Basic japam counting works offline. When internet is available, your progress syncs automatically.',
-    },
-  ];
+if (Platform.OS === 'android') {
+  UIManager.setLayoutAnimationEnabledExperimental?.(true);
+}
 
-export default function FAQ() {
-  const [open, setOpen] = useState<number | null>(0);
+const FAQ_ITEMS = [
+  {
+    q: 'What is Timer Japam?',
+    a: 'Choose a duration and start the timer. Chant continuously during the session. The app automatically counts completed malas.',
+  },
+  {
+    q: 'What is Tap Japam?',
+    a: 'After each mantra japa, tap the large circle once. The app counts up to 108 and completes one mala automatically.',
+  },
+  {
+    q: 'What is Auto-Repeat Malas?',
+    a: 'The timer automatically starts the next mala until the selected number of malas is completed.',
+  },
+  {
+    q: 'What does Export do?',
+    a: 'Export creates a CSV file of your japam history. You can save it as a personal backup or open it in Excel, Google Sheets, or Apple Numbers.',
+  },
+  {
+    q: 'What is "Add Japam"?',
+    a: 'Add Japam lets you record Japam that you completed without using the app. For example, if you completed Japam using a physical mala, forgot to use Timer or Tap Japam, or completed Japam earlier and want to record it now. Simply tap Add Japam, enter the number of malas you completed, and save. Your History and overall statistics will be updated automatically. Note: Use Add Japam only for Japam that has already been completed. If you are currently doing Japam, use Timer or Tap Japam to track your session.',
+  },
+  {
+    q: 'Can I use the app offline?',
+    a: "Yes. You can continue your japam without internet. Your data will sync when you're back online.",
+  },
+  {
+    q: 'How do Groups work?',
+    a: "Create a group or join using an invite code. Group members can view each other's japam progress.",
+  },
+  {
+    q: "Why isn't sound or vibration working?",
+    a: "Check your device's sound, vibration, and Do Not Disturb settings. Some phones reduce vibration in Battery Saver mode.",
+  },
+  {
+    q: 'How do I send feedback?',
+    a: 'Open Settings and tap Send Feedback to share suggestions or report issues.',
+  },
+] as const;
+
+// Mirrors the isMobile threshold from _layout.tsx (screenWidth < 500).
+const tabBarLayoutIsMobile = Dimensions.get('window').width < 500;
+
+export default function FaqScreen() {
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
+
+  // Tab bar geometry: height 74 + bottom offset, matching _layout.tsx exactly.
+  const tabBarSpaceFromBottom = 74 + (tabBarLayoutIsMobile
+    ? Math.max(12, insets.bottom + 8)
+    : Math.max(22, insets.bottom + 14));
+
+  const toggleFaq = (index: number) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpandedFaq(prev => (prev === index ? null : index));
+  };
 
   return (
     <LinearGradient colors={['#e7f5f5', '#c7e2e0', '#eef8f5']} style={styles.container}>
@@ -60,29 +81,48 @@ export default function FAQ() {
           ]}
         />
       ))}
-      <ScrollView contentContainerStyle={styles.content}>
-      <View style={styles.header}>
-  
+      <ScrollView
+        style={[styles.scroll, Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom }]}
+        contentContainerStyle={[
+          styles.content,
+          Platform.OS !== 'web' && { paddingTop: Math.max(28, insets.top + 8) },
+          { paddingBottom: 24 },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.header}>
+          <Pressable
+            style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.6 }]}
+            onPress={() => router.navigate('/(tabs)/settings')}
+            accessibilityRole="button"
+            accessibilityLabel="Back to Settings"
+          >
+            <Text style={styles.backText}>‹ Back</Text>
+          </Pressable>
+          <Text style={styles.title}>FAQ</Text>
+          <View style={styles.headerSpacer} />
+        </View>
 
-  <Text style={styles.title}>Learn</Text>
-
-  <Text style={styles.subtitle}>
-    Guidance for your Japam journey
-  </Text>
-</View>
-
-      {faqs.map((item, i) => {
-        const isOpen = open === i;
-        return (
-          <View key={item.q} style={[styles.card, isOpen && styles.cardOpen]}>
-            <Pressable style={styles.questionRow} onPress={() => setOpen((p) => (p === i ? null : i))}>
-              <Text style={styles.q}>{item.q}</Text>
-              <Text style={styles.icon}>{isOpen ? '−' : '+'}</Text>
+        {FAQ_ITEMS.map((item, index) => (
+          <View key={index} style={styles.faqCard}>
+            <Pressable
+              style={({ pressed }) => [styles.faqHeader, pressed && styles.faqHeaderPressed]}
+              onPress={() => toggleFaq(index)}
+              accessibilityRole="button"
+              accessibilityState={{ expanded: expandedFaq === index }}
+              accessibilityLabel={item.q}
+            >
+              <Text style={styles.faqQuestion}>{item.q}</Text>
+              <Text style={styles.faqToggle}>{expandedFaq === index ? '−' : '+'}</Text>
             </Pressable>
-            {isOpen ? <Text style={styles.a}>{item.a}</Text> : null}
+            {expandedFaq === index && (
+              <View>
+                <View style={styles.faqDivider} />
+                <Text style={styles.faqAnswer}>{item.a}</Text>
+              </View>
+            )}
           </View>
-        );
-      })}
+        ))}
       </ScrollView>
     </LinearGradient>
   );
@@ -90,47 +130,19 @@ export default function FAQ() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  star: {
-    position: 'absolute',
-    width: 2,
-    height: 2,
-    borderRadius: 99,
-    backgroundColor: '#0f766e',
-  },
-  content: {
-    width: '100%',
-    maxWidth: 820,
-    alignSelf: 'center',
-    padding: 20,
-    paddingTop: 28,
-    paddingBottom: 140,
-  },
-  header: { alignItems: 'center', marginBottom: 18 },
-  title: { color: '#102f34', fontSize: 36, fontWeight: '900', marginTop: 4, textAlign: 'center' },
-  subtitle: { color: '#365f61', marginTop: 4, fontSize: 18, textAlign: 'center' },
-
-  card: {
-    backgroundColor: 'rgba(255, 255, 255, 0.54)',
-    borderRadius: 20,
-    marginBottom: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 15,
-    borderWidth: 1,
-    borderColor: 'rgba(15, 118, 110, 0.16)',
-  },
-  cardOpen: {
-    borderColor: '#0f766e',
-    backgroundColor: 'rgba(255, 255, 255, 0.72)',
-  },
-
-  questionRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-
-  q: { color: '#12383c', fontWeight: '800', fontSize: 20, flex: 1, paddingRight: 10 },
-  icon: { color: '#0f766e', fontSize: 30, fontWeight: '700' },
-  a: { color: '#365f61', marginTop: 12, lineHeight: 29, fontSize: 18 },
- 
+  scroll: { flex: 1 },
+  star: { position: 'absolute', width: 2, height: 2, borderRadius: 99, backgroundColor: '#0f766e' },
+  content: { width: '100%', maxWidth: 820, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 28, paddingBottom: 24 },
+  header: { flexDirection: 'row', alignItems: 'center', marginBottom: 24 },
+  backBtn: { paddingVertical: 10, paddingRight: 12, minWidth: 72 },
+  backText: { color: '#0f8a87', fontSize: 18, fontWeight: '700' },
+  title: { flex: 1, color: '#102f34', fontSize: 28, fontWeight: '900', textAlign: 'center' },
+  headerSpacer: { minWidth: 72 },
+  faqCard: { backgroundColor: 'rgba(255, 255, 255, 0.54)', borderRadius: 20, paddingHorizontal: 18, marginBottom: 10, borderWidth: 1, borderColor: 'rgba(15, 118, 110, 0.16)', overflow: 'hidden' },
+  faqHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 16, minHeight: 56 },
+  faqHeaderPressed: { opacity: 0.65 },
+  faqQuestion: { color: '#12383c', fontSize: 18, fontWeight: '800', flex: 1, paddingRight: 12, lineHeight: 24 },
+  faqToggle: { color: '#0f8a87', fontSize: 22, fontWeight: '900', width: 28, textAlign: 'center' },
+  faqDivider: { height: 1, backgroundColor: 'rgba(15, 118, 110, 0.12)', marginBottom: 14 },
+  faqAnswer: { color: '#547071', fontSize: 17, lineHeight: 26, paddingBottom: 16 },
 });

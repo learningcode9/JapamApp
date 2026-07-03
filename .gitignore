@@ -45,5 +45,4 @@ app-example
 # Secret config files
 .env
 firebaseConfig.ts
-lib/supabase.ts
 .vercel

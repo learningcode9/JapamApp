@@ -1,5 +1,6 @@
 import {
   makeCompletionId,
+  makeLoopCompletionId,
   normalizeRecord,
   appendCompletion,
   dedupeByCompletionId,
@@ -9,10 +10,12 @@ import {
   todayCountFor,
   todayStatsFor,
   buildSupabaseHistoryPayload,
+  normalizeAll,
+  reconcileWithServer,
   toLocalDayKey,
-  selfHealSyncStatus,
   applyTombstones,
   mergeTombstones,
+  planHistoryDayAdjustment,
   type HistoryRecord,
 } from '../historyStore';
 
@@ -52,6 +55,122 @@ describe('makeCompletionId', () => {
   });
 });
 
+describe('makeLoopCompletionId', () => {
+  it('is stable for the same (userId, sessionId, loopNumber) no matter when computed', () => {
+    const a = makeLoopCompletionId(UID, 'timer-1000-abc', 2);
+    // Simulate a process restart: same session/loop, computed much later (different Date.now()).
+    const b = makeLoopCompletionId(UID, 'timer-1000-abc', 2);
+    expect(a).toBe(b);
+  });
+  it('is distinct across different loop numbers in the same session', () => {
+    expect(makeLoopCompletionId(UID, 'timer-1000-abc', 1)).not.toBe(
+      makeLoopCompletionId(UID, 'timer-1000-abc', 2)
+    );
+  });
+  it('is distinct across different sessions with the same loop number', () => {
+    expect(makeLoopCompletionId(UID, 'timer-1000-abc', 1)).not.toBe(
+      makeLoopCompletionId(UID, 'timer-2000-def', 1)
+    );
+  });
+  it('is distinct across different users with the same session/loop', () => {
+    expect(makeLoopCompletionId('user-a', 'timer-1000-abc', 1)).not.toBe(
+      makeLoopCompletionId('user-b', 'timer-1000-abc', 1)
+    );
+  });
+  it('scopes guest sessions under the literal "guest" prefix, same as makeCompletionId', () => {
+    expect(makeLoopCompletionId(null, 'timer-1000-abc', 1)).toBe('guest:timer-1000-abc:loop-1');
+  });
+});
+
+describe('bug reproduction: process-restart duplicate save collapses to one record', () => {
+  it('a loop re-claimed after a restart (same sessionId/loopNumber, different save-time date) does not duplicate', () => {
+    const sessionId = 'timer-1750000000000-xyz123';
+    // First save: native broadcast received while app is alive, loop 1 completes normally.
+    const firstSaveId = makeLoopCompletionId(UID, sessionId, 1);
+    let history = appendCompletion([], {
+      date: '2026-06-25T10:00:00.000Z', // true completion time
+      malas: 1,
+      totalCount: 108,
+      duration: 600,
+      userId: UID,
+      completionId: firstSaveId,
+    });
+    expect(history).toHaveLength(1);
+
+    // Process dies here (force-kill/OS kill/crash) -- in-memory guards (processedCompletionLoopsRef,
+    // lastSavedSessionRef, timerState.lastSavedCompletedLoops) are lost, but sessionId (persisted)
+    // and the native-reported loopNumber survive and are read back identically on restart.
+
+    // Second save: fresh process restart, reconcileNativeLoops() re-detects native completedLoops=1
+    // and re-claims it, calling saveSession() again for the SAME (sessionId, loopNumber) -- but at
+    // a LATER wall-clock moment (reconciliation time, not true completion time).
+    const secondSaveId = makeLoopCompletionId(UID, sessionId, 1);
+    expect(secondSaveId).toBe(firstSaveId); // deterministic: identical id, not a new one
+    history = appendCompletion(history, {
+      date: '2026-06-26T14:30:00.000Z', // reconciliation time -- a DIFFERENT calendar day
+      malas: 1,
+      totalCount: 108,
+      duration: 600,
+      userId: UID,
+      completionId: secondSaveId,
+    });
+
+    // The fix: exactly one record survives, not two.
+    expect(history).toHaveLength(1);
+    expect(history[0].date).toBe('2026-06-25T10:00:00.000Z'); // first save wins, true completion time kept
+    expect(todayCountFor(history, UID, '2026-06-25', toLocalDayKey)).toBe(108);
+    expect(todayCountFor(history, UID, '2026-06-26', toLocalDayKey)).toBe(0); // no phantom second day
+  });
+
+  it('legitimate multiple loops in one session still produce separate records', () => {
+    const sessionId = 'timer-1750000000000-xyz123';
+    let history: HistoryRecord[] = [];
+    for (let loop = 1; loop <= 3; loop++) {
+      history = appendCompletion(history, {
+        date: `2026-06-25T10:0${loop}:00.000Z`,
+        malas: 1,
+        totalCount: 108,
+        duration: 600,
+        userId: UID,
+        completionId: makeLoopCompletionId(UID, sessionId, loop),
+      });
+    }
+    expect(history).toHaveLength(3);
+    expect(new Set(history.map((r) => r.completionId)).size).toBe(3);
+  });
+
+  it('legitimate multiple sessions on the same day still produce separate records', () => {
+    let history: HistoryRecord[] = [];
+    history = appendCompletion(history, {
+      date: '2026-06-25T09:00:00.000Z',
+      malas: 1,
+      totalCount: 108,
+      duration: 600,
+      userId: UID,
+      completionId: makeLoopCompletionId(UID, 'timer-session-A', 1),
+    });
+    history = appendCompletion(history, {
+      date: '2026-06-25T15:00:00.000Z',
+      malas: 1,
+      totalCount: 108,
+      duration: 600,
+      userId: UID,
+      completionId: makeLoopCompletionId(UID, 'timer-session-B', 1),
+    });
+    expect(history).toHaveLength(2);
+    expect(todayCountFor(history, UID, '2026-06-25', toLocalDayKey)).toBe(216);
+  });
+
+  it('does not drop a legitimately different completion that happens to share a date-based fallback moment', () => {
+    // Tap Japam / Add Japam still use the date-based fallback (no sessionId) -- confirm the new
+    // existing-id guard in appendCompletion does not regress their existing distinct-id behavior.
+    let history: HistoryRecord[] = [];
+    history = appendCompletion(history, session('2026-06-25T09:00:00.000Z'));
+    history = appendCompletion(history, session('2026-06-25T09:00:00.001Z')); // 1ms later, distinct id
+    expect(history).toHaveLength(2);
+  });
+});
+
 describe('offline-first: appendCompletion', () => {
   it('records a completion with no network and marks it pending', () => {
     const h = appendCompletion([], session('2026-06-03T10:00:00.000Z'));
@@ -69,6 +188,19 @@ describe('offline-first: appendCompletion', () => {
     const n = normalizeRecord(legacy);
     expect(n.completionId).toBe(makeCompletionId(UID, legacy.date));
     expect(n.syncStatus).toBe('synced'); // legacy assumed already handled
+  });
+  it('preserves remoteId metadata for fetched Supabase rows', () => {
+    const legacy = {
+      date: '2026-06-01T08:00:00.000Z',
+      malas: 1,
+      totalCount: 108,
+      duration: 60,
+      manual: false,
+      userId: UID,
+      remoteId: 42,
+    };
+    const n = normalizeRecord(legacy);
+    expect(n.remoteId).toBe(42);
   });
   it('preserves a logged-in manual entry user name while pending', () => {
     const h = appendCompletion([], session('2026-06-03T10:00:00.000Z', {
@@ -164,6 +296,23 @@ describe('no data loss: mergeHistories (Supabase restore)', () => {
     expect(merged).toHaveLength(1);
     expect(merged[0].syncStatus).toBe('synced');
   });
+  it('keeps an edited pending record pending while the remote copy still has stale values', () => {
+    const iso = '2026-06-03T10:00:00.000Z';
+    const merged = mergeHistories(
+      [session(iso, { malas: 3, totalCount: 324, syncStatus: 'pending' })],
+      [session(iso, { malas: 4, totalCount: 432, syncStatus: 'synced' })]
+    );
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({ malas: 3, totalCount: 324, syncStatus: 'pending' });
+  });
+  it('marks an edited pending record synced once the remote values match', () => {
+    const iso = '2026-06-03T10:00:00.000Z';
+    const merged = mergeHistories(
+      [session(iso, { malas: 3, totalCount: 324, syncStatus: 'pending' })],
+      [session(iso, { malas: 3, totalCount: 324, syncStatus: 'synced' })]
+    );
+    expect(merged[0].syncStatus).toBe('synced');
+  });
   it('simulated sign-out then sign-in restore preserves an unsynced local mala', () => {
     // User completes a mala offline (pending), then signs in -> remote has only older data.
     const localAfterOffline = appendCompletion(
@@ -185,6 +334,15 @@ describe('no data loss: mergeHistories (Supabase restore)', () => {
     expect(merged.find((r) => r.completionId === makeCompletionId(UID, yesterday.date))?.syncStatus).toBe('pending');
     expect(merged.find((r) => r.completionId === makeCompletionId(UID, today.date))?.syncStatus).toBe('pending');
     expect(merged).toHaveLength(3);
+  });
+  it('preserves a remote row id when local and remote copies share the same completionId', () => {
+    const iso = '2026-06-03T10:00:00.000Z';
+    const merged = mergeHistories(
+      [session(iso, { syncStatus: 'pending' })],
+      [{ ...session(iso, { syncStatus: 'synced' }), remoteId: 99 }]
+    );
+
+    expect(merged.find((r) => r.completionId === makeCompletionId(UID, iso))?.remoteId).toBe(99);
   });
 });
 
@@ -331,70 +489,68 @@ describe('browser/app parity: same merged history => same count', () => {
   });
 });
 
-describe('self-heal sync: phantom-synced records re-upload (data consistency)', () => {
+describe('reconcileWithServer: drops Supabase-deleted records from local storage', () => {
   const iso = '2026-06-06T18:51:49.300Z';
   const cid = makeCompletionId(UID, iso);
 
-  it('1. re-marks a local synced record absent from remote back to pending', () => {
-    const { records, markedPending } = selfHealSyncStatus(
-      [session(iso, { syncStatus: 'synced' })],
-      UID,
-      new Set() // remote has nothing
+  it('1. drops a synced record absent from remote (Supabase-deleted row disappears)', () => {
+    const result = reconcileWithServer(
+      normalizeAll([session(iso, { syncStatus: 'synced' })]),
+      new Set(), // remote has nothing
+      UID
     );
-    expect(markedPending).toEqual([cid]);
-    expect(records[0].syncStatus).toBe('pending');
+    expect(result).toHaveLength(0);
   });
 
-  it('2. the re-marked record is then picked up by getPending (so it WILL sync to Supabase)', () => {
-    const { records } = selfHealSyncStatus([session(iso, { syncStatus: 'synced' })], UID, new Set());
-    expect(getPending(records).map((r) => r.completionId)).toContain(cid);
-  });
-
-  it('3. leaves a synced record that IS present in remote as synced', () => {
-    const { records, markedPending } = selfHealSyncStatus(
-      [session(iso, { syncStatus: 'synced' })],
-      UID,
-      new Set([cid])
+  it('2. keeps a synced record that IS present in remote', () => {
+    const result = reconcileWithServer(
+      normalizeAll([session(iso, { syncStatus: 'synced' })]),
+      new Set([cid]),
+      UID
     );
-    expect(markedPending).toEqual([]);
-    expect(records[0].syncStatus).toBe('synced');
+    expect(result).toHaveLength(1);
+    expect(result[0].syncStatus).toBe('synced');
   });
 
-  it('4. leaves an already-pending local record pending', () => {
-    const { records, markedPending } = selfHealSyncStatus(
-      [session(iso, { syncStatus: 'pending' })],
-      UID,
-      new Set()
+  it('3. keeps a pending record even if absent from remote (unsynced offline mala is never dropped)', () => {
+    const result = reconcileWithServer(
+      normalizeAll([session(iso, { syncStatus: 'pending' })]),
+      new Set(), // remote has nothing
+      UID
     );
-    expect(markedPending).toEqual([]);
-    expect(records[0].syncStatus).toBe('pending');
+    expect(result).toHaveLength(1);
+    expect(result[0].syncStatus).toBe('pending');
   });
 
-  it('5. does not modify another user\'s record, nor a guest (null userId) record', () => {
-    const { records, markedPending } = selfHealSyncStatus(
-      [
+  it('4. does not touch another user\'s records, nor guest (null userId) records', () => {
+    const result = reconcileWithServer(
+      normalizeAll([
         session(iso, { userId: 'other-user', syncStatus: 'synced' }),
         session(iso, { userId: undefined, syncStatus: 'synced' }),
-      ],
-      UID,
-      new Set() // remote empty for UID
+      ]),
+      new Set(), // remote empty for UID
+      UID
     );
-    expect(markedPending).toEqual([]);
-    expect(records.find((r) => r.userId === 'other-user')?.syncStatus).toBe('synced');
-    expect(records.find((r) => !r.userId)?.syncStatus).toBe('synced');
+    expect(result).toHaveLength(2);
+    expect(result.find((r) => r.userId === 'other-user')?.syncStatus).toBe('synced');
+    expect(result.find((r) => !r.userId)?.syncStatus).toBe('synced');
   });
 
-  it('6. re-upload is idempotent: once remote has it, a second self-heal does not re-mark, and dedup keeps one row', () => {
-    // 1st pass: missing remotely -> pending
-    let { records } = selfHealSyncStatus([session(iso, { syncStatus: 'synced' })], UID, new Set());
-    expect(records[0].syncStatus).toBe('pending');
-    // simulate a successful re-upload (Supabase now has it via on_conflict upsert) + local mark
-    records = markSynced(records, [cid]);
-    const second = selfHealSyncStatus(records, UID, new Set([cid]));
-    expect(second.markedPending).toEqual([]);
-    expect(second.records[0].syncStatus).toBe('synced');
-    // a re-uploaded completion never doubles: dedup by completion_id keeps exactly one
-    expect(dedupeByCompletionId([...records, session(iso, { syncStatus: 'synced' })])).toHaveLength(1);
+  it('5. uses makeCompletionId fallback for rows with no stored completionId (legacy null rows)', () => {
+    const fallbackId = makeCompletionId(UID, iso);
+    const normed = normalizeAll([session(iso, { syncStatus: 'synced' })]);
+    const withEmptyCid = [{ ...normed[0], completionId: '' }] as HistoryRecord[];
+    const result = reconcileWithServer(withEmptyCid, new Set([fallbackId]), UID);
+    expect(result).toHaveLength(1);
+  });
+
+  it('6. dedup keeps exactly one row after reconcile (no doubling)', () => {
+    const result = reconcileWithServer(
+      normalizeAll([session(iso, { syncStatus: 'synced' }), session(iso, { syncStatus: 'synced' })]),
+      new Set([cid]),
+      UID
+    );
+    expect(dedupeByCompletionId(result)).toHaveLength(1);
   });
 });
 
@@ -409,16 +565,14 @@ describe('tombstone delete sync (explicit deletion propagates, offline-safe)', (
     expect(out).toHaveLength(1);
   });
 
-  it('2. tombstoned record does NOT resurrect — self-heal skips it', () => {
-    // synced locally + absent remotely (deleted in Supabase) BUT tombstoned -> must NOT re-upload
-    const { records, markedPending } = selfHealSyncStatus(
-      [session(iso, { syncStatus: 'synced' })],
-      UID,
+  it('2. tombstoned record does NOT resurrect — reconcileWithServer drops it (absent from remote)', () => {
+    // synced locally + absent remotely (deleted in Supabase) + tombstoned -> dropped by reconcile
+    const result = reconcileWithServer(
+      normalizeAll([session(iso, { syncStatus: 'synced' })]),
       new Set(), // remote empty
-      [cid] // tombstoned
+      UID
     );
-    expect(markedPending).toEqual([]);
-    expect(records[0].syncStatus).toBe('synced'); // untouched (applyTombstones will drop it)
+    expect(result).toHaveLength(0);
   });
 
   it('3. an offline PENDING record (not tombstoned) is NOT deleted', () => {
@@ -440,17 +594,26 @@ describe('tombstone delete sync (explicit deletion propagates, offline-safe)', (
     expect(out).toHaveLength(1);
   });
 
-  it('5. self-heal does not re-upload tombstoned ids, but still heals legitimate ones', () => {
+  it('5. reconcileWithServer drops both absent synced records; applyTombstones then filters tombstoned remote rows', () => {
     const otherIso = '2026-06-06T21:00:00.000Z';
     const otherCid = makeCompletionId(UID, otherIso);
-    const { markedPending } = selfHealSyncStatus(
-      [session(iso, { syncStatus: 'synced' }), session(otherIso, { syncStatus: 'synced' })],
-      UID,
+    // Both absent from remote -> both dropped by reconcileWithServer
+    const result = reconcileWithServer(
+      normalizeAll([session(iso, { syncStatus: 'synced' }), session(otherIso, { syncStatus: 'synced' })]),
       new Set(), // both absent remotely
-      [cid] // only `cid` tombstoned
+      UID
     );
-    expect(markedPending).toContain(otherCid); // genuine synced-but-missing -> re-upload
-    expect(markedPending).not.toContain(cid); // deleted -> stays gone
+    expect(result.map((r) => r.completionId)).not.toContain(cid);
+    expect(result.map((r) => r.completionId)).not.toContain(otherCid);
+    // Tombstoned record that still appears in remote is filtered by applyTombstones (separate step)
+    const reconciled = reconcileWithServer(
+      normalizeAll([session(iso, { syncStatus: 'synced' }), session(otherIso, { syncStatus: 'synced' })]),
+      new Set([cid, otherCid]),
+      UID
+    );
+    const afterTombstone = applyTombstones(reconciled, [cid]);
+    expect(afterTombstone.map((r) => r.completionId)).not.toContain(cid);
+    expect(afterTombstone.map((r) => r.completionId)).toContain(otherCid);
   });
 
   it('mergeTombstones unions local + remote tombstones without duplicates', () => {
@@ -487,5 +650,136 @@ describe('shared selector: todayStatsFor (Main/Timer/History must agree)', () =>
     const h = appendCompletion([], session('2026-06-03T10:00:00.000Z')); // pending
     const stats = todayStatsFor(h, UID, toDayKey('2026-06-03T10:00:00.000Z'), toDayKey);
     expect(stats.malas).toBe(1);
+  });
+});
+
+describe('planHistoryDayAdjustment', () => {
+  const day = '2026-06-03';
+  const at = (hour: number) => `2026-06-03T${String(hour).padStart(2, '0')}:00:00.000Z`;
+  const idAt = (hour: number) => makeCompletionId(UID, at(hour));
+  const assertConsistentCounts = (records: HistoryRecord[]) => {
+    for (const record of records.filter(
+      (item) => item.userId === UID && toLocalDayKey(item.date) === day
+    )) {
+      expect(record.totalCount).toBe(record.malas * 108);
+    }
+  };
+
+  it('4 one-mala rows -> 3 keeps the oldest three and deletes only the latest', () => {
+    const records = [10, 11, 12, 13].map((hour) =>
+      session(at(hour), { syncStatus: 'synced' })
+    );
+    const plan = planHistoryDayAdjustment(records, UID, day, 3);
+
+    expect(plan.recordsToDelete.map((record) => record.completionId)).toEqual([idAt(13)]);
+    expect(plan.recordsToUpdate).toHaveLength(0);
+    expect(plan.updatedRecords.map((record) => record.completionId)).toEqual(
+      expect.arrayContaining([idAt(10), idAt(11), idAt(12)])
+    );
+    expect(plan.updatedRecords).toHaveLength(3);
+    assertConsistentCounts(plan.updatedRecords);
+  });
+
+  it('one 4-mala row -> 3 updates the same id and count to 324', () => {
+    const original = session(at(10), {
+      malas: 4,
+      totalCount: 432,
+      syncStatus: 'synced',
+      userName: 'Sravani',
+      userEmail: 'sravani@example.com',
+      source: 'manual',
+      remoteId: 12,
+    });
+    const plan = planHistoryDayAdjustment([original], UID, day, 3);
+    const update = plan.recordsToUpdate[0];
+
+    expect(update.before.completionId).toBe(update.after.completionId);
+    expect(update.after).toMatchObject({
+      malas: 3,
+      totalCount: 324,
+      remoteId: 12,
+      syncStatus: 'pending',
+      userName: 'Sravani',
+      userEmail: 'sravani@example.com',
+      source: 'manual',
+    });
+    expect(update.after.date).toBe(original.date);
+  });
+
+  it('mixed 3+1 -> 2 removes the latest row then reduces the oldest row', () => {
+    const records = [
+      session(at(10), { malas: 3, totalCount: 324, syncStatus: 'synced' }),
+      session(at(11), { malas: 1, totalCount: 108, syncStatus: 'synced' }),
+    ];
+    const plan = planHistoryDayAdjustment(records, UID, day, 2);
+
+    expect(plan.recordsToDelete.map((record) => record.completionId)).toEqual([idAt(11)]);
+    expect(plan.recordsToUpdate).toHaveLength(1);
+    expect(plan.recordsToUpdate[0].after).toMatchObject({
+      completionId: idAt(10),
+      malas: 2,
+      totalCount: 216,
+    });
+    assertConsistentCounts(plan.updatedRecords);
+  });
+
+  it('same value is a no-op', () => {
+    const plan = planHistoryDayAdjustment(
+      [session(at(10)), session(at(11))],
+      UID,
+      day,
+      2
+    );
+    expect(plan.changed).toBe(false);
+    expect(plan.recordsToUpdate).toHaveLength(0);
+    expect(plan.recordsToDelete).toHaveLength(0);
+  });
+
+  it('target 0 creates a delete-day plan containing every record for that day only', () => {
+    const otherDay = session('2026-06-02T10:00:00.000Z');
+    const plan = planHistoryDayAdjustment(
+      [session(at(10)), session(at(11)), otherDay],
+      UID,
+      day,
+      0
+    );
+    expect(plan.deleteEntireDay).toBe(true);
+    expect(plan.recordsToDelete).toHaveLength(2);
+    expect(plan.updatedRecords).toHaveLength(1);
+    expect(plan.updatedRecords[0].date).toBe(otherDay.date);
+  });
+
+  it('increase 3 -> 4 updates the earliest canonical id and count to 432', () => {
+    const original = session(at(10), { malas: 3, totalCount: 324, syncStatus: 'synced' });
+    const plan = planHistoryDayAdjustment([original], UID, day, 4);
+    expect(plan.recordsToUpdate[0].after).toMatchObject({
+      completionId: idAt(10),
+      malas: 4,
+      totalCount: 432,
+      syncStatus: 'pending',
+    });
+  });
+
+  it('preserves unrelated and pending/offline records without losing metadata', () => {
+    const pending = session(at(10), {
+      malas: 2,
+      totalCount: 216,
+      syncStatus: 'pending',
+      userName: 'Offline User',
+      source: 'timer',
+    });
+    const otherUser = session(at(11), { userId: 'other-user', syncStatus: 'pending' });
+    const plan = planHistoryDayAdjustment([pending, otherUser], UID, day, 1);
+
+    expect(plan.recordsToUpdate[0].after).toMatchObject({
+      completionId: makeCompletionId(UID, pending.date),
+      malas: 1,
+      totalCount: 108,
+      syncStatus: 'pending',
+      userName: 'Offline User',
+      source: 'timer',
+    });
+    expect(plan.updatedRecords.find((record) => record.userId === 'other-user')).toBeTruthy();
+    assertConsistentCounts(plan.updatedRecords);
   });
 });

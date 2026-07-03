@@ -8,9 +8,15 @@ import {
   todayStatsFor,
   toLocalDayKey,
 } from '../../lib/historyStore';
+import {
+  createMalaCompletionGuard,
+  detectMalaCrossing,
+  runMalaCompletion,
+} from '../../lib/malaCompletion';
 import { getWebOmAudioUri } from '../../lib/webOmAudio';
 import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
+import { ResponseType } from 'expo-auth-session';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import * as Notifications from 'expo-notifications';
@@ -39,6 +45,7 @@ import {
   Vibration,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -48,7 +55,7 @@ type Session = {
   totalCount: number;
   duration: number;
   manual?: boolean;
-  userId?: string;
+  userId?: string | null;
   userName?: string;
   userEmail?: string;
   source?: string;
@@ -90,6 +97,27 @@ const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
 const WEB_OM_AUDIO_SRC = '/om_complete.mp3';
+// Guest Mode is temporarily hidden — Google Sign-In is the only entry point for now. Flip this
+// back to true to restore the "Continue as Guest" button; none of the underlying guest/anonymous
+// auth code is removed, only this UI entry point is gated.
+const GUEST_MODE_ENABLED = false;
+
+// With Guest Mode hidden, a failed Google Sign-In leaves the user with no fallback into the app
+// — silently re-showing the same sign-in modal gives no explanation. Alert.alert is not
+// interactive in react-native-web (see the same caveat in this file's handleResetCount), so this
+// branches to window.alert on web, matching this codebase's existing pattern for cross-platform
+// alerts.
+const showGoogleSignInRequiredAlert = () => {
+  if (GUEST_MODE_ENABLED) return;
+  const message =
+    'Google Sign-In is required right now. Please check your Google account or internet connection and try again.';
+  if (Platform.OS === 'web') {
+    if (typeof window !== 'undefined') window.alert(message);
+  } else {
+    Alert.alert('Sign-In Required', message);
+  }
+};
+
 const USER_NAME_KEY = 'userName';
 const USER_EMAIL_KEY = 'userEmail';
 const USER_ID_KEY = 'userId';
@@ -116,7 +144,7 @@ const progressRingSize = progressCircleSize - (isMobile ? 10 : 14);
 const shellMinHeight =
   isMobile
     ? Platform.OS === 'web'
-      ? ('100dvh' as any)
+      ? ('100%' as any)
       : screenHeight
     : Math.min(Math.max(screenHeight - 54, 820), 940);
 
@@ -157,6 +185,11 @@ const isAuthPending = async () => {
 };
 
 export default function JapamMain() {
+  const insets = useSafeAreaInsets();
+  const tabBarSpaceFromBottom = 74 + (isMobile
+    ? Math.max(12, insets.bottom + 8)
+    : Math.max(22, insets.bottom + 14));
+
   const params = useLocalSearchParams<{ signin?: string }>();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [count, setCount] = useState(0);
@@ -181,6 +214,10 @@ export default function JapamMain() {
   const [hasSelectedTimer, setHasSelectedTimer] = useState(false);
   const [customMinutesInput, setCustomMinutesInput] = useState('');
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const [showGuestWarningModal, setShowGuestWarningModal] = useState(false);
+  const [showGuestNameModal, setShowGuestNameModal] = useState(false);
+  const [guestNameInput, setGuestNameInput] = useState('');
+  const [isGuestMode, setIsGuestMode] = useState(false);
   const [authReady, setAuthReady] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [repetitionSoundEnabled, setRepetitionSoundEnabled] = useState(true);
@@ -214,6 +251,7 @@ export default function JapamMain() {
   const lastSavedSessionRef = useRef('');
   const lastTapRef = useRef(0);
   const lastCompletedCycleRef = useRef<number>(0);
+  const tapMalaCompletionGuardRef = useRef(createMalaCompletionGuard());
   const startTimerIntervalRef = useRef<() => void>(() => {});
   const appStateRef = useRef(AppState.currentState);
   const restoreTodayTotalRef = useRef<() => Promise<void>>(async () => {});
@@ -242,11 +280,20 @@ export default function JapamMain() {
     if (savedUserName && savedUserId) {
       userIdRef.current = savedUserId;
       setUserName(savedUserName);
+      setIsGuestMode(false);
+      setShowUserModal(false);
+      setIsSigningIn(false);
+    } else if (savedUserName && !savedUserId) {
+      userIdRef.current = null;
+      setUserName(savedUserName);
+      setIsGuestMode(true);
       setShowUserModal(false);
       setIsSigningIn(false);
     } else {
       userIdRef.current = null;
+      lastSavedSessionRef.current = '';
       setUserName('');
+      setIsGuestMode(false);
       setIsSigningIn(authPending);
       if (!authPending) {
         setShowUserModal(false);
@@ -265,19 +312,16 @@ export default function JapamMain() {
     if (!sound) return;
 
     try {
+      // Unlock iOS audio session with the existing silent file — must happen before any
+      // I/O await so the user-gesture trust token is still valid when play() fires.
+      const unlock = new window.Audio('/silent-timer.wav');
+      await unlock.play().catch(() => undefined);
       if ('caches' in window) {
         caches.open('japam-audio-v1')
           .then((cache) => cache.add(WEB_OM_AUDIO_SRC).catch(() => undefined))
           .catch(() => undefined);
       }
       await fetch(WEB_OM_AUDIO_SRC, { cache: 'force-cache' }).catch(() => undefined);
-      await sound.stopAsync().catch(() => undefined);
-      await sound.setPositionAsync(0).catch(() => undefined);
-      await sound.setVolumeAsync(0).catch(() => undefined);
-      await sound.playAsync();
-      await sound.pauseAsync().catch(() => undefined);
-      await sound.setPositionAsync(0).catch(() => undefined);
-      await sound.setVolumeAsync(0.9).catch(() => undefined);
       webAudioPrimedRef.current = true;
     } catch (error) {
       console.log('Web audio unlock error:', error);
@@ -508,11 +552,29 @@ export default function JapamMain() {
   }, [clearTimerHandles]);
   startTimerIntervalRef.current = startTimerInterval;
 
+  const rawNonceRef = useRef<string>('');
+  const [hashedNonce, setHashedNonce] = useState<string>('');
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const arr = new Uint8Array(16);
+    crypto.getRandomValues(arr);
+    const raw = Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('');
+    rawNonceRef.current = raw;
+    console.log('[NONCE_GEN] tap-japam raw_prefix=%s', raw.slice(0, 8));
+    void crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw)).then((buf) => {
+      const hashed = Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
+      console.log('[NONCE_GEN] tap-japam hashed_prefix=%s', hashed.slice(0, 8));
+      setHashedNonce(hashed);
+    });
+  }, []);
+
   const [request, response, promptAsync] = Google.useAuthRequest({
     webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
     clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
-    scopes: ['profile', 'email'],
+    scopes: ['openid', 'profile', 'email'],
     redirectUri: Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : undefined,
+    responseType: Platform.OS === 'web' ? ResponseType.IdToken : undefined,
+    extraParams: Platform.OS === 'web' && hashedNonce ? { nonce: hashedNonce } : undefined,
   });
 
   useFocusEffect(
@@ -764,9 +826,11 @@ export default function JapamMain() {
         if (remoteSessions !== null) {
           const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
           const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
+          const rawTomb = await AsyncStorage.getItem('deletedCompletions');
+          const tombSet = new Set<string>(rawTomb ? JSON.parse(rawTomb) : []);
           const mergedHistory = mergeHistories(localHistory, remoteSessions).filter((s) => {
             const day = toLocalDayKey(s.date);
-            return day === 'unknown' || day <= todayKey;
+            return (day === 'unknown' || day <= todayKey) && !tombSet.has(s.completionId as string);
           });
 
           await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
@@ -805,10 +869,14 @@ export default function JapamMain() {
       return;
     }
 
-    // Not logged in
+    // Not logged in (guest) — restore today's in-progress count from unkeyed manual keys
     if (!preserveManualCount) {
-      await restoreTotal(0, { userId: null });
-      totalRef.current = 0;
+      const manualDate = await AsyncStorage.getItem(MANUAL_TOTAL_DATE_KEY);
+      const guestTotal = manualDate === todayKey
+        ? Number((await AsyncStorage.getItem(MANUAL_TOTAL_KEY)) || '0')
+        : 0;
+      await restoreTotal(guestTotal, { userId: null });
+      totalRef.current = guestTotal;
     } else {
       setMalas(0);
       setTotal(0);
@@ -841,23 +909,6 @@ export default function JapamMain() {
     document.title = isRunning ? `⏱ ${formatTime(seconds)} — Mantra Japam` : 'Mantra Japam';
   }, [isRunning, seconds]);
 
-  useEffect(() => {
-    if (Platform.OS !== 'web') return;
-    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
-    if (!isRunning) return;
-    const left = Math.max(0, targetSeconds - seconds);
-    const mm = String(Math.floor(left / 60)).padStart(2, '0');
-    const ss = String(left % 60).padStart(2, '0');
-    const artist = `Time left · ${mm}:${ss}`;
-    if (navigator.mediaSession.metadata) {
-      navigator.mediaSession.metadata.artist = artist;
-    } else {
-      navigator.mediaSession.metadata = new (window as any).MediaMetadata({
-        title: 'Japam Timer',
-        artist,
-      });
-    }
-  }, [isRunning, seconds, targetSeconds]);
 
   useEffect(() => {
     const onHistoryUpdated = () => {
@@ -1044,6 +1095,10 @@ export default function JapamMain() {
         setUserName(savedUserName);
         setShowUserModal(false);
         await restoreTodayTotal();
+      } else if (savedUserName && !savedUserId) {
+        userIdRef.current = null;
+        setUserName(savedUserName);
+        setShowUserModal(false);
       } else {
         setUserName('');
         setShowUserModal(false);
@@ -1052,7 +1107,12 @@ export default function JapamMain() {
       }
 
       if (savedUserId) {
-        const timerState = await fetchTimerStateFromSupabase(savedUserId);
+        let timerState: TimerStateRow | null = null;
+        try {
+          timerState = await fetchTimerStateFromSupabase(savedUserId);
+        } catch {
+          // offline — fall through to local AsyncStorage restore below
+        }
         if (timerState) {
           // Local storage may have more recent seconds if app was killed between cloud saves
           const localSeconds = Number((await AsyncStorage.getItem(getUserStorageKey(TIMER_SECONDS_KEY, savedUserId))) || '0');
@@ -1207,6 +1267,28 @@ export default function JapamMain() {
     }
   }, []);
 
+  const migrateGuestHistoryToGoogle = useCallback(async (googleUserId: string) => {
+    const raw = await AsyncStorage.getItem(HISTORY_KEY);
+    const history: Session[] = raw ? JSON.parse(raw) : [];
+    if (!history.some((r) => !r.userId)) return;
+    const migrated = history.map((r) =>
+      !r.userId ? { ...r, userId: googleUserId, syncStatus: 'pending' as const } : r
+    );
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(migrated));
+  }, []);
+
+  const handleSaveGuestName = useCallback(async () => {
+    const name = guestNameInput.trim();
+    if (!name) return;
+    await AsyncStorage.setItem(USER_NAME_KEY, name);
+    setUserName(name);
+    setIsGuestMode(true);
+    setShowGuestNameModal(false);
+    setShowUserModal(false);
+    setGuestNameInput('');
+    DeviceEventEmitter.emit('japam-auth-updated');
+  }, [guestNameInput]);
+
   const handleNativeGoogleSignIn = useCallback(async () => {
     console.log('SIGNIN PATH:', Platform.OS);
     console.log('Using native GoogleSignin');
@@ -1218,22 +1300,32 @@ export default function JapamMain() {
       if (userInfo.type !== 'success') {
         setIsSigningIn(false);
         setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
         return;
       }
       const { id, name, givenName, email } = userInfo.data.user;
       const { idToken } = userInfo.data;
+      let supabaseUuid: string | undefined;
       if (idToken) {
-        const { error: authError } = await supabase.auth.signInWithIdToken({ provider: 'google', token: idToken });
+        const { data: authData, error: authError } = await supabase.auth.signInWithIdToken({ provider: 'google', token: idToken });
         if (authError) console.log('Supabase signInWithIdToken error:', authError.message);
+        else supabaseUuid = authData?.user?.id;
       }
       const googleName = givenName || name || email || 'User';
       const googleEmail = email || '';
       const googleUserId = String(id).trim();
 
-      if (!googleUserId) { setIsSigningIn(false); setShowUserModal(true); return; }
+      if (!googleUserId) {
+        setIsSigningIn(false);
+        setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
+        return;
+      }
 
+      const userId = supabaseUuid ?? googleUserId;
       setHasRestoredTimer(false);
       setUserName(googleName);
+      setIsGuestMode(false);
       setShowUserModal(false);
       setAuthReady(true);
       setShowUserMenu(false);
@@ -1241,23 +1333,25 @@ export default function JapamMain() {
       totalRef.current = 0;
       await AsyncStorage.setItem(USER_NAME_KEY, googleName);
       if (googleEmail) await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
-      await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
-      userIdRef.current = googleUserId;
+      await migrateGuestHistoryToGoogle(userId);
+      await AsyncStorage.setItem(USER_ID_KEY, userId);
+      userIdRef.current = userId;
       DeviceEventEmitter.emit('japam-auth-updated');
 
-      await loadJapamNameFromSupabase(googleUserId);
+      await loadJapamNameFromSupabase(userId);
       await restoreTodayTotal();
-      await restoreHistoryFromSupabase(googleUserId);
-      await restoreTimerForUser(googleUserId);
-      void requestNotificationPermissionOnce();
+      await restoreHistoryFromSupabase(userId);
+      await restoreTimerForUser(userId);
     } catch (error) {
       console.log('Native Google sign-in error:', error);
       setShowUserModal(true);
+      showGoogleSignInRequiredAlert();
     } finally {
       setIsSigningIn(false);
     }
   }, [
     loadJapamNameFromSupabase,
+    migrateGuestHistoryToGoogle,
     requestNotificationPermissionOnce,
     restoreHistoryFromSupabase,
     restoreTimerForUser,
@@ -1270,11 +1364,15 @@ export default function JapamMain() {
       if (Platform.OS !== 'web') return; // native platforms use handleNativeGoogleSignIn
       if (!response) return;
 
+      console.log('[AUTH_CALLBACK] source=tap-japam-web response.type=%s', response.type);
       if (response.type !== 'success') {
         setIsSigningIn(false);
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-        if (!savedUserId) setShowUserModal(true);
+        if (!savedUserId) {
+          setShowUserModal(true);
+          showGoogleSignInRequiredAlert();
+        }
         return;
       }
 
@@ -1285,28 +1383,90 @@ export default function JapamMain() {
       const accessToken =
         authentication?.accessToken ||
         ('params' in response ? response.params?.access_token : undefined);
+      const idToken =
+        authentication?.idToken ||
+        ('params' in response ? (response.params as Record<string, string>)?.id_token : undefined);
 
-      if (!accessToken) {
+      console.log('[AUTH_CALLBACK] source=tap-japam-web hasIdToken=%s hasAccessToken=%s paramKeys=%s',
+        !!idToken, !!accessToken,
+        'params' in response ? Object.keys(response.params ?? {}).join(',') : 'none');
+
+      if (!accessToken && !idToken) {
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         setIsSigningIn(false);
         setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
         return;
       }
 
       try {
-        const userInfoResponse = await fetch('https://www.googleapis.com/userinfo/v2/me', {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
+        if (idToken) {
+          console.log('[SUPABASE_AUTH] tap-japam nonce_prefix=%s', rawNonceRef.current.slice(0, 8));
+          const { error: supaAuthError } = await supabase.auth.signInWithIdToken({
+            provider: 'google',
+            token: idToken,
+            nonce: rawNonceRef.current,
+          });
+          if (supaAuthError) console.log('[SUPABASE_AUTH] tap-japam signInWithIdToken error:', supaAuthError.message);
+          else console.log('[SUPABASE_AUTH] tap-japam web session established');
+        } else {
+          console.log('[SUPABASE_AUTH] tap-japam no id_token — session not established');
+        }
 
-        const userInfo = await userInfoResponse.json();
-        const googleName = userInfo?.given_name || userInfo?.name || userInfo?.email || 'User';
-        const googleEmail = userInfo?.email || '';
-        const googleUserId = String(userInfo?.id || '').trim();
+        const session = (await supabase.auth.getSession()).data.session;
+        const sessionIsAnonymous =
+          !!((session?.user as { is_anonymous?: boolean } | undefined)?.is_anonymous);
+        console.log(
+          '[SUPABASE_AUTH] tap-japam session.user.id=%s session.user.email=%s hasAccessToken=%s tokenLength=%s isAnonymous=%s',
+          session?.user?.id || 'none',
+          session?.user?.email || 'none',
+          !!session?.access_token,
+          session?.access_token?.length || 0,
+          sessionIsAnonymous
+        );
+        if (!session?.access_token || sessionIsAnonymous) {
+          console.log('[SUPABASE_AUTH] tap-japam missing non-anonymous Supabase session after Google login');
+          showGoogleSignInRequiredAlert();
+          return;
+        }
 
-        if (!googleUserId) { setShowUserModal(true); return; }
+        let googleUserId: string;
+        let googleName: string;
+        let googleEmail: string;
 
+        if (accessToken) {
+          const userInfoResponse = await fetch('https://www.googleapis.com/userinfo/v2/me', {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          const userInfo = await userInfoResponse.json();
+          googleName = userInfo?.given_name || userInfo?.name || userInfo?.email || 'User';
+          googleEmail = userInfo?.email || '';
+          googleUserId = String(userInfo?.id || '').trim();
+        } else {
+          const claims = JSON.parse(
+            decodeURIComponent(
+              atob(idToken!.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))
+                .split('')
+                .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+                .join('')
+            )
+          ) as Record<string, unknown>;
+          googleUserId = String(claims.sub || '');
+          googleName = String(claims.given_name || claims.name || claims.email || 'User');
+          googleEmail = String(claims.email || '');
+        }
+
+        if (!googleUserId) {
+          setShowUserModal(true);
+          showGoogleSignInRequiredAlert();
+          return;
+        }
+
+        // session is non-null: the guard above returns early if access_token is missing.
+        const userId = session!.user.id;
         setHasRestoredTimer(false);
         setUserName(googleName);
+        setIsGuestMode(false);
         setShowUserModal(false);
         setAuthReady(true);
         setShowUserMenu(false);
@@ -1316,21 +1476,22 @@ export default function JapamMain() {
         if (googleEmail) {
           await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
         }
-        await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
-        userIdRef.current = googleUserId;
+        await migrateGuestHistoryToGoogle(userId);
+        await AsyncStorage.setItem(USER_ID_KEY, userId);
+        userIdRef.current = userId;
         DeviceEventEmitter.emit('japam-auth-updated');
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
           window.dispatchEvent(new Event('japam-auth-updated'));
         }
 
-        await loadJapamNameFromSupabase(googleUserId);
+        await loadJapamNameFromSupabase(userId);
         await restoreTodayTotal();
-        await restoreHistoryFromSupabase(googleUserId);
-        await restoreTimerForUser(googleUserId);
-        void requestNotificationPermissionOnce();
+        await restoreHistoryFromSupabase(userId);
+        await restoreTimerForUser(userId);
       } catch (error) {
         console.log('Google login error:', error);
         setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
       } finally {
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         setIsSigningIn(false);
@@ -1341,6 +1502,7 @@ export default function JapamMain() {
   }, [
     response,
     loadJapamNameFromSupabase,
+    migrateGuestHistoryToGoogle,
     requestNotificationPermissionOnce,
     restoreHistoryFromSupabase,
     restoreTimerForUser,
@@ -1506,7 +1668,7 @@ export default function JapamMain() {
         totalCount: sessionTotal,
         duration,
         manual: false,
-        userId: userId || undefined,
+        userId: userId ?? null,
         userName: userId ? historyUserName : undefined,
         userEmail: userId ? savedUserEmail || undefined : undefined,
         source,
@@ -1607,14 +1769,25 @@ export default function JapamMain() {
     }
 
     if (Platform.OS === 'android') {
-      // Pattern [0, 80]: 0ms delay then 80ms vibration. More perceptible than 50ms
-      // while still feeling like a tap. vibrate(50) was inaudible on some devices.
-      Vibration.vibrate([0, 80]);
+      // Double-pulse (35ms buzz, 15ms gap, 40ms buzz = 90ms total) at default amplitude
+      // (~255/255 max on Android 8+, still the strongest JS-reachable option — see prior note
+      // on expo-haptics Heavy capping at 70/255). A single flat pulse of similar total length
+      // reads as a smear/buzz on modern Samsung LRA motors; a short buzz-gap-buzz reads as a
+      // firmer, more distinct "thump-thump" at the same perceived intensity budget.
+      // Total duration (90ms) is kept strictly under the 100ms tap debounce (lastTapRef) so the
+      // pattern always finishes and goes silent before the next legal tap's vibrate() call can
+      // land — no overlap/clipping even at the fastest tap rate the counting logic allows.
+      // Each new Vibration.vibrate() call cancels the previous one, so rapid tapping never
+      // accumulates overlapping buzzes — each tap gets its own clean pulse.
+      Vibration.vibrate([0, 35, 15, 40]);
       return;
     }
 
-    // iOS
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    // iOS: Medium gives a noticably stronger tap than Light ("collision between moderately sized
+    // UI elements" vs. Light's "small, light" objects) without being as intense as Heavy, which
+    // can feel jarring during 108 consecutive rapid taps. The Taptic Engine rate-limits calls
+    // automatically (~8–10 Hz), so very rapid tapping stays comfortable.
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
   }, [vibrationEnabled]);
 
   const playCompletionAnimation = useCallback(() => {
@@ -1759,15 +1932,20 @@ export default function JapamMain() {
       useNativeDriver: true,
     }).start();
 
-    const newTotal = setCountersFromTotal(totalRef.current + 1);
-    const newCount = newTotal % 108;
+    const previousTotal = totalRef.current;
+    const nextTotal = previousTotal + 1;
+    const newTotal = setCountersFromTotal(nextTotal);
+    const crossing = detectMalaCrossing(previousTotal, nextTotal);
 
-    if (newCount === 0) {
-      console.log('TAP_MALA_COMPLETE_REACHED total=%d count=%d', newTotal, newCount);
-      const saved = await saveSession(0, 1, 108, newTotal, 'tap');
-      if (saved) {
-        await completeFeedback('final');
-      }
+    if (crossing.crossed) {
+      console.log('TAP_MALA_COMPLETE_REACHED total=%d count=%d', newTotal, newTotal % 108);
+      await runMalaCompletion({
+        boundaryKey: crossing.nextMala,
+        guard: tapMalaCompletionGuardRef.current,
+        save: () => saveSession(0, 1, 108, newTotal, 'tap'),
+        playFeedback: () => completeFeedback('final'),
+        onError: (stage, error) => console.log('TAP_MALA_COMPLETION_ERROR stage=%s', stage, error),
+      });
     } else {
       void tapFeedback();
     }
@@ -1949,6 +2127,7 @@ export default function JapamMain() {
 
     timerStartedAtRef.current = null;
     userIdRef.current = null;
+    lastSavedSessionRef.current = '';
     clearTimerHandles();
     void hideTimerNotification();
     setSeconds(0);
@@ -1977,6 +2156,7 @@ export default function JapamMain() {
     setHasRestoredTimer(false);
     setShowUserMenu(false);
     setUserName('');
+    setIsGuestMode(false);
     setJapamName('');
     setNameInput('');
     setHasSetName(false); // ✅ reset on logout
@@ -2038,7 +2218,11 @@ export default function JapamMain() {
       end={{ x: 0, y: 1 }}
       style={{ flex: 1 }}
     >
-      <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={[styles.container, Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom }]}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.appShell}>
           <View pointerEvents="none" style={styles.sceneLayer}>
             <ImageBackground
@@ -2058,7 +2242,7 @@ export default function JapamMain() {
             </View>
           )}
 
-          <Text style={styles.tapInstruction}>Tap the circle to count Japam</Text>
+          <Text style={styles.tapInstruction}>After each mantra japa,{'\n'}tap the circle</Text>
 
           <Animated.View style={styles.progressShell}>
             <Animated.View
@@ -2131,9 +2315,11 @@ export default function JapamMain() {
               <View style={styles.modalTopMark}>
                 <View style={styles.modalTopDot} />
               </View>
-              <Text style={styles.modalTitle}>Sign in to save</Text>
+              <Text style={styles.modalTitle}>Save your Japam</Text>
               <Text style={styles.modalSubtitle}>
-                Sign in with Google to save your Japam history and sync across devices.
+                {GUEST_MODE_ENABLED
+                  ? 'Sign in with Google to sync across devices, or continue as a guest to save locally.'
+                  : 'Sign in with Google to sync your Japam across devices.'}
               </Text>
               <Pressable
                 disabled={Platform.OS === 'web' && !request}
@@ -2153,6 +2339,7 @@ export default function JapamMain() {
                         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
                         setIsSigningIn(false);
                         setShowUserModal(true);
+                        showGoogleSignInRequiredAlert();
                       }
                     })();
                   }
@@ -2163,9 +2350,79 @@ export default function JapamMain() {
                 </View>
                 <Text style={styles.modalButtonText}>Continue with Google</Text>
               </Pressable>
-              <Text style={styles.modalFootnote}>
-                Your history stays separate from other users on this device.
+              {GUEST_MODE_ENABLED && (
+                <Pressable
+                  style={styles.guestButton}
+                  onPress={() => { setShowUserModal(false); setShowGuestWarningModal(true); }}
+                >
+                  <Text style={styles.guestButtonText}>Continue as Guest</Text>
+                </Pressable>
+              )}
+              {GUEST_MODE_ENABLED && (
+                <Text style={styles.modalFootnote}>
+                  Guest history is saved on this device only.
+                </Text>
+              )}
+            </View>
+          </View>
+        </Modal>
+
+        <Modal visible={showGuestWarningModal} transparent animationType="fade">
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Pressable style={styles.modalClose} onPress={() => setShowGuestWarningModal(false)}>
+                <Text style={styles.modalCloseText}>×</Text>
+              </Pressable>
+              <View style={styles.modalTopMark}>
+                <View style={styles.modalTopDot} />
+              </View>
+              <Text style={styles.modalTitle}>Continue as Guest</Text>
+              <Text style={styles.modalSubtitle}>
+                {'Your Japam history will be stored only on this phone. If you delete the app or change your phone, your history will not be transferred.\n\nFor backup and sync across devices, please sign in with Google.'}
               </Text>
+              <Pressable
+                style={styles.modalButton}
+                onPress={() => { setShowGuestWarningModal(false); setShowGuestNameModal(true); }}
+              >
+                <Text style={styles.modalButtonText}>Continue as Guest</Text>
+              </Pressable>
+              <Pressable
+                style={styles.guestButton}
+                onPress={() => { setShowGuestWarningModal(false); setShowUserModal(true); }}
+              >
+                <Text style={styles.guestButtonText}>Sign in with Google</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal visible={showGuestNameModal} transparent animationType="fade">
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Pressable style={styles.modalClose} onPress={() => setShowGuestNameModal(false)}>
+                <Text style={styles.modalCloseText}>×</Text>
+              </Pressable>
+              <View style={styles.modalTopMark}>
+                <View style={styles.modalTopDot} />
+              </View>
+              <Text style={styles.modalTitle}>Your name</Text>
+              <Text style={styles.modalSubtitle}>Enter a name so your records are labeled correctly.</Text>
+              <TextInput
+                style={styles.guestNameInput}
+                placeholder="Enter your name"
+                placeholderTextColor="#94a3b8"
+                value={guestNameInput}
+                onChangeText={setGuestNameInput}
+                returnKeyType="done"
+                onSubmitEditing={() => void handleSaveGuestName()}
+              />
+              <Pressable
+                style={[styles.modalButton, !guestNameInput.trim() && styles.disabledButton]}
+                disabled={!guestNameInput.trim()}
+                onPress={() => void handleSaveGuestName()}
+              >
+                <Text style={styles.modalButtonText}>Continue</Text>
+              </Pressable>
             </View>
           </View>
         </Modal>
@@ -2414,11 +2671,7 @@ const styles = StyleSheet.create({
               : ('calc(20px + env(safe-area-inset-top))' as any))
           : 58)
       : (isShortMobile ? 14 : isMobile ? 20 : 58),
-    paddingBottom: Platform.OS === 'web'
-      ? (isMobile
-          ? ('calc(112px + env(safe-area-inset-bottom))' as any)
-          : 112)
-      : 112,
+    paddingBottom: 16,
     shadowColor: '#0f766e',
     shadowOpacity: isMobile ? 0 : 0.16,
     shadowRadius: 28,
@@ -3213,4 +3466,32 @@ const styles = StyleSheet.create({
   },
   signingInText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   buildDebug: { color: '#9B9B9B', fontSize: 10, textAlign: 'center', marginTop: 6, opacity: 0.6 },
+  guestButton: {
+    marginTop: 10,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#dbeceb',
+  },
+  guestButtonText: {
+    color: '#0f766e',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  guestNameInput: {
+    borderWidth: 1.5,
+    borderColor: 'rgba(15,143,135,0.35)',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: '#12383c',
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    marginBottom: 14,
+    width: '100%',
+  },
 });

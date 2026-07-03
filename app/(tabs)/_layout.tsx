@@ -4,6 +4,14 @@ import { Dimensions, Platform, StyleSheet, Text } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TimerProvider } from '../../contexts/timer-context';
 
+// Anchor the tab navigator on the Timer tab so it is the initial route.
+// Without this, the hidden `index` legacy "0/108 · Resume Japam" screen is the
+// navigator's anchor/first route, and the hardware back button reveals it. This
+// codebase's expo-router (v6) reads `anchor` (see app/_layout.tsx); paired with
+// `backBehavior="initialRoute"` and declaring `timer` first below, back from
+// Timer returns to Timer (already there) and exits/minimizes the app instead.
+export const unstable_settings = { anchor: 'timer' };
+
 const screenWidth = Dimensions.get('window').width;
 const isMobile = screenWidth < 500;
 const desktopTabWidth = 430;
@@ -11,13 +19,13 @@ const desktopTabLeft = Math.max(0, (screenWidth - desktopTabWidth) / 2);
 const webTabBarStyle =
   Platform.OS === 'web'
     ? ({
-        position: 'fixed',
-        bottom: 'calc(12px + env(safe-area-inset-bottom))',
-        left: '50%',
-        right: undefined,
+        // No position:fixed — tab bar is a flex sibling to the screens container.
+        // React Navigation's screens container has flex:1 and fills the remaining
+        // height automatically. No per-screen bottom padding or margin hacks needed.
+        alignSelf: 'center',
         width: 'calc(100% - 24px)',
         maxWidth: desktopTabWidth,
-        transform: 'translateX(-50%)',
+        marginBottom: 12,
         zIndex: 999,
         backdropFilter: 'blur(16px)',
       } as any)
@@ -55,6 +63,7 @@ export default function TabLayout() {
   return (
     <TimerProvider>
       <Tabs
+        backBehavior="initialRoute"
         screenOptions={{
           headerShown: false,
           tabBarActiveTintColor: '#0f766e',
@@ -90,13 +99,6 @@ export default function TabLayout() {
         }}
       >
         <Tabs.Screen
-          name="index"
-          options={{
-            href: null,
-          }}
-        />
-
-        <Tabs.Screen
           name="timer"
           options={{
             title: 'Timer',
@@ -104,6 +106,13 @@ export default function TabLayout() {
             tabBarIcon: ({ color, focused }) => (
               <Ionicons name={focused ? 'timer' : 'timer-outline'} size={focused ? 27 : 25} color={color} />
             ),
+          }}
+        />
+
+        <Tabs.Screen
+          name="index"
+          options={{
+            href: null,
           }}
         />
 
@@ -143,6 +152,17 @@ export default function TabLayout() {
 
 
         <Tabs.Screen
+          name="groups"
+          options={{
+            title: 'Groups',
+            tabBarLabel: tabLabel('Groups'),
+            tabBarIcon: ({ color, focused }) => (
+              <Ionicons name={focused ? 'people' : 'people-outline'} size={focused ? 27 : 25} color={color} />
+            ),
+          }}
+        />
+
+        <Tabs.Screen
           name="settings"
           options={{
             title: 'Settings',
@@ -150,6 +170,13 @@ export default function TabLayout() {
             tabBarIcon: ({ color, focused }) => (
               <Ionicons name="sparkles-outline" size={focused ? 27 : 25} color={color} />
             ),
+          }}
+        />
+
+        <Tabs.Screen
+          name="groups-dashboard"
+          options={{
+            href: null,
           }}
         />
 

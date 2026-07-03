@@ -8,7 +8,7 @@ Thank you for using Mantra Japam ("the App", "we", "our"). This Privacy Policy e
 
 ## 1. Who we are
 
-Mantra Japam is a personal spiritual practice app designed to help you count mantras, track daily mala progress, and build a consistent japam practice. The app is developed and maintained by an independent developer. You can reach us at **learningcode9@gmail.com**.
+Mantra Japam is a personal spiritual practice app designed to help you count mantras, track daily mala progress, and build a consistent japam practice. The app is developed and maintained by an independent developer. You can reach us at **mantrajapamapp@gmail.com**.
 
 ---
 
@@ -105,10 +105,10 @@ These providers are used solely to operate the App and do not receive permission
 You have the right to:
 
 - **Access** your data — your practice history and stats are visible inside the App
-- **Delete your data** — contact us at **learningcode9@gmail.com** to request full deletion of your account and all associated data from our servers
+- **Delete your data** — contact us at **mantrajapamapp@gmail.com** to request full deletion of your account and all associated data from our servers
 - **Withdraw consent** — you may log out at any time, which clears your data from the device. Local preferences can be cleared by uninstalling the App.
 
-To request data deletion, please email **learningcode9@gmail.com** with the subject line "Data Deletion Request" and the email address associated with your Google account.
+To request data deletion, please email **mantrajapamapp@gmail.com** with the subject line "Data Deletion Request" and the email address associated with your Google account.
 
 ---
 
@@ -128,6 +128,6 @@ We may update this Privacy Policy from time to time. When we do, we will update 
 
 If you have any questions, concerns, or requests regarding this Privacy Policy or your data, please contact us:
 
-**Email:** learningcode9@gmail.com
+**Email:** mantrajapamapp@gmail.com
 
 We will respond within a reasonable time.

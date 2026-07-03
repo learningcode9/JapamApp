@@ -4,6 +4,7 @@ import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import {
   dedupeByCompletionId,
   mergeHistories,
+  normalizeAll,
   todayStatsFor,
   toLocalDayKey,
 } from '../../lib/historyStore';
@@ -13,6 +14,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   DeviceEventEmitter,
   Dimensions,
   ImageBackground,
@@ -20,20 +22,28 @@ import {
   Modal,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   LOOP_OPTIONS,
   STD_DURATIONS,
   formatTimer,
   useTimer,
 } from '../../contexts/timer-context';
+import { ResponseType } from 'expo-auth-session';
 import { isIOSDeviceWeb, isStandaloneOrInstalledWeb } from '../../lib/pwaInstall';
+import {
+  signInAsGuest,
+  getIsAnonymous,
+  setIsAnonymous,
+  signInOrLinkGoogle,
+  showGoogleAccountCollisionDialog,
+} from '../../lib/anonymousAuth';
 import { supabase } from '../../lib/supabase';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -41,8 +51,18 @@ WebBrowser.maybeCompleteAuthSession();
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 const isMobile = screenWidth < 768;
 const isShortMobile = isMobile && screenHeight < 760;
-const CIRCLE_SIZE = isShortMobile ? 204 : isMobile ? 224 : 296;
+// Native phones fill the real viewport via flexbox (see container/appShell)
+// instead of the static captured screenHeight, and reserve the floating tab
+// bar's true height (computed from safe-area insets) so the stats card always
+// clears the bottom bar.
+const isNativeMobile = isMobile && Platform.OS !== 'web';
+const isWebMobile = Platform.OS === 'web' && isMobile;
+const CIRCLE_SIZE = (isWebMobile && isShortMobile) ? 176 : isShortMobile ? 204 : isMobile ? 224 : 296;
 const TEAL = '#0F8F87';
+// Guest Mode is temporarily hidden — Google Sign-In is the only entry point for now. Flip this
+// back to true to restore the "Continue as Guest" button; none of the underlying guest/anonymous
+// auth code is removed, only this UI entry point is gated.
+const GUEST_MODE_ENABLED = false;
 const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
@@ -55,7 +75,7 @@ type Session = {
   totalCount: number;
   duration: number;
   manual?: boolean;
-  userId?: string;
+  userId?: string | null;
   userName?: string;
   userEmail?: string;
   source?: string;
@@ -93,9 +113,34 @@ const dedupeHistoryForStats = (history: Session[]): Session[] =>
     (item) => item.totalCount > 0 && toLocalDayKey(item.date) !== 'unknown'
   );
 
+// With Guest Mode hidden, a failed Google Sign-In leaves the user with no fallback into the app
+// — silently re-showing the same sign-in modal gives no explanation. Alert.alert is not
+// interactive in react-native-web (see the same caveat in tap-japam.tsx's handleResetCount), so
+// this branches to window.alert on web, matching this codebase's existing pattern for
+// cross-platform alerts.
+const showGoogleSignInRequiredAlert = () => {
+  if (GUEST_MODE_ENABLED) return;
+  const message =
+    'Google Sign-In is required right now. Please check your Google account or internet connection and try again.';
+  if (Platform.OS === 'web') {
+    if (typeof window !== 'undefined') window.alert(message);
+  } else {
+    Alert.alert('Sign-In Required', message);
+  }
+};
+
 export default function TimerScreen() {
   const router = useRouter();
   const timer = useTimer();
+  const insets = useSafeAreaInsets();
+  // Mirror the floating tab bar geometry from _layout.tsx exactly.
+  // _layout.tsx uses screenWidth < 500 as its isMobile threshold (different from
+  // this file's < 768), so we replicate that split to get the correct bottom offset
+  // for every device width — phones vs phablets/tablets get different formulas.
+  const tabBarLayoutIsMobile = screenWidth < 500;
+  const tabBarSpaceFromBottom = 74 + (tabBarLayoutIsMobile
+    ? Math.max(12, insets.bottom + 8)   // phone: matches nativeTabBarStyle bottom in _layout.tsx
+    : Math.max(22, insets.bottom + 14)); // tablet: matches nativeTabBarStyle bottom in _layout.tsx
   const visibleMala = Math.min(
     Math.max(1, timer.completedLoops + (timer.isRunning || timer.isPaused ? 1 : 0)),
     timer.selectedLoops
@@ -105,6 +150,9 @@ export default function TimerScreen() {
   const [userName, setUserName] = useState('');
   const [showUserModal, setShowUserModal] = useState(false);
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const [showGuestWarningModal, setShowGuestWarningModal] = useState(false);
+  const [showGuestNameModal, setShowGuestNameModal] = useState(false);
+  const [guestNameInput, setGuestNameInput] = useState('');
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [showInstallHelp, setShowInstallHelp] = useState(false);
   const [malasToday, setMalasToday] = useState(0);
@@ -113,12 +161,31 @@ export default function TimerScreen() {
   const deferredInstallPromptRef = useRef<any>(null);
   const isIosDeviceWeb = isIOSDeviceWeb();
 
+  const rawNonceRef = useRef<string>('');
+  const [hashedNonce, setHashedNonce] = useState<string>('');
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const arr = new Uint8Array(16);
+    crypto.getRandomValues(arr);
+    const raw = Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('');
+    rawNonceRef.current = raw;
+    console.log('[NONCE_GEN] timer raw_prefix=%s', raw.slice(0, 8));
+    void crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw)).then((buf) => {
+      const hashed = Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
+      console.log('[NONCE_GEN] timer hashed_prefix=%s', hashed.slice(0, 8));
+      setHashedNonce(hashed);
+    });
+  }, []);
+
+
   const [request, response, promptAsync] = Google.useAuthRequest({
     webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
     androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID,
     clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
-    scopes: ['profile', 'email'],
+    scopes: ['openid', 'profile', 'email'],
     redirectUri: Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : undefined,
+    responseType: Platform.OS === 'web' ? ResponseType.IdToken : undefined,
+    extraParams: Platform.OS === 'web' && hashedNonce ? { nonce: hashedNonce } : undefined,
   });
 
   const loadUser = useCallback(async () => {
@@ -130,6 +197,31 @@ export default function TimerScreen() {
     setShowUserModal(true);
   }, []);
 
+  const migrateGuestHistoryToGoogle = useCallback(async (googleUserId: string) => {
+    const raw = await AsyncStorage.getItem(HISTORY_KEY);
+    const history: Session[] = raw ? JSON.parse(raw) : [];
+    if (!history.some((r) => !r.userId)) return;
+    const migrated = history.map((r) =>
+      !r.userId ? { ...r, userId: googleUserId, syncStatus: 'pending' as const } : r
+    );
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(migrated));
+  }, []);
+
+  const handleSaveGuestName = useCallback(async () => {
+    const name = guestNameInput.trim();
+    if (!name) return;
+    await AsyncStorage.setItem(USER_NAME_KEY, name);
+    // Best-effort: creates a real Supabase anonymous user (auth.uid()) so this guest's identity
+    // can later be linked to Google without losing data. On failure (offline, disabled), this
+    // leaves USER_ID_KEY unset, identical to today's local-only guest fallback.
+    await signInAsGuest();
+    setUserName(name);
+    setShowGuestNameModal(false);
+    setShowUserModal(false);
+    setGuestNameInput('');
+    DeviceEventEmitter.emit('japam-auth-updated');
+  }, [guestNameInput]);
+
   const loadStats = useCallback(async () => {
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
     const todayKey = getLocalDateKey();
@@ -139,6 +231,8 @@ export default function TimerScreen() {
     let rawSupabaseRows = 0;
     let rawSupabaseCount = 0;
 
+    // Option A: anonymous guest data syncs to Supabase immediately, same as a signed-in user —
+    // no anonymous-specific suppression here.
     if (userId) {
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -146,7 +240,7 @@ export default function TimerScreen() {
         try {
           const encodedUserId = encodeURIComponent(userId);
           const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,completion_id&order=created_at.asc`,
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,completion_id&order=created_at.asc&limit=10000`,
             { headers: { apikey: key, Authorization: `Bearer ${key}` } }
           );
           if (res.ok) {
@@ -175,6 +269,36 @@ export default function TimerScreen() {
               0
             );
             mergedHistory = mergeHistories(localHistory, remoteHistory);
+            const rawTombData = await AsyncStorage.getItem('deletedCompletions');
+            if (rawTombData) {
+              const tombIds = new Set<string>(JSON.parse(rawTombData) as string[]);
+              if (tombIds.size > 0) {
+                mergedHistory = mergedHistory.filter(
+                  (item) => !tombIds.has(item.completionId ?? '')
+                );
+              }
+            }
+            const remoteCount = rows.length;
+            const localSynced = localHistory.filter(
+              (r) => r.userId === userId && r.syncStatus === 'synced'
+            ).length;
+            const localPending = localHistory.filter(
+              (r) => r.userId === userId && r.syncStatus === 'pending'
+            ).length;
+            console.log(
+              '[RECONCILE_PRE] screen=timer remote_count=%d local_synced=%d local_pending=%d',
+              remoteCount, localSynced, localPending
+            );
+            const remoteIds = new Set(normalizeAll(remoteHistory).map((r) => r.completionId));
+            if (remoteCount >= 10000) {
+              console.log('[RECONCILE_SKIPPED] screen=timer reason=possible-truncation count=%d', remoteCount);
+            } else {
+              const before = mergedHistory.length;
+              mergedHistory = mergedHistory.filter((r) =>
+                !r.completionId || (r.userId || null) !== userId || r.syncStatus !== 'synced' || remoteIds.has(r.completionId)
+              );
+              console.log('[RECONCILE_APPLIED] screen=timer removed=%d', before - mergedHistory.length);
+            }
             await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
             console.log('[RESTORE_REMOTE_COUNT] screen=timer count=%d', remoteHistory.length);
             console.log(
@@ -284,6 +408,36 @@ export default function TimerScreen() {
     }
   }, []);
 
+  // Shared tail of native Google sign-in: stores the Google identity locally and (unless this was
+  // a linkIdentity success, or the user chose to sign in anyway after a collision) migrates any
+  // local guest-only history rows to this googleUserId — same storage steps as today, just
+  // factored out so the collision dialog's "Sign In" button can reach them too.
+  const finishGoogleSignIn = useCallback(async (
+    googleName: string,
+    googleEmail: string,
+    googleUserId: string,
+    skipMigration: boolean
+  ) => {
+    await AsyncStorage.setItem(USER_NAME_KEY, googleName);
+    if (googleEmail) await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
+    if (!skipMigration) {
+      // Direct Google sign-in (no prior anonymous session): use the Supabase UUID that
+      // signInWithIdToken / signInOrLinkGoogle just established, falling back to the Google
+      // numeric ID only if the session is unexpectedly unavailable.
+      const session = (await supabase.auth.getSession()).data.session;
+      const userId = session?.user?.id ?? googleUserId;
+      await migrateGuestHistoryToGoogle(userId);
+      await AsyncStorage.setItem(USER_ID_KEY, userId);
+    }
+    // skipMigration=true means linkIdentity was used: USER_ID_KEY already holds the anonymous
+    // Supabase UUID (set by signInAsGuest). Do not overwrite it with the Google numeric ID.
+    setUserName(googleName);
+    setShowUserModal(false);
+    DeviceEventEmitter.emit('japam-auth-updated');
+    DeviceEventEmitter.emit('japam-stats-updated');
+    void loadStats();
+  }, [loadStats, migrateGuestHistoryToGoogle]);
+
   const handleNativeGoogleSignIn = useCallback(async () => {
     console.log('SIGNIN PATH:', Platform.OS);
     console.log('Using native GoogleSignin');
@@ -305,6 +459,7 @@ export default function TimerScreen() {
         console.log('Native Google sign-in did not return a user.');
         setIsSigningIn(false);
         setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
         return;
       }
       const { id, name, givenName, email } = googleUser;
@@ -313,37 +468,71 @@ export default function TimerScreen() {
       const googleEmail = email || '';
       const googleUserId = String(id).trim();
 
-      if (!googleUserId) { setIsSigningIn(false); setShowUserModal(true); return; }
+      if (!googleUserId) {
+        setIsSigningIn(false);
+        setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
+        return;
+      }
+
+      let skipMigration = false;
 
       if (idToken) {
-        const { error: authError } = await supabase.auth.signInWithIdToken({ provider: 'google', token: idToken });
-        if (authError) console.log('Supabase signInWithIdToken error:', authError.message);
+        const isAnonymous = await getIsAnonymous();
+        const result = await signInOrLinkGoogle(idToken, isAnonymous);
+
+        if (result.kind === 'collision') {
+          // Approved UX (no merge, no silent failure): "Sign In" completes a normal direct
+          // sign-in into the existing linked account, abandoning this device's anonymous
+          // history; "Cancel" leaves the current anonymous session untouched.
+          showGoogleAccountCollisionDialog(
+            () => { void finishGoogleSignIn(googleName, googleEmail, googleUserId, true); },
+            () => { /* leave the current anonymous session untouched */ }
+          );
+          return;
+        }
+
+        if (result.kind === 'error') {
+          console.log('signInOrLinkGoogle error:', result.error);
+          // Preserve today's tolerant behavior: a Supabase auth error was always discarded and
+          // never blocked sign-in, so fall through and store the Google identity locally anyway.
+        }
+
+        if (result.kind === 'linked') {
+          skipMigration = true;
+          await setIsAnonymous(false);
+        }
       }
-      await AsyncStorage.setItem(USER_NAME_KEY, googleName);
-      if (googleEmail) await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
-      await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
-      setUserName(googleName);
-      setShowUserModal(false);
-      DeviceEventEmitter.emit('japam-auth-updated');
-      DeviceEventEmitter.emit('japam-stats-updated');
-      void loadStats();
+
+      await finishGoogleSignIn(googleName, googleEmail, googleUserId, skipMigration);
     } catch (error) {
       console.log('Native Google sign-in error:', error);
       setShowUserModal(true);
+      showGoogleSignInRequiredAlert();
     } finally {
       setIsSigningIn(false);
     }
-  }, [loadStats]);
+  }, [finishGoogleSignIn]);
+
+  useEffect(() => {
+    const signInSub = DeviceEventEmitter.addListener('japam-start-google-signin', () => void handleNativeGoogleSignIn());
+    return () => signInSub.remove();
+  }, [handleNativeGoogleSignIn]);
 
   useEffect(() => {
     const handleGoogleLogin = async () => {
+      if (Platform.OS !== 'web') return; // native platforms use handleNativeGoogleSignIn
       if (!response) return;
 
+      console.log('[AUTH_CALLBACK] source=timer-web response.type=%s', response.type);
       if (response.type !== 'success') {
         setIsSigningIn(false);
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-        if (!savedUserId) setShowUserModal(true);
+        if (!savedUserId) {
+          setShowUserModal(true);
+          showGoogleSignInRequiredAlert();
+        }
         return;
       }
 
@@ -354,34 +543,94 @@ export default function TimerScreen() {
       const accessToken =
         authentication?.accessToken ||
         ('params' in response ? response.params?.access_token : undefined);
+      const idToken =
+        authentication?.idToken ||
+        ('params' in response ? (response.params as Record<string, string>)?.id_token : undefined);
 
-      if (!accessToken) {
+      console.log('[AUTH_CALLBACK] source=timer-web hasIdToken=%s hasAccessToken=%s paramKeys=%s',
+        !!idToken, !!accessToken,
+        'params' in response ? Object.keys(response.params ?? {}).join(',') : 'none');
+
+      if (!accessToken && !idToken) {
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         setIsSigningIn(false);
         setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
         return;
       }
 
       try {
-        const userInfoResponse = await fetch('https://www.googleapis.com/userinfo/v2/me', {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
+        if (idToken) {
+          console.log('[SUPABASE_AUTH] timer nonce_prefix=%s', rawNonceRef.current.slice(0, 8));
+          const { error: supaAuthError } = await supabase.auth.signInWithIdToken({
+            provider: 'google',
+            token: idToken,
+            nonce: rawNonceRef.current,
+          });
+          if (supaAuthError) console.log('[SUPABASE_AUTH] timer signInWithIdToken error:', supaAuthError.message);
+          else console.log('[SUPABASE_AUTH] timer web session established');
+        } else {
+          console.log('[SUPABASE_AUTH] timer no id_token — session not established');
+        }
 
-        const userInfo = await userInfoResponse.json();
-        const googleName = userInfo?.given_name || userInfo?.name || userInfo?.email || 'User';
-        const googleEmail = userInfo?.email || '';
-        const googleUserId = String(userInfo?.id || '').trim();
-
-        if (!googleUserId) {
+        const session = (await supabase.auth.getSession()).data.session;
+        const sessionIsAnonymous =
+          !!((session?.user as { is_anonymous?: boolean } | undefined)?.is_anonymous);
+        console.log(
+          '[SUPABASE_AUTH] timer session.user.id=%s session.user.email=%s hasAccessToken=%s tokenLength=%s isAnonymous=%s',
+          session?.user?.id || 'none',
+          session?.user?.email || 'none',
+          !!session?.access_token,
+          session?.access_token?.length || 0,
+          sessionIsAnonymous
+        );
+        if (!session?.access_token || sessionIsAnonymous) {
+          console.log('[SUPABASE_AUTH] timer missing non-anonymous Supabase session after Google login');
           setShowUserModal(true);
+          showGoogleSignInRequiredAlert();
           return;
         }
 
+        let googleUserId: string;
+        let googleName: string;
+        let googleEmail: string;
+
+        if (accessToken) {
+          const userInfoResponse = await fetch('https://www.googleapis.com/userinfo/v2/me', {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          const userInfo = await userInfoResponse.json();
+          googleName = userInfo?.given_name || userInfo?.name || userInfo?.email || 'User';
+          googleEmail = userInfo?.email || '';
+          googleUserId = String(userInfo?.id || '').trim();
+        } else {
+          const claims = JSON.parse(
+            decodeURIComponent(
+              atob(idToken!.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))
+                .split('')
+                .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+                .join('')
+            )
+          ) as Record<string, unknown>;
+          googleUserId = String(claims.sub || '');
+          googleName = String(claims.given_name || claims.name || claims.email || 'User');
+          googleEmail = String(claims.email || '');
+        }
+
+        if (!googleUserId) {
+          setShowUserModal(true);
+          showGoogleSignInRequiredAlert();
+          return;
+        }
+
+        // session is non-null: the guard above returns early if access_token is missing.
+        const userId = session!.user.id;
         await AsyncStorage.setItem(USER_NAME_KEY, googleName);
         if (googleEmail) {
           await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
         }
-        await AsyncStorage.setItem(USER_ID_KEY, googleUserId);
+        await migrateGuestHistoryToGoogle(userId);
+        await AsyncStorage.setItem(USER_ID_KEY, userId);
         setUserName(googleName);
         setShowUserModal(false);
         DeviceEventEmitter.emit('japam-auth-updated');
@@ -394,6 +643,7 @@ export default function TimerScreen() {
       } catch (error) {
         console.log('Google login error:', error);
         setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
       } finally {
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         setIsSigningIn(false);
@@ -500,14 +750,30 @@ export default function TimerScreen() {
   const todayLabel = new Date().toLocaleDateString();
 
   return (
-    <SafeAreaView style={styles.root}>
+    <View style={styles.root}>
       <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.container}
+        style={[
+          styles.scroll,
+          Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom },
+        ]}
+        contentContainerStyle={[
+          styles.container,
+          isNativeMobile && { minHeight: undefined },
+        ]}
+        onLayout={undefined}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.appShell}>
+        <View
+          style={[
+            styles.appShell,
+            // paddingBottom: 16 provides a small visual gap below the stats cards.
+            // The large tabBarSpaceFromBottom padding is no longer needed here because
+            // the ScrollView's own marginBottom already ends at the tab bar top.
+            isNativeMobile && { flexGrow: 1, minHeight: undefined, paddingBottom: 16 },
+            Platform.OS === 'web' && isMobile && { paddingBottom: 16 },
+          ]}
+        >
           <View pointerEvents="none" style={styles.sceneLayer}>
             <ImageBackground
               source={ZEN_BACKGROUND}
@@ -593,7 +859,7 @@ export default function TimerScreen() {
           )}
 
           <View style={styles.card}>
-            <Text style={styles.cardLabel}>DURATION</Text>
+            <Text style={styles.cardLabel}>Select Japam Time (minutes)</Text>
             <View style={styles.chips}>
               {STD_DURATIONS.map((d) => (
                 <Pressable
@@ -648,7 +914,7 @@ export default function TimerScreen() {
               </View>
             )}
 
-            <Text style={[styles.cardLabel, { marginTop: isShortMobile ? 12 : isMobile ? 14 : 22 }]}>AUTO-REPEAT MALAS</Text>
+            <Text style={[styles.cardLabel, { marginTop: (isWebMobile && isShortMobile) ? 8 : isShortMobile ? 12 : isMobile ? 10 : 22 }]}>Auto-Repeat Malas</Text>
             <View style={styles.chips}>
               {LOOP_OPTIONS.map((l) => (
                 <Pressable
@@ -683,7 +949,7 @@ export default function TimerScreen() {
         </View>
 
         <Modal
-          visible={showUserModal}
+          visible={showUserModal && !isSigningIn}
           transparent
           animationType="fade"
           onRequestClose={() => setShowUserModal(false)}
@@ -696,13 +962,15 @@ export default function TimerScreen() {
               <View style={styles.modalTopMark}>
                 <View style={styles.modalTopDot} />
               </View>
-              <Text style={styles.modalTitle}>Sign in to save</Text>
+              <Text style={styles.modalTitle}>Save your Japam</Text>
               <Text style={styles.modalSubtitle}>
-                Sign in with Google to save your Japam history and sync across devices.
+                {GUEST_MODE_ENABLED
+                  ? 'Sign in with Google to sync across devices, or continue as a guest to save locally.'
+                  : 'Sign in with Google to sync your Japam across devices.'}
               </Text>
               <Pressable
-                disabled={isSigningIn || (Platform.OS === 'web' && !request)}
-                style={[styles.modalButton, (isSigningIn || (Platform.OS === 'web' && !request)) && styles.disabledButton]}
+                disabled={Platform.OS === 'web' && !request}
+                style={[styles.modalButton, (Platform.OS === 'web' && !request) && styles.disabledButton]}
                 onPress={() => {
                   if (Platform.OS !== 'web') {
                     void handleNativeGoogleSignIn();
@@ -719,12 +987,14 @@ export default function TimerScreen() {
                           await AsyncStorage.removeItem(AUTH_PENDING_KEY);
                           setIsSigningIn(false);
                           setShowUserModal(true);
+                          showGoogleSignInRequiredAlert();
                         }
                       } catch (error) {
                         console.log('Google prompt error:', error);
                         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
                         setIsSigningIn(false);
                         setShowUserModal(true);
+                        showGoogleSignInRequiredAlert();
                       }
                     })();
                   }
@@ -735,14 +1005,95 @@ export default function TimerScreen() {
                 </View>
                 <Text style={styles.modalButtonText}>Continue with Google</Text>
               </Pressable>
-              <Text style={styles.modalFootnote}>
-                Your history stays separate from other users on this device.
+              {GUEST_MODE_ENABLED && (
+                <Pressable
+                  style={styles.guestButton}
+                  onPress={() => { setShowUserModal(false); setShowGuestWarningModal(true); }}
+                >
+                  <Text style={styles.guestButtonText}>Continue as Guest</Text>
+                </Pressable>
+              )}
+              {GUEST_MODE_ENABLED && (
+                <Text style={styles.modalFootnote}>
+                  Guest history is saved on this device only.
+                </Text>
+              )}
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={showGuestWarningModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowGuestWarningModal(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Pressable style={styles.modalClose} onPress={() => setShowGuestWarningModal(false)}>
+                <Text style={styles.modalCloseText}>×</Text>
+              </Pressable>
+              <View style={styles.modalTopMark}>
+                <View style={styles.modalTopDot} />
+              </View>
+              <Text style={styles.modalTitle}>Continue as Guest</Text>
+              <Text style={styles.modalSubtitle}>
+                {'Your Japam history will be stored only on this phone. If you delete the app or change your phone, your history will not be transferred.\n\nFor backup and sync across devices, please sign in with Google.'}
               </Text>
+              <Pressable
+                style={styles.modalButton}
+                onPress={() => { setShowGuestWarningModal(false); setShowGuestNameModal(true); }}
+              >
+                <Text style={styles.modalButtonText}>Continue as Guest</Text>
+              </Pressable>
+              <Pressable
+                style={styles.guestButton}
+                onPress={() => { setShowGuestWarningModal(false); setShowUserModal(true); }}
+              >
+                <Text style={styles.guestButtonText}>Sign in with Google</Text>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={showGuestNameModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowGuestNameModal(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Pressable style={styles.modalClose} onPress={() => setShowGuestNameModal(false)}>
+                <Text style={styles.modalCloseText}>×</Text>
+              </Pressable>
+              <View style={styles.modalTopMark}>
+                <View style={styles.modalTopDot} />
+              </View>
+              <Text style={styles.modalTitle}>Your name</Text>
+              <Text style={styles.modalSubtitle}>Enter a name so your records are labeled correctly.</Text>
+              <TextInput
+                style={styles.guestNameInput}
+                placeholder="Enter your name"
+                placeholderTextColor="#94a3b8"
+                value={guestNameInput}
+                onChangeText={setGuestNameInput}
+                returnKeyType="done"
+                onSubmitEditing={() => void handleSaveGuestName()}
+              />
+              <Pressable
+                style={[styles.modalButton, !guestNameInput.trim() && styles.disabledButton]}
+                disabled={!guestNameInput.trim()}
+                onPress={() => void handleSaveGuestName()}
+              >
+                <Text style={styles.modalButtonText}>Continue</Text>
+              </Pressable>
             </View>
           </View>
         </Modal>
       </ScrollView>
-    </SafeAreaView>
+
+    </View>
   );
 }
 
@@ -773,7 +1124,7 @@ const styles = StyleSheet.create({
   },
   backgroundOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(245, 250, 250, 0.45)',
+    backgroundColor: 'rgba(245, 250, 250, 0.28)',
   },
   container: {
     flexGrow: 1,
@@ -782,13 +1133,13 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     paddingHorizontal: isMobile ? 0 : 24,
     alignItems: 'center',
-    minHeight: Platform.OS === 'web' ? ('100dvh' as any) : screenHeight,
+    minHeight: screenHeight,
   },
   appShell: {
     width: '100%',
     maxWidth: isMobile ? undefined : 460,
     minHeight: isMobile
-      ? (Platform.OS === 'web' ? ('100dvh' as any) : screenHeight)
+      ? (Platform.OS === 'web' ? ('100%' as any) : screenHeight)
       : Math.min(screenHeight - 48, 900),
     alignItems: 'center',
     overflow: 'hidden',
@@ -796,20 +1147,14 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(238, 248, 246, 0.94)',
     borderRadius: isMobile ? 0 : 28,
     paddingHorizontal: isMobile ? 22 : 28,
-    // Keep vertical spacing inside appShell so the absolute background layer
-    // covers the scrollable page, but reserve only the fixed tab bar space.
     paddingTop: Platform.OS === 'web'
       ? (isMobile
           ? (isShortMobile
               ? ('calc(26px + env(safe-area-inset-top))' as any)
               : ('calc(32px + env(safe-area-inset-top))' as any))
           : 58)
-      : (isShortMobile ? 24 : isMobile ? 34 : 58),
-    paddingBottom: Platform.OS === 'web'
-      ? (isMobile
-          ? ('calc(112px + env(safe-area-inset-bottom))' as any)
-          : 112)
-      : 112,
+      : (isShortMobile ? 24 : isMobile ? 28 : 58),
+    paddingBottom: 112,
     shadowColor: '#0f766e',
     shadowOpacity: isMobile ? 0 : 0.16,
     shadowRadius: 28,
@@ -822,7 +1167,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: isShortMobile ? 8 : isMobile ? 10 : 18,
+    marginBottom: isShortMobile ? 8 : isMobile ? 8 : 18,
     gap: 10,
   },
   headerSideSpacer: {
@@ -844,7 +1189,7 @@ const styles = StyleSheet.create({
     maxWidth: 128,
     paddingHorizontal: 14,
     borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.66)',
+    backgroundColor: 'rgba(255,255,255,0.78)',
     borderWidth: 1,
     borderColor: 'rgba(15,143,135,0.12)',
     alignItems: 'center',
@@ -877,14 +1222,14 @@ const styles = StyleSheet.create({
     color: '#4a7c80',
     textAlign: 'center',
     fontWeight: '700',
-    marginBottom: isShortMobile ? 12 : isMobile ? 16 : 26,
+    marginBottom: (isWebMobile && isShortMobile) ? 6 : isShortMobile ? 12 : isMobile ? 10 : 26,
   },
-  circleWrap: { marginBottom: isShortMobile ? 14 : isMobile ? 18 : 32 },
+  circleWrap: { marginBottom: (isWebMobile && isShortMobile) ? 8 : isShortMobile ? 14 : isMobile ? 12 : 32 },
   circleOuter: {
     width: CIRCLE_SIZE,
     height: CIRCLE_SIZE,
     borderRadius: CIRCLE_SIZE / 2,
-    backgroundColor: 'rgba(255,255,255,0.72)',
+    backgroundColor: 'rgba(255,255,255,0.80)',
     borderWidth: isMobile ? 12 : 18,
     borderColor: 'rgba(15,143,135,0.18)',
     alignItems: 'center',
@@ -897,7 +1242,7 @@ const styles = StyleSheet.create({
   },
   circleInner: { alignItems: 'center' },
   timerText: {
-    fontSize: isShortMobile ? 44 : isMobile ? 50 : 72,
+    fontSize: (isWebMobile && isShortMobile) ? 38 : isShortMobile ? 44 : isMobile ? 50 : 72,
     fontWeight: '800',
     color: TEAL,
     letterSpacing: -2,
@@ -912,7 +1257,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: isMobile ? 10 : 14,
-    marginBottom: isShortMobile ? 12 : isMobile ? 16 : 28,
+    marginBottom: (isWebMobile && isShortMobile) ? 8 : isShortMobile ? 12 : isMobile ? 10 : 28,
   },
   startBtn: {
     flexDirection: 'row',
@@ -940,14 +1285,14 @@ const styles = StyleSheet.create({
     borderColor: TEAL,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.72)',
+    backgroundColor: 'rgba(255,255,255,0.82)',
   },
   card: {
     width: '100%',
     maxWidth: 460,
-    backgroundColor: 'rgba(255,255,255,0.78)',
+    backgroundColor: 'rgba(255,255,255,0.86)',
     borderRadius: 22,
-    paddingVertical: isShortMobile ? 13 : isMobile ? 15 : 22,
+    paddingVertical: (isWebMobile && isShortMobile) ? 9 : isShortMobile ? 13 : isMobile ? 11 : 22,
     paddingHorizontal: isShortMobile ? 13 : isMobile ? 15 : 22,
     shadowColor: '#0a3a3c',
     shadowOpacity: 0.07,
@@ -963,16 +1308,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 9,
-    marginTop: isShortMobile ? 12 : isMobile ? 14 : 22,
-    marginBottom: isMobile ? 12 : 0,
+    marginTop: (isWebMobile && isShortMobile) ? 8 : isShortMobile ? 12 : isMobile ? 8 : 22,
+    marginBottom: isMobile ? 6 : 0,
   },
   statCard: {
     flexGrow: 1,
     flexBasis: '30%',
-    minHeight: isShortMobile ? 88 : isMobile ? 96 : 104,
+    minHeight: (isWebMobile && isShortMobile) ? 68 : isShortMobile ? 88 : isMobile ? 96 : 104,
     backgroundColor: 'rgba(255,255,255,0.94)',
     borderRadius: 18,
-    paddingVertical: isShortMobile ? 12 : isMobile ? 14 : 16,
+    paddingVertical: (isWebMobile && isShortMobile) ? 8 : isShortMobile ? 12 : isMobile ? 14 : 16,
     paddingHorizontal: isShortMobile ? 8 : 10,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1161,11 +1506,12 @@ const styles = StyleSheet.create({
   modalClose: { position: 'absolute', right: 14, top: 10, zIndex: 10 },
   modalCloseText: { color: '#547071', fontSize: 28, fontWeight: '800' },
   cardLabel: {
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: '800',
     color: '#4a8c90',
-    letterSpacing: 1.2,
-    marginBottom: isMobile ? 10 : 14,
+    letterSpacing: 1.0,
+    textTransform: 'uppercase',
+    marginBottom: (isWebMobile && isShortMobile) ? 6 : isMobile ? 8 : 14,
   },
   chips: {
     flexDirection: 'row',
@@ -1174,7 +1520,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   chip: {
-    paddingVertical: isShortMobile ? 7 : isMobile ? 8 : 9,
+    paddingVertical: (isWebMobile && isShortMobile) ? 6 : isShortMobile ? 7 : isMobile ? 8 : 9,
     paddingHorizontal: isShortMobile ? 13 : isMobile ? 15 : 18,
     borderRadius: 50,
     borderWidth: 1.5,
@@ -1229,5 +1575,33 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '800',
     fontSize: 14,
+  },
+  guestButton: {
+    marginTop: 10,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#dbeceb',
+  },
+  guestButtonText: {
+    color: '#0f766e',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  guestNameInput: {
+    borderWidth: 1.5,
+    borderColor: 'rgba(15,143,135,0.35)',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: '#12383c',
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    marginBottom: 14,
+    width: '100%',
   },
 });
