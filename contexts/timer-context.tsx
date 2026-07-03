@@ -1687,7 +1687,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       // called stopSelf() yet (that can lag up to ~6s behind completedLoops being final,
       // during which native.isRunning still reads true — see
       // docs/BUGFIX_TIMER_RESTORE_STALE_SESSION.md for the full root-cause writeup).
-      if (!moreToGo) {
+      if (!moreToGo && !isCompletingRef.current) {
         const targetSec = selectedDurationRef.current * 60;
         setSeconds(targetSec);
         secondsRef.current = targetSec;
