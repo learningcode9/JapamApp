@@ -214,7 +214,7 @@ export default function SettingsScreen() {
   };
 
   const openFeedbackForm = () => {
-    const formUrl = 'https://docs.google.com/forms/d/e/1FAIpQLScYFBZqgour0aN3hFFjW2hrOAkc9vVFdN0-1NPXdouZZRsHfQ/viewform?usp=sf_link';
+    const formUrl = 'https://docs.google.com/forms/d/e/1FAIpQLScxRkt9Iz1JLhjMmGHC3HtUxDDQUJK0FG-qX65m5n26p3gRdw/viewform?pli=1';
     Linking.openURL(formUrl).catch(() =>
       Alert.alert("Error", "Could not open the feedback form. Please try again.")
     );
