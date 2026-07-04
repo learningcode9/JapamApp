@@ -90,3 +90,29 @@ https://mantra-japam.vercel.app
 - Diagnostic-first investigation (structured logging before any fix) prevented an incorrect or premature fix, such as a singleton guard that would have masked the symptom rather than the cause.
 - Small, focused PRs made root-cause analysis easier — each diagnostic PR isolated a single question, which made the eventual fix PR easy to review and verify as minimal.
 - Staging validation before production prevented regressions from reaching real users.
+
+---
+
+## Issue Closure
+
+The investigation is complete and both issues are now closed.
+
+**Issue #19**
+https://github.com/learningcode9/JapamApp/issues/19
+
+Comment:
+https://github.com/learningcode9/JapamApp/issues/19#issuecomment-4884107420
+
+Status:
+Closed automatically by GitHub when PR #24 merged ("Fixes #19"), with the closing documentation comment added afterward.
+
+**Issue #20**
+https://github.com/learningcode9/JapamApp/issues/20
+
+Comment:
+https://github.com/learningcode9/JapamApp/issues/20#issuecomment-4884108436
+
+Status:
+Closed automatically by GitHub when PR #24 merged ("Fixes #20"), with the closing documentation comment added afterward.
+
+This completes the full investigation, validation, production release, and documentation lifecycle for Issues #19 and #20.
