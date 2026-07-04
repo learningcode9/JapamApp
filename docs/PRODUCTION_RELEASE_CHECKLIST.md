@@ -26,6 +26,8 @@ This is the standard checklist to follow before every production release of Mant
 - [ ] Record update ID
 - [ ] Record commit
 - [ ] Record runtimeVersion
+- [ ] Validate lifecycle fixes on a physical Android device before production.
+- [ ] Do not rely solely on emulator validation for lifecycle bugs.
 
 ## 4. Android Physical Device Validation
 
@@ -47,6 +49,12 @@ Every regression test below must be run against the staging build on a real devi
 - [ ] Notification
 - [ ] Sound
 - [ ] Vibration
+- [ ] Verify exactly one TimerProvider mount using current diagnostics (when diagnostics are enabled).
+- [ ] Verify exactly one AppState listener registration.
+- [ ] Verify no duplicate persist_state writes after background/foreground.
+- [ ] Verify selectedDuration remains unchanged throughout the session.
+- [ ] Test a long timer (10 minutes minimum) with multiple background/foreground cycles.
+- [ ] If possible, validate after an interruption (phone call or equivalent lifecycle interruption).
 
 ### History
 
@@ -125,3 +133,18 @@ Record the following for every production release:
 - **Verify OTA channel/runtimeVersion.** A device can only receive updates published to the channel baked into its native build at build time. Before concluding an OTA "did not arrive," confirm channel, branch, and `runtimeVersion` via `eas channel:view` / `eas update:list` — this has repeatedly been the actual explanation for an update appearing "missing."
 - **Use GitHub Issues as a knowledge base.** Recording resolved bugs (symptom, root cause, fix, validation, prevention) turns past incidents into a searchable reference instead of relying on memory or scattered docs.
 - **Keep PRs small and focused.** A PR that bundles an unrelated refactor with a targeted fix is harder to review and harder to safely revert — prefer the smallest change that solves the specific problem.
+- **Global long-lived providers belong in `app/_layout.tsx`** unless intentionally scoped.
+- **Avoid placing lifecycle-critical providers inside layouts known to participate in Expo Router initial route resolution.**
+- **Investigate with diagnostics before implementing fixes.**
+- **Architecture fixes are preferred over singleton/workaround fixes.**
+
+## Lifecycle Bug Investigation Checklist
+
+- [ ] Add diagnostics first.
+- [ ] Reproduce on physical device.
+- [ ] Verify provider mounts.
+- [ ] Verify listener registration/cleanup.
+- [ ] Verify persistence writes.
+- [ ] Identify framework behavior before changing architecture.
+- [ ] Validate on preview.
+- [ ] Promote only after production-equivalent validation.
