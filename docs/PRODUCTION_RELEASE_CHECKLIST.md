@@ -85,6 +85,18 @@ Every regression test below must be run against the staging build on a real devi
 - [ ] No DB migrations unless intentional
 - [ ] No native builds unless required
 
+### Vercel Deployment Policy
+
+- GitHub integration remains connected.
+- Git-triggered deployments are intentionally disabled.
+- Web production deployments are manual only.
+- Use:
+  ```
+  vercel --prod --project mantra-japam
+  ```
+- Staging web deployments are also manual.
+- Never assume merging to `main` deploys the web.
+
 ## 7. Verification
 
 Record the following for every production release:
