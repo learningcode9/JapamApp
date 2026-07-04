@@ -1,8 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Tabs } from 'expo-router';
+import { Tabs, usePathname } from 'expo-router';
+import { useEffect, useRef } from 'react';
 import { Dimensions, Platform, StyleSheet, Text } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TimerProvider } from '../../contexts/timer-context';
+
+// [LAYOUT_DIAG] Diagnostic-only instrumentation investigating why TimerProvider mounts twice
+// on every cold start (GitHub Issues #19/#20). No behavior change — every call site is a plain
+// console.log alongside existing render/effect logic. Safe to remove later: delete this block
+// and grep for "[LAYOUT_DIAG]" to find and remove the remaining call sites.
+const LAYOUT_DIAG_INSTANCE_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+const logLayoutDiag = (event: string, data?: Record<string, unknown>) => {
+  console.log('[LAYOUT_DIAG]', event, JSON.stringify({ instanceId: LAYOUT_DIAG_INSTANCE_ID, ts: Date.now(), ...data }));
+};
 
 // Anchor the tab navigator on the Timer tab so it is the initial route.
 // Without this, the hidden `index` legacy "0/108 · Resume Japam" screen is the
@@ -46,6 +56,28 @@ const tabLabel =
 
 export default function TabLayout() {
   const insets = useSafeAreaInsets();
+  const pathname = usePathname();
+
+  // [LAYOUT_DIAG] Per-mount ID, generated once per TabLayout mount via useRef's lazy
+  // initializer — distinct from LAYOUT_DIAG_INSTANCE_ID, which only distinguishes JS engine
+  // loads. If TabLayout mounts twice within the same JS load, this will show two different IDs.
+  const layoutMountIdRef = useRef(`layout-mount-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+
+  // [LAYOUT_DIAG] Fires on every render (not just mount), so a duplicate render without an
+  // intervening mount can also be seen, not just a duplicate full mount/unmount cycle.
+  logLayoutDiag('tab_layout_render', {
+    mountId: layoutMountIdRef.current,
+    pathname,
+    anchor: 'timer',
+    timerProviderRendered: true,
+  });
+
+  useEffect(() => {
+    logLayoutDiag('tab_layout_mount', { mountId: layoutMountIdRef.current, pathname });
+    return () => {
+      logLayoutDiag('tab_layout_unmount', { mountId: layoutMountIdRef.current });
+    };
+  }, []);
 
   const nativeTabBarStyle = Platform.OS !== 'web'
     ? {

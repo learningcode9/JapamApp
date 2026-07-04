@@ -5,7 +5,7 @@ import * as Updates from 'expo-updates';
 import { Asset } from 'expo-asset';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { AppState, Platform, View } from 'react-native';
 import 'react-native-reanimated';
 import { PaperProvider } from 'react-native-paper';
@@ -13,18 +13,43 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { ZEN_BACKGROUND } from '@/constants/assets';
 import { repairLegacyStoredUserId } from '@/lib/anonymousAuth';
 
+// [LAYOUT_DIAG] Diagnostic-only instrumentation investigating why TimerProvider (mounted inside
+// app/(tabs)/_layout.tsx) mounts twice on every cold start (GitHub Issues #19/#20). Checks
+// whether the duplication is isolated to the tabs layout or systemic from the root. No behavior
+// change — safe to remove later: delete this block and grep for "[LAYOUT_DIAG]".
+const ROOT_LAYOUT_DIAG_INSTANCE_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+const logRootLayoutDiag = (event: string, data?: Record<string, unknown>) => {
+  console.log('[LAYOUT_DIAG]', event, JSON.stringify({ instanceId: ROOT_LAYOUT_DIAG_INSTANCE_ID, ts: Date.now(), ...data }));
+};
+
 export const unstable_settings = {
   anchor: '(tabs)',
 };
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+  const rootLayoutMountIdRef = useRef(`root-mount-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+
+  // [LAYOUT_DIAG] Fires on every render of the root layout, so a duplicate root-level render
+  // can be distinguished from a duplicate that's isolated to the tabs layout further down.
+  logRootLayoutDiag('root_layout_render', { mountId: rootLayoutMountIdRef.current });
+
+  useEffect(() => {
+    logRootLayoutDiag('root_layout_mount', { mountId: rootLayoutMountIdRef.current });
+    return () => {
+      logRootLayoutDiag('root_layout_unmount', { mountId: rootLayoutMountIdRef.current });
+    };
+  }, []);
 
   // Startup identity canonicalization: if a valid Supabase session already exists but the cached
   // USER_ID_KEY is still a legacy numeric Google subject id, repair it to the session's UUID. A
   // no-op when there's no session, the id is already a UUID, or the user is a guest — see
   // lib/anonymousAuth.ts's repairLegacyStoredUserId for the exact gating conditions.
   useEffect(() => {
+    // [LAYOUT_DIAG] Confirms whether this pre-existing effect also fires twice, which would
+    // indicate the duplication is systemic to the root layout rather than isolated to the
+    // tabs layout / TimerProvider specifically.
+    logRootLayoutDiag('root_effect_repair_legacy_user_id', { mountId: rootLayoutMountIdRef.current });
     void repairLegacyStoredUserId();
   }, []);
 
