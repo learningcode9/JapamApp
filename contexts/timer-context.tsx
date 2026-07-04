@@ -201,6 +201,11 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const omAudioContextRef = useRef<AudioContext | null>(null);
   const omAudioBufferRef = useRef<AudioBuffer | null>(null);
   const omKeepAliveAudioRef = useRef<HTMLAudioElement | null>(null);
+  // [TIMER_DIAG] Per-mount ID (distinct from the module-level TIMER_DIAG_INSTANCE_ID, which
+  // only distinguishes JS engine loads). Generated once per TimerProvider mount via useRef's
+  // lazy initializer, so two concurrently-mounted TimerProvider instances within the same JS
+  // load can be told apart in the log stream — see GitHub Issues #19/#20.
+  const timerProviderMountIdRef = useRef(`mount-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
 
   useEffect(() => { secondsRef.current = seconds; }, [seconds]);
   useEffect(() => { isRunningRef.current = isRunning; }, [isRunning]);
@@ -216,21 +221,28 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     return () => { setNativeAppActive(false); };
   }, []);
 
+  // [TIMER_DIAG] Wraps logDiag with this mount's ID attached to every payload, alongside the
+  // existing module-level instanceId. Use this (not logDiag directly) everywhere inside
+  // TimerProvider from here down.
+  const logDiagM = useCallback((event: string, data?: Record<string, unknown>) => {
+    logDiag(event, { mountId: timerProviderMountIdRef.current, ...data });
+  }, []);
+
   // [TIMER_DIAG] App lifecycle: mount/unmount, tagged with a per-load instance ID so a genuine
   // JS process restart (e.g. after Android reclaims memory during a phone call) can be told
   // apart from a normal AppState background/foreground transition in the log stream.
   useEffect(() => {
-    logDiag('provider_mount', { platform: Platform.OS });
-    return () => logDiag('provider_unmount');
-  }, []);
+    logDiagM('provider_mount', { platform: Platform.OS });
+    return () => logDiagM('provider_unmount');
+  }, [logDiagM]);
 
   const setSelectedDurationDiag = useCallback((value: number, reason: DurationChangeReason) => {
     if (value !== selectedDurationRef.current) {
-      logDiag('duration_change', { previous: selectedDurationRef.current, next: value, reason });
+      logDiagM('duration_change', { previous: selectedDurationRef.current, next: value, reason });
     }
     setSelectedDuration(value);
     selectedDurationRef.current = value;
-  }, []);
+  }, [logDiagM]);
 
   const getCurrentRemainingSeconds = useCallback(() => (
     Math.max(0, selectedDurationRef.current * 60 - secondsRef.current)
@@ -416,7 +428,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     ];
     // [TIMER_DIAG] Every persistState call — this is the JS-side snapshot a later cold-start
     // restore will read back, so its freshness/correctness at write time matters.
-    logDiag('persist_state', {
+    logDiagM('persist_state', {
       remainingSeconds: Math.max(0, tSec - currentSeconds),
       selectedDuration: selectedDurationRef.current,
       running,
@@ -1222,7 +1234,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     console.log('[LoopComplete] Foreground: loop %d/%d done, isFinal=%s source=JS', newDone, selectedLoopsRef.current, isFinal);
     console.log('[Stats] MALA_COMPLETE completionSource=JS currentMala=%d targetMalaCount=%d isFinal=%s isPaused=%s isRunning=%s',
       newDone, selectedLoopsRef.current, isFinal, false, isRunningRef.current);
-    logDiag('session_complete_loop', {
+    logDiagM('session_complete_loop', {
       sessionId: timerSessionIdRef.current,
       selectedDuration: selectedDurationRef.current,
       remainingSeconds: getCurrentRemainingSeconds(),
@@ -1526,7 +1538,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         const savedSessionId = sessionId || (savedRunning ? createTimerSessionId() : '');
         // [TIMER_DIAG] Cold-start restore: raw AsyncStorage values plus selectedDuration
         // before this restore applies anything, to catch stale/late-flushed writes.
-        logDiag('cold_start_restore_read', {
+        logDiagM('cold_start_restore_read', {
           path: 'cold-start',
           TIMER_RUNNING_KEY: running,
           TIMER_SECONDS_KEY: sec,
@@ -1608,7 +1620,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
             restoredSeconds, restoredTarget, safeCompletedLoops, activeLoopLimit, hasPausedProgress);
         }
         // [TIMER_DIAG] Cold-start restore outcome, after any of the branches above applied.
-        logDiag('cold_start_restore_result', {
+        logDiagM('cold_start_restore_result', {
           path: 'cold-start',
           outcome: savedRunningStillActive ? 'running' : (savedPaused || savedRunning || hasPausedProgress) ? 'paused' : 'none',
           selectedDurationAfter: selectedDurationRef.current,
@@ -1651,7 +1663,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       // [TIMER_DIAG] Restore path: AsyncStorage-only fallback (used when reconcileNativeLoops
       // didn't re-anchor, or on non-Android). Logged before any early-return so a "did nothing"
       // outcome is still visible.
-      logDiag('restore_path', {
+      logDiagM('restore_path', {
         path: 'asyncstorage-only-fallback',
         TIMER_RUNNING_KEY: running,
         TIMER_SECONDS_KEY: sec,
@@ -1701,7 +1713,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       void persistState(true);
       console.log('[TimerBG] TIMER_RESTORE_RUNNING sessionId=%s startedAt=%d elapsed=%ds target=%ds completedLoops=%d/%d',
         restoredSessionId, restoredStartedAt, elapsed, restoredTarget, safeCompletedLoops, activeLoopLimit);
-      logDiag('restore_path_result', {
+      logDiagM('restore_path_result', {
         path: 'asyncstorage-only-fallback',
         outcome: 'running',
         selectedDurationAfter: selectedDurationRef.current,
@@ -1726,13 +1738,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     if (Platform.OS !== 'android') return;
     try {
       // [TIMER_DIAG] JS-side state immediately before consulting native, for comparison.
-      logDiag('reconcile_before', {
+      logDiagM('reconcile_before', {
         jsStartedAt: timerStartedAtRef.current,
         jsSelectedDuration: selectedDurationRef.current,
         jsRemainingSeconds: Math.max(0, selectedDurationRef.current * 60 - secondsRef.current),
       });
       const native = await getNativeTimerState();
-      logDiag('reconcile_native_state', {
+      logDiagM('reconcile_native_state', {
         nativeStartedAt: native?.startedAt ?? null,
         nativeDurationMs: native?.durationMs ?? null,
         nativeRunning: native?.isRunning ?? null,
@@ -1799,9 +1811,16 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   }, [acquireWakeLock, claimCompletionLoop, persistCompletedLoops, persistState, saveSession, startTimerInterval]);
 
   useEffect(() => {
+    // [TIMER_DIAG] Listener registration — if this fires more than once without a matching
+    // cleanup in between, that's direct evidence of a duplicate/leaked subscription (see
+    // Issues #19/#20 investigation).
+    logDiagM('appstate_listener_register', {
+      selectedDuration: selectedDurationRef.current,
+      remainingSeconds: Math.max(0, selectedDurationRef.current * 60 - secondsRef.current),
+    });
     const sub = AppState.addEventListener('change', (next) => {
       // [TIMER_DIAG] Every AppState transition, timestamped.
-      logDiag('appstate_transition', { from: appStateRef.current, to: next });
+      logDiagM('appstate_transition', { from: appStateRef.current, to: next });
       if (next === 'background' && appStateRef.current !== 'background') {
         const wasRunning = isRunningRef.current;
         if (isRunningRef.current && timerStartedAtRef.current !== null) {
@@ -1824,7 +1843,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       }
 
       if (next === 'active' && appStateRef.current !== 'active') {
-        logDiag('restore_path', { path: 'appstate-resume', platform: Platform.OS, wasRunningBefore: isRunningRef.current });
+        logDiagM('restore_path', { path: 'appstate-resume', platform: Platform.OS, wasRunningBefore: isRunningRef.current });
         updateTimerState({ appIsActive: true });
         if (Platform.OS === 'android') {
           setNativeAppActive(true);
@@ -1838,11 +1857,20 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
       appStateRef.current = next;
     });
-    return () => sub.remove();
+    return () => {
+      // [TIMER_DIAG] Listener cleanup — should always fire before the next register on a
+      // normal re-run/unmount. Its absence between two register logs would prove a leak.
+      logDiagM('appstate_listener_cleanup', {
+        selectedDuration: selectedDurationRef.current,
+        remainingSeconds: Math.max(0, selectedDurationRef.current * 60 - secondsRef.current),
+      });
+      sub.remove();
+    };
   }, [
     clearTimerInterval,
     clearCompletionNotification,
     hideNotification,
+    logDiagM,
     persistState,
     reconcileNativeLoops,
     releaseWakeLock,
@@ -1969,7 +1997,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     });
     console.log('[TimerBG] Timer started: sessionId=%s duration=%ds loops=%d/%d startedAt=%d',
       timerSessionIdRef.current, selectedDurationRef.current * 60, completedLoopsRef.current, selectedLoopsRef.current, timerStartedAtRef.current);
-    logDiag(resume ? 'session_resume' : 'session_start', {
+    logDiagM(resume ? 'session_resume' : 'session_start', {
       sessionId: timerSessionIdRef.current,
       selectedDuration: selectedDurationRef.current,
       remainingSeconds: Math.max(0, selectedDurationRef.current * 60 - secondsRef.current),
@@ -2030,7 +2058,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     if (Platform.OS === 'android') void pauseForegroundService();
     void persistState(false);
     console.log('[TimerBG] Timer paused');
-    logDiag('session_pause', {
+    logDiagM('session_pause', {
       sessionId: timerSessionIdRef.current,
       selectedDuration: selectedDurationRef.current,
       remainingSeconds: Math.max(0, selectedDurationRef.current * 60 - secondsRef.current),
@@ -2038,7 +2066,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   }, [clearCompletionNotification, clearTimerInterval, hideNotification, persistState, releaseWakeLock]);
 
   const reset = useCallback(() => {
-    logDiag('session_stop', {
+    logDiagM('session_stop', {
       sessionId: timerSessionIdRef.current,
       selectedDuration: selectedDurationRef.current,
       remainingSeconds: Math.max(0, selectedDurationRef.current * 60 - secondsRef.current),
