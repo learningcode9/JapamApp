@@ -84,6 +84,22 @@ const getLocalDateKey = (date = new Date()) => {
 const createTimerSessionId = () =>
   `timer-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
+// [TIMER_DIAG] Diagnostic-only instrumentation for GitHub Issues #19/#20 (intermittent timer
+// duration/reset reports after backgrounding). No behavior change anywhere below — every call
+// site is a plain console.log alongside existing logic. Contains no personal info, mantra
+// content, or user identifiers. Safe to remove later: delete this block and grep for
+// "[TIMER_DIAG]" to find and remove the remaining call sites.
+const TIMER_DIAG_INSTANCE_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+const logDiag = (event: string, data?: Record<string, unknown>) => {
+  console.log('[TIMER_DIAG]', event, JSON.stringify({ instanceId: TIMER_DIAG_INSTANCE_ID, ts: Date.now(), ...data }));
+};
+type DurationChangeReason =
+  | 'user-selection'
+  | 'asyncstorage-restore'
+  | 'session-restore'
+  | 'native-reconcile'
+  | 'unknown';
+
 const getCurrentMalaLabel = (completedLoops: number, selectedLoops: number, runningOrPaused = true) => {
   const safeSelectedLoops = Math.max(1, selectedLoops);
   const safeCompletedLoops = Math.min(Math.max(0, completedLoops), safeSelectedLoops);
@@ -198,6 +214,22 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     if (Platform.OS !== 'android') return;
     setNativeAppActive(true);
     return () => { setNativeAppActive(false); };
+  }, []);
+
+  // [TIMER_DIAG] App lifecycle: mount/unmount, tagged with a per-load instance ID so a genuine
+  // JS process restart (e.g. after Android reclaims memory during a phone call) can be told
+  // apart from a normal AppState background/foreground transition in the log stream.
+  useEffect(() => {
+    logDiag('provider_mount', { platform: Platform.OS });
+    return () => logDiag('provider_unmount');
+  }, []);
+
+  const setSelectedDurationDiag = useCallback((value: number, reason: DurationChangeReason) => {
+    if (value !== selectedDurationRef.current) {
+      logDiag('duration_change', { previous: selectedDurationRef.current, next: value, reason });
+    }
+    setSelectedDuration(value);
+    selectedDurationRef.current = value;
   }, []);
 
   const getCurrentRemainingSeconds = useCallback(() => (
@@ -382,6 +414,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       [T_DURATION_KEY, String(selectedDurationRef.current)],
       [T_LOOPS_KEY, String(selectedLoopsRef.current)],
     ];
+    // [TIMER_DIAG] Every persistState call — this is the JS-side snapshot a later cold-start
+    // restore will read back, so its freshness/correctness at write time matters.
+    logDiag('persist_state', {
+      remainingSeconds: Math.max(0, tSec - currentSeconds),
+      selectedDuration: selectedDurationRef.current,
+      running,
+    });
     try {
       await AsyncStorage.multiSet(pairs);
       if (uid) {
@@ -1183,6 +1222,17 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     console.log('[LoopComplete] Foreground: loop %d/%d done, isFinal=%s source=JS', newDone, selectedLoopsRef.current, isFinal);
     console.log('[Stats] MALA_COMPLETE completionSource=JS currentMala=%d targetMalaCount=%d isFinal=%s isPaused=%s isRunning=%s',
       newDone, selectedLoopsRef.current, isFinal, false, isRunningRef.current);
+    logDiag('session_complete_loop', {
+      sessionId: timerSessionIdRef.current,
+      selectedDuration: selectedDurationRef.current,
+      remainingSeconds: getCurrentRemainingSeconds(),
+      startedAt: timerStartedAtRef.current,
+      expectedEndTime: timerStartedAtRef.current !== null
+        ? timerStartedAtRef.current + selectedDurationRef.current * 60 * 1000
+        : null,
+      isFinal,
+      loop: newDone,
+    });
 
     if (vibrationEnabledRef.current && Platform.OS !== 'web') {
       pulse([0, 1200, 80, 1500]);
@@ -1329,8 +1379,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       ]);
       if (!active) return;
       if (dur) {
-        setSelectedDuration(Number(dur));
-        selectedDurationRef.current = Number(dur);
+        setSelectedDurationDiag(Number(dur), 'asyncstorage-restore');
       }
       if (loops) {
         setSelectedLoops(Number(loops));
@@ -1475,14 +1524,22 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         const savedRunning = running === 'true';
         const savedStartedAt = Number(startedAt) || 0;
         const savedSessionId = sessionId || (savedRunning ? createTimerSessionId() : '');
+        // [TIMER_DIAG] Cold-start restore: raw AsyncStorage values plus selectedDuration
+        // before this restore applies anything, to catch stale/late-flushed writes.
+        logDiag('cold_start_restore_read', {
+          path: 'cold-start',
+          TIMER_RUNNING_KEY: running,
+          TIMER_SECONDS_KEY: sec,
+          TIMER_STARTED_AT_KEY: startedAt,
+          T_DURATION_KEY: dur,
+          selectedDurationBefore: selectedDurationRef.current,
+        });
         timerSessionIdRef.current = savedSessionId;
         if (savedDur > 0) {
-          setSelectedDuration(savedDur);
-          selectedDurationRef.current = savedDur;
+          setSelectedDurationDiag(savedDur, 'session-restore');
         } else if (savedTarget > 0) {
           const mins = Math.round(savedTarget / 60);
-          setSelectedDuration(mins);
-          selectedDurationRef.current = mins;
+          setSelectedDurationDiag(mins, 'session-restore');
         }
         if (LOOP_OPTIONS.includes(savedLoops)) {
           setSelectedLoops(savedLoops);
@@ -1550,6 +1607,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           console.log('[TimerBG] TIMER_RESTORE_PAUSED elapsed=%ds target=%ds completedLoops=%d/%d inferred=%s',
             restoredSeconds, restoredTarget, safeCompletedLoops, activeLoopLimit, hasPausedProgress);
         }
+        // [TIMER_DIAG] Cold-start restore outcome, after any of the branches above applied.
+        logDiag('cold_start_restore_result', {
+          path: 'cold-start',
+          outcome: savedRunningStillActive ? 'running' : (savedPaused || savedRunning || hasPausedProgress) ? 'paused' : 'none',
+          selectedDurationAfter: selectedDurationRef.current,
+          remainingSecondsAfter: Math.max(0, selectedDurationRef.current * 60 - secondsRef.current),
+        });
       } catch {}
     })();
   }, [acquireWakeLock, persistState, scheduleCompletionNotification, showNotification, startTimerInterval]);
@@ -1584,6 +1648,17 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       const restoredTarget = savedTarget || savedDuration * 60 || selectedDurationRef.current * 60;
       const savedStartedAt = Number(startedAt) || 0;
       const savedSeconds = Number(sec) || 0;
+      // [TIMER_DIAG] Restore path: AsyncStorage-only fallback (used when reconcileNativeLoops
+      // didn't re-anchor, or on non-Android). Logged before any early-return so a "did nothing"
+      // outcome is still visible.
+      logDiag('restore_path', {
+        path: 'asyncstorage-only-fallback',
+        TIMER_RUNNING_KEY: running,
+        TIMER_SECONDS_KEY: sec,
+        TIMER_STARTED_AT_KEY: startedAt,
+        T_DURATION_KEY: dur,
+        selectedDurationBefore: selectedDurationRef.current,
+      });
       if (!savedRunning || restoredTarget <= 0) return false;
       const restoredSessionId = sessionId || createTimerSessionId();
 
@@ -1601,8 +1676,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       );
       const restoredDuration = savedDuration > 0 ? savedDuration : Math.round(restoredTarget / 60);
 
-      setSelectedDuration(restoredDuration);
-      selectedDurationRef.current = restoredDuration;
+      setSelectedDurationDiag(restoredDuration, 'session-restore');
       setSelectedLoops(activeLoopLimit);
       selectedLoopsRef.current = activeLoopLimit;
       setCompletedLoops(safeCompletedLoops);
@@ -1627,6 +1701,12 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       void persistState(true);
       console.log('[TimerBG] TIMER_RESTORE_RUNNING sessionId=%s startedAt=%d elapsed=%ds target=%ds completedLoops=%d/%d',
         restoredSessionId, restoredStartedAt, elapsed, restoredTarget, safeCompletedLoops, activeLoopLimit);
+      logDiag('restore_path_result', {
+        path: 'asyncstorage-only-fallback',
+        outcome: 'running',
+        selectedDurationAfter: selectedDurationRef.current,
+        remainingSecondsAfter: Math.max(0, restoredTarget - elapsed),
+      });
       return true;
     } catch (error) {
       console.log('[TimerBG] Restore running timer error:', error);
@@ -1645,7 +1725,19 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const reconcileNativeLoops = useCallback(async () => {
     if (Platform.OS !== 'android') return;
     try {
+      // [TIMER_DIAG] JS-side state immediately before consulting native, for comparison.
+      logDiag('reconcile_before', {
+        jsStartedAt: timerStartedAtRef.current,
+        jsSelectedDuration: selectedDurationRef.current,
+        jsRemainingSeconds: Math.max(0, selectedDurationRef.current * 60 - secondsRef.current),
+      });
       const native = await getNativeTimerState();
+      logDiag('reconcile_native_state', {
+        nativeStartedAt: native?.startedAt ?? null,
+        nativeDurationMs: native?.durationMs ?? null,
+        nativeRunning: native?.isRunning ?? null,
+        sessionMatch: Boolean(native && native.sessionId === timerSessionIdRef.current),
+      });
       if (!native || !native.sessionId || native.sessionId !== timerSessionIdRef.current) return;
 
       const jsDone = completedLoopsRef.current;
@@ -1708,6 +1800,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
+      // [TIMER_DIAG] Every AppState transition, timestamped.
+      logDiag('appstate_transition', { from: appStateRef.current, to: next });
       if (next === 'background' && appStateRef.current !== 'background') {
         const wasRunning = isRunningRef.current;
         if (isRunningRef.current && timerStartedAtRef.current !== null) {
@@ -1730,6 +1824,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       }
 
       if (next === 'active' && appStateRef.current !== 'active') {
+        logDiag('restore_path', { path: 'appstate-resume', platform: Platform.OS, wasRunningBefore: isRunningRef.current });
         updateTimerState({ appIsActive: true });
         if (Platform.OS === 'android') {
           setNativeAppActive(true);
@@ -1874,6 +1969,15 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     });
     console.log('[TimerBG] Timer started: sessionId=%s duration=%ds loops=%d/%d startedAt=%d',
       timerSessionIdRef.current, selectedDurationRef.current * 60, completedLoopsRef.current, selectedLoopsRef.current, timerStartedAtRef.current);
+    logDiag(resume ? 'session_resume' : 'session_start', {
+      sessionId: timerSessionIdRef.current,
+      selectedDuration: selectedDurationRef.current,
+      remainingSeconds: Math.max(0, selectedDurationRef.current * 60 - secondsRef.current),
+      startedAt: timerStartedAtRef.current,
+      expectedEndTime: timerStartedAtRef.current !== null
+        ? timerStartedAtRef.current + selectedDurationRef.current * 60 * 1000
+        : null,
+    });
     setIsRunning(true);
     isRunningRef.current = true;
     startTimerInterval();
@@ -1926,9 +2030,19 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     if (Platform.OS === 'android') void pauseForegroundService();
     void persistState(false);
     console.log('[TimerBG] Timer paused');
+    logDiag('session_pause', {
+      sessionId: timerSessionIdRef.current,
+      selectedDuration: selectedDurationRef.current,
+      remainingSeconds: Math.max(0, selectedDurationRef.current * 60 - secondsRef.current),
+    });
   }, [clearCompletionNotification, clearTimerInterval, hideNotification, persistState, releaseWakeLock]);
 
   const reset = useCallback(() => {
+    logDiag('session_stop', {
+      sessionId: timerSessionIdRef.current,
+      selectedDuration: selectedDurationRef.current,
+      remainingSeconds: Math.max(0, selectedDurationRef.current * 60 - secondsRef.current),
+    });
     clearTimerInterval();
     releaseWakeLock();
     setIsRunning(false);
@@ -1951,8 +2065,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
   const selectDuration = useCallback((mins: number) => {
     if (isRunningRef.current) return;
-    setSelectedDuration(mins);
-    selectedDurationRef.current = mins;
+    setSelectedDurationDiag(mins, 'user-selection');
     setSeconds(0);
     secondsRef.current = 0;
     setCompletedLoops(0);
