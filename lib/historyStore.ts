@@ -280,18 +280,29 @@ export const mergeHistories = (
  * Plan a correction to one visible daily aggregate without exposing or replacing its underlying
  * completion records. Reductions consume the newest records first so the oldest chronology stays
  * intact. Increases update the earliest record as the stable canonical record for that day.
+ *
+ * `japamName` scopes the plan to one History row's japam group (day + normalized name), so
+ * editing/deleting one japam on a multi-japam day never touches another japam's records. It is
+ * optional and omitting it (`undefined`) preserves the pre-multi-japam behavior of matching every
+ * record for the day regardless of name — existing callers that haven't been updated yet keep
+ * working unchanged. Pass the row's raw name (or `null` for the "Japam" group) once the caller
+ * groups by day+japam.
  */
 export const planHistoryDayAdjustment = (
   records: RawHistoryRecord[],
   userId: string | null | undefined,
   localDayKey: string,
   requestedTargetMalas: number,
+  japamName?: string | null,
 ): HistoryDayAdjustmentPlan => {
   const normalized = dedupeByCompletionId(records);
   const matchesUser = (record: HistoryRecord) =>
     userId ? record.userId === userId : !record.userId;
+  const targetJapamName = japamName === undefined ? undefined : normalizeJapamName(japamName);
+  const matchesJapam = (record: HistoryRecord) =>
+    targetJapamName === undefined || normalizeJapamName(record.japamName) === targetJapamName;
   const dayRecords = normalized
-    .filter((record) => matchesUser(record) && toLocalDayKey(record.date) === localDayKey)
+    .filter((record) => matchesUser(record) && matchesJapam(record) && toLocalDayKey(record.date) === localDayKey)
     .map((record) => ({
       ...record,
       malas: Math.max(0, Math.floor(Number(record.malas) || 0)),
@@ -365,7 +376,9 @@ export const planHistoryDayAdjustment = (
 
   return {
     changed: true,
-    deleteEntireDay: targetMalas === 0,
+    // Only "the entire day" when unscoped by japam — a scoped plan hitting zero only zeroes that
+    // japam's slice of the day, leaving other japams' records for the same day untouched.
+    deleteEntireDay: targetMalas === 0 && targetJapamName === undefined,
     currentMalas,
     targetMalas,
     updatedRecords,

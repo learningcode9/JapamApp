@@ -846,4 +846,60 @@ describe('planHistoryDayAdjustment', () => {
     expect(plan.updatedRecords.find((record) => record.userId === 'other-user')).toBeTruthy();
     assertConsistentCounts(plan.updatedRecords);
   });
+
+  describe('cross-Japam isolation (same user, same day, different japamName)', () => {
+    it('editing one japam on a multi-japam day never touches another japam\'s records', () => {
+      const gayatri = session(at(10), { malas: 3, totalCount: 324, japamName: 'Gayatri', syncStatus: 'synced' });
+      const ramaNama = session(at(11), { malas: 5, totalCount: 540, japamName: 'Rama Nama', syncStatus: 'synced' });
+      const plan = planHistoryDayAdjustment([gayatri, ramaNama], UID, day, 5, 'Gayatri');
+
+      expect(plan.currentMalas).toBe(3); // scoped to Gayatri only, not the combined 8
+      expect(plan.targetMalas).toBe(5);
+      expect(plan.recordsToUpdate).toHaveLength(1);
+      expect(plan.recordsToUpdate[0].after).toMatchObject({
+        completionId: idAt(10),
+        japamName: 'Gayatri',
+        malas: 5,
+        totalCount: 540,
+      });
+      // Rama Nama's record is untouched: not deleted, not updated, still 5 malas.
+      expect(plan.recordsToDelete).toHaveLength(0);
+      const ramaNamaAfter = plan.updatedRecords.find((r) => r.completionId === idAt(11));
+      expect(ramaNamaAfter).toMatchObject({ japamName: 'Rama Nama', malas: 5, totalCount: 540 });
+    });
+
+    it('deleting one japam down to zero on a multi-japam day only deletes that japam\'s records', () => {
+      const gayatri = session(at(10), { malas: 3, totalCount: 324, japamName: 'Gayatri', syncStatus: 'synced' });
+      const ramaNama = session(at(11), { malas: 5, totalCount: 540, japamName: 'Rama Nama', syncStatus: 'synced' });
+      const plan = planHistoryDayAdjustment([gayatri, ramaNama], UID, day, 0, 'Gayatri');
+
+      expect(plan.deleteEntireDay).toBe(false); // only Gayatri's slice of the day is zeroed, not the whole day
+      expect(plan.recordsToDelete.map((r) => r.completionId)).toEqual([idAt(10)]);
+      expect(plan.updatedRecords.map((r) => r.completionId)).toEqual([idAt(11)]);
+    });
+
+    it('null/blank japamName ("Japam") and a named japam on the same day are separate groups', () => {
+      const unnamed = session(at(10), { malas: 2, totalCount: 216, japamName: null, syncStatus: 'synced' });
+      const named = session(at(11), { malas: 4, totalCount: 432, japamName: 'Gayatri', syncStatus: 'synced' });
+      const plan = planHistoryDayAdjustment([unnamed, named], UID, day, 1, null);
+
+      expect(plan.currentMalas).toBe(2); // scoped to the unnamed ("Japam") group only
+      expect(plan.recordsToUpdate[0].after).toMatchObject({ completionId: idAt(10), malas: 1 });
+      const namedAfter = plan.updatedRecords.find((r) => r.completionId === idAt(11));
+      expect(namedAfter).toMatchObject({ japamName: 'Gayatri', malas: 4, totalCount: 432 });
+    });
+
+    it('a whitespace-only japamName filter matches the same group as null (both normalize to "Japam")', () => {
+      const unnamed = session(at(10), { malas: 2, totalCount: 216, japamName: null, syncStatus: 'synced' });
+      const plan = planHistoryDayAdjustment([unnamed], UID, day, 1, '   ');
+      expect(plan.recordsToUpdate[0].after).toMatchObject({ completionId: idAt(10), malas: 1 });
+    });
+
+    it('omitting the japamName parameter preserves prior (pre-feature) behavior: matches the whole day regardless of name', () => {
+      const gayatri = session(at(10), { malas: 3, totalCount: 324, japamName: 'Gayatri', syncStatus: 'synced' });
+      const ramaNama = session(at(11), { malas: 5, totalCount: 540, japamName: 'Rama Nama', syncStatus: 'synced' });
+      const plan = planHistoryDayAdjustment([gayatri, ramaNama], UID, day, 8);
+      expect(plan.changed).toBe(false); // combined 3+5=8 already matches target, same as before this feature
+    });
+  });
 });
