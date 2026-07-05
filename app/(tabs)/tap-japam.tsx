@@ -2300,6 +2300,7 @@ export default function JapamMain() {
               onChangeText={setJapamNameEntry}
               placeholder="e.g. Gayatri"
               placeholderTextColor="#7f9ea0"
+              editable={!isRunning}
               returnKeyType="done"
             />
           </View>
