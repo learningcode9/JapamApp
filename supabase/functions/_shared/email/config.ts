@@ -64,6 +64,23 @@ function parseSocialLinks(raw: string | undefined): SocialLink[] {
 }
 
 /**
+ * Parses EMAIL_ALLOWLIST (comma-separated addresses) into a lowercased Set,
+ * or `null` when unset/empty — `null` means "no restriction," preserving
+ * today's behavior for anyone who hasn't set the var. Used by
+ * dataAccess.ts's getActiveUsersInPeriod, the single shared choke point
+ * every send passes through, so setting this var restricts every campaign
+ * at once (intended for controlled testing against real data).
+ */
+export function parseAllowlist(raw: string | undefined): Set<string> | null {
+  if (!raw || !raw.trim()) return null;
+  const addresses = raw
+    .split(',')
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean);
+  return addresses.length > 0 ? new Set(addresses) : null;
+}
+
+/**
  * Loads campaign-agnostic config from environment variables, with sensible
  * defaults so the system still renders a complete, good-looking email when
  * only the required Supabase/email vars are set.
@@ -94,4 +111,71 @@ export function loadEmailConfig(): EmailConfig {
     socialLinks: parseSocialLinks(process.env.EMAIL_SOCIAL_LINKS),
     defaultPeriodDays: Number(process.env.PERIOD_DAYS) || 15,
   };
+}
+
+// ─── Production-readiness validation ───────────────────────────────────────
+
+/**
+ * Checks the environment for the specific things that are safe to forget
+ * when flipping DRY_RUN=false, and have already caused real problems in
+ * this project: RESEND_API_KEY, EMAIL_FROM_ADDRESS still pointing at the
+ * (confirmed NXDOMAIN) japamapp.com default, and no unsubscribe link
+ * configured. Returns a list of problems — empty means clear to send.
+ * Does not throw; see `assertProductionReady` for the throwing form used by
+ * the CLI scripts before a real send.
+ */
+export function validateProductionEnv(): string[] {
+  const problems: string[] = [];
+
+  if (!process.env.RESEND_API_KEY) {
+    problems.push('RESEND_API_KEY is not set — required for real sending.');
+  }
+
+  const fromAddress = process.env.EMAIL_FROM_ADDRESS;
+  if (!fromAddress) {
+    problems.push(
+      'EMAIL_FROM_ADDRESS is not set — sending would silently fall back to the built-in ' +
+        'default (noreply@japamapp.com), which is not a real, DNS-verified domain ' +
+        '(confirmed NXDOMAIN). Set it explicitly to a domain you have verified with your ' +
+        'email provider — see docs/CAMPAIGN_EMAIL_ARCHITECTURE.md, "DNS requirements".',
+    );
+  } else if (fromAddress.includes('japamapp.com')) {
+    problems.push(
+      'EMAIL_FROM_ADDRESS still references japamapp.com, which is not a registered domain. ' +
+        'Use a real, DNS-verified sending domain.',
+    );
+  }
+
+  if (!process.env.EMAIL_UNSUBSCRIBE_URL) {
+    problems.push(
+      'EMAIL_UNSUBSCRIBE_URL is not set — required before any real production send.',
+    );
+  }
+
+  if (!(process.env.EXPO_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL)) {
+    problems.push('EXPO_PUBLIC_SUPABASE_URL (or SUPABASE_URL) is not set.');
+  }
+
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    problems.push('SUPABASE_SERVICE_ROLE_KEY is not set.');
+  }
+
+  return problems;
+}
+
+/**
+ * Throws with every problem listed at once (not just the first) if the
+ * environment isn't ready for a real send. Call this — not
+ * validateProductionEnv directly — from CLI entry points right before a
+ * non-dry-run send, so a misconfigured environment fails loudly instead of
+ * emailing users from a domain that doesn't exist.
+ */
+export function assertProductionReady(): void {
+  const problems = validateProductionEnv();
+  if (problems.length > 0) {
+    throw new Error(
+      `Refusing to send real emails — ${problems.length} production-readiness check(s) failed:\n` +
+        problems.map(p => `  - ${p}`).join('\n'),
+    );
+  }
 }

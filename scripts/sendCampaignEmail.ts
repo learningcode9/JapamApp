@@ -16,6 +16,7 @@
 import { createCampaignService } from '../supabase/functions/_shared/email/campaignService';
 import { createEmailProvider } from '../supabase/functions/_shared/email/emailProvider';
 import { getCampaign } from '../supabase/functions/_shared/email/campaigns/registry';
+import { assertProductionReady } from '../supabase/functions/_shared/email/config';
 
 try {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -33,6 +34,10 @@ async function main(): Promise<void> {
   console.log(`  campaignId  = ${campaignId}`);
   console.log(`  dryRun      = ${dryRun}`);
   console.log(`  forceResend = ${forceResend}`);
+
+  if (!dryRun) {
+    assertProductionReady();
+  }
 
   const campaign = getCampaign(campaignId);
   const emailProvider = dryRun ? null : createEmailProvider();
