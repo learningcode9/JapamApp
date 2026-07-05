@@ -282,11 +282,17 @@ export const mergeHistories = (
  * intact. Increases update the earliest record as the stable canonical record for that day.
  *
  * `japamName` scopes the plan to one History row's japam group (day + normalized name), so
- * editing/deleting one japam on a multi-japam day never touches another japam's records. It is
- * optional and omitting it (`undefined`) preserves the pre-multi-japam behavior of matching every
- * record for the day regardless of name — existing callers that haven't been updated yet keep
- * working unchanged. Pass the row's raw name (or `null` for the "Japam" group) once the caller
- * groups by day+japam.
+ * editing/deleting one japam on a multi-japam day never touches another japam's records.
+ * - Pass the row's RAW name as stored/typed by the user (or `null` for the "Japam" group) — this
+ *   function normalizes internally via `normalizeJapamName`, the same helper `buildDailyRows`
+ *   uses for display grouping. Callers must NOT pre-normalize; passing an already-normalized value
+ *   is harmless (normalizing twice is a no-op) but passing a raw value keeps every call site
+ *   consistent and is the intended contract.
+ * - Matching is case-sensitive after trimming: "Gayatri" and "gayatri" are distinct groups by
+ *   design (see the `normalizeJapamName` contract) — this is not a case-insensitive comparison.
+ * - The parameter is optional; omitting it (`undefined`) preserves the pre-multi-japam behavior of
+ *   matching every record for the day regardless of name, so existing callers that haven't been
+ *   updated yet keep working unchanged.
  */
 export const planHistoryDayAdjustment = (
   records: RawHistoryRecord[],

@@ -901,5 +901,20 @@ describe('planHistoryDayAdjustment', () => {
       const plan = planHistoryDayAdjustment([gayatri, ramaNama], UID, day, 8);
       expect(plan.changed).toBe(false); // combined 3+5=8 already matches target, same as before this feature
     });
+
+    // Intended-behavior lock (current design): matching is case-sensitive after trimming.
+    // "Gayatri" and "gayatri" are treated as two distinct groups on the same day, each
+    // independently editable. If this is ever revisited to be case-insensitive, this test must
+    // change deliberately alongside normalizeJapamName's contract, not by accident.
+    it('treats differently-cased names as distinct groups ("Gayatri" vs "gayatri" do not merge)', () => {
+      const upper = session(at(10), { malas: 2, totalCount: 216, japamName: 'Gayatri', syncStatus: 'synced' });
+      const lower = session(at(11), { malas: 6, totalCount: 648, japamName: 'gayatri', syncStatus: 'synced' });
+      const plan = planHistoryDayAdjustment([upper, lower], UID, day, 5, 'Gayatri');
+
+      expect(plan.currentMalas).toBe(2); // scoped to 'Gayatri' only, not the combined 8
+      expect(plan.recordsToUpdate[0].after).toMatchObject({ completionId: idAt(10), malas: 5 });
+      const lowerAfter = plan.updatedRecords.find((r) => r.completionId === idAt(11));
+      expect(lowerAfter).toMatchObject({ japamName: 'gayatri', malas: 6, totalCount: 648 }); // untouched
+    });
   });
 });
