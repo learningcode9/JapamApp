@@ -65,11 +65,18 @@ function parseSocialLinks(raw: string | undefined): SocialLink[] {
 
 /**
  * Parses EMAIL_ALLOWLIST (comma-separated addresses) into a lowercased Set,
- * or `null` when unset/empty — `null` means "no restriction," preserving
- * today's behavior for anyone who hasn't set the var. Used by
+ * or `null` when unset/whitespace-only — `null` means "no restriction,"
+ * preserving today's behavior for anyone who hasn't set the var. Used by
  * dataAccess.ts's getActiveUsersInPeriod, the single shared choke point
  * every send passes through, so setting this var restricts every campaign
  * at once (intended for controlled testing against real data).
+ *
+ * Fails closed: if the var IS set to something (showing intent to
+ * restrict) but it parses to zero valid addresses — e.g. "," or " , , " —
+ * this throws instead of silently falling back to "no restriction". The
+ * whole point of this var is to prevent accidentally emailing real users
+ * during testing; silently treating a malformed value as "send to
+ * everyone" would be the one failure mode this feature exists to avoid.
  */
 export function parseAllowlist(raw: string | undefined): Set<string> | null {
   if (!raw || !raw.trim()) return null;
@@ -77,7 +84,15 @@ export function parseAllowlist(raw: string | undefined): Set<string> | null {
     .split(',')
     .map(s => s.trim().toLowerCase())
     .filter(Boolean);
-  return addresses.length > 0 ? new Set(addresses) : null;
+
+  if (addresses.length === 0) {
+    throw new Error(
+      `EMAIL_ALLOWLIST is set to "${raw}" but contains no valid addresses. ` +
+        'Refusing to fall back to "no restriction" — fix the value or unset the var entirely.',
+    );
+  }
+
+  return new Set(addresses);
 }
 
 /**
