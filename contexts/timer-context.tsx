@@ -6,6 +6,7 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import * as Notifications from 'expo-notifications';
 import { usePathname, useRouter } from 'expo-router';
 import { getTimerState, updateTimerState } from '../lib/timerState';
+import { computeColdStartRestoreDecision } from '../lib/timerColdStartRestore';
 import { supabase } from '../lib/supabase';
 import {
   appendCompletion,
@@ -1565,70 +1566,39 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           completedLoopsRef.current = safeCompletedLoops;
         }
         const restoredTarget = savedTarget || selectedDurationRef.current * 60;
-        const elapsedSinceSavedStart =
-          savedRunning && savedStartedAt > 0
-            ? Math.max(0, Math.floor((Date.now() - savedStartedAt) / 1000))
-            : savedSec;
-        const savedRunningStillActive =
-          savedRunning && savedStartedAt > 0 && restoredTarget > 0 && elapsedSinceSavedStart < restoredTarget;
-        const restoredSeconds = Math.min(
-          Math.max(0, elapsedSinceSavedStart),
-          Math.max(0, restoredTarget - 1)
-        );
-        const savedTimerCompleted =
-          restoredTarget > 0 && (savedCompletedLoops >= activeLoopLimit || savedSec >= restoredTarget);
-        const hasPausedProgress =
-          restoredSeconds > 0 &&
-          restoredSeconds < restoredTarget &&
-          !savedRunningStillActive &&
-          !savedTimerCompleted;
+        // See lib/timerColdStartRestore.ts for why this never auto-resumes/auto-completes:
+        // this effect only ever runs on a genuine process restart, never a same-process
+        // background/foreground cycle (that's the AppState listener below).
+        const restoreDecision = computeColdStartRestoreDecision({
+          savedRunning,
+          savedPaused,
+          savedSec,
+          savedTarget: restoredTarget,
+          savedCompletedLoops,
+          activeLoopLimit,
+        });
+        const { outcome, restoredSeconds } = restoreDecision;
 
-        if (savedRunningStillActive) {
-          setSeconds(restoredSeconds);
-          secondsRef.current = restoredSeconds;
-          setIsRunning(true);
-          isRunningRef.current = true;
-          timerStartedAtRef.current = savedStartedAt;
-          updateTimerState({
-            startedAt: savedStartedAt,
-            sessionId: savedSessionId,
-            durationSeconds: restoredTarget,
-            completedLoops: safeCompletedLoops,
-            totalLoops: activeLoopLimit,
-            userId: uid,
-            appIsActive: appStateRef.current === 'active',
-          });
-          startTimerInterval();
-          void acquireWakeLock();
-          void showNotification();
-          scheduleCompletionNotification(restoredTarget - restoredSeconds);
-          void persistState(true);
-          console.log('[TimerBG] TIMER_RESTORE_RUNNING source=hydrate startedAt=%d elapsed=%ds target=%ds completedLoops=%d/%d',
-            savedStartedAt, restoredSeconds, restoredTarget, safeCompletedLoops, activeLoopLimit);
-        } else if (
-          (savedPaused || savedRunning || hasPausedProgress) &&
-          restoredSeconds > 0 &&
-          restoredTarget > 0
-        ) {
+        if (outcome === 'paused') {
           setSeconds(restoredSeconds);
           secondsRef.current = restoredSeconds;
           setIsRunning(false);
           isRunningRef.current = false;
           timerStartedAtRef.current = null;
           updateTimerState({ sessionId: savedSessionId });
-          console.log('[TimerBG] TIMER_RESTORE_PAUSED elapsed=%ds target=%ds completedLoops=%d/%d inferred=%s',
-            restoredSeconds, restoredTarget, safeCompletedLoops, activeLoopLimit, hasPausedProgress);
+          console.log('[TimerBG] TIMER_RESTORE_PAUSED source=hydrate elapsed=%ds target=%ds completedLoops=%d/%d wasFlaggedRunning=%s',
+            restoredSeconds, restoredTarget, safeCompletedLoops, activeLoopLimit, savedRunning);
         }
         // [TIMER_DIAG] Cold-start restore outcome, after any of the branches above applied.
         logDiagM('cold_start_restore_result', {
           path: 'cold-start',
-          outcome: savedRunningStillActive ? 'running' : (savedPaused || savedRunning || hasPausedProgress) ? 'paused' : 'none',
+          outcome,
           selectedDurationAfter: selectedDurationRef.current,
           remainingSecondsAfter: Math.max(0, selectedDurationRef.current * 60 - secondsRef.current),
         });
       } catch {}
     })();
-  }, [acquireWakeLock, persistState, scheduleCompletionNotification, showNotification, startTimerInterval]);
+  }, []);
 
   useEffect(() => {
     if (isRunning && seconds > 0 && seconds >= targetSeconds && !isCompletingRef.current) {
