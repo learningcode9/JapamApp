@@ -3,11 +3,12 @@ import {
   appendCompletion,
   buildSupabaseHistoryPayload,
   markSynced,
+  normalizeJapamName,
   toLocalDayKey,
 } from '../../lib/historyStore';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Alert, DeviceEventEmitter, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 
@@ -33,6 +34,10 @@ const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
 const USER_EMAIL_KEY = 'userEmail';
+// Convenience-only "last typed japam name" prefill — device-local, not a default, not synced.
+const LAST_USED_JAPAM_NAME_KEY = 'lastUsedJapamName';
+const lastUsedJapamNameKey = (userId: string | null | undefined) =>
+  `${LAST_USED_JAPAM_NAME_KEY}:${userId || 'guest'}`;
 
 const getStoredUserMeta = async () => {
   const [storedName, storedEmail] = await Promise.all([
@@ -151,12 +156,24 @@ export default function ManualEntry() {
   const [dateText, setDateText] = useState(getLocalDate());
   const [malas, setMalas] = useState('');
   const [total, setTotal] = useState('');
+  const [japamNameEntry, setJapamNameEntry] = useState('');
   const [userId, setUserId] = useState<string | null>(null);
   useFocusEffect(
     React.useCallback(() => {
       AsyncStorage.getItem(USER_ID_KEY).then(setUserId);
     }, [])
   );
+
+  // Prefill "Current Japam" with whatever was last typed for this user/guest — a convenience so a
+  // user chanting the same japam daily doesn't retype it every session. Never a default: leaving
+  // it blank this session does not erase the remembered value (see onSave below).
+  useEffect(() => {
+    (async () => {
+      const uid = await AsyncStorage.getItem(USER_ID_KEY);
+      const stored = await AsyncStorage.getItem(lastUsedJapamNameKey(uid));
+      if (stored) setJapamNameEntry(stored);
+    })();
+  }, []);
 
   const onSave = async () => {
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
@@ -241,6 +258,7 @@ if (!userId) {
       userId: userId || undefined,
       userName,
       userEmail,
+      japamName: japamNameEntry,
     });
     const newCompletionId = updatedHistory[0].completionId;
     try {
@@ -251,6 +269,13 @@ if (!userId) {
       console.log('[Manual] MANUAL_HISTORY_SAVE_FAILED', err);
       Alert.alert('Save failed', 'Could not save the entry on this device.');
       return;
+    }
+
+    // Convenience-only prefill for next time — never erase the remembered value on a blank entry
+    // (the user might just be skipping the name this once, not un-naming their practice).
+    const normalizedJapamName = normalizeJapamName(japamNameEntry);
+    if (normalizedJapamName !== null) {
+      await AsyncStorage.setItem(lastUsedJapamNameKey(userId), normalizedJapamName).catch(() => {});
     }
 
     // Refresh History + Main stats immediately — same event the timer/tap completion path emits.
@@ -339,6 +364,15 @@ if (!userId) {
         onChangeText={setTotal}
         keyboardType="numeric"
         placeholder="Total count"
+        placeholderTextColor="#94a3b8"
+      />
+
+      <Text style={styles.fieldLabel}>Current Japam (Optional)</Text>
+      <TextInput
+        style={styles.input}
+        value={japamNameEntry}
+        onChangeText={setJapamNameEntry}
+        placeholder="e.g. Gayatri"
         placeholderTextColor="#94a3b8"
       />
 

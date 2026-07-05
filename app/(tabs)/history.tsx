@@ -162,6 +162,10 @@ const DELETED_COMPLETIONS_KEY = 'deletedCompletions';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
 const USER_EMAIL_KEY = 'userEmail';
+// Convenience-only "last typed japam name" prefill — device-local, not a default, not synced.
+const LAST_USED_JAPAM_NAME_KEY = 'lastUsedJapamName';
+const lastUsedJapamNameKey = (userId: string | null | undefined) =>
+  `${LAST_USED_JAPAM_NAME_KEY}:${userId || 'guest'}`;
 
 const getStoredUserMeta = async () => {
   const [storedName, storedEmail] = await Promise.all([
@@ -686,6 +690,7 @@ export default function HistoryScreen() {
   const [addMalas, setAddMalas] = useState(1);
   const [addEntryMode, setAddEntryMode] = useState<AddEntryMode>('malas');
   const [addCountText, setAddCountText] = useState('108');
+  const [addJapamName, setAddJapamName] = useState('');
   const [editingRow, setEditingRow] = useState<DailyRow | null>(null);
   const [editMalas, setEditMalas] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
@@ -697,12 +702,18 @@ export default function HistoryScreen() {
     return getLocalDateKey(yesterday);
   };
 
-  const openAddModal = () => {
+  const openAddModal = async () => {
     setAddDateMode('today');
     setAddDate(getLocalDateKey());
     setAddMalas(1);
     setAddEntryMode('malas');
     setAddCountText('108');
+    // Prefill "Current Japam" with whatever was last typed for this user/guest — a convenience so
+    // a user chanting the same japam daily doesn't retype it every session. Never a default:
+    // leaving it blank this session does not erase the remembered value (see saveAddJapam below).
+    const uid = await AsyncStorage.getItem(USER_ID_KEY);
+    const stored = await AsyncStorage.getItem(lastUsedJapamNameKey(uid));
+    setAddJapamName(stored || '');
     setShowAddModal(true);
   };
 
@@ -775,9 +786,17 @@ export default function HistoryScreen() {
         userId: currentUserId ?? null,
         userName,
         userEmail,
+        japamName: addJapamName,
       });
       const newCompletionId = updated[0].completionId;
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
+
+      // Convenience-only prefill for next time — never erase the remembered value on a blank
+      // entry (the user might just be skipping the name this once, not un-naming their practice).
+      const normalizedAddJapamName = normalizeJapamName(addJapamName);
+      if (normalizedAddJapamName !== null) {
+        await AsyncStorage.setItem(lastUsedJapamNameKey(currentUserId), normalizedAddJapamName).catch(() => {});
+      }
       console.log(
         '[OFFLINE_SAVE_ACCEPTED] source=history-manual completionId=%s created_at=%s localDay=%s syncStatus=%s',
         newCompletionId,
@@ -1339,6 +1358,15 @@ export default function HistoryScreen() {
                 maxLength={10}
               />
             )}
+
+            <Text style={styles.modalLabel}>Current Japam (Optional)</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={addJapamName}
+              onChangeText={setAddJapamName}
+              placeholder="e.g. Gayatri"
+              placeholderTextColor="#8aacae"
+            />
 
             <Text style={styles.modalLabel}>Entry Mode</Text>
             <View style={styles.dateChoiceRow}>

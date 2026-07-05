@@ -17,6 +17,7 @@ import {
   makeLoopCompletionId,
   markSynced,
   mergeTombstones,
+  normalizeJapamName,
   toLocalDayKey,
   type HistoryRecord,
 } from '../lib/historyStore';
@@ -65,6 +66,12 @@ const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
+// Convenience-only "last typed japam name" — a device-local prefill hint, NOT a default japam and
+// NOT synced/stored in Supabase or user_profiles. Guest-safe via the same `userId || 'guest'`
+// sentinel makeCompletionId already uses, so guest and signed-in users get separate slots.
+const LAST_USED_JAPAM_NAME_KEY = 'lastUsedJapamName';
+const lastUsedJapamNameKey = (userId: string | null | undefined) =>
+  `${LAST_USED_JAPAM_NAME_KEY}:${userId || 'guest'}`;
 const WEB_OM_AUDIO_SRC = '/om_complete.mp3';
 const WEB_TIMER_AUDIO_SRC = '/silent-timer.wav';
 
@@ -129,6 +136,7 @@ type TimerContextValue = {
   reset: () => void;
   selectDuration: (minutes: number) => void;
   selectLoops: (loops: number) => void;
+  setSessionJapamName: (value: string) => void;
 };
 
 const TimerContext = createContext<TimerContextValue | null>(null);
@@ -207,6 +215,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   // lazy initializer, so two concurrently-mounted TimerProvider instances within the same JS
   // load can be told apart in the log stream — see GitHub Issues #19/#20.
   const timerProviderMountIdRef = useRef(`mount-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  // Raw (un-normalized) japam name currently typed on the Timer screen. Read by saveSession at
+  // completion time — a ref, not state, because a loop can complete via a background/native event
+  // while the screen isn't necessarily re-rendering.
+  const japamNameRef = useRef('');
 
   useEffect(() => { secondsRef.current = seconds; }, [seconds]);
   useEffect(() => { isRunningRef.current = isRunning; }, [isRunning]);
@@ -244,6 +256,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     setSelectedDuration(value);
     selectedDurationRef.current = value;
   }, [logDiagM]);
+
+  // Called on every keystroke of the Timer screen's "Current Japam (Optional)" field. Just updates
+  // the ref saveSession reads at completion time — no re-render needed, no persistence here (that
+  // happens in saveSession, once a completion is actually saved with a non-blank name).
+  const setSessionJapamName = useCallback((value: string) => {
+    japamNameRef.current = value;
+  }, []);
 
   const getCurrentRemainingSeconds = useCallback(() => (
     Math.max(0, selectedDurationRef.current * 60 - secondsRef.current)
@@ -1062,6 +1081,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       completionId: sessionId
         ? makeLoopCompletionId(uid || null, sessionId, completedLoopsRef.current)
         : undefined,
+      japamName: japamNameRef.current,
     };
 
     // Local save FIRST (offline-first) + event emission — awaited by completeCycle so stats
@@ -1078,6 +1098,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         toLocalDayKey(updatedHistory[0]?.date),
         updatedHistory[0]?.syncStatus
       );
+
+      // Convenience-only prefill for next time — never erase the remembered value on a blank
+      // entry (the user might just be skipping the name this once, not un-naming their practice).
+      const normalizedJapamName = normalizeJapamName(japamNameRef.current);
+      if (normalizedJapamName !== null) {
+        await AsyncStorage.setItem(lastUsedJapamNameKey(uid), normalizedJapamName).catch(() => {});
+      }
 
       const after = await readMalasTodaySnapshot();
       console.log('[Stats] STATS_SAVE_ACCEPTED completionSource=JS currentMala=%d targetMalaCount=%d malasTodayAfter=%d todayCountAfter=%d entriesAfter=%d',
@@ -2099,6 +2126,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     reset,
     selectDuration,
     selectLoops,
+    setSessionJapamName,
   }), [
     completedLoops,
     isCustomDuration,
@@ -2111,6 +2139,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     selectLoops,
     selectedDuration,
     selectedLoops,
+    setSessionJapamName,
     start,
     targetSeconds,
     timeLeft,

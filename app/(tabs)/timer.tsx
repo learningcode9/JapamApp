@@ -69,6 +69,10 @@ const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
 const USER_EMAIL_KEY = 'userEmail';
 const AUTH_PENDING_KEY = 'authPending';
+// Convenience-only "last typed japam name" prefill — device-local, not a default, not synced.
+const LAST_USED_JAPAM_NAME_KEY = 'lastUsedJapamName';
+const lastUsedJapamNameKey = (userId: string | null | undefined) =>
+  `${LAST_USED_JAPAM_NAME_KEY}:${userId || 'guest'}`;
 
 type Session = {
   date: string;
@@ -149,6 +153,7 @@ export default function TimerScreen() {
   );
   const [showCustomInput, setShowCustomInput] = useState(false);
   const [customText, setCustomText] = useState('');
+  const [japamNameEntry, setJapamNameEntry] = useState('');
   const [userName, setUserName] = useState('');
   const [showUserModal, setShowUserModal] = useState(false);
   const [isSigningIn, setIsSigningIn] = useState(false);
@@ -162,6 +167,26 @@ export default function TimerScreen() {
   const [dayStreak, setDayStreak] = useState(0);
   const deferredInstallPromptRef = useRef<any>(null);
   const isIosDeviceWeb = isIOSDeviceWeb();
+
+  // Prefill "Current Japam" with whatever was last typed for this user/guest — a convenience so a
+  // user chanting the same japam daily doesn't retype it every session. Never a default: leaving
+  // it blank this session does not erase the remembered value (see setSessionJapamName below).
+  useEffect(() => {
+    (async () => {
+      const uid = await AsyncStorage.getItem(USER_ID_KEY);
+      const stored = await AsyncStorage.getItem(lastUsedJapamNameKey(uid));
+      if (stored) {
+        setJapamNameEntry(stored);
+        timer.setSessionJapamName(stored);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const onChangeJapamNameEntry = (text: string) => {
+    setJapamNameEntry(text);
+    timer.setSessionJapamName(text);
+  };
 
   const rawNonceRef = useRef<string>('');
   const [hashedNonce, setHashedNonce] = useState<string>('');
@@ -805,6 +830,19 @@ export default function TimerScreen() {
 
           <Text style={styles.dateText}>Today · {todayLabel}</Text>
           <Text style={styles.subtitle}>Pick a duration, set loops, breathe.</Text>
+
+          <View style={styles.japamNameField}>
+            <Text style={styles.cardLabel}>Current Japam (Optional)</Text>
+            <TextInput
+              style={styles.japamNameInput}
+              value={japamNameEntry}
+              onChangeText={onChangeJapamNameEntry}
+              placeholder="e.g. Gayatri"
+              placeholderTextColor="#7f9ea0"
+              editable={!timer.isRunning}
+              returnKeyType="done"
+            />
+          </View>
 
       {showInstallBanner && !isStandaloneOrInstalledWeb() && (
             <View style={styles.installBanner}>
@@ -1551,6 +1589,22 @@ const styles = StyleSheet.create({
   chipTextActive: {
     color: '#fff',
     fontWeight: '900',
+  },
+  japamNameField: {
+    width: '100%',
+    maxWidth: 360,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  japamNameInput: {
+    height: isMobile ? 40 : 44,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: 'rgba(15,143,135,0.35)',
+    paddingHorizontal: 14,
+    fontSize: 15,
+    color: '#12383c',
+    backgroundColor: 'rgba(255,255,255,0.9)',
   },
   customRow: {
     flexDirection: 'row',

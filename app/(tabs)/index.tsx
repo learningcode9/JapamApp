@@ -103,6 +103,10 @@ const USER_NAME_KEY = 'userName';
 const USER_EMAIL_KEY = 'userEmail';
 const USER_ID_KEY = 'userId';
 const AUTH_PENDING_KEY = 'authPending';
+// Convenience-only "last typed japam name" prefill — device-local, not a default, not synced.
+const LAST_USED_JAPAM_NAME_KEY = 'lastUsedJapamName';
+const lastUsedJapamNameKey = (userId: string | null | undefined) =>
+  `${LAST_USED_JAPAM_NAME_KEY}:${userId || 'guest'}`;
 const LAST_TOTAL_KEY = 'lastTotal';
 const HISTORY_SYNC_VERSION_KEY = 'historyStatsSyncVersion';
 const NOTIF_PERMISSION_ASKED_KEY = 'notifPermissionAsked';
@@ -228,6 +232,9 @@ export default function JapamMain() {
   const [, setJapamName] = useState('');
   const [, setNameInput] = useState('');
   const [, setHasSetName] = useState(false);
+  // Per-session, plain-text japam name (Custom Japam Name per Session) — distinct from
+  // japamName/setJapamName above, which is the unrelated per-user global rename feature.
+  const [japamNameEntry, setJapamNameEntry] = useState('');
   const [userName, setUserName] = useState('');
   const [showUserModal, setShowUserModal] = useState(false);
   const [showTimerSheet, setShowTimerSheet] = useState(false);
@@ -311,6 +318,17 @@ export default function JapamMain() {
     } catch (e) {
       console.log('Notification permission error:', e);
     }
+  }, []);
+
+  // Prefill "Current Japam" with whatever was last typed for this user/guest — a convenience so a
+  // user chanting the same japam daily doesn't retype it every session. Never a default: leaving
+  // it blank this session does not erase the remembered value (see saveSession below).
+  useEffect(() => {
+    (async () => {
+      const uid = await AsyncStorage.getItem(USER_ID_KEY);
+      const stored = await AsyncStorage.getItem(lastUsedJapamNameKey(uid));
+      if (stored) setJapamNameEntry(stored);
+    })();
   }, []);
 
   useEffect(() => {
@@ -1741,11 +1759,19 @@ export default function JapamMain() {
         userId: userId ?? null,
         userName: userId ? historyUserName : undefined,
         userEmail: userId ? savedUserEmail || undefined : undefined,
+        japamName: japamNameEntry,
       });
       const savedRecord = updatedHistory[0];
 
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
       await AsyncStorage.setItem(HISTORY_SYNC_VERSION_KEY, String(Date.now()));
+
+      // Convenience-only prefill for next time — never erase the remembered value on a blank
+      // entry (the user might just be skipping the name this once, not un-naming their practice).
+      const normalizedJapamName = normalizeJapamName(japamNameEntry);
+      if (normalizedJapamName !== null) {
+        await AsyncStorage.setItem(lastUsedJapamNameKey(userId), normalizedJapamName).catch(() => {});
+      }
 
       // Emit immediately after local save — Home and History update without waiting for Supabase
       DeviceEventEmitter.emit('japam-history-updated', { userId: userId || 'guest', todayTotal: accumulatedTotal });
@@ -1788,7 +1814,7 @@ export default function JapamMain() {
     } finally {
       isSavingSessionRef.current = false;
     }
-  }, [userName]);
+  }, [userName, japamNameEntry]);
 
 
   const tapFeedback = useCallback(() => {
@@ -2319,6 +2345,19 @@ export default function JapamMain() {
           )}
 
           <Text style={styles.dateText}>Today · {todayLabel}</Text>
+
+          <View style={styles.japamNameField}>
+            <Text style={styles.japamNameLabel}>Current Japam (Optional)</Text>
+            <TextInput
+              style={styles.japamNameInput}
+              value={japamNameEntry}
+              onChangeText={setJapamNameEntry}
+              placeholder="e.g. Gayatri"
+              placeholderTextColor="#7f9ea0"
+              editable={!isRunning}
+              returnKeyType="done"
+            />
+          </View>
 
           <Animated.View style={styles.progressShell}>
             <Animated.View
@@ -3058,6 +3097,29 @@ const styles = StyleSheet.create({
     fontSize: isMobile ? 14 : 15,
     fontWeight: '700',
     marginBottom: isShortMobile ? 10 : isMobile ? 14 : 30,
+  },
+  japamNameField: {
+    width: '100%',
+    maxWidth: 360,
+    marginBottom: isShortMobile ? 10 : isMobile ? 14 : 20,
+  },
+  japamNameLabel: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#4a8c90',
+    letterSpacing: 1.0,
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
+  japamNameInput: {
+    height: isMobile ? 40 : 44,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: 'rgba(15,143,135,0.35)',
+    paddingHorizontal: 14,
+    fontSize: 15,
+    color: '#12383c',
+    backgroundColor: 'rgba(255,255,255,0.9)',
   },
   progressShell: {
     width: progressCircleSize,
