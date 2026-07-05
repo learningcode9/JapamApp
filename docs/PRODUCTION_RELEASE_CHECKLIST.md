@@ -92,6 +92,15 @@ Every regression test below must be run against the staging build on a real devi
 - [ ] Deploy web
 - [ ] No DB migrations unless intentional
 - [ ] No native builds unless required
+- [ ] **Custom Japam Name per Session:** `db/add_japam_name_to_history.sql` applied to the target Supabase database (see below) — required before this feature's code reaches that environment
+
+### Hard Release Gate — Custom Japam Name per Session
+
+`db/add_japam_name_to_history.sql` **must be run against the target Supabase database (staging and/or production, whichever is being deployed to) before this branch is deployed or OTA-published.**
+
+Reason: the app now sends `japam_name` in every `japam_history` write payload (Timer, Home, Tap Japam, Manual Entry, History's Add modal, and the offline retry queue all go through the shared `buildSupabaseHistoryPayload`, which always includes this field). If the column does not exist yet, Postgres/PostgREST rejects the write — **history saves fail app-wide, not just for this feature** — until the migration is applied.
+
+Order of operations: run the migration first, confirm the post-apply verification query in the SQL file, then deploy/OTA-publish this branch. Never the other way around.
 
 ### Vercel Deployment Policy
 
