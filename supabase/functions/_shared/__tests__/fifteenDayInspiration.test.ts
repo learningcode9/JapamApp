@@ -79,6 +79,37 @@ describe('fifteenDayInspirationCampaign.buildHtml', () => {
     const ctx = makeContext({ stats: makeStats({ bestDay: null }) });
     expect(() => fifteenDayInspirationCampaign.buildHtml(ctx)).not.toThrow();
   });
+
+  it('HTML-escapes a user-controlled display name instead of injecting it raw', () => {
+    const ctx = makeContext({ stats: makeStats({ userName: '<script>alert(1)</script>' }) });
+    const html = fifteenDayInspirationCampaign.buildHtml(ctx);
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).toContain('&lt;script&gt;');
+  });
+
+  it('contains no curly/smart quotes anywhere in the rendered output', () => {
+    const html = fifteenDayInspirationCampaign.buildHtml(makeContext());
+    expect(html).not.toMatch(/[‘’“”]/);
+  });
+
+  it('does not claim the recipient started exactly 15 days ago', () => {
+    // The copy must read correctly for long-time practitioners too, not
+    // just someone on literally day 15 — see campaignService's "too new"
+    // eligibility gate, which only guarantees >= 15 days of history, not
+    // exactly 15.
+    const html = fifteenDayInspirationCampaign.buildHtml(makeContext());
+    expect(html).not.toContain('Fifteen days ago, you began');
+  });
+
+  it('marks layout tables as presentation-only for screen readers', () => {
+    const html = fifteenDayInspirationCampaign.buildHtml(makeContext());
+    expect(html).toMatch(/<table role="presentation"/);
+  });
+
+  it('declares a light color-scheme to avoid client dark-mode inversion', () => {
+    const html = fifteenDayInspirationCampaign.buildHtml(makeContext());
+    expect(html).toContain('name="color-scheme" content="light"');
+  });
 });
 
 describe('fifteenDayInspirationCampaign.buildText', () => {

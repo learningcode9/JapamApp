@@ -73,24 +73,38 @@ export async function getHistoryForUser(
   return (data ?? []) as JapamHistoryRow[];
 }
 
+export interface LifetimeStats {
+  lifetimeTotalMalas: number;
+  /** ISO timestamp of the user's earliest japam_history row, or null if they have none. */
+  firstActivityAt: string | null;
+}
+
 /**
- * Full-history (all-time) total malas for a user — used for the "lifetime
- * total" stat shown in inspirational campaigns. Deliberately separate from
- * `getHistoryForUser`, which is period-bounded.
+ * Full-history (all-time) stats for a user — used for the "lifetime total"
+ * stat shown in inspirational campaigns, and to gate brand-new users out of
+ * a campaign whose copy assumes an established practice (see
+ * campaignService.ts's "too new" eligibility check). Combines what used to
+ * be two separate full-table-scan queries (a sum and a min) into one.
  */
-export async function getLifetimeTotalMalas(
+export async function getLifetimeStats(
   supabase: SupabaseClient,
   userId: string,
-): Promise<number> {
+): Promise<LifetimeStats> {
   const { data, error } = await supabase
     .from('japam_history')
-    .select('malas')
-    .eq('user_id', userId);
+    .select('malas, created_at')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: true });
 
   if (error) {
-    throw new Error(`getLifetimeTotalMalas(${userId}): ${error.message}`);
+    throw new Error(`getLifetimeStats(${userId}): ${error.message}`);
   }
-  return (data ?? []).reduce((sum, row) => sum + (Number(row.malas) || 0), 0);
+
+  const rows = data ?? [];
+  return {
+    lifetimeTotalMalas: rows.reduce((sum, row) => sum + (Number(row.malas) || 0), 0),
+    firstActivityAt: rows.length > 0 ? (rows[0].created_at as string) : null,
+  };
 }
 
 export async function isDuplicateSummary(
@@ -99,19 +113,33 @@ export async function isDuplicateSummary(
   emailType: string,
   periodStart: string,
 ): Promise<boolean> {
+  // Deliberately NOT an exact match on period_start. periodStart is computed
+  // as "today - (periodDays-1)" at call time (see calculator.ts), so it is a
+  // different value every single day. An exact-match check only catches a
+  // second run on the *same calendar day* — if the sender is ever invoked
+  // more than once per period (e.g. a daily cron, which this repo's own
+  // SUMMARY_EMAIL_SETUP.md docs suggest as a valid scheduling option), every
+  // active user would receive a new email every day instead of every N days.
+  //
+  // Instead, look at the most recent sent/dry_run record for this user+type
+  // and treat it as a duplicate if its period still overlaps with (or ends
+  // after) the start of the period being computed now — i.e. fewer than
+  // `periodDays` have elapsed since the last send.
   const { data, error } = await supabase
     .from('user_email_summaries')
-    .select('id')
+    .select('period_end')
     .eq('user_id', userId)
     .eq('email_type', emailType)
-    .eq('period_start', periodStart)
     .in('status', ['sent', 'dry_run'])
+    .order('period_start', { ascending: false })
     .limit(1);
 
   if (error) {
     throw new Error(`isDuplicateSummary(${userId}): ${error.message}`);
   }
-  return (data?.length ?? 0) > 0;
+  if (!data?.length) return false;
+
+  return data[0].period_end >= periodStart;
 }
 
 export async function recordSummary(

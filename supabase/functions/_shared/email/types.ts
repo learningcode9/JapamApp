@@ -101,6 +101,7 @@ export type ResultStatus =
   | 'dry_run'
   | 'skipped_no_activity'
   | 'skipped_duplicate'
+  | 'skipped_too_new'
   | 'failed';
 
 export interface SummaryRunResult {

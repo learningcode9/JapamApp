@@ -8,7 +8,7 @@
 // content, clearly attributed, alongside a more universal reflection line.
 
 import type { CampaignDefinition, CampaignContext } from './types';
-import { renderCampaignEmail } from '../baseTemplate';
+import { renderCampaignEmail, escapeHtml } from '../baseTemplate';
 
 function fmtDate(dateStr: string): string {
   const [y, m, d] = dateStr.split('-').map(Number);
@@ -30,17 +30,17 @@ function buildHtml(ctx: CampaignContext): string {
   const content = `
   <tr><td style="padding:32px 32px 4px;">
     <p style="margin:0;font-size:17px;color:${config.colors.textPrimary};">
-      Hello, <strong>${stats.userName}</strong> 🙏
+      Hello, <strong>${escapeHtml(stats.userName)}</strong> 🙏
     </p>
     <p style="margin:14px 0 0;font-size:15px;line-height:1.75;color:${config.colors.textPrimary};">
-      Fifteen days ago, you began another small chapter of your Japam practice.
-      Whatever the pace, showing up for even a few quiet minutes is enough —
+      Over the last fifteen days, you've continued showing up for your Japam practice.
+      Whatever the pace, a few quiet minutes is enough —
       the practice itself is the point, not the count.
     </p>
   </td></tr>
 
   <tr><td style="padding:20px 32px 0;">
-    <table width="100%" cellpadding="0" cellspacing="0"
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
            style="border-radius:12px;overflow:hidden;border:1px solid rgba(0,0,0,0.06);">
       <tr style="background:${config.colors.background};">
         <td style="padding:14px 20px;font-size:14px;color:${config.colors.textPrimary};">🪷 Malas in the last 15 days</td>
@@ -92,7 +92,7 @@ function buildHtml(ctx: CampaignContext): string {
       headline: 'Every Mala Brings You Closer to Inner Peace',
     },
     contentHtml: content,
-    ctaLabel: 'Continue Today’s Japam',
+    ctaLabel: "Continue Today's Japam",
     config,
   });
 }
@@ -111,7 +111,7 @@ function buildText(ctx: CampaignContext): string {
 
 Hello, ${stats.userName}!
 
-Fifteen days ago, you began another small chapter of your Japam practice. Whatever the pace, showing up for even a few quiet minutes is enough — the practice itself is the point, not the count.
+Over the last fifteen days, you've continued showing up for your Japam practice. Whatever the pace, a few quiet minutes is enough — the practice itself is the point, not the count.
 
   Malas in the last 15 days: ${stats.totalMalas.toLocaleString()}
   Daily average:             ${stats.averageMalasPerActiveDay.toFixed(1)}
