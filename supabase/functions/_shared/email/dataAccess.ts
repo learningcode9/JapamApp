@@ -52,9 +52,17 @@ export async function getHistoryForUser(
   periodStart: string,
   periodEnd: string,
 ): Promise<JapamHistoryRow[]> {
+  // NOTE: `source` is deliberately NOT in this select. The live `japam_history`
+  // table (schema.sql) has no `source` column — selecting it errors with
+  // "column japam_history.source does not exist" against real Supabase data
+  // (confirmed in the paused email-campaign Phase 0 investigation). types.ts
+  // already types `source` as optional and calculator.ts already handles its
+  // absence gracefully (`breakdown: null`), so omitting it here changes
+  // nothing observable — it only prevents a query that would otherwise fail
+  // on every real (non-fake-data) run.
   const { data, error } = await supabase
     .from('japam_history')
-    .select('user_id, user_name, malas, count, created_at, completion_id, source')
+    .select('user_id, user_name, malas, count, created_at, completion_id')
     .eq('user_id', userId)
     .gte('created_at', `${periodStart}T00:00:00.000Z`)
     .lte('created_at', `${periodEnd}T23:59:59.999Z`);
