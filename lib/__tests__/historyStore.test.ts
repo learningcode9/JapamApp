@@ -3,6 +3,7 @@ import {
   makeLoopCompletionId,
   normalizeRecord,
   normalizeJapamName,
+  historyDayJapamGroupKey,
   appendCompletion,
   dedupeByCompletionId,
   mergeHistories,
@@ -102,6 +103,36 @@ describe('normalizeJapamName: single shared helper for the plain-text japam name
   it('collapses null and undefined to null', () => {
     expect(normalizeJapamName(null)).toBeNull();
     expect(normalizeJapamName(undefined)).toBeNull();
+  });
+});
+
+describe('historyDayJapamGroupKey: the single grouping key shared by History display and edit scoping', () => {
+  it('produces the same key for the same day and the same normalized name', () => {
+    expect(historyDayJapamGroupKey('2026-06-03', 'Gayatri')).toBe(
+      historyDayJapamGroupKey('2026-06-03', '  Gayatri  ')
+    );
+  });
+  it('produces different keys for the same day with different names', () => {
+    expect(historyDayJapamGroupKey('2026-06-03', 'Gayatri')).not.toBe(
+      historyDayJapamGroupKey('2026-06-03', 'Rama Nama')
+    );
+  });
+  it('produces different keys for different days with the same name', () => {
+    expect(historyDayJapamGroupKey('2026-06-03', 'Gayatri')).not.toBe(
+      historyDayJapamGroupKey('2026-06-04', 'Gayatri')
+    );
+  });
+  it('treats null, undefined, and blank/whitespace names as the same "Japam" group', () => {
+    const a = historyDayJapamGroupKey('2026-06-03', null);
+    const b = historyDayJapamGroupKey('2026-06-03', undefined);
+    const c = historyDayJapamGroupKey('2026-06-03', '   ');
+    expect(a).toBe(b);
+    expect(b).toBe(c);
+  });
+  it('treats differently-cased names as distinct groups, consistent with planHistoryDayAdjustment', () => {
+    expect(historyDayJapamGroupKey('2026-06-03', 'Gayatri')).not.toBe(
+      historyDayJapamGroupKey('2026-06-03', 'gayatri')
+    );
   });
 });
 

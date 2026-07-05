@@ -7,6 +7,7 @@ import {
   makeCompletionId,
   markSynced,
   mergeHistories,
+  historyDayJapamGroupKey,
   mergeTombstones,
   normalizeAll,
   normalizeJapamName,
@@ -102,6 +103,7 @@ type Session = {
 type DailyRow = {
   dateKey: string;
   dateLabel: string;
+  japamName: string | null;
   malas: number;
   totalCount: number;
   accumulated: number;
@@ -255,11 +257,17 @@ const dedupeSessions = (sessions: Session[]): Session[] =>
   );
 
 const buildDailyRows = (sessions: Session[]) => {
+  // Keyed by day + normalized japam name (see historyDayJapamGroupKey) — NOT by day alone, so a
+  // day with multiple japams renders as multiple rows, one per japam. This is the same key
+  // planHistoryDayAdjustment uses to scope edits, so a row's displayed group and its actual
+  // editable set can never disagree.
   const grouped = new Map<string, DailyRow>();
 
   dedupeSessions(sessions).forEach((item) => {
     const dayKey = toDayKey(item.date);
-    const existing = grouped.get(dayKey);
+    const japamName = normalizeJapamName(item.japamName);
+    const groupKey = historyDayJapamGroupKey(dayKey, japamName);
+    const existing = grouped.get(groupKey);
 
     const itemMalas = Number(item.malas) || 0;
     const itemTotalCount = Number(item.totalCount) || itemMalas * 108;
@@ -279,9 +287,10 @@ const buildDailyRows = (sessions: Session[]) => {
       return;
     }
 
-    grouped.set(dayKey, {
+    grouped.set(groupKey, {
       dateKey: dayKey,
       dateLabel: toDayLabel(dayKey),
+      japamName,
       malas,
       totalCount,
       accumulated: 0,
@@ -298,6 +307,7 @@ const buildDailyRows = (sessions: Session[]) => {
     [...grouped.values()].map((row) => ({
       dateKey: row.dateKey,
       displayLabel: row.dateLabel,
+      japamName: row.japamName,
       totalCount: row.totalCount,
     }))
   );
@@ -305,7 +315,10 @@ const buildDailyRows = (sessions: Session[]) => {
   const oldestFirstRows = [...grouped.values()].sort((a, b) => {
     if (a.dateKey === 'unknown') return 1;
     if (b.dateKey === 'unknown') return -1;
-    return a.dateKey.localeCompare(b.dateKey);
+    const dayDiff = a.dateKey.localeCompare(b.dateKey);
+    // Same day: order deterministically by japam name so row order doesn't depend on incidental
+    // array/Map iteration order (the "Japam" / null group sorts first via '' < any name).
+    return dayDiff || (a.japamName ?? '').localeCompare(b.japamName ?? '');
   });
 
   let runningTotal = 0;
@@ -700,7 +713,7 @@ export default function HistoryScreen() {
   };
 
   const openEditModal = (row: DailyRow) => {
-    console.log('[EDIT_MODAL_OPEN] dateKey=%s malas=%d', row.dateKey, row.malas);
+    console.log('[EDIT_MODAL_OPEN] dateKey=%s japamName=%s malas=%d', row.dateKey, row.japamName ?? 'Japam', row.malas);
     setEditingRow(row);
     setEditMalas(row.malas);
   };
@@ -994,7 +1007,7 @@ export default function HistoryScreen() {
 
   const confirmDeleteDay = useCallback((row: DailyRow) => {
     if (!row.completionIds.length) return;
-    const title = 'Delete these records?';
+    const title = `Delete these ${row.japamName ?? 'Japam'} records?`;
     const message = 'This will permanently delete these records from all your devices and cannot be undone.';
     // react-native-web does not render Alert.alert, so use the browser's confirm dialog on web.
     if (Platform.OS === 'web') {
@@ -1032,7 +1045,8 @@ export default function HistoryScreen() {
         currentHistory,
         currentUserId,
         row.dateKey,
-        editMalas
+        editMalas,
+        row.japamName
       );
       if (!plan.changed) {
         setEditingRow(null);
@@ -1161,11 +1175,14 @@ export default function HistoryScreen() {
         return;
       }
 
-      const lines = ['Date,Malas,Count,Accumulated'];
+      // Japam is free text and may contain commas/quotes — always CSV-quote it, unlike the other
+      // columns which are numeric/date-key and never need escaping.
+      const csvQuote = (value: string) => `"${value.replace(/"/g, '""')}"`;
+      const lines = ['Date,Japam,Malas,Count,Accumulated'];
 
       dailyRows.forEach((row) => {
         lines.push(
-          `${row.dateKey},${row.malas},${row.totalCount},${row.accumulated}`
+          `${row.dateKey},${csvQuote(row.japamName ?? 'Japam')},${row.malas},${row.totalCount},${row.accumulated}`
         );
       });
 
@@ -1421,6 +1438,11 @@ export default function HistoryScreen() {
               {editingRow ? toEditDateLabel(editingRow.dateKey) : ''}
             </Text>
 
+            <Text style={styles.modalLabel}>Japam</Text>
+            <Text style={styles.readOnlyDate}>
+              {editingRow ? editingRow.japamName ?? 'Japam' : ''}
+            </Text>
+
             <Text style={styles.modalLabel}>Malas</Text>
             <View style={styles.stepperRow}>
               <Pressable
@@ -1485,6 +1507,9 @@ export default function HistoryScreen() {
                   <Text style={styles.cellText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.9}>
                     {row.dateLabel}
                   </Text>
+                  <Text style={styles.japamNameLabel} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
+                    {row.japamName ?? 'Japam'}
+                  </Text>
                 </View>
                 <View style={[styles.columnCell, styles.numColumn]}>
                   <Text style={[styles.cellText, styles.numericText]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.92}>{row.malas}</Text>
@@ -1504,11 +1529,11 @@ export default function HistoryScreen() {
                         pressed && { opacity: 0.5 },
                       ]}
                       onPress={() => {
-                        console.log('[EDIT_ICON_PRESS] dateKey=%s malas=%d', row.dateKey, row.malas);
+                        console.log('[EDIT_ICON_PRESS] dateKey=%s japamName=%s malas=%d', row.dateKey, row.japamName ?? 'Japam', row.malas);
                         openEditModal(row);
                       }}
-                      accessibilityLabel={`Edit ${row.dateLabel}`}
-                      accessibilityHint="Opens this day's malas for editing"
+                      accessibilityLabel={`Edit ${row.japamName ?? 'Japam'} on ${row.dateLabel}`}
+                      accessibilityHint="Opens this japam's malas for editing"
                       accessibilityRole="button"
                       hitSlop={4}
                     >
@@ -1521,8 +1546,8 @@ export default function HistoryScreen() {
                         pressed && { opacity: 0.5 },
                       ]}
                       onPress={() => confirmDeleteDay(row)}
-                      accessibilityLabel={`Delete ${row.dateLabel}`}
-                      accessibilityHint="Deletes this day's history rows"
+                      accessibilityLabel={`Delete ${row.japamName ?? 'Japam'} on ${row.dateLabel}`}
+                      accessibilityHint="Deletes this japam's history rows for this day"
                       accessibilityRole="button"
                       hitSlop={4}
                     >
@@ -1882,6 +1907,12 @@ const styles = StyleSheet.create({
     color: '#12383c',
     fontSize: TABLE_VALUE_FONT_SIZE,
     fontWeight: '700',
+  },
+  japamNameLabel: {
+    color: '#5b8a87',
+    fontSize: TABLE_VALUE_FONT_SIZE - 3,
+    fontWeight: '500',
+    marginTop: 1,
   },
   dateColumn: IS_ANDROID
     ? { width: ANDROID_DATE_WIDTH, flexGrow: 0, flexShrink: 0 }

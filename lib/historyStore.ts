@@ -56,6 +56,15 @@ export const normalizeJapamName = (raw?: string | null): string | null => {
   return trimmed.length > 0 ? trimmed : null;
 };
 
+/**
+ * The single grouping key for "one History row" = one local day + one normalized japam name.
+ * Both the History screen's display grouping (buildDailyRows) and planHistoryDayAdjustment's edit
+ * scoping must derive their group identity from this function — never re-derive it independently
+ * — so a row's displayed group and its actual editable set can never disagree.
+ */
+export const historyDayJapamGroupKey = (dayKey: string, japamName?: string | null): string =>
+  `${dayKey}::${normalizeJapamName(japamName) ?? ''}`;
+
 export type HistoryRecordUpdate = {
   before: HistoryRecord;
   after: HistoryRecord;
