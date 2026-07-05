@@ -14,6 +14,7 @@
 
 import { createSummaryEmailService } from '../supabase/functions/_shared/email/summaryService';
 import { createEmailProvider } from '../supabase/functions/_shared/email/emailProvider';
+import { assertProductionReady } from '../supabase/functions/_shared/email/config';
 
 // Load .env.local if present (optional — production callers set env vars directly)
 try {
@@ -32,6 +33,10 @@ async function main(): Promise<void> {
   console.log(`  dryRun     = ${dryRun}`);
   console.log(`  forceResend= ${forceResend}`);
   console.log(`  periodDays = ${periodDays}`);
+
+  if (!dryRun) {
+    assertProductionReady();
+  }
 
   const emailProvider = dryRun ? null : createEmailProvider();
   const service = createSummaryEmailService(emailProvider);

@@ -6,6 +6,24 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { AuthUser, JapamHistoryRow, EmailSummaryRecord } from './types';
+import { parseAllowlist } from './config';
+
+/**
+ * user_ids with a non-null unsubscribed_at in user_email_preferences — i.e.
+ * everyone who has opted out of campaign emails. See the 20260705 migration
+ * for why this is its own table rather than a column on user_profiles.
+ */
+export async function getUnsubscribedUserIds(supabase: SupabaseClient): Promise<Set<string>> {
+  const { data, error } = await supabase
+    .from('user_email_preferences')
+    .select('user_id')
+    .not('unsubscribed_at', 'is', null);
+
+  if (error) {
+    throw new Error(`getUnsubscribedUserIds: ${error.message}`);
+  }
+  return new Set((data ?? []).map(r => r.user_id as string));
+}
 
 export async function getActiveUsersInPeriod(
   supabase: SupabaseClient,
@@ -26,17 +44,25 @@ export async function getActiveUsersInPeriod(
   const activeIds = new Set(activityRows.map(r => r.user_id as string).filter(Boolean));
   if (activeIds.size === 0) return [];
 
-  const { data: { users }, error: authErr } = await supabase.auth.admin.listUsers({
-    page: 1,
-    perPage: 1000,
-  });
+  const [{ data: { users }, error: authErr }, unsubscribedIds] = await Promise.all([
+    supabase.auth.admin.listUsers({ page: 1, perPage: 1000 }),
+    getUnsubscribedUserIds(supabase),
+  ]);
 
   if (authErr) {
     throw new Error(`getActiveUsersInPeriod: auth.admin.listUsers failed — ${authErr.message}`);
   }
 
+  // EMAIL_ALLOWLIST, when set, restricts every campaign to only the listed
+  // addresses — intended for controlled testing against real production
+  // data without emailing real users. Unset (the default) means no
+  // restriction, identical to behavior before this filter existed.
+  const allowlist = parseAllowlist(process.env.EMAIL_ALLOWLIST);
+
   return (users ?? [])
     .filter(u => u.email && activeIds.has(u.id))
+    .filter(u => !unsubscribedIds.has(u.id))
+    .filter(u => allowlist === null || allowlist.has(u.email!.toLowerCase()))
     .map(u => ({
       id: u.id,
       email: u.email!,
