@@ -5,6 +5,7 @@ import {
   dedupeByCompletionId,
   mergeHistories,
   normalizeAll,
+  normalizeJapamName,
   todayStatsFor,
   toLocalDayKey,
 } from '../../lib/historyStore';
@@ -81,6 +82,7 @@ type Session = {
   source?: string;
   completionId?: string;
   syncStatus?: 'pending' | 'synced';
+  japamName?: string | null;
 };
 
 const getLocalDateKey = (date = new Date()) => {
@@ -240,7 +242,7 @@ export default function TimerScreen() {
         try {
           const encodedUserId = encodeURIComponent(userId);
           const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,completion_id&order=created_at.asc&limit=10000`,
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,completion_id,japam_name&order=created_at.asc&limit=10000`,
             { headers: { apikey: key, Authorization: `Bearer ${key}` } }
           );
           if (res.ok) {
@@ -251,6 +253,7 @@ export default function TimerScreen() {
               count: number | string;
               user_name?: string;
               completion_id?: string;
+              japam_name?: string | null;
             }[] = await res.json();
             rawSupabaseRows = rows.length;
             const remoteHistory: Session[] = rows.map((row) => ({
@@ -263,6 +266,7 @@ export default function TimerScreen() {
               userName: row.user_name,
               completionId: row.completion_id,
               syncStatus: 'synced' as const,
+              japamName: normalizeJapamName(row.japam_name),
             }));
             rawSupabaseCount = remoteHistory.reduce(
               (sum, row) => sum + (Number(row.totalCount) || 0),

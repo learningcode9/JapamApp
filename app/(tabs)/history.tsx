@@ -9,6 +9,7 @@ import {
   mergeHistories,
   mergeTombstones,
   normalizeAll,
+  normalizeJapamName,
   planHistoryDayAdjustment,
   reconcileWithServer,
   toLocalDayKey,
@@ -95,6 +96,7 @@ type Session = {
   remoteId?: string | number;
   completionId?: string;
   syncStatus?: 'pending' | 'synced';
+  japamName?: string | null;
 };
 
 type DailyRow = {
@@ -117,6 +119,7 @@ type RemoteHistoryRow = {
   user_name?: string;
   user_email?: string;
   completion_id?: string;
+  japam_name?: string | null;
 };
 
 type ManualSyncInput = {
@@ -330,7 +333,7 @@ const fetchRemoteSessions = async (userId: string, legacyUserId?: string | null)
     // they merge/display/reconcile identically to rows fetched by the UUID itself.
     const fetchBy = async (field: 'user_id' | 'user_name', value: string, taggedUserId: string) => {
       const query = new URLSearchParams({
-        select: 'id,created_at,malas,count,user_name,completion_id',
+        select: 'id,created_at,malas,count,user_name,completion_id,japam_name',
         [field]: `eq.${value}`,
         order: 'created_at.asc',
         limit: '10000',
@@ -366,6 +369,7 @@ const fetchRemoteSessions = async (userId: string, legacyUserId?: string | null)
           remoteId: row.id,
           completionId: row.completion_id || makeCompletionId(taggedUserId, row.created_at || new Date().toISOString()),
           syncStatus: 'synced' as const,
+          japamName: normalizeJapamName(row.japam_name),
         };
       });
     };

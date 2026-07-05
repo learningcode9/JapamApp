@@ -5,6 +5,7 @@ import {
   buildSupabaseHistoryPayload,
   markSynced,
   mergeHistories,
+  normalizeJapamName,
   todayStatsFor,
   toLocalDayKey,
 } from '../../lib/historyStore';
@@ -61,6 +62,7 @@ type Session = {
   source?: string;
   completionId?: string;
   syncStatus?: 'pending' | 'synced';
+  japamName?: string | null;
 };
 
 type TimerStateRow = {
@@ -797,7 +799,7 @@ export default function JapamMain() {
         if (url && key) {
           const encodedUserId = encodeURIComponent(savedUserId);
           const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,completion_id&order=created_at.asc`,
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,completion_id,japam_name&order=created_at.asc`,
             { headers: { apikey: key, Authorization: `Bearer ${key}` } }
           );
           if (res.ok) {
@@ -807,6 +809,7 @@ export default function JapamMain() {
               count: number | string;
               user_name?: string;
               completion_id?: string;
+              japam_name?: string | null;
             }[] =
               await res.json();
             remoteSessions = rows.map((row) => ({
@@ -819,6 +822,7 @@ export default function JapamMain() {
               userName: row.user_name,
               completionId: row.completion_id,
               syncStatus: 'synced' as const,
+              japamName: normalizeJapamName(row.japam_name),
             }));
           }
         }
@@ -1228,6 +1232,7 @@ export default function JapamMain() {
         userEmail: item.user_email,
         completionId: item.completion_id,
         syncStatus: 'synced' as const,
+        japamName: normalizeJapamName(item.japam_name),
       }));
 
       const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
