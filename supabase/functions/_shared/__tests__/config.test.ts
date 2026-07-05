@@ -21,6 +21,28 @@ describe('parseAllowlist', () => {
     expect(result?.has('other@example.com')).toBe(true);
     expect(result?.size).toBe(2);
   });
+
+  // Fails closed: the var is set (showing intent to restrict) but contains
+  // no valid addresses, so falling back to "no restriction" would silently
+  // send to everyone — the exact failure mode this feature exists to avoid.
+  it('throws when set to only a delimiter', () => {
+    expect(() => parseAllowlist(',')).toThrow(/EMAIL_ALLOWLIST/);
+  });
+
+  it('throws when set to only delimiters and whitespace', () => {
+    expect(() => parseAllowlist(' , , ')).toThrow(/EMAIL_ALLOWLIST/);
+  });
+
+  it('still returns null for a genuinely empty/whitespace-only value (not a throw)', () => {
+    expect(parseAllowlist('')).toBeNull();
+    expect(parseAllowlist('   ')).toBeNull();
+  });
+
+  it('ignores stray empty entries as long as at least one valid address remains', () => {
+    const result = parseAllowlist('valid@example.com,,  ,');
+    expect(result?.size).toBe(1);
+    expect(result?.has('valid@example.com')).toBe(true);
+  });
 });
 
 describe('validateProductionEnv / assertProductionReady', () => {
