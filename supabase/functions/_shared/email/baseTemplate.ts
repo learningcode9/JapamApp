@@ -17,11 +17,13 @@ export interface HeroContent {
   headline: string;
 }
 
-function escapeHtml(value: string): string {
+export function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function renderHero(hero: HeroContent, config: EmailConfig): string {
@@ -30,13 +32,17 @@ function renderHero(hero: HeroContent, config: EmailConfig): string {
               letter-spacing:0.12em;text-transform:uppercase;">${escapeHtml(hero.eyebrow)}</p>`
     : '';
 
-  // Prefer a real hosted photo when configured; otherwise fall back to a
-  // CSS gradient. The gradient path also guarantees the hero always renders
-  // even with images disabled (the Gmail/Outlook default), which a bare
-  // <img>-only hero would not.
+  // The gradient is always present as the base `background`, even when a
+  // photo is configured. Outlook desktop (Word's rendering engine) does not
+  // support `background-image` on table cells at all and would otherwise
+  // show a blank/white cell — which would make the white hero text
+  // unreadable. Gmail/Apple Mail/etc. render `background-image` layered on
+  // top of the gradient, so configuring a photo is still a strict visual
+  // upgrade there; Outlook just falls back to the branded gradient.
+  const gradient = `linear-gradient(135deg,${config.colors.primary} 0%,${config.colors.primaryDark} 100%)`;
   const backgroundStyle = config.heroImageUrl
-    ? `background-image:url('${config.heroImageUrl}');background-size:cover;background-position:center;`
-    : `background:linear-gradient(135deg,${config.colors.primary} 0%,${config.colors.primaryDark} 100%);`;
+    ? `background:${gradient};background-image:url('${config.heroImageUrl}');background-size:cover;background-position:center;`
+    : `background:${gradient};`;
 
   return `<tr><td style="${backgroundStyle}padding:56px 32px;text-align:center;">
     ${eyebrowHtml}
@@ -119,12 +125,14 @@ export function renderCampaignEmail(params: {
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <meta name="color-scheme" content="light"/>
+  <meta name="supported-color-schemes" content="light"/>
   <title>${escapeHtml(title)}</title>
 </head>
 <body style="margin:0;padding:0;background:${config.colors.background};font-family:Georgia,'Times New Roman',serif;">
-<table width="100%" cellpadding="0" cellspacing="0" style="background:${config.colors.background};padding:32px 16px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${config.colors.background};padding:32px 16px;">
 <tr><td align="center">
-<table width="600" cellpadding="0" cellspacing="0"
+<table role="presentation" width="600" cellpadding="0" cellspacing="0"
        style="max-width:600px;width:100%;background:${config.colors.cardBackground};border-radius:16px;
               overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,0.08);">
 

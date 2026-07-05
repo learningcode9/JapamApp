@@ -74,8 +74,8 @@ export class CampaignEmailService {
     return dataAccess.getHistoryForUser(this.supabase, userId, periodStart, periodEnd);
   }
 
-  protected async getLifetimeTotalMalas(userId: string): Promise<number> {
-    return dataAccess.getLifetimeTotalMalas(this.supabase, userId);
+  protected async getLifetimeStats(userId: string): Promise<dataAccess.LifetimeStats> {
+    return dataAccess.getLifetimeStats(this.supabase, userId);
   }
 
   protected async isDuplicate(userId: string, periodStart: string): Promise<boolean> {
@@ -119,7 +119,26 @@ export class CampaignEmailService {
         };
       }
 
-      const lifetimeTotalMalas = await this.getLifetimeTotalMalas(user.id);
+      const { lifetimeTotalMalas, firstActivityAt } = await this.getLifetimeStats(user.id);
+
+      // This campaign's copy ("fifteen days ago, you began...") assumes an
+      // established practice of at least one full period. Without this
+      // check, a user who signed up and practiced once yesterday would
+      // immediately qualify (they have "activity in the period") and
+      // receive a message that describes a journey they haven't had yet.
+      if (firstActivityAt) {
+        const daysSinceFirstActivity =
+          (Date.parse(`${periodEnd}T23:59:59.999Z`) - Date.parse(firstActivityAt)) / 86_400_000;
+        if (daysSinceFirstActivity < this.campaign.periodDays) {
+          return {
+            userId: user.id,
+            email: user.email,
+            status: 'skipped_too_new',
+            reason: `first activity ${daysSinceFirstActivity.toFixed(1)} days ago — requires ${this.campaign.periodDays}`,
+          };
+        }
+      }
+
       const ctx = { stats, lifetimeTotalMalas, config: this.config };
 
       if (dryRun) {

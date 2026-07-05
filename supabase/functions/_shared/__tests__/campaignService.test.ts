@@ -28,6 +28,10 @@ const FAKE_CAMPAIGN: CampaignDefinition = {
   buildText: (ctx: CampaignContext) => `${ctx.stats.userName}:${ctx.lifetimeTotalMalas}`,
 };
 
+// Far enough in the past that every existing test (none of which are about
+// the "too new" eligibility gate) is unaffected by its introduction.
+const LONG_ESTABLISHED_USER_ISO = '2020-01-01T00:00:00.000Z';
+
 /**
  * Subclass that replaces all Supabase data-access methods with injectable
  * fakes — same pattern as SummaryEmailService's TestService.
@@ -42,6 +46,7 @@ class TestService extends CampaignEmailService {
     public fakeLifetimeTotal = 42,
     emailProvider: EmailProvider | null = null,
     campaign: CampaignDefinition = FAKE_CAMPAIGN,
+    public fakeFirstActivityAt: string | null = LONG_ESTABLISHED_USER_ISO,
   ) {
     super(campaign, {} as never, emailProvider, loadEmailConfig());
   }
@@ -54,8 +59,8 @@ class TestService extends CampaignEmailService {
     return this.fakeHistory;
   }
 
-  protected override async getLifetimeTotalMalas(): Promise<number> {
-    return this.fakeLifetimeTotal;
+  protected override async getLifetimeStats(): Promise<{ lifetimeTotalMalas: number; firstActivityAt: string | null }> {
+    return { lifetimeTotalMalas: this.fakeLifetimeTotal, firstActivityAt: this.fakeFirstActivityAt };
   }
 
   protected override async isDuplicate(): Promise<boolean> {
@@ -99,6 +104,31 @@ describe('CampaignEmailService no activity', () => {
     const results = await service.run({ dryRun: true });
 
     expect(results[0].status).toBe('skipped_no_activity');
+  });
+});
+
+// ─── New-user eligibility ───────────────────────────────────────────────────
+
+describe('CampaignEmailService new-user eligibility', () => {
+  it('skips a user whose first-ever activity is more recent than the campaign period', async () => {
+    const service = new TestService([USER], [makeRow()], false, 42, null, FAKE_CAMPAIGN, new Date().toISOString());
+    const results = await service.run({ dryRun: true });
+
+    expect(results[0].status).toBe('skipped_too_new');
+  });
+
+  it('does not skip a long-established user', async () => {
+    const service = new TestService([USER], [makeRow()], false, 42, null, FAKE_CAMPAIGN, LONG_ESTABLISHED_USER_ISO);
+    const results = await service.run({ dryRun: true });
+
+    expect(results[0].status).toBe('dry_run');
+  });
+
+  it('does not skip when firstActivityAt is null (defensive default)', async () => {
+    const service = new TestService([USER], [makeRow()], false, 42, null, FAKE_CAMPAIGN, null);
+    const results = await service.run({ dryRun: true });
+
+    expect(results[0].status).toBe('dry_run');
   });
 });
 
