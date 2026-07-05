@@ -14,6 +14,7 @@ import {
   buildSupabaseHistoryPayload,
   dedupeByCompletionId,
   getPending,
+  lastUsedJapamNameKey,
   makeLoopCompletionId,
   markSynced,
   mergeTombstones,
@@ -66,12 +67,6 @@ const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
-// Convenience-only "last typed japam name" — a device-local prefill hint, NOT a default japam and
-// NOT synced/stored in Supabase or user_profiles. Guest-safe via the same `userId || 'guest'`
-// sentinel makeCompletionId already uses, so guest and signed-in users get separate slots.
-const LAST_USED_JAPAM_NAME_KEY = 'lastUsedJapamName';
-const lastUsedJapamNameKey = (userId: string | null | undefined) =>
-  `${LAST_USED_JAPAM_NAME_KEY}:${userId || 'guest'}`;
 const WEB_OM_AUDIO_SRC = '/om_complete.mp3';
 const WEB_TIMER_AUDIO_SRC = '/silent-timer.wav';
 

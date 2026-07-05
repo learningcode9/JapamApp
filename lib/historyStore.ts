@@ -65,6 +65,23 @@ export const normalizeJapamName = (raw?: string | null): string | null => {
 export const historyDayJapamGroupKey = (dayKey: string, japamName?: string | null): string =>
   `${dayKey}::${normalizeJapamName(japamName) ?? ''}`;
 
+/**
+ * Storage key for the convenience-only "last typed japam name" prefill. This is NOT a default
+ * japam and is never synced/sent to Supabase or user_profiles — it exists purely so a user who
+ * chants the same japam daily doesn't retype it every session (see normalizeJapamName's callers
+ * for the "don't erase on blank" rule that goes with it).
+ *
+ * Every screen that reads/writes this AsyncStorage key MUST go through this one function instead
+ * of re-deriving the key string locally, so a change to the scoping scheme (e.g. the guest
+ * sentinel) can never drift out of sync between screens.
+ *
+ * Guest-safe via the same `userId || 'guest'` sentinel makeCompletionId already uses, so guest and
+ * signed-in users get separate slots.
+ */
+export const LAST_USED_JAPAM_NAME_KEY = 'lastUsedJapamName';
+export const lastUsedJapamNameKey = (userId: string | null | undefined): string =>
+  `${LAST_USED_JAPAM_NAME_KEY}:${userId || 'guest'}`;
+
 export type HistoryRecordUpdate = {
   before: HistoryRecord;
   after: HistoryRecord;

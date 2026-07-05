@@ -3,6 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import {
   dedupeByCompletionId,
+  lastUsedJapamNameKey,
   mergeHistories,
   normalizeAll,
   normalizeJapamName,
@@ -69,10 +70,6 @@ const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
 const USER_EMAIL_KEY = 'userEmail';
 const AUTH_PENDING_KEY = 'authPending';
-// Convenience-only "last typed japam name" prefill — device-local, not a default, not synced.
-const LAST_USED_JAPAM_NAME_KEY = 'lastUsedJapamName';
-const lastUsedJapamNameKey = (userId: string | null | undefined) =>
-  `${LAST_USED_JAPAM_NAME_KEY}:${userId || 'guest'}`;
 
 type Session = {
   date: string;
@@ -168,20 +165,38 @@ export default function TimerScreen() {
   const deferredInstallPromptRef = useRef<any>(null);
   const isIosDeviceWeb = isIOSDeviceWeb();
 
-  // Prefill "Current Japam" with whatever was last typed for this user/guest — a convenience so a
-  // user chanting the same japam daily doesn't retype it every session. Never a default: leaving
-  // it blank this session does not erase the remembered value (see setSessionJapamName below).
+  // Prefill "Current Japam" with whatever was last typed for THE CURRENT user/guest — a
+  // convenience so a user chanting the same japam daily doesn't retype it every session. Never a
+  // default: leaving it blank this session does not erase the remembered value (see
+  // setSessionJapamName below).
+  //
+  // Re-runs on 'japam-auth-updated' (sign-in/out/guest-name-set), not just on mount: this screen
+  // never unmounts across a sign-out/sign-in cycle (Timer is a persistent tab, and sign-in/out
+  // happens via an in-place modal on this same screen), so a mount-only effect would leave User
+  // A's remembered name visible — and silently saved onto — User B's next completion. Always
+  // setting the value (even to '' when the new identity has no remembered name) is the fix; only
+  // setting it when truthy is what caused the leak.
+  const refreshJapamNameEntry = useCallback(async () => {
+    const uid = await AsyncStorage.getItem(USER_ID_KEY);
+    const stored = await AsyncStorage.getItem(lastUsedJapamNameKey(uid));
+    const value = stored || '';
+    setJapamNameEntry(value);
+    timer.setSessionJapamName(value);
+  }, [timer]);
+
   useEffect(() => {
-    (async () => {
-      const uid = await AsyncStorage.getItem(USER_ID_KEY);
-      const stored = await AsyncStorage.getItem(lastUsedJapamNameKey(uid));
-      if (stored) {
-        setJapamNameEntry(stored);
-        timer.setSessionJapamName(stored);
+    void refreshJapamNameEntry();
+    const sub = DeviceEventEmitter.addListener('japam-auth-updated', () => void refreshJapamNameEntry());
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.addEventListener('japam-auth-updated', refreshJapamNameEntry as EventListener);
+    }
+    return () => {
+      sub.remove();
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.removeEventListener('japam-auth-updated', refreshJapamNameEntry as EventListener);
       }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    };
+  }, [refreshJapamNameEntry]);
 
   const onChangeJapamNameEntry = (text: string) => {
     setJapamNameEntry(text);

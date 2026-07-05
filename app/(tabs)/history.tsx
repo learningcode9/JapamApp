@@ -8,6 +8,7 @@ import {
   markSynced,
   mergeHistories,
   historyDayJapamGroupKey,
+  lastUsedJapamNameKey,
   mergeTombstones,
   normalizeAll,
   normalizeJapamName,
@@ -162,10 +163,6 @@ const DELETED_COMPLETIONS_KEY = 'deletedCompletions';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
 const USER_EMAIL_KEY = 'userEmail';
-// Convenience-only "last typed japam name" prefill — device-local, not a default, not synced.
-const LAST_USED_JAPAM_NAME_KEY = 'lastUsedJapamName';
-const lastUsedJapamNameKey = (userId: string | null | undefined) =>
-  `${LAST_USED_JAPAM_NAME_KEY}:${userId || 'guest'}`;
 
 const getStoredUserMeta = async () => {
   const [storedName, storedEmail] = await Promise.all([

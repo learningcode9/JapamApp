@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   appendCompletion,
   buildSupabaseHistoryPayload,
+  lastUsedJapamNameKey,
   markSynced,
   mergeHistories,
   normalizeAll,
@@ -103,10 +104,6 @@ const USER_NAME_KEY = 'userName';
 const USER_EMAIL_KEY = 'userEmail';
 const USER_ID_KEY = 'userId';
 const AUTH_PENDING_KEY = 'authPending';
-// Convenience-only "last typed japam name" prefill — device-local, not a default, not synced.
-const LAST_USED_JAPAM_NAME_KEY = 'lastUsedJapamName';
-const lastUsedJapamNameKey = (userId: string | null | undefined) =>
-  `${LAST_USED_JAPAM_NAME_KEY}:${userId || 'guest'}`;
 const LAST_TOTAL_KEY = 'lastTotal';
 const HISTORY_SYNC_VERSION_KEY = 'historyStatsSyncVersion';
 const NOTIF_PERMISSION_ASKED_KEY = 'notifPermissionAsked';
@@ -320,16 +317,36 @@ export default function JapamMain() {
     }
   }, []);
 
-  // Prefill "Current Japam" with whatever was last typed for this user/guest — a convenience so a
-  // user chanting the same japam daily doesn't retype it every session. Never a default: leaving
-  // it blank this session does not erase the remembered value (see saveSession below).
-  useEffect(() => {
-    (async () => {
-      const uid = await AsyncStorage.getItem(USER_ID_KEY);
-      const stored = await AsyncStorage.getItem(lastUsedJapamNameKey(uid));
-      if (stored) setJapamNameEntry(stored);
-    })();
+  // Prefill "Current Japam" with whatever was last typed for THE CURRENT user/guest — a
+  // convenience so a user chanting the same japam daily doesn't retype it every session. Never a
+  // default: leaving it blank this session does not erase the remembered value (see saveSession
+  // below).
+  //
+  // Re-runs on 'japam-auth-updated' (sign-in/out/guest-name-set), not just on mount: this screen
+  // never unmounts across a sign-out/sign-in cycle (Home is a persistent tab, and sign-in/out
+  // happens via an in-place modal on this same screen), so a mount-only effect would leave one
+  // user's remembered name visible — and silently saved onto — the next signed-in user's
+  // completion. Always setting the value (even to '' when the new identity has no remembered
+  // name) is the fix; only setting it when truthy is what caused the leak.
+  const refreshJapamNameEntry = useCallback(async () => {
+    const uid = await AsyncStorage.getItem(USER_ID_KEY);
+    const stored = await AsyncStorage.getItem(lastUsedJapamNameKey(uid));
+    setJapamNameEntry(stored || '');
   }, []);
+
+  useEffect(() => {
+    void refreshJapamNameEntry();
+    const sub = DeviceEventEmitter.addListener('japam-auth-updated', () => void refreshJapamNameEntry());
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.addEventListener('japam-auth-updated', refreshJapamNameEntry as EventListener);
+    }
+    return () => {
+      sub.remove();
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.removeEventListener('japam-auth-updated', refreshJapamNameEntry as EventListener);
+      }
+    };
+  }, [refreshJapamNameEntry]);
 
   useEffect(() => {
     if (Platform.OS !== 'android') return;

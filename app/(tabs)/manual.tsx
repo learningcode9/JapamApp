@@ -2,13 +2,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   appendCompletion,
   buildSupabaseHistoryPayload,
+  lastUsedJapamNameKey,
   markSynced,
   normalizeJapamName,
   toLocalDayKey,
 } from '../../lib/historyStore';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { Alert, DeviceEventEmitter, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 
@@ -34,10 +35,6 @@ const HISTORY_KEY = 'history';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
 const USER_EMAIL_KEY = 'userEmail';
-// Convenience-only "last typed japam name" prefill — device-local, not a default, not synced.
-const LAST_USED_JAPAM_NAME_KEY = 'lastUsedJapamName';
-const lastUsedJapamNameKey = (userId: string | null | undefined) =>
-  `${LAST_USED_JAPAM_NAME_KEY}:${userId || 'guest'}`;
 
 const getStoredUserMeta = async () => {
   const [storedName, storedEmail] = await Promise.all([
@@ -164,16 +161,27 @@ export default function ManualEntry() {
     }, [])
   );
 
-  // Prefill "Current Japam" with whatever was last typed for this user/guest — a convenience so a
-  // user chanting the same japam daily doesn't retype it every session. Never a default: leaving
-  // it blank this session does not erase the remembered value (see onSave below).
-  useEffect(() => {
-    (async () => {
-      const uid = await AsyncStorage.getItem(USER_ID_KEY);
-      const stored = await AsyncStorage.getItem(lastUsedJapamNameKey(uid));
-      if (stored) setJapamNameEntry(stored);
-    })();
-  }, []);
+  // Prefill "Current Japam" with whatever was last typed for THE CURRENT user/guest — a
+  // convenience so a user chanting the same japam daily doesn't retype it every session. Never a
+  // default: leaving it blank this session does not erase the remembered value (see onSave
+  // below).
+  //
+  // Uses useFocusEffect (re-runs every time this screen gains focus), not a mount-only effect:
+  // Manual Entry has no sign-in UI of its own, so an identity change can only happen by
+  // navigating to another screen (Timer/Home/Tap), signing in/out there, then navigating back
+  // here — which refocuses this screen and correctly re-checks. A mount-only effect would leave a
+  // previous user's remembered name visible — and silently saved onto — the next signed-in user's
+  // entry. Always setting the value (even to '' when the new identity has no remembered name) is
+  // the fix; only setting it when truthy is what caused the leak.
+  useFocusEffect(
+    useCallback(() => {
+      (async () => {
+        const uid = await AsyncStorage.getItem(USER_ID_KEY);
+        const stored = await AsyncStorage.getItem(lastUsedJapamNameKey(uid));
+        setJapamNameEntry(stored || '');
+      })();
+    }, [])
+  );
 
   const onSave = async () => {
     const userId = await AsyncStorage.getItem(USER_ID_KEY);

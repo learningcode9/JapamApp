@@ -4,6 +4,7 @@ import {
   normalizeRecord,
   normalizeJapamName,
   historyDayJapamGroupKey,
+  lastUsedJapamNameKey,
   appendCompletion,
   dedupeByCompletionId,
   mergeHistories,
@@ -133,6 +134,19 @@ describe('historyDayJapamGroupKey: the single grouping key shared by History dis
     expect(historyDayJapamGroupKey('2026-06-03', 'Gayatri')).not.toBe(
       historyDayJapamGroupKey('2026-06-03', 'gayatri')
     );
+  });
+});
+
+describe('lastUsedJapamNameKey: single shared storage-key builder for the "remembered" prefill', () => {
+  it('scopes the key to the given userId', () => {
+    expect(lastUsedJapamNameKey('user-123')).toBe('lastUsedJapamName:user-123');
+  });
+  it('scopes guests (null userId) under the literal "guest" sentinel, same as makeCompletionId', () => {
+    expect(lastUsedJapamNameKey(null)).toBe('lastUsedJapamName:guest');
+    expect(lastUsedJapamNameKey(undefined)).toBe('lastUsedJapamName:guest');
+  });
+  it('gives different users distinct keys', () => {
+    expect(lastUsedJapamNameKey('user-a')).not.toBe(lastUsedJapamNameKey('user-b'));
   });
 });
 
