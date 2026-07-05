@@ -1,54 +1,61 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import type { EmailProvider } from './emailProvider';
-import type {
-  JapamHistoryRow,
-  AuthUser,
-  EmailSummaryRecord,
-  SummaryRunOptions,
-  SummaryRunResult,
-} from './types';
+import type { AuthUser, JapamHistoryRow, EmailSummaryRecord, SummaryRunResult } from './types';
+import type { CampaignDefinition } from './campaigns/types';
+import type { EmailConfig } from './config';
 import { calculateSummaryStats, getPeriodDates } from './calculator';
-import { buildEmailHtml, buildEmailText } from './template';
+import { loadEmailConfig } from './config';
 import * as dataAccess from './dataAccess';
 
-const EMAIL_TYPE = '15day_summary';
-const EMAIL_SUBJECT = '🙏 Your 15-Day Japam Journey';
+export interface CampaignRunOptions {
+  dryRun: boolean;
+  /** Skip the duplicate check and re-send regardless. */
+  forceResend?: boolean;
+}
 
-// ─── Service ──────────────────────────────────────────────────────────────────
-
-export class SummaryEmailService {
+/**
+ * Generic engine that runs any CampaignDefinition against every user active
+ * in that campaign's period window: find active users, skip anyone already
+ * sent-to this period, compute stats + lifetime totals, render, send, and
+ * record the outcome in `user_email_summaries` (keyed by the campaign's own
+ * `id` as `email_type`, so no per-campaign DB migration is ever needed).
+ *
+ * Data-access methods are `protected` for the same reason they are in
+ * SummaryEmailService: tests subclass this service and replace them with
+ * fakes rather than mocking the Supabase query builder.
+ */
+export class CampaignEmailService {
   constructor(
+    private readonly campaign: CampaignDefinition,
     private readonly supabase: SupabaseClient,
     private readonly emailProvider: EmailProvider | null,
-    private readonly fromAddress: string,
-    private readonly appUrl: string = '',
+    private readonly config: EmailConfig,
   ) {}
 
-  async run(options: SummaryRunOptions): Promise<SummaryRunResult[]> {
-    const { dryRun, periodDays = 15, forceResend = false } = options;
-    const { periodStart, periodEnd } = getPeriodDates(periodDays);
+  async run(options: CampaignRunOptions): Promise<SummaryRunResult[]> {
+    const { dryRun, forceResend = false } = options;
+    const { periodStart, periodEnd } = getPeriodDates(this.campaign.periodDays);
 
     console.log(
-      `[SummaryEmail] period=${periodStart}→${periodEnd}  dryRun=${dryRun}  forceResend=${forceResend}`,
+      `[Campaign:${this.campaign.id}] period=${periodStart}→${periodEnd} dryRun=${dryRun} forceResend=${forceResend}`,
     );
 
     const users = await this.getActiveUsers(periodStart, periodEnd);
-    console.log(`[SummaryEmail] ${users.length} user(s) with activity in period`);
+    console.log(`[Campaign:${this.campaign.id}] ${users.length} user(s) with activity in period`);
 
     const results: SummaryRunResult[] = [];
-
     for (const user of users) {
       const result = await this.processUser(user, periodStart, periodEnd, dryRun, forceResend);
       results.push(result);
       const extra = result.reason ? ` — ${result.reason}` : result.messageId ? ` (${result.messageId})` : '';
-      console.log(`[SummaryEmail] ${user.email}: ${result.status}${extra}`);
+      console.log(`[Campaign:${this.campaign.id}] ${user.email}: ${result.status}${extra}`);
     }
 
     const counts = results.reduce<Record<string, number>>(
       (acc, r) => ({ ...acc, [r.status]: (acc[r.status] ?? 0) + 1 }),
       {},
     );
-    console.log('[SummaryEmail] done', counts);
+    console.log(`[Campaign:${this.campaign.id}] done`, counts);
 
     return results;
   }
@@ -67,8 +74,12 @@ export class SummaryEmailService {
     return dataAccess.getHistoryForUser(this.supabase, userId, periodStart, periodEnd);
   }
 
+  protected async getLifetimeTotalMalas(userId: string): Promise<number> {
+    return dataAccess.getLifetimeTotalMalas(this.supabase, userId);
+  }
+
   protected async isDuplicate(userId: string, periodStart: string): Promise<boolean> {
-    return dataAccess.isDuplicateSummary(this.supabase, userId, EMAIL_TYPE, periodStart);
+    return dataAccess.isDuplicateSummary(this.supabase, userId, this.campaign.id, periodStart);
   }
 
   protected async recordSummary(record: Omit<EmailSummaryRecord, 'id' | 'created_at'>): Promise<void> {
@@ -84,6 +95,8 @@ export class SummaryEmailService {
     dryRun: boolean,
     forceResend: boolean,
   ): Promise<SummaryRunResult> {
+    const emailType = this.campaign.id;
+
     try {
       if (!forceResend && (await this.isDuplicate(user.id, periodStart))) {
         return {
@@ -106,12 +119,14 @@ export class SummaryEmailService {
         };
       }
 
+      const lifetimeTotalMalas = await this.getLifetimeTotalMalas(user.id);
+      const ctx = { stats, lifetimeTotalMalas, config: this.config };
+
       if (dryRun) {
-        console.log('[DRY RUN] Would send to:', user.email);
-        console.log('[DRY RUN] Stats:', JSON.stringify(stats, null, 2));
+        console.log(`[Campaign:${emailType}] DRY RUN would send to:`, user.email);
         await this.recordSummary({
           user_id: user.id,
-          email_type: EMAIL_TYPE,
+          email_type: emailType,
           period_start: periodStart,
           period_end: periodEnd,
           sent_at: null,
@@ -126,10 +141,10 @@ export class SummaryEmailService {
         throw new Error('emailProvider is null — pass dryRun:true or provide a provider');
       }
 
-      // Mark pending before attempting send to prevent races
+      // Mark pending before attempting send to prevent races.
       await this.recordSummary({
         user_id: user.id,
-        email_type: EMAIL_TYPE,
+        email_type: emailType,
         period_start: periodStart,
         period_end: periodEnd,
         sent_at: null,
@@ -138,20 +153,20 @@ export class SummaryEmailService {
         error: null,
       });
 
-      const html = buildEmailHtml(stats, this.appUrl);
-      const text = buildEmailText(stats, this.appUrl);
+      const html = this.campaign.buildHtml(ctx);
+      const text = this.campaign.buildText(ctx);
 
       const { messageId } = await this.emailProvider.sendEmail({
         to: user.email,
-        from: this.fromAddress,
-        subject: EMAIL_SUBJECT,
+        from: this.config.fromAddress,
+        subject: this.campaign.subject,
         html,
         text,
       });
 
       await this.recordSummary({
         user_id: user.id,
-        email_type: EMAIL_TYPE,
+        email_type: emailType,
         period_start: periodStart,
         period_end: periodEnd,
         sent_at: new Date().toISOString(),
@@ -163,10 +178,9 @@ export class SummaryEmailService {
       return { userId: user.id, email: user.email, status: 'sent', messageId };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // Best-effort failure record — do not rethrow, continue to next user
       await this.recordSummary({
         user_id: user.id,
-        email_type: EMAIL_TYPE,
+        email_type: emailType,
         period_start: periodStart,
         period_end: periodEnd,
         sent_at: null,
@@ -182,13 +196,12 @@ export class SummaryEmailService {
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
 
-export function createSummaryEmailService(
+export function createCampaignService(
+  campaign: CampaignDefinition,
   emailProvider: EmailProvider | null,
-): SummaryEmailService {
+): CampaignEmailService {
   const url = process.env.EXPO_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const from = process.env.EMAIL_FROM_ADDRESS ?? 'Japam App <noreply@japamapp.com>';
-  const appUrl = process.env.APP_URL ?? '';
 
   if (!url) throw new Error('SUPABASE_URL (or EXPO_PUBLIC_SUPABASE_URL) env var is required');
   if (!serviceKey) throw new Error('SUPABASE_SERVICE_ROLE_KEY env var is required');
@@ -197,5 +210,5 @@ export function createSummaryEmailService(
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  return new SummaryEmailService(supabase, emailProvider, from, appUrl);
+  return new CampaignEmailService(campaign, supabase, emailProvider, loadEmailConfig());
 }
