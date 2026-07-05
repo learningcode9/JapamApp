@@ -2,6 +2,7 @@ import {
   makeCompletionId,
   makeLoopCompletionId,
   normalizeRecord,
+  normalizeJapamName,
   appendCompletion,
   dedupeByCompletionId,
   mergeHistories,
@@ -79,6 +80,25 @@ describe('makeLoopCompletionId', () => {
   });
   it('scopes guest sessions under the literal "guest" prefix, same as makeCompletionId', () => {
     expect(makeLoopCompletionId(null, 'timer-1000-abc', 1)).toBe('guest:timer-1000-abc:loop-1');
+  });
+});
+
+describe('normalizeJapamName: single shared helper for the plain-text japam name', () => {
+  it('trims leading and trailing whitespace', () => {
+    expect(normalizeJapamName('  Gayatri  ')).toBe('Gayatri');
+  });
+  it('preserves interior spacing and casing', () => {
+    expect(normalizeJapamName('Om Namah Shivaya')).toBe('Om Namah Shivaya');
+  });
+  it('collapses an empty string to null', () => {
+    expect(normalizeJapamName('')).toBeNull();
+  });
+  it('collapses a whitespace-only string to null', () => {
+    expect(normalizeJapamName('   ')).toBeNull();
+  });
+  it('collapses null and undefined to null', () => {
+    expect(normalizeJapamName(null)).toBeNull();
+    expect(normalizeJapamName(undefined)).toBeNull();
   });
 });
 
@@ -233,6 +253,35 @@ describe('offline-first: appendCompletion', () => {
     expect(n.userName).toBe('Remote User');
     expect(n.userEmail).toBe('remote@example.com');
   });
+  it('round-trips a plain-text japamName through appendCompletion', () => {
+    const h = appendCompletion([], session('2026-06-03T10:00:00.000Z', {
+      japamName: 'Gayatri',
+    }));
+    expect(h[0].japamName).toBe('Gayatri');
+  });
+  it('normalizes a whitespace-only japamName to null on append', () => {
+    const h = appendCompletion([], session('2026-06-03T10:00:00.000Z', {
+      japamName: '   ',
+    }));
+    expect(h[0].japamName).toBeNull();
+  });
+  it('defaults japamName to null for legacy records lacking the field', () => {
+    const legacy = { date: '2026-06-01T08:00:00.000Z', malas: 1, totalCount: 108, duration: 60, manual: false, userId: UID };
+    const n = normalizeRecord(legacy);
+    expect(n.japamName).toBeNull();
+  });
+  it('preserves a trimmed japamName through normalizeRecord', () => {
+    const n = normalizeRecord({
+      date: '2026-06-03T10:00:00.000Z',
+      malas: 1,
+      totalCount: 108,
+      duration: 0,
+      manual: false,
+      userId: UID,
+      japamName: '  Rama Nama  ',
+    } as HistoryRecord);
+    expect(n.japamName).toBe('Rama Nama');
+  });
 });
 
 describe('no undercounting: dedupeByCompletionId', () => {
@@ -369,6 +418,18 @@ describe('sync payload/date integrity', () => {
   it('buckets bare dates and ISO timestamps by local day', () => {
     expect(toLocalDayKey('2026-06-02')).toBe('2026-06-02');
     expect(toLocalDayKey('2026-06-02T23:30:00.000Z')).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+  it('includes a trimmed japam_name in the Supabase payload', () => {
+    const record = appendCompletion([], session('2026-06-03T10:00:00.000Z', {
+      japamName: '  Gayatri  ',
+    }))[0];
+    const payload = buildSupabaseHistoryPayload(record, UID, 'Sravani');
+    expect(payload.japam_name).toBe('Gayatri');
+  });
+  it('sends null japam_name when the record has none, never crashing', () => {
+    const record = appendCompletion([], session('2026-06-03T10:00:00.000Z'))[0];
+    const payload = buildSupabaseHistoryPayload(record, UID, 'Sravani');
+    expect(payload.japam_name).toBeNull();
   });
 });
 

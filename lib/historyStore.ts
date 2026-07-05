@@ -31,6 +31,8 @@ export interface HistoryRecord {
   remoteId?: number | string;
   completionId: string;
   syncStatus: SyncStatus;
+  /** Plain-text name the user typed for this one completion (e.g. "Gayatri"). Never an id. */
+  japamName?: string | null;
 }
 
 export type SupabaseHistoryPayload = {
@@ -40,6 +42,18 @@ export type SupabaseHistoryPayload = {
   count: number;
   created_at: string;
   completion_id: string;
+  japam_name: string | null;
+};
+
+/**
+ * Single shared normalizer for the per-completion japam name — every read/write path must call
+ * this instead of re-implementing trim/blank handling (see the day+name History grouping and
+ * planHistoryDayAdjustment's edit scoping, which both depend on this producing identical output
+ * for identical input).
+ */
+export const normalizeJapamName = (raw?: string | null): string | null => {
+  const trimmed = (raw || '').trim();
+  return trimmed.length > 0 ? trimmed : null;
 };
 
 export type HistoryRecordUpdate = {
@@ -129,6 +143,7 @@ export const normalizeRecord = (raw: RawHistoryRecord): HistoryRecord => {
     remoteId: raw.remoteId ?? raw.remote_id,
     completionId: raw.completionId || makeCompletionId(userId, raw.date),
     syncStatus: raw.syncStatus === 'pending' ? 'pending' : 'synced',
+    japamName: normalizeJapamName(raw.japamName),
   };
 };
 
@@ -163,6 +178,7 @@ export const appendCompletion = (
     userEmail?: string;
     source?: string;
     completionId?: string;
+    japamName?: string | null;
   }
 ): HistoryRecord[] => {
   const completionId = completion.completionId || makeCompletionId(completion.userId, completion.date);
@@ -182,6 +198,7 @@ export const appendCompletion = (
     source: completion.source,
     completionId,
     syncStatus: completion.userId ? 'pending' : 'synced',
+    japamName: normalizeJapamName(completion.japamName),
   };
   return [record, ...normalized];
 };
@@ -411,6 +428,7 @@ export const buildSupabaseHistoryPayload = (
     count: normalized.totalCount,
     created_at: normalized.date,
     completion_id: normalized.completionId,
+    japam_name: normalized.japamName ?? null,
   };
 };
 
