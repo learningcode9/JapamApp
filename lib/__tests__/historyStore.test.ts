@@ -87,6 +87,9 @@ describe('normalizeJapamName: single shared helper for the plain-text japam name
   it('trims leading and trailing whitespace', () => {
     expect(normalizeJapamName('  Gayatri  ')).toBe('Gayatri');
   });
+  it('trims surrounding tabs and newlines, not just spaces', () => {
+    expect(normalizeJapamName('\nGayatri\t')).toBe('Gayatri');
+  });
   it('preserves interior spacing and casing', () => {
     expect(normalizeJapamName('Om Namah Shivaya')).toBe('Om Namah Shivaya');
   });
