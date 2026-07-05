@@ -132,6 +132,7 @@ type ManualSyncInput = {
   totalCount: number;
   createdAt: string;
   completionId: string;
+  japamName: string | null;
 };
 
 type AddDateMode = 'today' | 'yesterday' | 'custom';
@@ -414,6 +415,7 @@ const saveToSupabase = async (
   totalCount: number,
   createdAt: string,
   completionId: string,
+  japamName: string | null,
 ): Promise<boolean> => {
   const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
   const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -431,6 +433,7 @@ const saveToSupabase = async (
       userName,
       completionId,
       syncStatus: 'pending',
+      japamName,
     }, userId, userName);
     console.log(
       '[SYNC_PAYLOAD_CREATED_AT] source=history-manual completionId=%s created_at=%s localDay=%s',
@@ -465,6 +468,7 @@ const syncManualEntryToSupabase = async ({
   totalCount,
   createdAt,
   completionId,
+  japamName,
 }: ManualSyncInput) => {
   try {
     const supabaseOk = await saveToSupabase(
@@ -473,7 +477,8 @@ const syncManualEntryToSupabase = async ({
       malas,
       totalCount,
       createdAt,
-      completionId
+      completionId,
+      japamName
     );
 
     if (!supabaseOk) return false;
@@ -812,6 +817,7 @@ export default function HistoryScreen() {
           totalCount: finalCount,
           createdAt,
           completionId: newCompletionId,
+          japamName: normalizeJapamName(addJapamName),
         });
       }
 

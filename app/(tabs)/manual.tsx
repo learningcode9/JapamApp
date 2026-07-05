@@ -29,6 +29,7 @@ type ManualSyncInput = {
   totalNum: number;
   selectedDateTime: string;
   completionId: string;
+  japamName: string | null;
 };
 
 const HISTORY_KEY = 'history';
@@ -79,6 +80,7 @@ const syncManualEntryToSupabase = async ({
   totalNum,
   selectedDateTime,
   completionId,
+  japamName,
 }: ManualSyncInput) => {
   console.log('[Manual] MANUAL_SYNC_START completionId=%s malas=%d count=%d', completionId, malaNum, totalNum);
   try {
@@ -100,6 +102,7 @@ const syncManualEntryToSupabase = async ({
       userName,
       completionId,
       syncStatus: 'pending',
+      japamName,
     }, userId, userName);
     console.log(
       '[SYNC_PAYLOAD_CREATED_AT] source=manual completionId=%s created_at=%s localDay=%s',
@@ -303,6 +306,7 @@ if (!userId) {
       totalNum,
       selectedDateTime,
       completionId: newCompletionId,
+      japamName: normalizeJapamName(japamNameEntry),
     });
 
     Alert.alert('Saved', 'Manual entry added to history');
