@@ -1,5 +1,6 @@
 package com.japamapp.mantrajapam
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.util.Log
@@ -10,6 +11,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.MediaPlayer
@@ -20,7 +22,11 @@ import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.telephony.PhoneStateListener
+import android.telephony.TelephonyCallback
+import android.telephony.TelephonyManager
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import java.util.concurrent.atomic.AtomicBoolean
 
 class JapamTimerService : Service() {
@@ -70,6 +76,88 @@ class JapamTimerService : Service() {
     private var lastSaveTime: Long = 0L
     private var startHeadsUpPosted: Boolean = false
 
+    // Automatic pause on incoming/active phone call (requirement: pause immediately, never
+    // auto-resume — the user must explicitly press Resume). Registered only while the timer
+    // is actually running (ACTION_START / doResume), unregistered as soon as we pause for any
+    // reason (doPause covers both a manual pause and a call-triggered auto-pause) or stop.
+    // Two API paths because TelephonyManager.listen()/PhoneStateListener.onCallStateChanged
+    // are deprecated as of API 31 in favor of TelephonyCallback — see registerCallStateListener.
+    private var telephonyManager: TelephonyManager? = null
+    private var legacyPhoneStateListener: PhoneStateListener? = null
+    private var modernTelephonyCallback: TelephonyCallback? = null
+    private var callStateListenerRegistered: Boolean = false
+
+    private fun hasReadPhoneStatePermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun onCallStateObserved(state: Int) {
+        // RINGING covers an incoming call; OFFHOOK covers an already-answered/active call
+        // (including one answered before this listener was (re)registered). IDLE is the call
+        // ending — deliberately not handled: no auto-resume, ever.
+        if (state == TelephonyManager.CALL_STATE_RINGING || state == TelephonyManager.CALL_STATE_OFFHOOK) {
+            Log.d("NativeTimer", "[NativeTimer] phone call detected (state=$state) — auto-pausing sessionId=$sessionId")
+            doPause()
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun registerCallStateListener() {
+        if (callStateListenerRegistered || isPaused) return
+        if (!hasReadPhoneStatePermission()) {
+            Log.d("NativeTimer", "[NativeTimer] READ_PHONE_STATE not granted — automatic call-pause unavailable, manual pause still works")
+            return
+        }
+        try {
+            val tm = telephonyManager ?: (getSystemService(TELEPHONY_SERVICE) as? TelephonyManager)
+            telephonyManager = tm
+            if (tm == null) return
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val callback = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
+                    override fun onCallStateChanged(state: Int) = onCallStateObserved(state)
+                }
+                modernTelephonyCallback = callback
+                tm.registerTelephonyCallback(mainExecutor, callback)
+            } else {
+                val listener = object : PhoneStateListener() {
+                    override fun onCallStateChanged(state: Int, phoneNumber: String?) {
+                        // phoneNumber intentionally ignored — only the state (ringing/offhook/idle)
+                        // is ever read; no call metadata is stored, logged, or transmitted.
+                        onCallStateObserved(state)
+                    }
+                }
+                legacyPhoneStateListener = listener
+                tm.listen(listener, PhoneStateListener.LISTEN_CALL_STATE)
+            }
+            callStateListenerRegistered = true
+            Log.d("NativeTimer", "[NativeTimer] call-state listener registered sessionId=$sessionId api=${Build.VERSION.SDK_INT}")
+        } catch (error: SecurityException) {
+            Log.w("NativeTimer", "[NativeTimer] call-state listener registration denied", error)
+        } catch (error: Exception) {
+            Log.w("NativeTimer", "[NativeTimer] call-state listener registration error", error)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun unregisterCallStateListener() {
+        if (!callStateListenerRegistered) return
+        try {
+            val tm = telephonyManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                modernTelephonyCallback?.let { tm?.unregisterTelephonyCallback(it) }
+            } else {
+                legacyPhoneStateListener?.let { tm?.listen(it, PhoneStateListener.LISTEN_NONE) }
+            }
+        } catch (error: Exception) {
+            Log.w("NativeTimer", "[NativeTimer] call-state listener unregister error", error)
+        } finally {
+            modernTelephonyCallback = null
+            legacyPhoneStateListener = null
+            callStateListenerRegistered = false
+        }
+    }
+
     // Checks every second whether the timer has expired
     private val tickRunnable = object : Runnable {
         override fun run() {
@@ -94,6 +182,7 @@ class JapamTimerService : Service() {
                 ACTION_PAUSE -> doPause()
                 ACTION_RESUME -> doResume()
                 ACTION_STOP -> {
+                    unregisterCallStateListener()
                     saveState()
                     @Suppress("DEPRECATION")
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -170,6 +259,7 @@ class JapamTimerService : Service() {
 
             handler.removeCallbacks(tickRunnable)
             handler.postDelayed(tickRunnable, 1000L)
+            registerCallStateListener()
         }
         return START_STICKY
     }
@@ -179,6 +269,7 @@ class JapamTimerService : Service() {
         handler.removeCallbacks(tickRunnable)
         mediaPlayer?.release()
         mediaPlayer = null
+        unregisterCallStateListener()
         try { unregisterReceiver(actionReceiver) } catch (_: Exception) {}
         saveState()
         super.onDestroy()
@@ -350,6 +441,10 @@ class JapamTimerService : Service() {
         val remaining = maxOf(durationMs - pausedElapsedMs, 0L)
         updateNotification(remaining)
         saveState()
+        // Covers both a manual pause and a call-triggered auto-pause (onCallStateObserved calls
+        // doPause() directly) — either way, nothing more to listen for until the user explicitly
+        // resumes. Safe to call from within the listener's own callback.
+        unregisterCallStateListener()
     }
 
     private fun doResume() {
@@ -357,6 +452,7 @@ class JapamTimerService : Service() {
         isPaused = false
         startedAt = System.currentTimeMillis() - pausedElapsedMs
         saveState()
+        registerCallStateListener()
         val remaining = maxOf(durationMs - (System.currentTimeMillis() - startedAt), 0L)
         updateNotification(remaining)
         handler.postDelayed(tickRunnable, 1000L)

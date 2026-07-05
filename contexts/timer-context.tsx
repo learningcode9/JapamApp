@@ -38,9 +38,11 @@ import React, {
   type ReactNode,
 } from 'react';
 import {
+  Alert,
   AppState,
   DeviceEventEmitter,
   Platform,
+  PermissionsAndroid,
   Pressable,
   StyleSheet,
   Text,
@@ -64,6 +66,7 @@ const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const VIBRATION_ENABLED_KEY = 'vibrationEnabled';
+const CALL_PAUSE_PERMISSION_PROMPTED_KEY = 'callPausePermissionPrompted';
 const WEB_OM_AUDIO_SRC = '/om_complete.mp3';
 const WEB_TIMER_AUDIO_SRC = '/silent-timer.wav';
 
@@ -583,6 +586,49 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.log('[TimerNotify] Permission error:', error);
       return false;
+    }
+  }, []);
+
+  // Lazy, one-time request for automatic pause-on-phone-call (Android only). Asked the first
+  // time a session starts, never at app launch, and never more than once regardless of outcome
+  // — CALL_PAUSE_PERMISSION_PROMPTED_KEY gates every future call so this never nags. Declining
+  // (either the in-app rationale or the system dialog) leaves the app fully functional: manual
+  // pause via the button/notification already works today and is completely unaffected: the
+  // native service independently checks its own permission before registering any listener, so
+  // there is nothing here that can crash or block timer start if this is skipped or denied.
+  const requestCallPausePermission = useCallback(async () => {
+    if (Platform.OS !== 'android') return;
+    try {
+      const alreadyPrompted = await AsyncStorage.getItem(CALL_PAUSE_PERMISSION_PROMPTED_KEY);
+      if (alreadyPrompted === 'true') return;
+
+      const alreadyGranted = await PermissionsAndroid.check(
+        PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE
+      );
+      if (alreadyGranted) {
+        await AsyncStorage.setItem(CALL_PAUSE_PERMISSION_PROMPTED_KEY, 'true');
+        return;
+      }
+
+      const userWantsToAllow = await new Promise<boolean>((resolve) => {
+        Alert.alert(
+          'Pause automatically during calls',
+          'Japam App can pause your timer the moment a call comes in, so you never lose track of your session. ' +
+            'Your call details are never stored, viewed, or shared — only whether a call is active.',
+          [
+            { text: 'Not now', style: 'cancel', onPress: () => resolve(false) },
+            { text: 'Allow', onPress: () => resolve(true) },
+          ],
+          { cancelable: true, onDismiss: () => resolve(false) }
+        );
+      });
+
+      if (userWantsToAllow) {
+        await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE);
+      }
+      await AsyncStorage.setItem(CALL_PAUSE_PERMISSION_PROMPTED_KEY, 'true');
+    } catch (error) {
+      console.log('[TimerCallPause] Permission request error (non-blocking):', error);
     }
   }, []);
 
@@ -2022,6 +2068,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         userId: userIdRef.current,
         startedAt: timerStartedAtRef.current ?? Date.now(),
       });
+      // Fire-and-forget, exactly like the notification-permission request below — never
+      // blocks the timer from starting, and the native service works fine (falls back to
+      // manual-pause-only) whether this is granted, denied, or still pending.
+      void requestCallPausePermission();
     }
     void requestNotificationPermission().then((granted) => {
       if (!isRunningRef.current) return;
@@ -2039,6 +2089,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     persistState,
     primeWebCompletionAudio,
     readPersistedCompletedLoops,
+    requestCallPausePermission,
     requestNotificationPermission,
     scheduleCompletionNotification,
     seconds,
