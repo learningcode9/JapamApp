@@ -136,3 +136,39 @@ export const japamLabel = (japams: Japam[], japamId: string | null | undefined):
   const match = japams.find((j) => j.id === japamId);
   return match?.name ?? 'Japam';
 };
+
+/**
+ * Safely reconstruct a Japams list from a raw AsyncStorage read. Any missing key, malformed JSON,
+ * non-array value, or malformed item is skipped/defaulted rather than crashing display — same
+ * "never crash on bad input" discipline as createJapam/renameJapam's blank-name handling. An item
+ * with a blank name or a missing/non-string id is dropped entirely rather than inventing one.
+ */
+export const parseStoredJapams = (raw: string | null | undefined): Japam[] => {
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+
+  const result: Japam[] = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    const id = record.id;
+    if (typeof id !== 'string' || id.length === 0) continue;
+    const name = normalizeJapamName(record.name as string | null | undefined);
+    if (name === null) continue;
+    const createdAt = typeof record.createdAt === 'string' ? record.createdAt : new Date().toISOString();
+    const updatedAt = typeof record.updatedAt === 'string' ? record.updatedAt : createdAt;
+    const displayOrder = typeof record.displayOrder === 'number' && Number.isFinite(record.displayOrder)
+      ? record.displayOrder
+      : null;
+    const archivedAt = typeof record.archivedAt === 'string' ? record.archivedAt : null;
+    const userId = typeof record.userId === 'string' ? record.userId : null;
+    result.push({ id, userId, name, displayOrder, createdAt, updatedAt, archivedAt });
+  }
+  return result;
+};
