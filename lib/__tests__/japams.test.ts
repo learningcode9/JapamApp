@@ -9,6 +9,7 @@ import {
   archivedJapams,
   japamLabel,
   normalizeJapamName,
+  parseStoredJapams,
   type Japam,
 } from '../japams';
 
@@ -203,5 +204,71 @@ describe('japamLabel: display label resolution, no hardcoded mantra names', () =
     // every other piece of text comes from the user's own createJapam/renameJapam input.
     expect(japamLabel([], 'anything')).toBe('Japam');
     expect(japamLabel([], null)).toBe('Japam');
+  });
+});
+
+describe('parseStoredJapams: safely reconstruct a Japams list from a raw AsyncStorage read', () => {
+  it('returns [] for a missing key (null)', () => {
+    expect(parseStoredJapams(null)).toEqual([]);
+  });
+  it('returns [] for undefined', () => {
+    expect(parseStoredJapams(undefined)).toEqual([]);
+  });
+  it('returns [] for an empty string', () => {
+    expect(parseStoredJapams('')).toEqual([]);
+  });
+  it('returns [] for malformed JSON rather than throwing', () => {
+    expect(parseStoredJapams('{not valid json')).toEqual([]);
+  });
+  it('returns [] for valid JSON that is not an array', () => {
+    expect(parseStoredJapams('{"id":"x"}')).toEqual([]);
+  });
+  it('reconstructs a previously-saved Japams list', () => {
+    const raw = JSON.stringify([
+      makeJapam({ id: 'j1', name: 'Gayatri' }),
+      makeJapam({ id: 'j2', name: 'Govinda', archivedAt: '2026-07-01T00:00:00.000Z' }),
+    ]);
+    const result = parseStoredJapams(raw);
+    expect(result).toHaveLength(2);
+    expect(result.find((j) => j.id === 'j1')?.name).toBe('Gayatri');
+    expect(result.find((j) => j.id === 'j2')?.archivedAt).toBe('2026-07-01T00:00:00.000Z');
+  });
+  it('trims a stored name via normalizeJapamName', () => {
+    const raw = JSON.stringify([makeJapam({ id: 'j1', name: '  Gayatri  ' })]);
+    expect(parseStoredJapams(raw)[0].name).toBe('Gayatri');
+  });
+  it('skips an item with a blank/missing name rather than inventing one', () => {
+    const raw = JSON.stringify([
+      { id: 'j1', name: '', createdAt: NOW, updatedAt: NOW },
+      makeJapam({ id: 'j2', name: 'Govinda' }),
+    ]);
+    const result = parseStoredJapams(raw);
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe('j2');
+  });
+  it('skips an item with a missing/non-string id', () => {
+    const raw = JSON.stringify([
+      { name: 'No Id', createdAt: NOW, updatedAt: NOW },
+      makeJapam({ id: 'j2', name: 'Govinda' }),
+    ]);
+    const result = parseStoredJapams(raw);
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe('j2');
+  });
+  it('defaults an invalid/missing displayOrder to null', () => {
+    const raw = JSON.stringify([{ id: 'j1', name: 'Gayatri', createdAt: NOW, updatedAt: NOW, displayOrder: 'not-a-number' }]);
+    expect(parseStoredJapams(raw)[0].displayOrder).toBeNull();
+  });
+  it('preserves a valid numeric displayOrder', () => {
+    const raw = JSON.stringify([makeJapam({ id: 'j1', name: 'Gayatri', displayOrder: 2 })]);
+    expect(parseStoredJapams(raw)[0].displayOrder).toBe(2);
+  });
+  it('defaults a missing/invalid archivedAt to null', () => {
+    const raw = JSON.stringify([{ id: 'j1', name: 'Gayatri', createdAt: NOW, updatedAt: NOW, archivedAt: 12345 }]);
+    expect(parseStoredJapams(raw)[0].archivedAt).toBeNull();
+  });
+  it('defaults a missing/non-string userId to null (e.g. a guest-created Japam)', () => {
+    const raw = JSON.stringify([{ id: 'j1', name: 'Gayatri', createdAt: NOW, updatedAt: NOW }]);
+    expect(parseStoredJapams(raw)[0].userId).toBeNull();
   });
 });
