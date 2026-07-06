@@ -16,6 +16,7 @@ import {
   applyTombstones,
   mergeTombstones,
   planHistoryDayAdjustment,
+  normalizeJapamName,
   type HistoryRecord,
 } from '../historyStore';
 
@@ -781,5 +782,158 @@ describe('planHistoryDayAdjustment', () => {
     });
     expect(plan.updatedRecords.find((record) => record.userId === 'other-user')).toBeTruthy();
     assertConsistentCounts(plan.updatedRecords);
+  });
+});
+
+const isoAt = (hour: number) => `2026-07-06T${String(hour).padStart(2, '0')}:00:00.000Z`;
+
+describe('normalizeJapamName', () => {
+  it('trims whitespace', () => {
+    expect(normalizeJapamName('  Gayatri  ')).toBe('Gayatri');
+  });
+  it('returns null for blank/whitespace-only input', () => {
+    expect(normalizeJapamName('')).toBeNull();
+    expect(normalizeJapamName('   ')).toBeNull();
+  });
+  it('returns null for null/undefined', () => {
+    expect(normalizeJapamName(null)).toBeNull();
+    expect(normalizeJapamName(undefined)).toBeNull();
+  });
+});
+
+describe('japamId: identity field on HistoryRecord', () => {
+  describe('normalizeRecord', () => {
+    it('carries a valid japamId and trims the japamName snapshot', () => {
+      const record = normalizeRecord(session(isoAt(0), {
+        japamId: 'japam-abc-123',
+        japamName: '  Gayatri  ',
+      }));
+      expect(record.japamId).toBe('japam-abc-123');
+      expect(record.japamName).toBe('Gayatri');
+    });
+    it('defaults japamId to null when absent', () => {
+      const record = normalizeRecord(session(isoAt(0)));
+      expect(record.japamId).toBeNull();
+      expect(record.japamName).toBeNull();
+    });
+    it('defaults a non-string japamId to null rather than crashing', () => {
+      const record = normalizeRecord(session(isoAt(0), { japamId: 12345 as unknown as string }));
+      expect(record.japamId).toBeNull();
+    });
+    it('defaults an empty-string japamId to null', () => {
+      const record = normalizeRecord(session(isoAt(0), { japamId: '' }));
+      expect(record.japamId).toBeNull();
+    });
+    it('preserves a japamName snapshot even when japamId is absent (legacy free-text row)', () => {
+      const record = normalizeRecord(session(isoAt(0), { japamName: 'Old Mantra' }));
+      expect(record.japamId).toBeNull();
+      expect(record.japamName).toBe('Old Mantra');
+    });
+  });
+
+  describe('appendCompletion', () => {
+    it('carries japamId and japamName through into the new record', () => {
+      const history = appendCompletion([], {
+        date: isoAt(0),
+        malas: 1,
+        totalCount: 108,
+        duration: 60,
+        userId: UID,
+        japamId: 'japam-abc-123',
+        japamName: 'Gayatri',
+      });
+      expect(history[0].japamId).toBe('japam-abc-123');
+      expect(history[0].japamName).toBe('Gayatri');
+    });
+    it('defaults to null when the caller omits japamId/japamName (e.g. a screen with no Japam picker)', () => {
+      const history = appendCompletion([], {
+        date: isoAt(0),
+        malas: 1,
+        totalCount: 108,
+        duration: 60,
+        userId: UID,
+      });
+      expect(history[0].japamId).toBeNull();
+      expect(history[0].japamName).toBeNull();
+    });
+    it('does not let a duplicate completionId change an already-appended record\'s japamId', () => {
+      const first = appendCompletion([], {
+        date: isoAt(0),
+        malas: 1,
+        totalCount: 108,
+        duration: 60,
+        userId: UID,
+        completionId: 'fixed-id',
+        japamId: 'japam-a',
+      });
+      const second = appendCompletion(first, {
+        date: isoAt(0),
+        malas: 1,
+        totalCount: 108,
+        duration: 60,
+        userId: UID,
+        completionId: 'fixed-id',
+        japamId: 'japam-b',
+      });
+      expect(second).toHaveLength(1);
+      expect(second[0].japamId).toBe('japam-a');
+    });
+  });
+
+  describe('buildSupabaseHistoryPayload', () => {
+    it('includes japam_id and the trimmed japam_name snapshot', () => {
+      const record = normalizeRecord(session(isoAt(0), {
+        japamId: 'japam-abc-123',
+        japamName: '  Gayatri  ',
+      }));
+      const payload = buildSupabaseHistoryPayload(record, UID, 'Sravani');
+      expect(payload.japam_id).toBe('japam-abc-123');
+      expect(payload.japam_name).toBe('Gayatri');
+    });
+    it('sends null japam_id and japam_name when the record has neither, never crashing', () => {
+      const record = normalizeRecord(session(isoAt(0)));
+      const payload = buildSupabaseHistoryPayload(record, UID, 'Sravani');
+      expect(payload.japam_id).toBeNull();
+      expect(payload.japam_name).toBeNull();
+    });
+  });
+
+  describe('dedupeByCompletionId: identity is never overwritten by a later duplicate', () => {
+    it('keeps the first-seen record\'s japamId/japamName when upgrading pending to synced', () => {
+      const pendingFirst = session(isoAt(0), {
+        completionId: 'dup-id',
+        japamId: 'japam-a',
+        japamName: 'Gayatri',
+        syncStatus: 'pending',
+      });
+      const syncedDuplicate = session(isoAt(0), {
+        completionId: 'dup-id',
+        japamId: 'japam-b',
+        japamName: 'Different Name',
+        syncStatus: 'synced',
+      });
+      const result = dedupeByCompletionId([pendingFirst, syncedDuplicate]);
+      expect(result).toHaveLength(1);
+      expect(result[0].syncStatus).toBe('synced');
+      expect(result[0].japamId).toBe('japam-a');
+      expect(result[0].japamName).toBe('Gayatri');
+    });
+  });
+
+  describe('round trip: appendCompletion -> buildSupabaseHistoryPayload preserves identity', () => {
+    it('carries the same japamId through the full local-save-then-sync-payload pipeline', () => {
+      const history = appendCompletion([], {
+        date: isoAt(0),
+        malas: 1,
+        totalCount: 108,
+        duration: 60,
+        userId: UID,
+        japamId: 'japam-abc-123',
+        japamName: 'Gayatri',
+      });
+      const payload = buildSupabaseHistoryPayload(history[0], UID, 'Sravani');
+      expect(payload.japam_id).toBe('japam-abc-123');
+      expect(payload.japam_name).toBe('Gayatri');
+    });
   });
 });
