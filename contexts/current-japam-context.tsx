@@ -1,20 +1,27 @@
 /**
  * CurrentJapamContext — the single source of truth for "which Japam is currently selected."
  *
- * AsyncStorage is persistence only: the Provider loads from it once (on mount and on identity
- * change) and writes through to it on every change, but every consumer reads the SAME in-memory
- * React state via useContext, not independent per-screen storage reads. This mirrors exactly how
- * TimerContext already works in this app (contexts/timer-context.tsx) and was chosen specifically
- * to avoid the cross-instance staleness class of bug already found once in this feature's earlier
- * slot-based design (independent per-screen hooks each holding their own copy of the same value).
+ * This Context owns RUNTIME STATE only (the in-memory Japams list, which one is selected, loading
+ * status) and delegates every persistence concern to lib/japamsRepository.ts. It never touches
+ * AsyncStorage directly and never imports lib/japams.ts's pure create/rename/archive/restore
+ * functions directly either — those are called INSIDE the repository. This split means: when
+ * Supabase sync is added later, it is added entirely inside the repository file, and this Context
+ * (and every screen that uses it) does not change at all.
  *
- * Provider placement: NOT mounted anywhere yet in this commit (per Commit 4's scope) — it must
- * eventually live at the app root (app/_layout.tsx), alongside TimerProvider, exactly the same
- * lesson already documented in this project's release checklist about global long-lived providers.
+ * Every consumer reads the SAME in-memory React state via useContext, not independent per-screen
+ * storage reads — this mirrors exactly how TimerContext already works in this app
+ * (contexts/timer-context.tsx) and was chosen specifically to avoid the cross-instance staleness
+ * class of bug already found once in this feature's earlier slot-based design (independent
+ * per-screen hooks each holding their own copy of the same value).
  *
- * No Supabase sync here — Japams are local-only (AsyncStorage) for both guests and signed-in users
- * in this commit, matching the same starting point the earlier slot design had before any sync was
- * ever wired up.
+ * Provider placement: NOT mounted anywhere yet in this commit — it must eventually live at the app
+ * root (app/_layout.tsx), alongside TimerProvider, exactly the same lesson already documented in
+ * this project's release checklist about global long-lived providers.
+ *
+ * No raw state setter is exposed. selectJapam is the only way to change the current selection —
+ * this keeps "select" a meaningful app action (easy to find every call site of, easy to extend
+ * later, e.g. to validate the id or emit an event) rather than an anonymous state mutation any
+ * screen could call for any reason.
  */
 import React, {
   createContext,
@@ -28,20 +35,8 @@ import React, {
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DeviceEventEmitter, Platform } from 'react-native';
-import {
-  activeJapams,
-  archiveJapam as archiveJapamPure,
-  createJapam as createJapamPure,
-  renameJapam as renameJapamPure,
-  restoreJapam as restoreJapamPure,
-  type Japam,
-} from '../lib/japams';
-import {
-  loadCurrentJapamId,
-  loadJapams,
-  saveCurrentJapamId,
-  saveJapams,
-} from '../lib/japamsStorage';
+import { activeJapams, type Japam } from '../lib/japams';
+import * as japamsRepository from '../lib/japamsRepository';
 
 const USER_ID_KEY = 'userId';
 
@@ -52,9 +47,9 @@ type CurrentJapamContextValue = {
   currentJapamId: string | null;
   /** Convenience lookup of the selected Japam object, or null. */
   currentJapam: Japam | null;
-  /** True until the initial AsyncStorage load for the current identity completes. */
+  /** True until the initial load for the current identity completes. */
   isLoading: boolean;
-  setCurrentJapamId: (japamId: string | null) => void;
+  selectJapam: (japamId: string | null) => void;
   createJapam: (rawName: string) => Promise<Japam | null>;
   renameJapam: (japamId: string, rawName: string) => Promise<void>;
   archiveJapam: (japamId: string) => Promise<void>;
@@ -67,10 +62,9 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   const [japams, setJapams] = useState<Japam[]>([]);
   const [currentJapamId, setCurrentJapamIdState] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  // saveJapams/saveCurrentJapamId are fire-and-forget writes keyed by whichever identity was
-  // active at call time; refresh() can run again (auth change) while an earlier write is still in
-  // flight, so every mutation re-reads the CURRENT userId from storage rather than closing over a
-  // possibly-stale one from render time.
+  // Repository calls are keyed by whichever identity was active at call time; refresh() can run
+  // again (auth change) while an earlier write is still in flight, so every action re-reads the
+  // CURRENT userId from this ref rather than closing over a possibly-stale one from render time.
   const userIdRef = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -78,8 +72,8 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
     userIdRef.current = userId;
     const [loadedJapams, persistedCurrentId] = await Promise.all([
-      loadJapams(userId),
-      loadCurrentJapamId(userId),
+      japamsRepository.loadJapams(userId),
+      japamsRepository.loadCurrentJapamId(userId),
     ]);
     setJapams(loadedJapams);
     // Auto-reopen the last selected Japam, per the approved architecture -- but only if it still
@@ -92,7 +86,7 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
     const resolvedCurrentId = persistedStillActive?.id ?? active[0]?.id ?? null;
     setCurrentJapamIdState(resolvedCurrentId);
     if (resolvedCurrentId !== persistedCurrentId) {
-      await saveCurrentJapamId(userId, resolvedCurrentId);
+      await japamsRepository.saveCurrentJapamId(userId, resolvedCurrentId);
     }
     setIsLoading(false);
   }, []);
@@ -111,58 +105,44 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
     };
   }, [refresh]);
 
-  const setCurrentJapamId = useCallback((japamId: string | null) => {
+  const selectJapam = useCallback((japamId: string | null) => {
     setCurrentJapamIdState(japamId);
-    void saveCurrentJapamId(userIdRef.current, japamId);
+    void japamsRepository.saveCurrentJapamId(userIdRef.current, japamId);
   }, []);
 
   const createJapam = useCallback(async (rawName: string): Promise<Japam | null> => {
-    const userId = userIdRef.current;
-    const created = createJapamPure(userId, rawName);
-    if (created === null) return null;
-    const updated = [...japams, created];
-    setJapams(updated);
-    await saveJapams(userId, updated);
+    const result = await japamsRepository.createJapam(userIdRef.current, rawName);
+    if (result === null) return null;
+    setJapams(result.japams);
     // A newly created Japam becomes the current one -- there is no reason to make the user select
     // what they just created.
-    setCurrentJapamId(created.id);
-    return created;
-  }, [japams, setCurrentJapamId]);
+    selectJapam(result.created.id);
+    return result.created;
+  }, [selectJapam]);
 
   const renameJapam = useCallback(async (japamId: string, rawName: string): Promise<void> => {
-    const target = japams.find((j) => j.id === japamId);
-    if (!target) return;
-    const renamed = renameJapamPure(target, rawName);
-    const updated = japams.map((j) => (j.id === japamId ? renamed : j));
+    const updated = await japamsRepository.renameJapam(userIdRef.current, japamId, rawName);
     setJapams(updated);
-    await saveJapams(userIdRef.current, updated);
-  }, [japams]);
+  }, []);
 
   const archiveJapam = useCallback(async (japamId: string): Promise<void> => {
-    const target = japams.find((j) => j.id === japamId);
-    if (!target) return;
-    const archived = archiveJapamPure(target);
-    const updated = japams.map((j) => (j.id === japamId ? archived : j));
+    const updated = await japamsRepository.archiveJapam(userIdRef.current, japamId);
     setJapams(updated);
-    await saveJapams(userIdRef.current, updated);
     // The archived Japam can no longer be "current" -- it's hidden from the default list. Fall
-    // back to the next active Japam, or null.
+    // back to the next active Japam, or null. This is a runtime-selection decision, so it lives
+    // here in the Context, not in the repository.
     if (currentJapamId === japamId) {
       const nextActive = activeJapams(updated)[0]?.id ?? null;
-      setCurrentJapamId(nextActive);
+      selectJapam(nextActive);
     }
-  }, [japams, currentJapamId, setCurrentJapamId]);
+  }, [currentJapamId, selectJapam]);
 
   const restoreJapam = useCallback(async (japamId: string): Promise<void> => {
-    const target = japams.find((j) => j.id === japamId);
-    if (!target) return;
-    const restored = restoreJapamPure(target);
-    const updated = japams.map((j) => (j.id === japamId ? restored : j));
+    const updated = await japamsRepository.restoreJapam(userIdRef.current, japamId);
     setJapams(updated);
-    await saveJapams(userIdRef.current, updated);
     // Restoring is a "manage archived Japams" action, not a selection -- it deliberately does not
     // change currentJapamId.
-  }, [japams]);
+  }, []);
 
   const currentJapam = useMemo(
     () => japams.find((j) => j.id === currentJapamId) ?? null,
@@ -174,7 +154,7 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
     currentJapamId,
     currentJapam,
     isLoading,
-    setCurrentJapamId,
+    selectJapam,
     createJapam,
     renameJapam,
     archiveJapam,
@@ -184,7 +164,7 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
     currentJapamId,
     currentJapam,
     isLoading,
-    setCurrentJapamId,
+    selectJapam,
     createJapam,
     renameJapam,
     archiveJapam,
