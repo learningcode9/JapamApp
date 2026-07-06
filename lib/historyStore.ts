@@ -31,6 +31,13 @@ export interface HistoryRecord {
   remoteId?: number | string;
   completionId: string;
   syncStatus: SyncStatus;
+  /** Stable identity: which Japam (see the `japams` table) this completion belongs to. Null/absent
+   * means legacy/unassigned. This is the ONLY field that determines which Japam a record belongs
+   * to — japamName is a denormalized snapshot only, never used for identity or grouping. */
+  japamId?: string | null;
+  /** Denormalized snapshot of the Japam's display name at completion time, for display/CSV/legacy
+   * fallback without a join. Never typed per-session — see normalizeJapamName. */
+  japamName?: string | null;
 }
 
 export type SupabaseHistoryPayload = {
@@ -40,6 +47,24 @@ export type SupabaseHistoryPayload = {
   count: number;
   created_at: string;
   completion_id: string;
+  japam_id: string | null;
+  japam_name: string | null;
+};
+
+/**
+ * Single shared normalizer for the denormalized japam display-name snapshot — every read/write
+ * path must call this instead of re-implementing trim/blank handling.
+ */
+export const normalizeJapamName = (raw?: string | null): string | null => {
+  const trimmed = (raw || '').trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+/** Defensive normalization for a Japam id: any non-string or blank value becomes null. */
+const normalizeJapamId = (raw: unknown): string | null => {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
 };
 
 export type HistoryRecordUpdate = {
@@ -129,6 +154,8 @@ export const normalizeRecord = (raw: RawHistoryRecord): HistoryRecord => {
     remoteId: raw.remoteId ?? raw.remote_id,
     completionId: raw.completionId || makeCompletionId(userId, raw.date),
     syncStatus: raw.syncStatus === 'pending' ? 'pending' : 'synced',
+    japamId: normalizeJapamId(raw.japamId),
+    japamName: normalizeJapamName(raw.japamName),
   };
 };
 
@@ -163,6 +190,8 @@ export const appendCompletion = (
     userEmail?: string;
     source?: string;
     completionId?: string;
+    japamId?: string | null;
+    japamName?: string | null;
   }
 ): HistoryRecord[] => {
   const completionId = completion.completionId || makeCompletionId(completion.userId, completion.date);
@@ -182,6 +211,8 @@ export const appendCompletion = (
     source: completion.source,
     completionId,
     syncStatus: completion.userId ? 'pending' : 'synced',
+    japamId: normalizeJapamId(completion.japamId),
+    japamName: normalizeJapamName(completion.japamName),
   };
   return [record, ...normalized];
 };
@@ -411,6 +442,8 @@ export const buildSupabaseHistoryPayload = (
     count: normalized.totalCount,
     created_at: normalized.date,
     completion_id: normalized.completionId,
+    japam_id: normalized.japamId ?? null,
+    japam_name: normalized.japamName ?? null,
   };
 };
 
