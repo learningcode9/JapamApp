@@ -320,7 +320,19 @@ if (!userId) {
       ))}
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
       <View style={styles.panel}>
-  
+
+  <Pressable
+    style={({ pressed }) => [styles.currentJapamButton, pressed && { opacity: 0.7 }]}
+    onPress={() => router.push('/my-japams')}
+    accessibilityRole="button"
+    accessibilityLabel={
+      currentJapam ? `Current Japam: ${currentJapam.name}. Tap to switch.` : 'Open My Japams'
+    }
+  >
+    <Text numberOfLines={1} style={styles.currentJapamText}>
+      {currentJapam ? `${currentJapam.name} ▾` : 'My Japams'}
+    </Text>
+  </Pressable>
 
   <Text style={styles.title}>Manual Entry</Text>
 
@@ -420,6 +432,23 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
 
+  currentJapamButton: {
+    minHeight: 40,
+    maxWidth: 200,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.66)',
+    borderWidth: 1,
+    borderColor: 'rgba(15,143,135,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  currentJapamText: {
+    color: '#063B3B',
+    fontSize: 14,
+    fontWeight: '900',
+  },
   title: {
     color: '#102f34',
     fontSize: 36,
