@@ -19,6 +19,7 @@ import {
   normalizeJapamName,
   statsByJapam,
   japamStatsFor,
+  dayStreakForJapam,
   filterByJapam,
   type HistoryRecord,
 } from '../historyStore';
@@ -27,6 +28,17 @@ const UID = 'user-123';
 // Local YYYY-MM-DD key, matching how the app buckets days.
 const toDayKey = (iso: string) => {
   const d = new Date(iso);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+// Same noon-anchored, calendar-day arithmetic as the app's own getPreviousDateKey
+// (app/(tabs)/timer.tsx and tap-japam.tsx) -- dayStreakForJapam takes this as an injected
+// parameter rather than reimplementing it, so tests must mirror the real implementation exactly.
+const getPreviousDayKey = (dayKey: string) => {
+  const d = new Date(`${dayKey}T12:00:00`);
+  d.setDate(d.getDate() - 1);
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
@@ -1065,6 +1077,97 @@ describe('statsByJapam / japamStatsFor: centralized per-Japam stats selector', (
       const statsMap = statsByJapam(history, UID, TODAY, toDayKey);
       expect(japamStatsFor(statsMap, undefined)).toEqual(japamStatsFor(statsMap, null));
     });
+  });
+});
+
+describe('dayStreakForJapam: per-Japam consecutive-day streak', () => {
+  const DAY0 = '2026-07-06'; // "today" for these tests
+  const DAY1 = getPreviousDayKey(DAY0);
+  const DAY2 = getPreviousDayKey(DAY1);
+  const DAY3 = getPreviousDayKey(DAY2);
+  const at = (day: string, hour: number) => `${day}T${String(hour).padStart(2, '0')}:00:00.000Z`;
+
+  it('counts a streak for one Japam only, ignoring a different Japam\'s own history', () => {
+    const history = [
+      session(at(DAY0, 9), { japamId: 'gayatri' }),
+      session(at(DAY1, 9), { japamId: 'gayatri' }),
+      // govinda has its own unbroken streak too, but must not inflate gayatri's count
+      session(at(DAY0, 10), { japamId: 'govinda' }),
+      session(at(DAY1, 10), { japamId: 'govinda' }),
+      session(at(DAY2, 10), { japamId: 'govinda' }),
+    ];
+    expect(dayStreakForJapam(history, UID, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(2);
+    expect(dayStreakForJapam(history, UID, 'govinda', DAY0, toDayKey, getPreviousDayKey)).toBe(3);
+  });
+
+  it('returns 0 for a Japam with no completions at all, rather than throwing', () => {
+    const history = [session(at(DAY0, 9), { japamId: 'gayatri' })];
+    expect(dayStreakForJapam(history, UID, 'brand-new-japam', DAY0, toDayKey, getPreviousDayKey)).toBe(0);
+  });
+
+  it('a brand-new Japam with zero history has a 0 streak even when other Japams have activity today', () => {
+    const history = [session(at(DAY0, 9), { japamId: 'gayatri' })];
+    expect(dayStreakForJapam([], UID, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(0);
+    expect(dayStreakForJapam(history, UID, 'brand-new-japam', DAY0, toDayKey, getPreviousDayKey)).toBe(0);
+  });
+
+  it('groups legacy/unassigned rows (japamId null) separately from any real Japam', () => {
+    const history = [
+      session(at(DAY0, 9), { japamId: null }),
+      session(at(DAY1, 9), { japamId: null }),
+      session(at(DAY0, 10), { japamId: 'gayatri' }),
+    ];
+    expect(dayStreakForJapam(history, UID, null, DAY0, toDayKey, getPreviousDayKey)).toBe(2);
+    expect(dayStreakForJapam(history, UID, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(1);
+  });
+
+  it('only counts this user\'s own records for the Japam, matching statsByJapam\'s userId convention', () => {
+    const history = [
+      session(at(DAY0, 9), { japamId: 'gayatri', userId: UID }),
+      session(at(DAY0, 10), { japamId: 'gayatri', userId: 'other-user' }),
+      session(at(DAY1, 9), { japamId: 'gayatri', userId: 'other-user' }),
+    ];
+    expect(dayStreakForJapam(history, UID, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(1);
+  });
+
+  it('supports guest mode (userId null) the same way as statsByJapam', () => {
+    const history = [
+      session(at(DAY0, 9), { japamId: 'gayatri', userId: null }),
+      session(at(DAY1, 9), { japamId: 'gayatri', userId: null }),
+      session(at(DAY0, 10), { japamId: 'gayatri', userId: 'someone-signed-in' }),
+    ];
+    expect(dayStreakForJapam(history, null, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(2);
+  });
+
+  it('breaks the streak on a missing day rather than skipping over the gap', () => {
+    const history = [
+      session(at(DAY0, 9), { japamId: 'gayatri' }),
+      // DAY1 has no completion for this Japam -- gap
+      session(at(DAY2, 9), { japamId: 'gayatri' }),
+      session(at(DAY3, 9), { japamId: 'gayatri' }),
+    ];
+    expect(dayStreakForJapam(history, UID, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(1);
+  });
+
+  it('still counts yesterday\'s streak when nothing has been logged yet today', () => {
+    const history = [
+      session(at(DAY1, 9), { japamId: 'gayatri' }),
+      session(at(DAY2, 9), { japamId: 'gayatri' }),
+    ];
+    expect(dayStreakForJapam(history, UID, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(2);
+  });
+
+  it('dedupes by completionId, same as statsByJapam, so a duplicate record does not fabricate an extra active day', () => {
+    const dup = session(at(DAY0, 9), { japamId: 'gayatri', completionId: 'dup-id' });
+    const history = [dup, { ...dup }];
+    expect(dayStreakForJapam(history, UID, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(1);
+  });
+
+  it('ignores a zero/negative totalCount record (no real completion) when deciding if a day is active', () => {
+    // malas: 0 too -- normalizeRecord falls back to malas*108 when totalCount is falsy, same
+    // convention statsByJapam already relies on.
+    const history = [session(at(DAY0, 9), { japamId: 'gayatri', malas: 0, totalCount: 0 })];
+    expect(dayStreakForJapam(history, UID, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(0);
   });
 });
 

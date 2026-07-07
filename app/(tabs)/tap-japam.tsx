@@ -3,9 +3,11 @@ import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import {
   appendCompletion,
   buildSupabaseHistoryPayload,
+  dayStreakForJapam,
+  japamStatsFor,
   markSynced,
   mergeHistories,
-  todayStatsFor,
+  statsByJapam,
   toLocalDayKey,
 } from '../../lib/historyStore';
 import {
@@ -174,6 +176,21 @@ const parseHistory = (raw: string | null): Session[] => {
 };
 
 const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
+
+/**
+ * Per-(identity, Japam) scoped key for the live tap counter (TOTAL_KEY/MALAS_KEY/COUNT_KEY and
+ * their MANUAL_* mirrors) -- the only key shape these now use, replacing the old bare (fully
+ * unscoped) and per-user-only shapes. userId null means guest ('guest' in the key), japamId null
+ * means legacy/unassigned, matching the same convention as
+ * statsByJapam/japamStatsFor/dayStreakForJapam everywhere else. Product requirement: Home/Timer/Tap
+ * Japam must always reflect the selected Japam only, so no cached value under any OTHER key shape
+ * may be read back and repaint the wrong Japam's count after switching.
+ */
+const getJapamScopedKey = (
+  key: string,
+  userId: string | null,
+  japamId: string | null
+) => `${key}:${userId ?? 'guest'}:${japamId ?? 'legacy'}`;
 
 const isAuthPending = async () => {
   const raw = await AsyncStorage.getItem(AUTH_PENDING_KEY);
@@ -489,27 +506,21 @@ export default function JapamMain() {
       const currentMalas = Math.floor(currentTotal / 108);
       const currentCount = currentTotal % 108;
       const todayKey = getLocalDateKey();
+      const japamId = activeJapamIdRef.current;
 
       await AsyncStorage.multiSet([
         [getUserStorageKey(TIMER_SECONDS_KEY, savedUserId), String(currentSeconds)],
         [TIMER_SECONDS_KEY, String(currentSeconds)],
         [getUserStorageKey(TIMER_RUNNING_KEY, savedUserId), String(ref.isRunning)],
         [TIMER_RUNNING_KEY, String(ref.isRunning)],
-        [getUserStorageKey(TOTAL_KEY, savedUserId), String(currentTotal)],
-        [getUserStorageKey(COUNT_KEY, savedUserId), String(currentCount)],
-        [getUserStorageKey(MALAS_KEY, savedUserId), String(currentMalas)],
-        [getUserStorageKey(TOTAL_DATE_KEY, savedUserId), todayKey],
-        [getUserStorageKey(MANUAL_TOTAL_KEY, savedUserId), String(currentTotal)],
-        [getUserStorageKey(MANUAL_COUNT_KEY, savedUserId), String(currentCount)],
-        [getUserStorageKey(MANUAL_MALAS_KEY, savedUserId), String(currentMalas)],
-        [getUserStorageKey(MANUAL_TOTAL_DATE_KEY, savedUserId), todayKey],
-        [TOTAL_KEY, String(currentTotal)],
-        [COUNT_KEY, String(currentCount)],
-        [MALAS_KEY, String(currentMalas)],
-        [MANUAL_TOTAL_KEY, String(currentTotal)],
-        [MANUAL_COUNT_KEY, String(currentCount)],
-        [MANUAL_MALAS_KEY, String(currentMalas)],
-        [MANUAL_TOTAL_DATE_KEY, todayKey],
+        [getJapamScopedKey(TOTAL_KEY, savedUserId, japamId), String(currentTotal)],
+        [getJapamScopedKey(COUNT_KEY, savedUserId, japamId), String(currentCount)],
+        [getJapamScopedKey(MALAS_KEY, savedUserId, japamId), String(currentMalas)],
+        [getJapamScopedKey(TOTAL_DATE_KEY, savedUserId, japamId), todayKey],
+        [getJapamScopedKey(MANUAL_TOTAL_KEY, savedUserId, japamId), String(currentTotal)],
+        [getJapamScopedKey(MANUAL_COUNT_KEY, savedUserId, japamId), String(currentCount)],
+        [getJapamScopedKey(MANUAL_MALAS_KEY, savedUserId, japamId), String(currentMalas)],
+        [getJapamScopedKey(MANUAL_TOTAL_DATE_KEY, savedUserId, japamId), todayKey],
       ]);
 
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -638,7 +649,7 @@ export default function JapamMain() {
   }, [authReady, isSigningIn, params.signin, userName]);
 
   const restoreTotal = useCallback(
-    async (nextTotal: number, options?: { userId?: string | null }) => {
+    async (nextTotal: number, options?: { userId?: string | null; japamId?: string | null }) => {
       const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
       const nextMalas = Math.floor(safeTotal / 108);
       const nextCount = safeTotal % 108;
@@ -646,35 +657,27 @@ export default function JapamMain() {
         options?.userId === undefined
           ? await AsyncStorage.getItem(USER_ID_KEY)
           : options.userId;
+      const japamId = options?.japamId === undefined ? activeJapamIdRef.current : options.japamId;
 
       totalRef.current = safeTotal;
       setTotal(safeTotal);
       setMalas(nextMalas);
       setCount(nextCount);
 
-      await AsyncStorage.setItem(TOTAL_KEY, String(safeTotal));
-      await AsyncStorage.setItem(MALAS_KEY, String(nextMalas));
-      await AsyncStorage.setItem(COUNT_KEY, String(nextCount));
-      await AsyncStorage.setItem(MANUAL_TOTAL_KEY, String(safeTotal));
-      await AsyncStorage.setItem(MANUAL_MALAS_KEY, String(nextMalas));
-      await AsyncStorage.setItem(MANUAL_COUNT_KEY, String(nextCount));
-      await AsyncStorage.setItem(MANUAL_TOTAL_DATE_KEY, getLocalDateKey());
-
-      if (activeUserId) {
-        await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, activeUserId), String(safeTotal));
-        await AsyncStorage.setItem(getUserStorageKey(MALAS_KEY, activeUserId), String(nextMalas));
-        await AsyncStorage.setItem(getUserStorageKey(COUNT_KEY, activeUserId), String(nextCount));
-        await AsyncStorage.setItem(getUserStorageKey(MANUAL_TOTAL_KEY, activeUserId), String(safeTotal));
-        await AsyncStorage.setItem(getUserStorageKey(MANUAL_MALAS_KEY, activeUserId), String(nextMalas));
-        await AsyncStorage.setItem(getUserStorageKey(MANUAL_COUNT_KEY, activeUserId), String(nextCount));
-        await AsyncStorage.setItem(getUserStorageKey(MANUAL_TOTAL_DATE_KEY, activeUserId), getLocalDateKey());
-      }
+      const todayKey = getLocalDateKey();
+      await AsyncStorage.setItem(getJapamScopedKey(TOTAL_KEY, activeUserId, japamId), String(safeTotal));
+      await AsyncStorage.setItem(getJapamScopedKey(MALAS_KEY, activeUserId, japamId), String(nextMalas));
+      await AsyncStorage.setItem(getJapamScopedKey(COUNT_KEY, activeUserId, japamId), String(nextCount));
+      await AsyncStorage.setItem(getJapamScopedKey(MANUAL_TOTAL_KEY, activeUserId, japamId), String(safeTotal));
+      await AsyncStorage.setItem(getJapamScopedKey(MANUAL_MALAS_KEY, activeUserId, japamId), String(nextMalas));
+      await AsyncStorage.setItem(getJapamScopedKey(MANUAL_COUNT_KEY, activeUserId, japamId), String(nextCount));
+      await AsyncStorage.setItem(getJapamScopedKey(MANUAL_TOTAL_DATE_KEY, activeUserId, japamId), todayKey);
     },
     []
   );
 
   const refreshDayStreak = useCallback(
-    async (options?: { userId?: string | null; todayTotal?: number }) => {
+    async (options?: { userId?: string | null; japamId?: string | null }) => {
       const activeUserId =
         options?.userId === undefined
           ? await AsyncStorage.getItem(USER_ID_KEY)
@@ -685,32 +688,19 @@ export default function JapamMain() {
         return;
       }
 
+      const japamId = options?.japamId === undefined ? activeJapamIdRef.current : options.japamId;
       const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
       const history: Session[] = rawHistory ? JSON.parse(rawHistory) : [];
-      const activeDays = new Set<string>();
-
-      history.forEach((item) => {
-        if (item.userId !== activeUserId) return;
-        if ((Number(item.totalCount) || 0) <= 0 && (Number(item.malas) || 0) <= 0) return;
-
-        const itemDate = new Date(item.date);
-        if (Number.isNaN(itemDate.getTime())) return;
-
-        activeDays.add(getLocalDateKey(itemDate));
-      });
-
       const todayKey = getLocalDateKey();
-      if ((options?.todayTotal ?? 0) > 0) {
-        activeDays.add(todayKey);
-      }
 
-      let cursor = activeDays.has(todayKey) ? todayKey : getPreviousDateKey(todayKey);
-      let nextStreak = 0;
-
-      while (activeDays.has(cursor)) {
-        nextStreak += 1;
-        cursor = getPreviousDateKey(cursor);
-      }
+      const nextStreak = dayStreakForJapam(
+        history,
+        activeUserId,
+        japamId,
+        todayKey,
+        toLocalDayKey,
+        getPreviousDateKey
+      );
 
       setDayStreak(nextStreak);
     },
@@ -788,32 +778,26 @@ export default function JapamMain() {
     if (!response.ok) console.log('Total save error:', await response.text());
   };
 
-  const getLocalTodayTotalForUser = useCallback(async (userId: string) => {
-    const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
-    const sessions = parseHistory(rawHistory);
-    const todayKey = getLocalDateKey();
-
-    return sessions
-      .filter((item) => item.userId === userId && toLocalDayKey(item.date) === todayKey)
-      .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
-  }, []);
-
   const restoreTodayTotal = useCallback(async (options?: { preserveManualCount?: boolean }) => {
     const preserveManualCount = Boolean(options?.preserveManualCount);
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
     const todayKey = getLocalDateKey();
+    // Captured once per focus by the ref above (see its own comment) -- every read/write below
+    // uses this SAME value, so a Japam switch elsewhere never retroactively repaints this restore
+    // pass with a mix of two different Japams' cached numbers.
+    const japamId = activeJapamIdRef.current;
 
-    const getManualStoredTotal = async (userId: string) => {
-      const manualDate = await AsyncStorage.getItem(getUserStorageKey(MANUAL_TOTAL_DATE_KEY, userId));
+    const getManualStoredTotal = async (userId: string | null) => {
+      const manualDate = await AsyncStorage.getItem(getJapamScopedKey(MANUAL_TOTAL_DATE_KEY, userId, japamId));
       if (manualDate === todayKey) {
-        return Number((await AsyncStorage.getItem(getUserStorageKey(MANUAL_TOTAL_KEY, userId))) || '0');
+        return Number((await AsyncStorage.getItem(getJapamScopedKey(MANUAL_TOTAL_KEY, userId, japamId))) || '0');
       }
 
       // Backward compatibility for users who already had manual progress saved
       // before the dedicated manual storage keys existed.
-      const legacyDate = await AsyncStorage.getItem(getUserStorageKey(TOTAL_DATE_KEY, userId));
+      const legacyDate = await AsyncStorage.getItem(getJapamScopedKey(TOTAL_DATE_KEY, userId, japamId));
       if (manualDate === null && legacyDate === todayKey) {
-        return Number((await AsyncStorage.getItem(getUserStorageKey(TOTAL_KEY, userId))) || '0');
+        return Number((await AsyncStorage.getItem(getJapamScopedKey(TOTAL_KEY, userId, japamId))) || '0');
       }
 
       return 0;
@@ -823,7 +807,7 @@ export default function JapamMain() {
       const localStoredTotal = await getManualStoredTotal(savedUserId);
 
       if (localStoredTotal > 0 && !preserveManualCount) {
-        await restoreTotal(localStoredTotal, { userId: savedUserId });
+        await restoreTotal(localStoredTotal, { userId: savedUserId, japamId });
         totalRef.current = localStoredTotal;
       }
 
@@ -878,55 +862,48 @@ export default function JapamMain() {
 
           await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
 
-          const { totalCount: remoteHistoryTotal } = todayStatsFor(
-            mergedHistory,
-            savedUserId,
-            todayKey,
-            toLocalDayKey
-          );
-
           if (!preserveManualCount) {
-            await restoreTotal(localStoredTotal, { userId: savedUserId });
+            await restoreTotal(localStoredTotal, { userId: savedUserId, japamId });
             totalRef.current = localStoredTotal;
           }
-          await refreshDayStreak({ userId: savedUserId, todayTotal: remoteHistoryTotal });
+          await refreshDayStreak({ userId: savedUserId, japamId });
         } else {
-          const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
           if (!preserveManualCount) {
-            await restoreTotal(localStoredTotal, { userId: savedUserId });
+            await restoreTotal(localStoredTotal, { userId: savedUserId, japamId });
             totalRef.current = localStoredTotal;
           }
-          await refreshDayStreak({ userId: savedUserId, todayTotal: localHistoryTotal });
+          await refreshDayStreak({ userId: savedUserId, japamId });
         }
       } catch (error) {
         console.log('Stats sync error, using local data:', error);
-        const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
         if (!preserveManualCount) {
-          await restoreTotal(localStoredTotal, { userId: savedUserId });
+          await restoreTotal(localStoredTotal, { userId: savedUserId, japamId });
           totalRef.current = localStoredTotal;
         }
-        await refreshDayStreak({ userId: savedUserId, todayTotal: localHistoryTotal });
+        await refreshDayStreak({ userId: savedUserId, japamId });
       }
 
       setHasRestoredTotal(true);
       return;
     }
 
-    // Not logged in (guest) — restore today's in-progress count from unkeyed manual keys
+    // Not logged in (guest) — restore today's in-progress count from this Japam's own guest-scoped
+    // keys (previously unkeyed/global, which is exactly what let a different Japam's cached total
+    // flash on screen after switching).
     if (!preserveManualCount) {
-      const manualDate = await AsyncStorage.getItem(MANUAL_TOTAL_DATE_KEY);
+      const manualDate = await AsyncStorage.getItem(getJapamScopedKey(MANUAL_TOTAL_DATE_KEY, null, japamId));
       const guestTotal = manualDate === todayKey
-        ? Number((await AsyncStorage.getItem(MANUAL_TOTAL_KEY)) || '0')
+        ? Number((await AsyncStorage.getItem(getJapamScopedKey(MANUAL_TOTAL_KEY, null, japamId))) || '0')
         : 0;
-      await restoreTotal(guestTotal, { userId: null });
+      await restoreTotal(guestTotal, { userId: null, japamId });
       totalRef.current = guestTotal;
     } else {
       setMalas(0);
       setTotal(0);
     }
-    await refreshDayStreak({ userId: null, todayTotal: 0 });
+    await refreshDayStreak({ userId: null, japamId });
     setHasRestoredTotal(true);
-  }, [getLocalTodayTotalForUser, refreshDayStreak, restoreTotal]);
+  }, [refreshDayStreak, restoreTotal]);
 
   useEffect(() => {
     restoreTodayTotalRef.current = restoreTodayTotal;
@@ -1581,24 +1558,20 @@ export default function JapamMain() {
     if (!hasRestoredTotal || !userName) return;
 
     void (async () => {
-      await AsyncStorage.setItem(COUNT_KEY, String(count));
-      await AsyncStorage.setItem(MALAS_KEY, String(malas));
-      await AsyncStorage.setItem(TOTAL_KEY, String(total));
-      await AsyncStorage.setItem(MANUAL_COUNT_KEY, String(count));
-      await AsyncStorage.setItem(MANUAL_MALAS_KEY, String(malas));
-      await AsyncStorage.setItem(MANUAL_TOTAL_KEY, String(total));
-      await AsyncStorage.setItem(MANUAL_TOTAL_DATE_KEY, getLocalDateKey());
-
+      const japamId = activeJapamIdRef.current;
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      const todayKey = getLocalDateKey();
+
+      await AsyncStorage.setItem(getJapamScopedKey(COUNT_KEY, savedUserId, japamId), String(count));
+      await AsyncStorage.setItem(getJapamScopedKey(MALAS_KEY, savedUserId, japamId), String(malas));
+      await AsyncStorage.setItem(getJapamScopedKey(TOTAL_KEY, savedUserId, japamId), String(total));
+      await AsyncStorage.setItem(getJapamScopedKey(MANUAL_COUNT_KEY, savedUserId, japamId), String(count));
+      await AsyncStorage.setItem(getJapamScopedKey(MANUAL_MALAS_KEY, savedUserId, japamId), String(malas));
+      await AsyncStorage.setItem(getJapamScopedKey(MANUAL_TOTAL_KEY, savedUserId, japamId), String(total));
+      await AsyncStorage.setItem(getJapamScopedKey(MANUAL_TOTAL_DATE_KEY, savedUserId, japamId), todayKey);
+
       if (savedUserId) {
-        await AsyncStorage.setItem(getUserStorageKey(COUNT_KEY, savedUserId), String(count));
-        await AsyncStorage.setItem(getUserStorageKey(MALAS_KEY, savedUserId), String(malas));
-        await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, savedUserId), String(total));
-        await AsyncStorage.setItem(getUserStorageKey(MANUAL_COUNT_KEY, savedUserId), String(count));
-        await AsyncStorage.setItem(getUserStorageKey(MANUAL_MALAS_KEY, savedUserId), String(malas));
-        await AsyncStorage.setItem(getUserStorageKey(MANUAL_TOTAL_KEY, savedUserId), String(total));
-        await AsyncStorage.setItem(getUserStorageKey(MANUAL_TOTAL_DATE_KEY, savedUserId), getLocalDateKey());
-        await refreshDayStreak({ userId: savedUserId, todayTotal: 0 });
+        await refreshDayStreak({ userId: savedUserId, japamId });
 
         if (dbTotalSaveTimeoutRef.current) {
           clearTimeout(dbTotalSaveTimeoutRef.current);
@@ -1942,21 +1915,17 @@ export default function JapamMain() {
     setCount(nextCount);
 
     void (async () => {
-      await AsyncStorage.setItem(TOTAL_KEY, String(safeTotal));
-      await AsyncStorage.setItem(MALAS_KEY, String(nextMalas));
-      await AsyncStorage.setItem(COUNT_KEY, String(nextCount));
+      const japamId = activeJapamIdRef.current;
       const savedUserId = userIdRef.current;
-      if (savedUserId) {
-        const todayKey = getLocalDateKey();
-        await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, savedUserId), String(safeTotal));
-        await AsyncStorage.setItem(getUserStorageKey(MALAS_KEY, savedUserId), String(nextMalas));
-        await AsyncStorage.setItem(getUserStorageKey(COUNT_KEY, savedUserId), String(nextCount));
-        await AsyncStorage.setItem(getUserStorageKey(TOTAL_DATE_KEY, savedUserId), todayKey);
-        await AsyncStorage.setItem(getUserStorageKey(MANUAL_TOTAL_KEY, savedUserId), String(safeTotal));
-        await AsyncStorage.setItem(getUserStorageKey(MANUAL_MALAS_KEY, savedUserId), String(nextMalas));
-        await AsyncStorage.setItem(getUserStorageKey(MANUAL_COUNT_KEY, savedUserId), String(nextCount));
-        await AsyncStorage.setItem(getUserStorageKey(MANUAL_TOTAL_DATE_KEY, savedUserId), todayKey);
-      }
+      const todayKey = getLocalDateKey();
+      await AsyncStorage.setItem(getJapamScopedKey(TOTAL_KEY, savedUserId, japamId), String(safeTotal));
+      await AsyncStorage.setItem(getJapamScopedKey(MALAS_KEY, savedUserId, japamId), String(nextMalas));
+      await AsyncStorage.setItem(getJapamScopedKey(COUNT_KEY, savedUserId, japamId), String(nextCount));
+      await AsyncStorage.setItem(getJapamScopedKey(TOTAL_DATE_KEY, savedUserId, japamId), todayKey);
+      await AsyncStorage.setItem(getJapamScopedKey(MANUAL_TOTAL_KEY, savedUserId, japamId), String(safeTotal));
+      await AsyncStorage.setItem(getJapamScopedKey(MANUAL_MALAS_KEY, savedUserId, japamId), String(nextMalas));
+      await AsyncStorage.setItem(getJapamScopedKey(MANUAL_COUNT_KEY, savedUserId, japamId), String(nextCount));
+      await AsyncStorage.setItem(getJapamScopedKey(MANUAL_TOTAL_DATE_KEY, savedUserId, japamId), todayKey);
     })();
 
     return safeTotal;
@@ -2252,6 +2221,11 @@ export default function JapamMain() {
       window.dispatchEvent(new Event('japam-auth-updated'));
     }
 
+    // TOTAL_KEY/MALAS_KEY/COUNT_KEY/MANUAL_* are no longer written under these bare names at all
+    // (see getJapamScopedKey) -- removing them here is now a harmless no-op for those names, kept
+    // only so a pre-upgrade install's leftover bare keys get cleaned up. The Japam that was active
+    // for this session is cleared explicitly by its real (scoped) key below, so no stale cached
+    // total for THIS Japam survives into the next sign-in on this device.
     await AsyncStorage.multiRemove([
       TOTAL_KEY,
       COUNT_KEY,
@@ -2261,6 +2235,14 @@ export default function JapamMain() {
       MANUAL_MALAS_KEY,
       MANUAL_TOTAL_DATE_KEY,
       LAST_TOTAL_KEY,
+      getJapamScopedKey(TOTAL_KEY, currentUserId, activeJapamIdRef.current),
+      getJapamScopedKey(COUNT_KEY, currentUserId, activeJapamIdRef.current),
+      getJapamScopedKey(MALAS_KEY, currentUserId, activeJapamIdRef.current),
+      getJapamScopedKey(TOTAL_DATE_KEY, currentUserId, activeJapamIdRef.current),
+      getJapamScopedKey(MANUAL_TOTAL_KEY, currentUserId, activeJapamIdRef.current),
+      getJapamScopedKey(MANUAL_COUNT_KEY, currentUserId, activeJapamIdRef.current),
+      getJapamScopedKey(MANUAL_MALAS_KEY, currentUserId, activeJapamIdRef.current),
+      getJapamScopedKey(MANUAL_TOTAL_DATE_KEY, currentUserId, activeJapamIdRef.current),
     ]);
 
     totalRef.current = 0;
