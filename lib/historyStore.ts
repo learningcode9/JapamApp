@@ -300,12 +300,19 @@ export const planHistoryDayAdjustment = (
   userId: string | null | undefined,
   localDayKey: string,
   requestedTargetMalas: number,
+  japamId?: string | null,
 ): HistoryDayAdjustmentPlan => {
   const normalized = dedupeByCompletionId(records);
   const matchesUser = (record: HistoryRecord) =>
     userId ? record.userId === userId : !record.userId;
+  // Omitting japamId preserves the original, unscoped behavior (backward compatible with the one
+  // caller that predates Japam Workspaces). Passing it -- including explicitly as null, for the
+  // legacy/unassigned bucket -- scopes every count/update/delete to records matching exactly that
+  // Japam, leaving every other Japam's same-day records completely untouched.
+  const matchesJapam = (record: HistoryRecord) =>
+    japamId === undefined ? true : (record.japamId ?? null) === japamId;
   const dayRecords = normalized
-    .filter((record) => matchesUser(record) && toLocalDayKey(record.date) === localDayKey)
+    .filter((record) => matchesUser(record) && matchesJapam(record) && toLocalDayKey(record.date) === localDayKey)
     .map((record) => ({
       ...record,
       malas: Math.max(0, Math.floor(Number(record.malas) || 0)),
@@ -559,3 +566,15 @@ export const japamStatsFor = (
   statsMap: Map<string | null, JapamStats>,
   japamId: string | null | undefined
 ): JapamStats => statsMap.get(japamId ?? null) ?? ZERO_JAPAM_STATS;
+
+/**
+ * Records belonging to exactly one Japam, deduped — the single centralized filter any screen
+ * scoped to "the current Japam" (History) should call, instead of hand-writing
+ * records.filter(r => r.japamId === ...) itself. japamId: null matches only legacy/unassigned
+ * records, mirroring statsByJapam/planHistoryDayAdjustment's own null-means-legacy convention.
+ */
+export const filterByJapam = (
+  records: RawHistoryRecord[],
+  japamId: string | null
+): HistoryRecord[] =>
+  dedupeByCompletionId(records).filter((r) => (r.japamId ?? null) === japamId);

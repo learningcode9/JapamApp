@@ -19,6 +19,7 @@ import {
   normalizeJapamName,
   statsByJapam,
   japamStatsFor,
+  filterByJapam,
   type HistoryRecord,
 } from '../historyStore';
 
@@ -785,6 +786,59 @@ describe('planHistoryDayAdjustment', () => {
     expect(plan.updatedRecords.find((record) => record.userId === 'other-user')).toBeTruthy();
     assertConsistentCounts(plan.updatedRecords);
   });
+
+  describe('japamId scoping (optional 5th parameter)', () => {
+    it('omitting japamId preserves the original, unscoped behavior (backward compatible)', () => {
+      const records = [
+        session(at(10), { japamId: 'gayatri', syncStatus: 'synced' }),
+        session(at(11), { japamId: 'govinda', syncStatus: 'synced' }),
+      ];
+      const plan = planHistoryDayAdjustment(records, UID, day, 1);
+      expect(plan.currentMalas).toBe(2);
+      expect(plan.recordsToDelete).toHaveLength(1);
+    });
+
+    it('scopes currentMalas/targetMalas and edits to only the given Japam\'s same-day records', () => {
+      const records = [
+        session(at(10), { japamId: 'gayatri', malas: 2, totalCount: 216, syncStatus: 'synced' }),
+        session(at(11), { japamId: 'govinda', malas: 5, totalCount: 540, syncStatus: 'synced' }),
+      ];
+      const plan = planHistoryDayAdjustment(records, UID, day, 1, 'gayatri');
+
+      expect(plan.currentMalas).toBe(2); // only gayatri's malas, not 2+5
+      expect(plan.recordsToUpdate).toHaveLength(1);
+      expect(plan.recordsToUpdate[0].before.japamId).toBe('gayatri');
+      // govinda's same-day record is completely untouched
+      const govindaRecord = plan.updatedRecords.find((r) => r.japamId === 'govinda');
+      expect(govindaRecord).toMatchObject({ malas: 5, totalCount: 540 });
+    });
+
+    it('never deletes or updates a different Japam\'s record even when reducing to 0', () => {
+      const records = [
+        session(at(10), { japamId: 'gayatri', malas: 1, totalCount: 108, syncStatus: 'synced' }),
+        session(at(11), { japamId: 'govinda', malas: 1, totalCount: 108, syncStatus: 'synced' }),
+      ];
+      const plan = planHistoryDayAdjustment(records, UID, day, 0, 'gayatri');
+
+      expect(plan.deleteEntireDay).toBe(true);
+      expect(plan.recordsToDelete).toHaveLength(1);
+      expect(plan.recordsToDelete[0].japamId).toBe('gayatri');
+      expect(plan.updatedRecords.some((r) => r.japamId === 'govinda')).toBe(true);
+    });
+
+    it('passing japamId: null scopes to legacy/unassigned records only, excluding real Japams', () => {
+      const records = [
+        session(at(10), { japamId: null, malas: 1, totalCount: 108, syncStatus: 'synced' }),
+        session(at(11), { japamId: 'gayatri', malas: 4, totalCount: 432, syncStatus: 'synced' }),
+      ];
+      const plan = planHistoryDayAdjustment(records, UID, day, 0, null);
+
+      expect(plan.currentMalas).toBe(1);
+      expect(plan.recordsToDelete).toHaveLength(1);
+      expect(plan.recordsToDelete[0].japamId).toBeNull();
+      expect(plan.updatedRecords.some((r) => r.japamId === 'gayatri')).toBe(true);
+    });
+  });
 });
 
 const isoAt = (hour: number) => `2026-07-06T${String(hour).padStart(2, '0')}:00:00.000Z`;
@@ -1011,5 +1065,39 @@ describe('statsByJapam / japamStatsFor: centralized per-Japam stats selector', (
       const statsMap = statsByJapam(history, UID, TODAY, toDayKey);
       expect(japamStatsFor(statsMap, undefined)).toEqual(japamStatsFor(statsMap, null));
     });
+  });
+});
+
+describe('filterByJapam', () => {
+  const at = (hour: number) => `2026-07-06T${String(hour).padStart(2, '0')}:00:00.000Z`;
+
+  it('returns only records matching the given japamId, never mixing other Japams in', () => {
+    const records = [
+      session(at(9), { japamId: 'gayatri', completionId: 'a' }),
+      session(at(10), { japamId: 'govinda', completionId: 'b' }),
+      session(at(11), { japamId: 'gayatri', completionId: 'c' }),
+    ];
+    const result = filterByJapam(records, 'gayatri');
+    expect(result.map((r) => r.completionId).sort()).toEqual(['a', 'c']);
+  });
+
+  it('japamId: null matches only legacy/unassigned records, excluding every real Japam', () => {
+    const records = [
+      session(at(9), { japamId: null, completionId: 'legacy' }),
+      session(at(10), { japamId: 'gayatri', completionId: 'gayatri-1' }),
+    ];
+    const result = filterByJapam(records, null);
+    expect(result.map((r) => r.completionId)).toEqual(['legacy']);
+  });
+
+  it('a Japam with no matching records returns an empty array, not every record', () => {
+    const records = [session(at(9), { japamId: 'govinda' })];
+    expect(filterByJapam(records, 'gayatri')).toEqual([]);
+  });
+
+  it('dedupes by completionId, same as every other selector in this file', () => {
+    const dup = session(at(9), { japamId: 'gayatri', completionId: 'dup' });
+    const result = filterByJapam([dup, { ...dup }], 'gayatri');
+    expect(result).toHaveLength(1);
   });
 });

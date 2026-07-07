@@ -4,6 +4,7 @@ import {
   appendCompletion,
   buildSupabaseHistoryPayload,
   dedupeByCompletionId,
+  filterByJapam,
   makeCompletionId,
   markSynced,
   mergeHistories,
@@ -14,11 +15,12 @@ import {
   toLocalDayKey,
   type HistoryRecord,
 } from '../../lib/historyStore';
+import { useCurrentJapam } from '../../contexts/current-japam-context';
 import { repairLegacyStoredUserId, LEGACY_USER_ID_KEY } from '../../lib/anonymousAuth';
 import { supabase } from '../../lib/supabase';
 import * as FileSystem from 'expo-file-system/legacy';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Sharing from 'expo-sharing';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -95,6 +97,8 @@ type Session = {
   remoteId?: string | number;
   completionId?: string;
   syncStatus?: 'pending' | 'synced';
+  japamId?: string | null;
+  japamName?: string | null;
 };
 
 type DailyRow = {
@@ -126,6 +130,8 @@ type ManualSyncInput = {
   totalCount: number;
   createdAt: string;
   completionId: string;
+  japamId: string | null;
+  japamName: string | null;
 };
 
 type AddDateMode = 'today' | 'yesterday' | 'custom';
@@ -396,6 +402,8 @@ const saveToSupabase = async (
   totalCount: number,
   createdAt: string,
   completionId: string,
+  japamId: string | null,
+  japamName: string | null,
 ): Promise<boolean> => {
   const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
   const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -413,6 +421,8 @@ const saveToSupabase = async (
       userName,
       completionId,
       syncStatus: 'pending',
+      japamId,
+      japamName,
     }, userId, userName);
     console.log(
       '[SYNC_PAYLOAD_CREATED_AT] source=history-manual completionId=%s created_at=%s localDay=%s',
@@ -447,6 +457,8 @@ const syncManualEntryToSupabase = async ({
   totalCount,
   createdAt,
   completionId,
+  japamId,
+  japamName,
 }: ManualSyncInput) => {
   try {
     const supabaseOk = await saveToSupabase(
@@ -455,7 +467,9 @@ const syncManualEntryToSupabase = async ({
       malas,
       totalCount,
       createdAt,
-      completionId
+      completionId,
+      japamId,
+      japamName
     );
 
     if (!supabaseOk) return false;
@@ -660,6 +674,8 @@ const syncHistoryEditsToSupabase = async (
 
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const { currentJapam, currentJapamId, isLoading: isJapamContextLoading } = useCurrentJapam();
   const tabBarSpaceFromBottom = 74 + Math.max(12, insets.bottom + 8);
 
   const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
@@ -749,6 +765,9 @@ export default function HistoryScreen() {
       ).toISOString();
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
       const existing = parseHistory(raw);
+      // Tagged with whichever Japam is current -- otherwise this entry would be saved untagged
+      // and immediately vanish from view, since History now only ever displays the current
+      // Japam's records.
       const updated = appendCompletion(existing, {
         date: createdAt,
         malas: finalMalas,
@@ -758,6 +777,8 @@ export default function HistoryScreen() {
         userId: currentUserId ?? null,
         userName,
         userEmail,
+        japamId: currentJapamId,
+        japamName: currentJapam?.name ?? null,
       });
       const newCompletionId = updated[0].completionId;
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updated));
@@ -779,6 +800,8 @@ export default function HistoryScreen() {
           totalCount: finalCount,
           createdAt,
           completionId: newCompletionId,
+          japamId: currentJapamId,
+          japamName: currentJapam?.name ?? null,
         });
       }
 
@@ -909,8 +932,14 @@ export default function HistoryScreen() {
       }
     }
 
-    setDailyRows(buildDailyRows(sessions));
-  }, []);
+    // Scoped to exactly the current Japam via the centralized filterByJapam selector -- never a
+    // hand-written records.filter(...) here. No current Japam selected/none exist yet -> show
+    // nothing (the render below shows a distinct help state for this), rather than falling back to
+    // legacy/unassigned records.
+    setDailyRows(
+      currentJapamId ? buildDailyRows(filterByJapam(sessions, currentJapamId)) : []
+    );
+  }, [currentJapamId]);
 
   // Tombstone-based delete: remove the records locally, record a tombstone (so self-heal never
   // re-uploads them and other devices delete their copy on sync), and best-effort delete remote
@@ -1024,11 +1053,16 @@ export default function HistoryScreen() {
       const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
       const currentHistory = parseHistory(raw);
+      // japamId scoped explicitly: row.malas only ever reflects the current Japam's count (rows
+      // are built from already-filtered data), but currentHistory here is the FULL, unfiltered
+      // history read fresh from storage -- without this, editing "day X" would aggregate and
+      // mutate every Japam's same-day records together instead of only this one's.
       const plan = planHistoryDayAdjustment(
         currentHistory,
         currentUserId,
         row.dateKey,
-        editMalas
+        editMalas,
+        currentJapamId
       );
       if (!plan.changed) {
         setEditingRow(null);
@@ -1113,7 +1147,7 @@ export default function HistoryScreen() {
     } finally {
       setIsSaving(false);
     }
-  }, [confirmDeleteDay, editMalas, editingRow, isSaving, loadHistory, performDelete]);
+  }, [confirmDeleteDay, currentJapamId, editMalas, editingRow, isSaving, loadHistory, performDelete]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1251,7 +1285,27 @@ export default function HistoryScreen() {
     >
       <View style={styles.header}>
         <Text style={styles.title}>History</Text>
+        {currentJapam && (
+          <Text style={styles.subtitle}>{currentJapam.name}</Text>
+        )}
       </View>
+
+      {!currentJapamId && !isJapamContextLoading ? (
+        <View style={[styles.emptyRow, { alignItems: 'center' }]}>
+          <Text style={[styles.emptyText, { textAlign: 'center' }]}>
+            No Japam selected. Create or select a Japam to see its history.
+          </Text>
+          <Pressable
+            style={({ pressed }) => [styles.headerAddButton, pressed && { opacity: 0.7 }, { marginTop: 16 }]}
+            onPress={() => router.push('/my-japams')}
+            accessibilityRole="button"
+            accessibilityLabel="Open My Japams"
+          >
+            <Text style={styles.headerAddButtonText}>My Japams</Text>
+          </Pressable>
+        </View>
+      ) : (
+      <>
       <View style={styles.simpleSummary}>
         <Text style={styles.summaryText}>📿 Total Malas: {totalMalas}</Text>
         <Text style={styles.summaryText}>🔢 Total Count: {totalCount}</Text>
@@ -1557,6 +1611,8 @@ export default function HistoryScreen() {
             ? 'Use the row actions to edit or delete a day.'
             : 'Use the row actions to edit, or long-press to delete a day.'}
         </Text>
+      )}
+      </>
       )}
 
     </ScrollView>
