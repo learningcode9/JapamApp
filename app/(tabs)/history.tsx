@@ -980,8 +980,11 @@ export default function HistoryScreen() {
     await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(filtered));
     console.log('[DELETE_LOCAL_REMOVED] removed=%d remaining=%d', local.length - filtered.length, filtered.length);
 
-    // 3) Refresh this screen's UI immediately and notify Main/History to recompute counts.
-    setDailyRows(buildDailyRows(filtered.filter((item) => item.userId === currentUserId)));
+    // 3) Notify Main/History to recompute counts. This screen's own 'japam-history-updated'
+    // listener calls loadHistory() in response, which re-fetches through
+    // historyRepository.loadHistoryForJapam and is correctly scoped to the current Japam --
+    // deliberately not duplicated here as an inline optimistic update (that used to filter by
+    // userId only, momentarily showing every Japam's rows mixed together after a delete).
     DeviceEventEmitter.emit('japam-stats-updated');
     DeviceEventEmitter.emit('japam-history-updated', { userId: currentUserId || 'guest' });
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
