@@ -129,6 +129,7 @@ type TimerContextValue = {
   reset: () => void;
   selectDuration: (minutes: number) => void;
   selectLoops: (loops: number) => void;
+  setActiveJapamSelection: (japamId: string | null, japamName: string | null) => void;
 };
 
 const TimerContext = createContext<TimerContextValue | null>(null);
@@ -207,6 +208,14 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   // lazy initializer, so two concurrently-mounted TimerProvider instances within the same JS
   // load can be told apart in the log stream — see GitHub Issues #19/#20.
   const timerProviderMountIdRef = useRef(`mount-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  // The Japam a running session belongs to, captured ONCE at the moment Start is pressed (see
+  // handleStart in timer.tsx, which calls setActiveJapamSelection immediately before start()).
+  // Refs, not state: saveSession can fire from a native background event with no live render
+  // cycle. Deliberately NOT kept in sync with CurrentJapamContext on every change -- switching the
+  // app's current Japam while this session is already running must NOT retroactively change which
+  // Japam the completion is attributed to (see the architecture review on Timer capture-at-Start).
+  const activeJapamIdRef = useRef<string | null>(null);
+  const activeJapamNameRef = useRef<string | null>(null);
 
   useEffect(() => { secondsRef.current = seconds; }, [seconds]);
   useEffect(() => { isRunningRef.current = isRunning; }, [isRunning]);
@@ -244,6 +253,14 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     setSelectedDuration(value);
     selectedDurationRef.current = value;
   }, [logDiagM]);
+
+  // Called by the Timer screen's Start handler, immediately before start(), with whatever
+  // CurrentJapamContext currently holds -- a one-time snapshot, not a continuous subscription.
+  // Just updates the refs saveSession reads at completion time; no re-render needed.
+  const setActiveJapamSelection = useCallback((japamId: string | null, japamName: string | null) => {
+    activeJapamIdRef.current = japamId;
+    activeJapamNameRef.current = japamName;
+  }, []);
 
   const getCurrentRemainingSeconds = useCallback(() => (
     Math.max(0, selectedDurationRef.current * 60 - secondsRef.current)
@@ -1062,6 +1079,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       completionId: sessionId
         ? makeLoopCompletionId(uid || null, sessionId, completedLoopsRef.current)
         : undefined,
+      japamId: activeJapamIdRef.current,
+      japamName: activeJapamNameRef.current,
     };
 
     // Local save FIRST (offline-first) + event emission — awaited by completeCycle so stats
@@ -2099,6 +2118,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     reset,
     selectDuration,
     selectLoops,
+    setActiveJapamSelection,
   }), [
     completedLoops,
     isCustomDuration,
@@ -2111,6 +2131,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     selectLoops,
     selectedDuration,
     selectedLoops,
+    setActiveJapamSelection,
     start,
     targetSeconds,
     timeLeft,
