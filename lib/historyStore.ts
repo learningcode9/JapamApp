@@ -502,3 +502,60 @@ export const mergeTombstones = (a: Iterable<string>, b: Iterable<string>): strin
   for (const x of b) s.add(x);
   return [...s];
 };
+
+export type JapamStats = {
+  todayMalas: number;
+  todayTotalCount: number;
+  lifetimeMalas: number;
+  lifetimeTotalCount: number;
+};
+
+const ZERO_JAPAM_STATS: JapamStats = {
+  todayMalas: 0,
+  todayTotalCount: 0,
+  lifetimeMalas: 0,
+  lifetimeTotalCount: 0,
+};
+
+/**
+ * Today's and lifetime stats for EVERY Japam at once, keyed by japamId (null = legacy/unassigned
+ * history) — the centralized selector for any screen that needs Japam-scoped totals (My Japams,
+ * History, future Dashboard/Statistics/Widgets), so no caller ever needs to hand-write
+ * `records.filter(r => r.japamId === ...)` itself.
+ *
+ * This is a single-pass GROUP-BY, not a repeated single-Japam filter: the "My Japams" list needs
+ * every Japam's stats simultaneously, which is a different shape from "give me one Japam's
+ * total" — see japamStatsFor below for that single-Japam convenience accessor over this result.
+ *
+ * Reuses the exact same dedupe + userId-matching discipline as todayCountFor/todayStatsFor so the
+ * numbers here never disagree with those existing selectors.
+ */
+export const statsByJapam = (
+  records: RawHistoryRecord[],
+  userId: string | null | undefined,
+  todayKey: string,
+  toDayKey: (dateISO: string) => string
+): Map<string | null, JapamStats> => {
+  const map = new Map<string | null, JapamStats>();
+  for (const r of dedupeByCompletionId(records)) {
+    const matchesUser = userId ? r.userId === userId : !r.userId;
+    if (!matchesUser || r.totalCount <= 0) continue;
+    const key = r.japamId ?? null;
+    const existing = map.get(key) ?? { ...ZERO_JAPAM_STATS };
+    existing.lifetimeTotalCount += r.totalCount;
+    existing.lifetimeMalas = Math.floor(existing.lifetimeTotalCount / 108);
+    if (toDayKey(r.date) === todayKey) {
+      existing.todayTotalCount += r.totalCount;
+      existing.todayMalas = Math.floor(existing.todayTotalCount / 108);
+    }
+    map.set(key, existing);
+  }
+  return map;
+};
+
+/** Convenience accessor for one Japam's stats out of statsByJapam's result — all-zero (never
+ * throws) if that Japam has no completions yet. */
+export const japamStatsFor = (
+  statsMap: Map<string | null, JapamStats>,
+  japamId: string | null | undefined
+): JapamStats => statsMap.get(japamId ?? null) ?? ZERO_JAPAM_STATS;

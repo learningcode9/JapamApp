@@ -17,6 +17,8 @@ import {
   mergeTombstones,
   planHistoryDayAdjustment,
   normalizeJapamName,
+  statsByJapam,
+  japamStatsFor,
   type HistoryRecord,
 } from '../historyStore';
 
@@ -934,6 +936,80 @@ describe('japamId: identity field on HistoryRecord', () => {
       const payload = buildSupabaseHistoryPayload(history[0], UID, 'Sravani');
       expect(payload.japam_id).toBe('japam-abc-123');
       expect(payload.japam_name).toBe('Gayatri');
+    });
+  });
+});
+
+describe('statsByJapam / japamStatsFor: centralized per-Japam stats selector', () => {
+  const TODAY = '2026-07-06';
+  const YESTERDAY = '2026-07-05';
+  const todayIso = (hour: number) => `${TODAY}T${String(hour).padStart(2, '0')}:00:00.000Z`;
+  const yesterdayIso = (hour: number) => `${YESTERDAY}T${String(hour).padStart(2, '0')}:00:00.000Z`;
+
+  it('computes today and lifetime malas for a single Japam across multiple days', () => {
+    const history = [
+      session(todayIso(9), { japamId: 'gayatri', malas: 1, totalCount: 108 }),
+      session(todayIso(10), { japamId: 'gayatri', malas: 1, totalCount: 108 }),
+      session(yesterdayIso(9), { japamId: 'gayatri', malas: 3, totalCount: 324 }),
+    ];
+    const statsMap = statsByJapam(history, UID, TODAY, toDayKey);
+    const stats = japamStatsFor(statsMap, 'gayatri');
+    expect(stats.todayMalas).toBe(2);
+    expect(stats.todayTotalCount).toBe(216);
+    expect(stats.lifetimeMalas).toBe(5); // 2 today + 3 yesterday
+    expect(stats.lifetimeTotalCount).toBe(540);
+  });
+
+  it('computes stats for every Japam simultaneously, never mixing them (the "My Japams" list needs all at once)', () => {
+    const history = [
+      session(todayIso(9), { japamId: 'gayatri', malas: 5, totalCount: 540 }),
+      session(todayIso(10), { japamId: 'govinda', malas: 2, totalCount: 216 }),
+    ];
+    const statsMap = statsByJapam(history, UID, TODAY, toDayKey);
+    expect(japamStatsFor(statsMap, 'gayatri').todayMalas).toBe(5);
+    expect(japamStatsFor(statsMap, 'govinda').todayMalas).toBe(2);
+  });
+
+  it('groups legacy/unassigned rows (no japamId) under the null key, separate from any real Japam', () => {
+    const history = [
+      session(todayIso(9), { japamId: null, malas: 1, totalCount: 108 }),
+      session(todayIso(10), { japamId: 'gayatri', malas: 1, totalCount: 108 }),
+    ];
+    const statsMap = statsByJapam(history, UID, TODAY, toDayKey);
+    expect(japamStatsFor(statsMap, null).todayMalas).toBe(1);
+    expect(japamStatsFor(statsMap, 'gayatri').todayMalas).toBe(1);
+  });
+
+  it('only counts this user\'s own records, matching todayStatsFor\'s existing userId convention', () => {
+    const history = [
+      session(todayIso(9), { japamId: 'gayatri', userId: UID, malas: 1, totalCount: 108 }),
+      session(todayIso(10), { japamId: 'gayatri', userId: 'other-user', malas: 9, totalCount: 972 }),
+    ];
+    const statsMap = statsByJapam(history, UID, TODAY, toDayKey);
+    expect(japamStatsFor(statsMap, 'gayatri').todayMalas).toBe(1);
+  });
+
+  it('dedupes by completionId, same as every other selector in this file', () => {
+    const dup = session(todayIso(9), { japamId: 'gayatri', malas: 1, totalCount: 108, completionId: 'dup-id' });
+    const history = [dup, { ...dup }];
+    const statsMap = statsByJapam(history, UID, TODAY, toDayKey);
+    expect(japamStatsFor(statsMap, 'gayatri').todayMalas).toBe(1);
+  });
+
+  describe('japamStatsFor: safe defaults', () => {
+    it('returns all-zero stats for a Japam with no completions rather than throwing', () => {
+      const statsMap = statsByJapam([], UID, TODAY, toDayKey);
+      expect(japamStatsFor(statsMap, 'never-used')).toEqual({
+        todayMalas: 0,
+        todayTotalCount: 0,
+        lifetimeMalas: 0,
+        lifetimeTotalCount: 0,
+      });
+    });
+    it('treats undefined the same as null (legacy bucket)', () => {
+      const history = [session(todayIso(9), { japamId: null, malas: 1, totalCount: 108 })];
+      const statsMap = statsByJapam(history, UID, TODAY, toDayKey);
+      expect(japamStatsFor(statsMap, undefined)).toEqual(japamStatsFor(statsMap, null));
     });
   });
 });
