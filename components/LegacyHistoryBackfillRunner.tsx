@@ -102,9 +102,14 @@ export default function LegacyHistoryBackfillRunner() {
   useEffect(() => {
     if (isLoading) return;
 
+    // Captured outside the IIFE so the failure handler below can still see which identity was
+    // being attempted, without moving the add() call itself (see comment at that call site).
+    let identityKeyBeingAttempted: string | null = null;
+
     (async () => {
       const userId = await AsyncStorage.getItem(USER_ID_KEY);
       const identityKey = userId || 'guest';
+      identityKeyBeingAttempted = identityKey;
       // Synchronous check-then-mark with no await in between: safe against this effect firing
       // again in quick succession for the SAME identity (e.g. isLoading flickering, or React
       // re-invoking effects), while never blocking a DIFFERENT identity from being checked.
@@ -145,8 +150,17 @@ export default function LegacyHistoryBackfillRunner() {
         [{ text: 'Got it' }]
       );
     })().catch(() => {
-      // Best-effort, non-blocking: on any failure, the flag is deliberately NOT marked complete,
-      // so this identity's backfill is retried on a future launch instead of silently lost.
+      // Best-effort, non-blocking: on any failure, the persisted flag is deliberately NOT marked
+      // complete, so this identity's backfill is retried on a future launch instead of silently
+      // lost. Also remove it from the in-memory set (if it was added) so a legitimate retry
+      // opportunity WITHIN this same session -- e.g. isLoading resolving again for this same
+      // identity for any reason -- isn't silently skipped just because a prior attempt happened
+      // to fail. Does not reintroduce the concurrent-duplicate-run risk: the add() above still
+      // happens synchronously before any await, so a genuinely concurrent second invocation for
+      // the same identity is still blocked while this attempt is in flight.
+      if (identityKeyBeingAttempted) {
+        checkedIdentitiesRef.current.delete(identityKeyBeingAttempted);
+      }
     });
   }, [isLoading, createJapam]);
 
