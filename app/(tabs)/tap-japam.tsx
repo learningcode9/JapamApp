@@ -13,6 +13,7 @@ import {
   detectMalaCrossing,
   runMalaCompletion,
 } from '../../lib/malaCompletion';
+import { useCurrentJapam } from '../../contexts/current-japam-context';
 import { getWebOmAudioUri } from '../../lib/webOmAudio';
 import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
@@ -185,6 +186,23 @@ const isAuthPending = async () => {
 };
 
 export default function JapamMain() {
+  const { currentJapam } = useCurrentJapam();
+  // The Japam this screen's completions belong to. Tap Japam has no discrete "Start" button (see
+  // handleStart below, which is not wired to any visible control on this screen) -- tapping the
+  // circle is the actual interaction, with no clear start/stop boundary of its own. Treating
+  // "arriving at this screen to tap" as the practical equivalent of pressing Start: captured once
+  // per focus (not on every tap), so switching the app's current Japam elsewhere while the user
+  // keeps tapping here never retroactively changes what those taps are attributed to. Refs, not
+  // state, matching the same discipline as Timer/Home's equivalent wiring.
+  const activeJapamIdRef = useRef<string | null>(null);
+  const activeJapamNameRef = useRef<string | null>(null);
+  useFocusEffect(
+    useCallback(() => {
+      activeJapamIdRef.current = currentJapam?.id ?? null;
+      activeJapamNameRef.current = currentJapam?.name ?? null;
+    }, [currentJapam])
+  );
+
   const insets = useSafeAreaInsets();
   const tabBarSpaceFromBottom = 74 + (isMobile
     ? Math.max(12, insets.bottom + 8)
@@ -1672,6 +1690,8 @@ export default function JapamMain() {
         userName: userId ? historyUserName : undefined,
         userEmail: userId ? savedUserEmail || undefined : undefined,
         source,
+        japamId: activeJapamIdRef.current,
+        japamName: activeJapamNameRef.current,
       });
       const savedRecord = updatedHistory[0];
 
@@ -1965,6 +1985,12 @@ export default function JapamMain() {
     if (!isResumeFromPause) {
       completedLoopMalasRef.current = 0;
       setAutoCompletedMalas(0);
+      // Defensive/consistency wiring matching Home's equivalent handleStart -- this timer-mode
+      // path isn't currently wired to any visible control on this screen (tapping the circle is
+      // the real interaction, captured on focus above), but re-capturing here too keeps this
+      // function correct on its own terms if it's ever reached.
+      activeJapamIdRef.current = currentJapam?.id ?? null;
+      activeJapamNameRef.current = currentJapam?.name ?? null;
     }
     timerStartedAtRef.current = Date.now() - nextSeconds * 1000;
     timerRef.current = { seconds: nextSeconds, isRunning: true, targetSeconds: nextTargetSeconds, minutesInput: String(mins), loopTimer };
