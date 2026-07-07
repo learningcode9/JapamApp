@@ -11,6 +11,7 @@ import {
   toLocalDayKey,
 } from '../../lib/historyStore';
 import { useCurrentJapam } from '../../contexts/current-japam-context';
+import CurrentJapamHeaderButton from '../../components/CurrentJapamHeaderButton';
 import * as Google from 'expo-auth-session/providers/google';
 import { ResponseType } from 'expo-auth-session';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
@@ -18,7 +19,7 @@ import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Notifications from 'expo-notifications';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { isIOSDeviceWeb, isStandaloneOrInstalledWeb } from '../../lib/pwaInstall';
@@ -190,7 +191,6 @@ const isAuthPending = async () => {
 };
 
 export default function JapamMain() {
-  const router = useRouter();
   const { currentJapam } = useCurrentJapam();
   // The Japam this screen's own session belongs to, captured ONCE at the moment Start is pressed
   // (see handleStart below). Refs, not state, matching the same discipline as Timer's
@@ -2332,18 +2332,7 @@ export default function JapamMain() {
           )}
 
           <View style={styles.topControls}>
-            <Pressable
-              style={({ pressed }) => [styles.currentJapamButton, pressed && styles.softPressed]}
-              onPress={() => router.push('/my-japams')}
-              accessibilityRole="button"
-              accessibilityLabel={
-                currentJapam ? `Current Japam: ${currentJapam.name}. Tap to switch.` : 'Open My Japams'
-              }
-            >
-              <Text numberOfLines={1} style={styles.currentJapamText}>
-                {currentJapam ? `${currentJapam.name} ▾` : 'My Japams'}
-              </Text>
-            </Pressable>
+            <CurrentJapamHeaderButton style={{ position: 'absolute', left: 0, top: 2 }} />
 
             <Text style={styles.welcomeText}>Welcome</Text>
 
@@ -2982,29 +2971,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 16,
     elevation: 4,
-  },
-  currentJapamButton: {
-    position: 'absolute',
-    left: 0,
-    top: 2,
-    minHeight: 40,
-    maxWidth: 128,
-    paddingHorizontal: 14,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.66)',
-    borderWidth: 1,
-    borderColor: 'rgba(15,143,135,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#0f8f87',
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
-    elevation: 4,
-  },
-  currentJapamText: {
-    color: '#063B3B',
-    fontSize: isMobile ? 14 : 15,
-    fontWeight: '900',
   },
   softPressed: {
     transform: [{ scale: 0.96 }],

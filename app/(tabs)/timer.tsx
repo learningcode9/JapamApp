@@ -36,6 +36,7 @@ import {
   useTimer,
 } from '../../contexts/timer-context';
 import { useCurrentJapam } from '../../contexts/current-japam-context';
+import CurrentJapamHeaderButton from '../../components/CurrentJapamHeaderButton';
 import { ResponseType } from 'expo-auth-session';
 import { isIOSDeviceWeb, isStandaloneOrInstalledWeb } from '../../lib/pwaInstall';
 import {
@@ -797,18 +798,7 @@ export default function TimerScreen() {
           </View>
 
           <View style={styles.topControls}>
-            <Pressable
-              style={({ pressed }) => [styles.currentJapamButton, pressed && styles.softPressed]}
-              onPress={() => router.push('/my-japams')}
-              accessibilityRole="button"
-              accessibilityLabel={
-                currentJapam ? `Current Japam: ${currentJapam.name}. Tap to switch.` : 'Open My Japams'
-              }
-            >
-              <Text numberOfLines={1} style={styles.currentJapamText}>
-                {currentJapam ? `${currentJapam.name} ▾` : 'My Japams'}
-              </Text>
-            </Pressable>
+            <CurrentJapamHeaderButton style={{ flex: 1 }} />
             <Text numberOfLines={1} style={styles.welcomeText}>Welcome</Text>
             <Pressable
               style={({ pressed }) => [styles.accountButton, pressed && styles.softPressed]}
@@ -1190,28 +1180,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: isShortMobile ? 8 : isMobile ? 8 : 18,
     gap: 10,
-  },
-  currentJapamButton: {
-    flex: 1,
-    minHeight: 40,
-    minWidth: 74,
-    maxWidth: 128,
-    paddingHorizontal: 14,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.78)',
-    borderWidth: 1,
-    borderColor: 'rgba(15,143,135,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#0f8f87',
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
-    elevation: 4,
-  },
-  currentJapamText: {
-    color: '#063B3B',
-    fontSize: isMobile ? 14 : 15,
-    fontWeight: '900',
   },
   welcomeText: {
     flex: 2,
