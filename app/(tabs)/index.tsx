@@ -10,6 +10,7 @@ import {
   todayStatsFor,
   toLocalDayKey,
 } from '../../lib/historyStore';
+import { useCurrentJapam } from '../../contexts/current-japam-context';
 import * as Google from 'expo-auth-session/providers/google';
 import { ResponseType } from 'expo-auth-session';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
@@ -189,6 +190,15 @@ const isAuthPending = async () => {
 };
 
 export default function JapamMain() {
+  const { currentJapam } = useCurrentJapam();
+  // The Japam this screen's own session belongs to, captured ONCE at the moment Start is pressed
+  // (see handleStart below). Refs, not state, matching the same discipline as Timer's
+  // activeJapamIdRef/activeJapamNameRef in contexts/timer-context.tsx: switching the app's current
+  // Japam elsewhere while this session is already running must never retroactively change which
+  // Japam the eventual completion is attributed to.
+  const activeJapamIdRef = useRef<string | null>(null);
+  const activeJapamNameRef = useRef<string | null>(null);
+
   // Live responsive dimensions — recomputes on rotation / resize for all screen sizes
   const { width: dynW, height: dynH } = useWindowDimensions();
   const dynIsMobile = dynW < 500;
@@ -1736,6 +1746,8 @@ export default function JapamMain() {
         userId: userId ?? null,
         userName: userId ? historyUserName : undefined,
         userEmail: userId ? savedUserEmail || undefined : undefined,
+        japamId: activeJapamIdRef.current,
+        japamName: activeJapamNameRef.current,
       });
       const savedRecord = updatedHistory[0];
 
@@ -1941,6 +1953,11 @@ export default function JapamMain() {
     if (!isResumeFromPause) {
       completedLoopMalasRef.current = 0;
       setAutoCompletedMalas(0);
+      // Snapshot whichever Japam is current AT THIS EXACT MOMENT, once, for this new session --
+      // only on a genuinely fresh start, not on resume-from-pause (which continues the same
+      // session and must keep whatever was already captured).
+      activeJapamIdRef.current = currentJapam?.id ?? null;
+      activeJapamNameRef.current = currentJapam?.name ?? null;
     }
     timerStartedAtRef.current = Date.now() - nextSeconds * 1000;
     timerRef.current = { seconds: nextSeconds, isRunning: true, targetSeconds: nextTargetSeconds, minutesInput: String(mins), loopTimer };
