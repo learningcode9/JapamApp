@@ -1091,11 +1091,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       const updatedHistory = appendCompletion(history, completion);
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
       console.log(
-        '[OFFLINE_SAVE_ACCEPTED] source=timer completionId=%s created_at=%s localDay=%s syncStatus=%s',
+        '[OFFLINE_SAVE_ACCEPTED] source=timer completionId=%s created_at=%s localDay=%s syncStatus=%s japamId=%s japamName=%s',
         updatedHistory[0]?.completionId,
         updatedHistory[0]?.date,
         toLocalDayKey(updatedHistory[0]?.date),
-        updatedHistory[0]?.syncStatus
+        updatedHistory[0]?.syncStatus,
+        updatedHistory[0]?.japamId,
+        updatedHistory[0]?.japamName
       );
 
       const after = await readMalasTodaySnapshot();
@@ -1994,6 +1996,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       expectedEndTime: timerStartedAtRef.current !== null
         ? timerStartedAtRef.current + selectedDurationRef.current * 60 * 1000
         : null,
+      japamId: activeJapamIdRef.current,
+      japamName: activeJapamNameRef.current,
     });
     setIsRunning(true);
     isRunningRef.current = true;
