@@ -5,6 +5,7 @@ import {
   markSynced,
   toLocalDayKey,
 } from '../../lib/historyStore';
+import { useCurrentJapam } from '../../contexts/current-japam-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect } from 'expo-router';
 import React, { useState } from 'react';
@@ -27,6 +28,8 @@ type ManualSyncInput = {
   totalNum: number;
   selectedDateTime: string;
   completionId: string;
+  japamId: string | null;
+  japamName: string | null;
 };
 
 const HISTORY_KEY = 'history';
@@ -77,6 +80,8 @@ const syncManualEntryToSupabase = async ({
   totalNum,
   selectedDateTime,
   completionId,
+  japamId,
+  japamName,
 }: ManualSyncInput) => {
   console.log('[Manual] MANUAL_SYNC_START completionId=%s malas=%d count=%d', completionId, malaNum, totalNum);
   try {
@@ -88,6 +93,11 @@ const syncManualEntryToSupabase = async ({
       return;
     }
 
+    // Built from the actual saved values (including japamId/japamName), not re-derived --
+    // reconstructing this payload from a hand-picked subset of fields is exactly the bug class
+    // already found and fixed once in this feature's history (a new field silently missing from
+    // the immediate online-save path while the offline-retry path, which re-reads the real saved
+    // record, stayed correct).
     const payload = buildSupabaseHistoryPayload({
       date: selectedDateTime,
       malas: malaNum,
@@ -98,6 +108,8 @@ const syncManualEntryToSupabase = async ({
       userName,
       completionId,
       syncStatus: 'pending',
+      japamId,
+      japamName,
     }, userId, userName);
     console.log(
       '[SYNC_PAYLOAD_CREATED_AT] source=manual completionId=%s created_at=%s localDay=%s',
@@ -139,6 +151,8 @@ const syncManualEntryToSupabase = async ({
 };
 
 export default function ManualEntry() {
+  const { currentJapam } = useCurrentJapam();
+
   const getLocalDate = () => {
     const d = new Date();
     const year = d.getFullYear();
@@ -230,6 +244,10 @@ if (!userId) {
     const raw = await AsyncStorage.getItem(HISTORY_KEY);
     const history: Session[] = raw ? JSON.parse(raw) : [];
     const { userName, userEmail } = await getStoredUserMeta();
+    // No start-capture needed -- Manual Entry is a one-time save action, so it simply reads
+    // whichever Japam is current at the moment Save is pressed.
+    const japamId = currentJapam?.id ?? null;
+    const japamName = currentJapam?.name ?? null;
 
     // Save locally first with a stable completionId + syncStatus (offline-first, dedup-safe).
     const updatedHistory = appendCompletion(history, {
@@ -241,6 +259,8 @@ if (!userId) {
       userId: userId || undefined,
       userName,
       userEmail,
+      japamId,
+      japamName,
     });
     const newCompletionId = updatedHistory[0].completionId;
     try {
@@ -270,6 +290,8 @@ if (!userId) {
       totalNum,
       selectedDateTime,
       completionId: newCompletionId,
+      japamId,
+      japamName,
     });
 
     Alert.alert('Saved', 'Manual entry added to history');
