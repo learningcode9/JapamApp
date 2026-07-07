@@ -709,6 +709,10 @@ export default function TimerScreen() {
       openSignInModal();
       return;
     }
+    // Snapshot whichever Japam is current AT THIS EXACT MOMENT, once, before starting. Switching
+    // the app's current Japam later must never retroactively change what this running session's
+    // eventual completion is attributed to -- see setActiveJapamSelection in timer-context.tsx.
+    timer.setActiveJapamSelection(currentJapam?.id ?? null, currentJapam?.name ?? null);
     timer.start();
   };
 
