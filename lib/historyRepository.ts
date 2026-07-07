@@ -13,9 +13,11 @@
  * AsyncStorage reads, JSON parsing, and selector orchestration live; screens only render what it
  * returns. No UI decides which selector to call — that decision lives here, once.
  *
- * This commit implements read operations only. Writes (appendCompletion, edits, deletes) are not
- * moved here — Timer/Home/Tap/Manual/History are not being wired to this repository yet, and their
- * own write paths are unchanged for now.
+ * Reads only, with one deliberate exception: applyLegacyHistoryBackfill (below), which persists
+ * the one-time legacy-history reassignment. Timer/Home/Tap/Manual/History's own save/edit/delete
+ * write paths are NOT moved here and remain unchanged -- this repository does not become the
+ * general write path for history just because one specific, self-contained write operation lives
+ * here.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -29,6 +31,7 @@ import {
   type RawHistoryRecord,
   type JapamStats,
 } from './historyStore';
+import { planLegacyHistoryBackfill, type LegacyHistoryBackfillPlan } from './legacyHistoryBackfill';
 
 export type { JapamStats };
 /** Re-exported so screens have one single import path for both loading and reading stats — they
@@ -112,4 +115,40 @@ export const loadLifetimeStats = async (
   const statsMap = await loadJapamStats(userId);
   const stats = japamStatsFor(statsMap, japamId);
   return { malas: stats.lifetimeMalas, totalCount: stats.lifetimeTotalCount };
+};
+
+/**
+ * Persists the one-time legacy history backfill for one identity: reassigns that identity's
+ * null-japamId records to (japamId, japamName) and writes the result back to the SAME HISTORY_KEY
+ * every other read/write in this app already uses -- offline-first, no network call, no Supabase
+ * write. Every other identity's records (every other user, or guest, mixed into the same storage
+ * key) are read back out untouched and written back exactly as they were.
+ *
+ * The actual reassignment decision is lib/legacyHistoryBackfill.ts's planLegacyHistoryBackfill
+ * (pure, already tested) -- this function only supplies the I/O around it: load, scope to this
+ * identity, plan, merge back with everyone else's untouched records, and persist -- but only if
+ * the plan actually found something to reassign, so a no-op call never rewrites storage.
+ *
+ * Callers (a future orchestration layer) are still responsible for: deciding japamId/japamName,
+ * creating that Japam, checking/setting the per-identity "already backfilled" flag so this never
+ * runs a second time, and showing any user-facing notice. None of that lives here.
+ */
+export const applyLegacyHistoryBackfill = async (
+  userId: string | null | undefined,
+  japamId: string,
+  japamName: string,
+): Promise<LegacyHistoryBackfillPlan> => {
+  const all = await loadHistory();
+  const matchesIdentity = (r: HistoryRecord) => (userId ? r.userId === userId : !r.userId);
+  const forThisIdentity = all.filter(matchesIdentity);
+  const forOthers = all.filter((r) => !matchesIdentity(r));
+
+  const plan = planLegacyHistoryBackfill(forThisIdentity, japamId, japamName);
+
+  if (plan.needsBackfill) {
+    const merged = [...forOthers, ...plan.updatedRecords];
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(merged));
+  }
+
+  return plan;
 };
