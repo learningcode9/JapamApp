@@ -577,6 +577,40 @@ export const japamStatsFor = (
 ): JapamStats => statsMap.get(japamId ?? null) ?? ZERO_JAPAM_STATS;
 
 /**
+ * Consecutive-day streak (ending today, or yesterday if nothing logged yet today) for ONE Japam
+ * only — same userId/japamId matching discipline as statsByJapam, so it never disagrees with the
+ * Today/Lifetime numbers shown alongside it. getPreviousDayKey is injected (not reimplemented
+ * here) because it's plain calendar-day arithmetic that already exists per-screen (see
+ * getPreviousDateKey in timer.tsx/tap-japam.tsx) — this keeps historyStore.ts dependency-free
+ * rather than adding a third copy of the same date math.
+ */
+export const dayStreakForJapam = (
+  records: RawHistoryRecord[],
+  userId: string | null | undefined,
+  japamId: string | null | undefined,
+  todayKey: string,
+  toDayKey: (dateISO: string) => string,
+  getPreviousDayKey: (dayKey: string) => string
+): number => {
+  const targetJapamId = japamId ?? null;
+  const activeDays = new Set<string>();
+  for (const r of dedupeByCompletionId(records)) {
+    const matchesUser = userId ? r.userId === userId : !r.userId;
+    if (!matchesUser || r.totalCount <= 0) continue;
+    if ((r.japamId ?? null) !== targetJapamId) continue;
+    activeDays.add(toDayKey(r.date));
+  }
+
+  let cursor = activeDays.has(todayKey) ? todayKey : getPreviousDayKey(todayKey);
+  let streak = 0;
+  while (activeDays.has(cursor)) {
+    streak += 1;
+    cursor = getPreviousDayKey(cursor);
+  }
+  return streak;
+};
+
+/**
  * Records belonging to exactly one Japam, deduped — the single centralized filter any screen
  * scoped to "the current Japam" (History) should call, instead of hand-writing
  * records.filter(r => r.japamId === ...) itself. japamId: null matches only legacy/unassigned
