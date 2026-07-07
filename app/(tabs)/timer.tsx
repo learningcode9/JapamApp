@@ -35,6 +35,7 @@ import {
   formatTimer,
   useTimer,
 } from '../../contexts/timer-context';
+import { useCurrentJapam } from '../../contexts/current-japam-context';
 import { ResponseType } from 'expo-auth-session';
 import { isIOSDeviceWeb, isStandaloneOrInstalledWeb } from '../../lib/pwaInstall';
 import {
@@ -132,6 +133,7 @@ const showGoogleSignInRequiredAlert = () => {
 export default function TimerScreen() {
   const router = useRouter();
   const timer = useTimer();
+  const { currentJapam } = useCurrentJapam();
   const insets = useSafeAreaInsets();
   // Mirror the floating tab bar geometry from _layout.tsx exactly.
   // _layout.tsx uses screenWidth < 500 as its isMobile threshold (different from
@@ -787,7 +789,18 @@ export default function TimerScreen() {
           </View>
 
           <View style={styles.topControls}>
-            <View style={styles.headerSideSpacer} />
+            <Pressable
+              style={({ pressed }) => [styles.currentJapamButton, pressed && styles.softPressed]}
+              onPress={() => router.push('/my-japams')}
+              accessibilityRole="button"
+              accessibilityLabel={
+                currentJapam ? `Current Japam: ${currentJapam.name}. Tap to switch.` : 'Open My Japams'
+              }
+            >
+              <Text numberOfLines={1} style={styles.currentJapamText}>
+                {currentJapam ? `${currentJapam.name} ▾` : 'My Japams'}
+              </Text>
+            </Pressable>
             <Text numberOfLines={1} style={styles.welcomeText}>Welcome</Text>
             <Pressable
               style={({ pressed }) => [styles.accountButton, pressed && styles.softPressed]}
@@ -1170,9 +1183,27 @@ const styles = StyleSheet.create({
     marginBottom: isShortMobile ? 8 : isMobile ? 8 : 18,
     gap: 10,
   },
-  headerSideSpacer: {
+  currentJapamButton: {
     flex: 1,
+    minHeight: 40,
     minWidth: 74,
+    maxWidth: 128,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.78)',
+    borderWidth: 1,
+    borderColor: 'rgba(15,143,135,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#0f8f87',
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 4,
+  },
+  currentJapamText: {
+    color: '#063B3B',
+    fontSize: isMobile ? 14 : 15,
+    fontWeight: '900',
   },
   welcomeText: {
     flex: 2,
