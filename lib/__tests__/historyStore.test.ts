@@ -937,13 +937,13 @@ describe('japamId: identity field on HistoryRecord', () => {
   });
 
   describe('buildSupabaseHistoryPayload', () => {
-    it('includes japam_id and the trimmed japam_name snapshot', () => {
+    it('withholds japam_id (stop-loss: no FK-safe write path to public.japams yet) but preserves the trimmed japam_name snapshot', () => {
       const record = normalizeRecord(session(isoAt(0), {
         japamId: 'japam-abc-123',
         japamName: '  Gayatri  ',
       }));
       const payload = buildSupabaseHistoryPayload(record, UID, 'Sravani');
-      expect(payload.japam_id).toBe('japam-abc-123');
+      expect(payload.japam_id).toBeNull();
       expect(payload.japam_name).toBe('Gayatri');
     });
     it('sends null japam_id and japam_name when the record has neither, never crashing', () => {
@@ -977,7 +977,7 @@ describe('japamId: identity field on HistoryRecord', () => {
   });
 
   describe('round trip: appendCompletion -> buildSupabaseHistoryPayload preserves identity', () => {
-    it('carries the same japamId through the full local-save-then-sync-payload pipeline', () => {
+    it('withholds japam_id from the remote payload (stop-loss) while japam_name still carries through', () => {
       const history = appendCompletion([], {
         date: isoAt(0),
         malas: 1,
@@ -988,7 +988,7 @@ describe('japamId: identity field on HistoryRecord', () => {
         japamName: 'Gayatri',
       });
       const payload = buildSupabaseHistoryPayload(history[0], UID, 'Sravani');
-      expect(payload.japam_id).toBe('japam-abc-123');
+      expect(payload.japam_id).toBeNull();
       expect(payload.japam_name).toBe('Gayatri');
     });
   });
