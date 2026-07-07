@@ -15,7 +15,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { activeJapams, type Japam } from '../lib/japams';
+import { activeJapams, archivedJapams, type Japam } from '../lib/japams';
 import { loadJapamStats, japamStatsFor, type JapamStats } from '../lib/historyRepository';
 import { useCurrentJapam } from '../contexts/current-japam-context';
 
@@ -36,6 +36,7 @@ export default function MyJapamsScreen() {
     createJapam,
     renameJapam,
     archiveJapam,
+    restoreJapam,
   } = useCurrentJapam();
 
   const [statsMap, setStatsMap] = useState<Map<string | null, JapamStats>>(new Map());
@@ -128,6 +129,7 @@ export default function MyJapamsScreen() {
   };
 
   const visibleJapams = activeJapams(japams);
+  const archivedVisibleJapams = archivedJapams(japams);
 
   return (
     <LinearGradient colors={['#e7f5f5', '#c7e2e0', '#eef8f5']} style={styles.container}>
@@ -214,6 +216,50 @@ export default function MyJapamsScreen() {
 
         {visibleJapams.length > 0 && (
           <Text style={styles.hintText}>Long-press a Japam to archive it.</Text>
+        )}
+
+        {archivedVisibleJapams.length > 0 && (
+          <>
+            <Text style={styles.sectionHeading}>Archived Japams</Text>
+            {archivedVisibleJapams.map((japam) => {
+              const stats = japamStatsFor(statsMap, japam.id) ?? ZERO_STATS;
+              return (
+                <View
+                  key={japam.id}
+                  style={[styles.card, styles.archivedCard]}
+                >
+                  <View style={styles.cardHeader}>
+                    <View style={styles.cardNameRow}>
+                      <Ionicons name="archive-outline" size={20} color="#5f7778" style={styles.checkIcon} />
+                      <Text style={styles.cardName} numberOfLines={1}>{japam.name}</Text>
+                    </View>
+                    <Pressable
+                      style={styles.restoreButton}
+                      onPress={() => void restoreJapam(japam.id)}
+                      hitSlop={12}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Restore ${japam.name}`}
+                    >
+                      <Ionicons name="refresh" size={16} color="#0f766e" />
+                      <Text style={styles.restoreButtonText}>Restore</Text>
+                    </Pressable>
+                  </View>
+
+                  <View style={styles.statsRow}>
+                    <View style={styles.statBox}>
+                      <Text style={styles.statLabel}>Today</Text>
+                      <Text style={styles.statValue}>{stats.todayMalas} malas</Text>
+                    </View>
+                    <View style={styles.statBox}>
+                      <Text style={styles.statLabel}>Lifetime</Text>
+                      <Text style={styles.statValue}>{stats.lifetimeMalas} malas</Text>
+                    </View>
+                  </View>
+                </View>
+              );
+            })}
+            <Text style={styles.hintText}>Tap Restore to bring an archived Japam back.</Text>
+          </>
         )}
       </ScrollView>
 
@@ -315,6 +361,11 @@ const styles = StyleSheet.create({
     marginTop: 14,
     minHeight: 96,
   },
+  archivedCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
+    borderColor: 'rgba(95, 119, 120, 0.22)',
+    opacity: 0.95,
+  },
   cardCurrent: {
     borderColor: '#0f766e',
     borderWidth: 3,
@@ -345,6 +396,21 @@ const styles = StyleSheet.create({
   editButton: {
     padding: 8,
   },
+  restoreButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15, 118, 110, 0.1)',
+  },
+  restoreButtonText: {
+    color: '#0f766e',
+    fontSize: 14,
+    fontWeight: '800',
+  },
   statsRow: {
     flexDirection: 'row',
     marginTop: 14,
@@ -369,6 +435,13 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '800',
     marginTop: 2,
+  },
+  sectionHeading: {
+    color: '#102f34',
+    fontSize: 20,
+    fontWeight: '900',
+    marginTop: 24,
+    marginBottom: 8,
   },
   addButton: {
     flexDirection: 'row',
