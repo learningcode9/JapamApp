@@ -1305,9 +1305,18 @@ export default function HistoryScreen() {
     >
       <View style={styles.header}>
         <Text style={styles.title}>History</Text>
-        {currentJapam && (
-          <Text style={styles.subtitle}>{currentJapam.name}</Text>
-        )}
+        <Pressable
+          style={({ pressed }) => [styles.currentJapamButton, pressed && { opacity: 0.7 }]}
+          onPress={() => router.push('/my-japams')}
+          accessibilityRole="button"
+          accessibilityLabel={
+            currentJapam ? `Current Japam: ${currentJapam.name}. Tap to switch.` : 'Open My Japams'
+          }
+        >
+          <Text numberOfLines={1} style={styles.currentJapamText}>
+            {currentJapam ? `${currentJapam.name} ▾` : 'My Japams'}
+          </Text>
+        </Pressable>
       </View>
 
       {!currentJapamId && !isJapamContextLoading ? (
@@ -1704,10 +1713,22 @@ const styles = StyleSheet.create({
     width: '100%',
   },
 
-  subtitle: {
-    color: '#365f61',
-    fontSize: 18,
-    textAlign: 'center',
+  currentJapamButton: {
+    minHeight: 40,
+    maxWidth: 200,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.66)',
+    borderWidth: 1,
+    borderColor: 'rgba(15,143,135,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+  },
+  currentJapamText: {
+    color: '#063B3B',
+    fontSize: 14,
+    fontWeight: '900',
   },
 
   // Previously flexDirection:'row' + flexWrap:'wrap'. When "Total Count: 124607" grew wide enough
