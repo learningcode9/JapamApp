@@ -798,7 +798,7 @@ export default function TimerScreen() {
           </View>
 
           <View style={styles.topControls}>
-            <CurrentJapamHeaderButton style={{ flex: 1 }} />
+            <CurrentJapamHeaderButton variant="timer" />
             <Text numberOfLines={1} style={styles.welcomeText}>Welcome</Text>
             <Pressable
               style={({ pressed }) => [styles.accountButton, pressed && styles.softPressed]}

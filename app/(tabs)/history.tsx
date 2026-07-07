@@ -1306,7 +1306,7 @@ export default function HistoryScreen() {
     >
       <View style={styles.header}>
         <Text style={styles.title}>History</Text>
-        <CurrentJapamHeaderButton style={{ marginTop: 10 }} />
+        <CurrentJapamHeaderButton variant="history" />
       </View>
 
       {!currentJapamId && !isJapamContextLoading ? (

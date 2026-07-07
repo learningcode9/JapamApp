@@ -2332,7 +2332,7 @@ export default function JapamMain() {
           )}
 
           <View style={styles.topControls}>
-            <CurrentJapamHeaderButton style={{ position: 'absolute', left: 0, top: 2 }} />
+            <CurrentJapamHeaderButton variant="home" />
 
             <Text style={styles.welcomeText}>Welcome</Text>
 

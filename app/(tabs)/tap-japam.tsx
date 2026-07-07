@@ -2318,9 +2318,7 @@ export default function JapamMain() {
             </ImageBackground>
           </View>
 
-          <View style={styles.currentJapamRow}>
-            <CurrentJapamHeaderButton />
-          </View>
+          <CurrentJapamHeaderButton variant="tapJapam" />
 
           {isSigningIn && (
             <View style={styles.signingInBanner}>
@@ -2796,11 +2794,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 16,
     elevation: 4,
-  },
-  currentJapamRow: {
-    width: '100%',
-    alignItems: 'flex-end',
-    marginBottom: 8,
   },
   softPressed: {
     transform: [{ scale: 0.96 }],

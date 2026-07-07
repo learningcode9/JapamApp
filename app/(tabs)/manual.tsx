@@ -337,7 +337,7 @@ if (!userId) {
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
       <View style={styles.panel}>
 
-  <CurrentJapamHeaderButton style={{ marginBottom: 14 }} />
+  <CurrentJapamHeaderButton variant="manual" />
 
   <Text style={styles.title}>Manual Entry</Text>
 
