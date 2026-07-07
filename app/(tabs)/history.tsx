@@ -4,7 +4,6 @@ import {
   appendCompletion,
   buildSupabaseHistoryPayload,
   dedupeByCompletionId,
-  filterByJapam,
   makeCompletionId,
   markSynced,
   mergeHistories,
@@ -15,6 +14,7 @@ import {
   toLocalDayKey,
   type HistoryRecord,
 } from '../../lib/historyStore';
+import * as historyRepository from '../../lib/historyRepository';
 import { useCurrentJapam } from '../../contexts/current-japam-context';
 import { repairLegacyStoredUserId, LEGACY_USER_ID_KEY } from '../../lib/anonymousAuth';
 import { supabase } from '../../lib/supabase';
@@ -932,13 +932,17 @@ export default function HistoryScreen() {
       }
     }
 
-    // Scoped to exactly the current Japam via the centralized filterByJapam selector -- never a
-    // hand-written records.filter(...) here. No current Japam selected/none exist yet -> show
-    // nothing (the render below shows a distinct help state for this), rather than falling back to
-    // legacy/unassigned records.
-    setDailyRows(
-      currentJapamId ? buildDailyRows(filterByJapam(sessions, currentJapamId)) : []
-    );
+    // History does not decide which selector to call or how records get scoped -- it asks
+    // HistoryRepository for this Japam's records (already deduped/filtered) and hands the result
+    // straight to buildDailyRows. No current Japam selected/none exist yet -> show nothing (the
+    // render below shows a distinct help state for this) rather than calling the repository with
+    // no Japam to scope to.
+    if (!currentJapamId) {
+      setDailyRows([]);
+      return;
+    }
+    const japamScopedSessions = await historyRepository.loadHistoryForJapam(currentUserId, currentJapamId);
+    setDailyRows(buildDailyRows(japamScopedSessions));
   }, [currentJapamId]);
 
   // Tombstone-based delete: remove the records locally, record a tombstone (so self-heal never

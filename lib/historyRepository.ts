@@ -8,9 +8,10 @@
  * layering, same reason for existing.
  *
  * Screens must never read AsyncStorage directly, never JSON.parse history themselves, and never
- * call lib/historyStore.ts's selectors (statsByJapam, todayStatsFor, etc.) directly — they ask
- * this repository for the clean, already-computed value they need. This file is where AsyncStorage
- * reads, JSON parsing, and selector orchestration live; screens only render what it returns.
+ * call lib/historyStore.ts's selectors (statsByJapam, filterByJapam, todayStatsFor, etc.) directly
+ * — they ask this repository for the clean, already-computed value they need. This file is where
+ * AsyncStorage reads, JSON parsing, and selector orchestration live; screens only render what it
+ * returns. No UI decides which selector to call — that decision lives here, once.
  *
  * This commit implements read operations only. Writes (appendCompletion, edits, deletes) are not
  * moved here — Timer/Home/Tap/Manual/History are not being wired to this repository yet, and their
@@ -22,6 +23,7 @@ import {
   normalizeAll,
   statsByJapam,
   japamStatsFor as japamStatsForSelector,
+  filterByJapam,
   toLocalDayKey,
   type HistoryRecord,
   type RawHistoryRecord,
@@ -61,6 +63,22 @@ export const loadHistoryForUser = async (
 ): Promise<HistoryRecord[]> => {
   const all = await loadHistory();
   return all.filter((r) => (userId ? r.userId === userId : !r.userId));
+};
+
+/**
+ * This user's history records for exactly one Japam, already scoped and deduped -- the single
+ * place any screen scoped to "the current Japam" (History) asks for its records, instead of
+ * loading history and calling a historyStore selector itself. Internally: load history, filter to
+ * this user, then hand off to filterByJapam (which dedupes and matches the Japam). japamId: null
+ * matches only legacy/unassigned records, mirroring lib/historyStore.ts's own null-means-legacy
+ * convention throughout (statsByJapam, planHistoryDayAdjustment, filterByJapam).
+ */
+export const loadHistoryForJapam = async (
+  userId: string | null | undefined,
+  japamId: string | null,
+): Promise<HistoryRecord[]> => {
+  const forUser = await loadHistoryForUser(userId);
+  return filterByJapam(forUser, japamId);
 };
 
 /**
