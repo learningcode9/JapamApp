@@ -90,14 +90,26 @@ const fetchSuggestedJapamName = async (userId: string | null): Promise<string> =
 
 export default function LegacyHistoryBackfillRunner() {
   const { isLoading, createJapam } = useCurrentJapam();
-  const hasRunRef = useRef(false);
+  // Identity-aware run guard, not a single boolean: this component is mounted once for the app's
+  // whole lifetime (inside CurrentJapamProvider, which itself never unmounts), so a single
+  // hasRunRef would permanently skip a NEW identity's own check for the rest of the session after
+  // the FIRST identity was checked -- e.g. starting as a guest, then signing in without
+  // restarting the app, would silently skip that signed-in identity's backfill until next cold
+  // start. Each identity (a userId, or 'guest') must be checked independently, exactly once per
+  // session; a previously-checked identity must never block a different one.
+  const checkedIdentitiesRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    if (isLoading || hasRunRef.current) return;
-    hasRunRef.current = true;
+    if (isLoading) return;
 
     (async () => {
       const userId = await AsyncStorage.getItem(USER_ID_KEY);
+      const identityKey = userId || 'guest';
+      // Synchronous check-then-mark with no await in between: safe against this effect firing
+      // again in quick succession for the SAME identity (e.g. isLoading flickering, or React
+      // re-invoking effects), while never blocking a DIFFERENT identity from being checked.
+      if (checkedIdentitiesRef.current.has(identityKey)) return;
+      checkedIdentitiesRef.current.add(identityKey);
 
       if (await isLegacyHistoryBackfillComplete(userId)) return;
 
