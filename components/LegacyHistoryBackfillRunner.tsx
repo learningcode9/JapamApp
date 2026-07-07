@@ -32,10 +32,14 @@
  * This is a known, accepted limitation (per the approved proposal) until Japams themselves get
  * Supabase sync -- not something this commit attempts to solve.
  *
- * The suggested name for the created Japam is a fixed generic default (DEFAULT_JAPAM_NAME), not
- * user_profiles.japam_name -- deliberately, to avoid adding any new Supabase read to this
- * commit. Using that profile field as a nicer suggested name is a natural, separate, later
- * enhancement, not part of this orchestration.
+ * The suggested name for the created Japam is a best-effort read of user_profiles.japam_name (the
+ * SAME read-only query already used elsewhere in this app -- see loadJapamNameFromSupabase in
+ * app/(tabs)/index.tsx and app/(tabs)/tap-japam.tsx), falling back to a fixed generic default
+ * (DEFAULT_JAPAM_NAME) for guests, a missing/blank profile name, or any fetch failure. This lookup
+ * never blocks startup (it only runs after step 1 already confirmed there's something to migrate,
+ * inside the same fire-and-forget effect) and never fails the backfill itself -- any error here is
+ * caught locally and just falls through to the generic default, same as every other best-effort
+ * step in this flow.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useRef } from 'react';
@@ -53,6 +57,36 @@ const DEFAULT_JAPAM_NAME = 'My Japam';
 // Never persisted -- only used to ask planLegacyHistoryBackfill "is there anything to reassign?"
 // without actually reassigning anything yet.
 const CHECK_ONLY_PLACEHOLDER = '__legacy_backfill_check_only__';
+
+/**
+ * Best-effort suggested name for the default Japam: user_profiles.japam_name for a signed-in
+ * user, if present and non-blank, else DEFAULT_JAPAM_NAME. Guests, missing env config, a
+ * not-found/empty profile row, a blank name, or any network/parse error all fall through to the
+ * same generic default -- this never throws.
+ */
+const fetchSuggestedJapamName = async (userId: string | null): Promise<string> => {
+  if (!userId) return DEFAULT_JAPAM_NAME;
+
+  try {
+    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseKey) return DEFAULT_JAPAM_NAME;
+
+    const encodedUserId = encodeURIComponent(userId);
+    const response = await fetch(
+      `${supabaseUrl}/rest/v1/user_profiles?user_id=eq.${encodedUserId}&select=japam_name`,
+      { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` } }
+    );
+    if (!response.ok) return DEFAULT_JAPAM_NAME;
+
+    const rows = await response.json();
+    const profileName = rows?.[0]?.japam_name;
+    const trimmed = typeof profileName === 'string' ? profileName.trim() : '';
+    return trimmed.length > 0 ? trimmed : DEFAULT_JAPAM_NAME;
+  } catch {
+    return DEFAULT_JAPAM_NAME;
+  }
+};
 
 export default function LegacyHistoryBackfillRunner() {
   const { isLoading, createJapam } = useCurrentJapam();
@@ -80,9 +114,10 @@ export default function LegacyHistoryBackfillRunner() {
         return;
       }
 
-      // Step 2: create the one default Japam. createJapam already auto-selects it -- existing,
-      // untouched Context behavior.
-      const created = await createJapam(DEFAULT_JAPAM_NAME);
+      // Step 2: create the one default Japam, named after the best available existing name.
+      // createJapam already auto-selects it -- existing, untouched Context behavior.
+      const suggestedName = await fetchSuggestedJapamName(userId);
+      const created = await createJapam(suggestedName);
       if (!created) return; // Defensive only: createJapam only returns null for a blank name.
 
       // Step 3: persist the real reassignment using the just-created Japam's real id/name.
