@@ -16,24 +16,10 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { activeJapams, type Japam } from '../lib/japams';
-import {
-  statsByJapam,
-  japamStatsFor,
-  toLocalDayKey,
-  type JapamStats,
-  type RawHistoryRecord,
-} from '../lib/historyStore';
+import { loadJapamStats, japamStatsFor, type JapamStats } from '../lib/historyRepository';
 import { useCurrentJapam } from '../contexts/current-japam-context';
 
 const USER_ID_KEY = 'userId';
-const HISTORY_KEY = 'history';
-
-const getLocalDateKey = (date = new Date()) => {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-};
 
 const ZERO_STATS: JapamStats = { todayMalas: 0, todayTotalCount: 0, lifetimeMalas: 0, lifetimeTotalCount: 0 };
 
@@ -54,27 +40,19 @@ export default function MyJapamsScreen() {
 
   const [statsMap, setStatsMap] = useState<Map<string | null, JapamStats>>(new Map());
 
-  // Reloads local history + recomputes stats every time this screen is focused -- matching the
-  // same useFocusEffect convention already used by Timer/History elsewhere in this app. Uses ONLY
-  // the centralized statsByJapam selector; never filters records by hand here.
+  // Reloads stats every time this screen is focused -- matching the same useFocusEffect convention
+  // already used by Timer/History elsewhere in this app. This screen never reads AsyncStorage,
+  // never parses JSON, and never calls a historyStore selector itself -- it only asks
+  // historyRepository for the already-computed stats and renders them.
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
       (async () => {
-        const [userId, rawHistory] = await Promise.all([
-          AsyncStorage.getItem(USER_ID_KEY),
-          AsyncStorage.getItem(HISTORY_KEY),
-        ]);
+        const userId = await AsyncStorage.getItem(USER_ID_KEY);
         if (cancelled) return;
-        let history: RawHistoryRecord[] = [];
-        try {
-          const parsed = rawHistory ? JSON.parse(rawHistory) : [];
-          history = Array.isArray(parsed) ? parsed : [];
-        } catch {
-          history = [];
-        }
-        const todayKey = getLocalDateKey();
-        setStatsMap(statsByJapam(history, userId, todayKey, toLocalDayKey));
+        const stats = await loadJapamStats(userId);
+        if (cancelled) return;
+        setStatsMap(stats);
       })();
       return () => {
         cancelled = true;
