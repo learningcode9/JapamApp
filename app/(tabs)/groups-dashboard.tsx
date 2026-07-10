@@ -58,6 +58,65 @@ const NAME_CELL_FLEX = isTablet ? 1.3 : isNarrowPhone ? 0.95 : 1.0;
 // a little, which Name has the headroom for (short member names in practice).
 const STAT_CELL_FLEX = isNarrowPhone ? 0.78 : isTablet ? 1.05 : 0.9;
 
+function normalizeRouteParam(value: string | string[] | undefined, fallback: string): string {
+  if (Array.isArray(value)) {
+    return typeof value[0] === 'string' ? value[0] : fallback;
+  }
+  return typeof value === 'string' ? value : fallback;
+}
+
+type GroupsDashboardErrorBoundaryProps = {
+  children: React.ReactNode;
+  onBackToGroups: () => void;
+  groupIdLast4: string;
+};
+
+type GroupsDashboardErrorBoundaryState = {
+  hasError: boolean;
+};
+
+/**
+ * Contains an unexpected render-time failure to this route. Async/RPC failures already render
+ * the normal error state below; this boundary is only the final safeguard against a blank route
+ * or a whole-app React crash from an unexpected native/runtime render exception.
+ */
+class GroupsDashboardErrorBoundary extends React.Component<
+  GroupsDashboardErrorBoundaryProps,
+  GroupsDashboardErrorBoundaryState
+> {
+  state: GroupsDashboardErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown, errorInfo: React.ErrorInfo) {
+    const err = error as { name?: string; message?: string };
+    console.error('[GROUPS_DIAG] dashboard-render-error', {
+      name: String(err?.name || 'unknown'),
+      message: String(err?.message || error || 'unknown'),
+      groupIdLast4: this.props.groupIdLast4 || 'none',
+      componentStack: String(errorInfo.componentStack || '').trim(),
+    });
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={styles.boundaryFallback}>
+          <Ionicons name="alert-circle-outline" size={42} color={TEAL} />
+          <Text style={styles.boundaryFallbackTitle}>This group could not be displayed.</Text>
+          <Pressable style={styles.boundaryFallbackButton} onPress={this.props.onBackToGroups}>
+            <Text style={styles.boundaryFallbackButtonText}>Back to Groups</Text>
+          </Pressable>
+        </View>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 // Local-day boundary, matching the same "viewer's local calendar day" definition used
 // throughout the rest of this app (see lib/historyStore.ts's toLocalDayKey/todayStatsFor) —
 // not a UTC day, since get_group_dashboard's today_start/today_end are caller-supplied for
@@ -86,9 +145,10 @@ export default function GroupsDashboardScreen() {
     : Math.max(22, insets.bottom + 14));
 
   const router = useRouter();
-  const params = useLocalSearchParams<{ groupId?: string; groupName?: string }>();
-  const groupId = params.groupId || '';
-  const groupName = params.groupName || 'Group';
+  const params = useLocalSearchParams<{ groupId?: string | string[]; groupName?: string | string[] }>();
+  const groupId = normalizeRouteParam(params.groupId, '');
+  const groupName = normalizeRouteParam(params.groupName, 'Group');
+  const groupIdLast4 = groupId ? groupId.slice(-4) : 'none';
   const [displayGroupName, setDisplayGroupName] = useState(groupName);
 
   const [userId, setUserId] = useState<string | null>(null);
@@ -155,6 +215,13 @@ export default function GroupsDashboardScreen() {
       } finally {
         if (!silent) setLoading(false);
       }
+    } catch (err: any) {
+      // AsyncStorage and the identity read occur before the RPC-specific catch above. Never let
+      // a rejected lifecycle load escape a focus callback as an unhandled JS exception.
+      if (!silent) {
+        setError(err?.message || 'Could not load this group.');
+        setLoading(false);
+      }
     } finally {
       loadInFlightRef.current = false;
     }
@@ -198,7 +265,10 @@ export default function GroupsDashboardScreen() {
 
   // The dashboard rows already tell us the current viewer's own role in this group (no separate
   // "am I admin" call needed) — find their own row by userId.
-  const isAdmin = rows.some((row) => row.userId === userId && row.role === 'admin');
+  // getGroupDashboard always returns an array, but keeping the render boundary input array-safe
+  // prevents an unexpected runtime payload from turning this route into a blank screen.
+  const dashboardRows = Array.isArray(rows) ? rows : [];
+  const isAdmin = dashboardRows.some((row) => row.userId === userId && row.role === 'admin');
 
   // Lazy, one-time fetch — the invite code never changes once a group is created, so there's no
   // need to re-fetch it on every 12s refresh tick the way the roster/stats are. Only admins ever
@@ -346,6 +416,11 @@ export default function GroupsDashboardScreen() {
 
   return (
     <View style={styles.container}>
+      <GroupsDashboardErrorBoundary
+        key={groupId}
+        onBackToGroups={() => router.replace('/groups')}
+        groupIdLast4={groupIdLast4}
+      >
       <View style={[styles.headerRow, { paddingTop: Math.max(16, insets.top + 8) }]}>
         <Pressable style={styles.backButton} onPress={() => router.back()}>
           <Ionicons name="chevron-back" size={24} color={TEAL} />
@@ -401,7 +476,7 @@ export default function GroupsDashboardScreen() {
           <ActivityIndicator color={TEAL} style={styles.loadingSpinner} />
         ) : error ? (
           <Text style={styles.errorText}>{error}</Text>
-        ) : rows.length === 0 ? (
+        ) : dashboardRows.length === 0 ? (
           <Text style={styles.emptyText}>No members found for this group.</Text>
         ) : (
           <>
@@ -434,7 +509,7 @@ export default function GroupsDashboardScreen() {
                 </View>
               </View>
 
-              {sortDashboardRows(rows).map((row, index) => (
+              {sortDashboardRows(dashboardRows).map((row, index) => (
                 <View
                   key={row.userId}
                   style={[styles.tableRow, index % 2 === 1 && styles.altTableRow]}
@@ -471,6 +546,7 @@ export default function GroupsDashboardScreen() {
           </>
         )}
       </ScrollView>
+      </GroupsDashboardErrorBoundary>
 
       <Modal visible={showRenameModal} transparent animationType="fade" onRequestClose={() => setShowRenameModal(false)}>
         <View style={styles.modalOverlay}>
@@ -683,6 +759,35 @@ const styles = StyleSheet.create({
   memberName: { fontSize: NAME_FONT_SIZE, fontWeight: '700', color: '#12383c' },
   adminStar: { color: '#c08a1e', fontSize: 15, fontWeight: '700' },
   statValue: { fontSize: VALUE_FONT_SIZE, fontWeight: '900', color: TEAL, textAlign: 'center' },
+  boundaryFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    backgroundColor: '#f5fafa',
+  },
+  boundaryFallbackTitle: {
+    marginTop: 12,
+    color: '#12383c',
+    fontSize: 17,
+    fontWeight: '700',
+    lineHeight: 24,
+    textAlign: 'center',
+  },
+  boundaryFallbackButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 18,
+    minHeight: 44,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+    backgroundColor: TEAL,
+  },
+  boundaryFallbackButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
   leaveGroupButton: {
     alignSelf: 'center',
     flexDirection: 'row',
