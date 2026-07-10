@@ -5,6 +5,7 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
   DeviceEventEmitter,
   Dimensions,
   Modal,
@@ -146,6 +147,9 @@ export default function GroupsDashboardScreen() {
     : Math.max(22, insets.bottom + 14));
 
   const router = useRouter();
+  const returnToGroups = useCallback(() => {
+    router.replace('/groups');
+  }, [router]);
   const params = useLocalSearchParams<{ groupId?: string | string[]; groupName?: string | string[] }>();
   const groupId = normalizeRouteParam(params.groupId, '');
   const groupName = normalizeRouteParam(params.groupName, 'Group');
@@ -182,6 +186,19 @@ export default function GroupsDashboardScreen() {
   // load can all fire close together; this ensures only one get_group_dashboard request is ever
   // in flight at a time, exactly like the same pattern already used by syncPendingHistory.
   const loadInFlightRef = useRef(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== 'android') return undefined;
+
+      const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+        returnToGroups();
+        return true;
+      });
+
+      return () => subscription.remove();
+    }, [returnToGroups])
+  );
 
   useEffect(() => {
     setDisplayGroupName(groupName);
@@ -420,11 +437,11 @@ export default function GroupsDashboardScreen() {
     <View style={styles.container}>
       <GroupsDashboardErrorBoundary
         key={groupId}
-        onBackToGroups={() => router.replace('/groups')}
+        onBackToGroups={returnToGroups}
         groupIdLast4={groupIdLast4}
       >
       <View style={[styles.headerRow, { paddingTop: Math.max(16, insets.top + 8) }]}>
-        <Pressable style={styles.backButton} onPress={() => router.back()}>
+        <Pressable style={styles.backButton} onPress={returnToGroups}>
           <Ionicons name="chevron-back" size={24} color={TEAL} />
         </Pressable>
         <Text style={styles.header} numberOfLines={1}>{displayGroupName}</Text>
