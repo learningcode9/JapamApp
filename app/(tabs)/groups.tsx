@@ -22,6 +22,7 @@ import {
   type CreateGroupResult,
   type MyGroup,
 } from '../../lib/groupsRepository';
+import { repairLegacyStoredUserId } from '../../lib/anonymousAuth';
 
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
@@ -48,6 +49,7 @@ export default function GroupsScreen() {
   const [joinError, setJoinError] = useState('');
 
   const loadGroups = useCallback(async () => {
+    await repairLegacyStoredUserId();
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
     const savedUserName = (await AsyncStorage.getItem(USER_NAME_KEY)) || '';
     setUserId(savedUserId);

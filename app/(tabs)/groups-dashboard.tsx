@@ -27,6 +27,7 @@ import {
   renameGroup,
   type GroupDashboardRow,
 } from '../../lib/groupsRepository';
+import { repairLegacyStoredUserId } from '../../lib/anonymousAuth';
 
 // While the dashboard is focused, re-fetch this often so other members' completions show up
 // without anyone needing to leave and re-enter the screen. Kept well above the Supabase round
@@ -196,6 +197,7 @@ export default function GroupsDashboardScreen() {
     loadInFlightRef.current = true;
     const silent = options?.silent ?? false;
     try {
+      await repairLegacyStoredUserId();
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
       setUserId(savedUserId);
 
