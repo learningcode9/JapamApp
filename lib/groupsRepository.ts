@@ -1,10 +1,8 @@
 /**
  * Groups / Family Japam — thin data-access layer over the live Supabase RPCs
- * (create_group, find_group_by_invite_code, get_my_groups, get_group_dashboard) plus the
- * direct group_members insert used by the Join flow. No UI here.
+ * (create_group, join_group_by_invite_code, get_my_groups, get_group_dashboard). No UI here.
  *
- * user_id is always a plain opaque string (Google numeric ID today — see
- * GUEST_TO_ANON_AUTH_MIGRATION.md for why this isn't guaranteed to stay that way forever).
+ * Membership writes derive the user ID from the active Supabase session inside the join RPC.
  */
 import { supabase } from './supabase';
 
@@ -78,29 +76,22 @@ export async function createGroup(
 
 export async function joinGroupByInviteCode(
   inviteCode: string,
-  userId: string,
   userName: string
 ): Promise<JoinGroupOutcome> {
-  const { data: found, error: findError } = await supabase.rpc('find_group_by_invite_code', {
-    p_invite_code: inviteCode,
-  });
-  if (findError) return { kind: 'error', message: findError.message };
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError || !sessionData.session?.user?.id) {
+    return { kind: 'error', message: 'Please sign in before joining a group.' };
+  }
 
-  const group = Array.isArray(found) && found.length > 0 ? (found[0] as any) : null;
+  const { data, error } = await supabase.rpc('join_group_by_invite_code', {
+    p_invite_code: inviteCode,
+    p_user_name: userName,
+  });
+  if (error) return { kind: 'error', message: error.message };
+
+  const group = Array.isArray(data) && data.length > 0 ? (data[0] as any) : null;
   if (!group) return { kind: 'notFound' };
   if (!group.is_active) return { kind: 'inactive' };
-
-  const { error: insertError } = await supabase
-    .from('group_members')
-    .insert({ group_id: group.id, user_id: userId, user_name: userName, role: 'member' });
-
-  if (insertError) {
-    // 23505 = unique_violation on (group_id, user_id) -> already a member; treat as success.
-    if ((insertError as any).code === '23505') {
-      return { kind: 'joined', groupId: group.id, groupName: group.name };
-    }
-    return { kind: 'error', message: insertError.message };
-  }
 
   return { kind: 'joined', groupId: group.id, groupName: group.name };
 }

@@ -146,7 +146,7 @@ export default function GroupsScreen() {
     setJoining(true);
     setJoinError('');
     try {
-      const outcome = await joinGroupByInviteCode(code, userId, userName);
+      const outcome = await joinGroupByInviteCode(code, userName);
       if (outcome.kind === 'notFound') {
         setJoinError('No group found with that code.');
         return;
