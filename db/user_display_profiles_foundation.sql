@@ -15,10 +15,18 @@ where n.nspname = 'public'
   and p.proname in ('upsert_my_display_profile', 'reset_my_display_profile_to_provider')
 order by signature;
 
+-- SECTION 2 — GUARDED APPLY
+--
+-- Run the complete file as one SQL Editor script. All DDL is inside this
+-- transaction, so any failed guard or create rolls back the entire foundation.
+-- Distinct dollar-quote tags are intentional: they make the boundaries between
+-- the preflight and the two PL/pgSQL function bodies unambiguous to SQL editors.
+begin;
+
 -- Refuse to adopt or overwrite an unexpected existing object. The read-only
 -- precheck above is for operator visibility; this guard makes the apply step
 -- safe even if the database changes between precheck and execution.
-do $$
+do $display_profile_preflight$
 begin
   if to_regclass('public.user_display_profiles') is not null then
     raise exception 'public.user_display_profiles already exists; stop and review before applying this foundation';
@@ -34,7 +42,7 @@ begin
     raise exception 'a user display-profile RPC already exists; stop and review before applying this foundation';
   end if;
 end;
-$$;
+$display_profile_preflight$;
 
 create table public.user_display_profiles (
   user_id uuid primary key references auth.users(id) on delete cascade,
@@ -76,7 +84,7 @@ returns table (
 language plpgsql
 security definer
 set search_path = public, pg_temp
-as $$
+as $upsert_my_display_profile$
 declare
   v_user_id uuid := auth.uid();
   v_display_name text := btrim(p_display_name);
@@ -133,7 +141,7 @@ begin
     end
   returning profile.user_id, profile.display_name, profile.name_source, profile.updated_at;
 end;
-$$;
+$upsert_my_display_profile$;
 
 create function public.reset_my_display_profile_to_provider(
   p_display_name text
@@ -147,7 +155,7 @@ returns table (
 language plpgsql
 security definer
 set search_path = public, pg_temp
-as $$
+as $reset_my_display_profile_to_provider$
 declare
   v_user_id uuid := auth.uid();
   v_display_name text := btrim(p_display_name);
@@ -183,7 +191,7 @@ begin
     updated_at = now()
   returning profile.user_id, profile.display_name, profile.name_source, profile.updated_at;
 end;
-$$;
+$reset_my_display_profile_to_provider$;
 
 revoke all on function public.upsert_my_display_profile(text, text) from public;
 revoke execute on function public.upsert_my_display_profile(text, text) from anon;
@@ -246,6 +254,8 @@ order by policyname;
 
 select count(*) as profile_rows_after_foundation
 from public.user_display_profiles;
+
+commit;
 
 -- SECTION 4 — STAGING-ONLY CONTRACT VALIDATION (RUN SEPARATELY, THEN ROLLBACK)
 --
