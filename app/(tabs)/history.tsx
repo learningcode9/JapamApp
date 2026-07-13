@@ -172,6 +172,11 @@ const backfillMissingUserNames = async (userId: string, userName: string) => {
   const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key || !userId || !userName) return;
 
+  // Require a real session JWT. Without one the request would run as `anon` role, which has
+  // no UPDATE policy — guaranteed 403 (mirrors syncHistoryEditsToSupabase below).
+  const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
+  if (!sessionToken) return;
+
   try {
     const query = new URLSearchParams({ user_id: `eq.${userId}` });
     query.append('or', '(user_name.is.null,user_name.eq.)');
@@ -180,7 +185,7 @@ const backfillMissingUserNames = async (userId: string, userName: string) => {
       headers: {
         'Content-Type': 'application/json',
         apikey: key,
-        Authorization: `Bearer ${key}`,
+        Authorization: `Bearer ${sessionToken}`,
         Prefer: 'return=minimal',
       },
       body: JSON.stringify({ user_name: userName }),
@@ -325,6 +330,12 @@ const fetchRemoteSessions = async (userId: string, legacyUserId?: string | null)
 
   if (!url || !key || !userId) return null;
 
+  // Require a real session JWT — an anon-key request has no SELECT policy for this user's rows
+  // once RLS is tightened (mirrors syncPendingHistory's session-token preference). No session
+  // returns null here, same as any other fetch failure below (caller keeps local history as-is).
+  const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
+  if (!sessionToken) return null;
+
   try {
     // taggedUserId lets a legacy-id query's rows be tagged as belonging to the canonical UUID, so
     // they merge/display/reconcile identically to rows fetched by the UUID itself.
@@ -339,7 +350,7 @@ const fetchRemoteSessions = async (userId: string, legacyUserId?: string | null)
       const response = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
         headers: {
           apikey: key,
-          Authorization: `Bearer ${key}`,
+          Authorization: `Bearer ${sessionToken}`,
         },
         cache: 'no-store',
       });
@@ -401,8 +412,13 @@ const saveToSupabase = async (
   const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) return false;
 
+  // Require a real session JWT — an anon-key request has no INSERT policy for this user's own
+  // rows once RLS is tightened. Fail closed (stays 'pending' for retry) rather than falling back
+  // to the anon key.
+  const accessToken = (await supabase.auth.getSession()).data.session?.access_token;
+  if (!accessToken) return false;
+
   try {
-    const accessToken = (await supabase.auth.getSession()).data.session?.access_token || key;
     const body = buildSupabaseHistoryPayload({
       date: createdAt,
       malas,

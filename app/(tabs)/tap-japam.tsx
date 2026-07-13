@@ -794,11 +794,16 @@ export default function JapamMain() {
         const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
         let remoteSessions: Session[] | null = null;
 
-        if (url && key) {
+        // Require a real session JWT — an anon-key request has no SELECT policy for another
+        // user's rows and none for this user's own rows once RLS is tightened (mirrors
+        // syncPendingHistory's session-token preference). No session means remoteSessions stays
+        // null below, which skips the merge and leaves local history untouched.
+        const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
+        if (url && key && sessionToken) {
           const encodedUserId = encodeURIComponent(savedUserId);
           const res = await fetch(
             `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,completion_id&order=created_at.asc`,
-            { headers: { apikey: key, Authorization: `Bearer ${key}` } }
+            { headers: { apikey: key, Authorization: `Bearer ${sessionToken}` } }
           );
           if (res.ok) {
             const rows: {
@@ -1208,10 +1213,16 @@ export default function JapamMain() {
       const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       if (!supabaseUrl || !supabaseKey) return;
 
+      // Require a real session JWT — an anon-key request has no SELECT policy for this user's
+      // rows once RLS is tightened. No session means we leave local history untouched (same
+      // no-op path as any other fetch failure below).
+      const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
+      if (!sessionToken) return;
+
       const encodedUserId = encodeURIComponent(googleUserId);
       const response = await fetch(
         `${supabaseUrl}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=*&order=created_at.asc`,
-        { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` } }
+        { headers: { apikey: supabaseKey, Authorization: `Bearer ${sessionToken}` } }
       );
 
       if (!response.ok) return;
@@ -1720,9 +1731,17 @@ export default function JapamMain() {
           );
           void (async () => {
             try {
+              // Require a real session JWT — an anon-key request has no INSERT policy for this
+              // user's own rows once RLS is tightened (mirrors syncPendingHistory's session-token
+              // preference). No session leaves the record 'pending' for the next opportunistic sync.
+              const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
+              if (!sessionToken) {
+                console.log('[SYNC_FAILED] source=%s completionId=%s reason=no-session', source, payload.completion_id);
+                return;
+              }
               const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${key}`, Prefer: 'return=minimal,resolution=merge-duplicates' },
+                headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${sessionToken}`, Prefer: 'return=minimal,resolution=merge-duplicates' },
                 body: JSON.stringify(payload),
               });
 
