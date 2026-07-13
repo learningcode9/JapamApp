@@ -5,6 +5,7 @@ import {
   markSynced,
   toLocalDayKey,
 } from '../../lib/historyStore';
+import { supabase } from '../../lib/supabase';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect } from 'expo-router';
 import React, { useState } from 'react';
@@ -48,6 +49,11 @@ const backfillMissingUserNames = async (userId: string, userName: string) => {
   const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key || !userId || !userName) return;
 
+  // Require a real session JWT. Without one the request would run as `anon` role, which has
+  // no UPDATE policy — guaranteed 403 (mirrors history.tsx's syncHistoryEditsToSupabase).
+  const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
+  if (!sessionToken) return;
+
   try {
     const query = new URLSearchParams({ user_id: `eq.${userId}` });
     query.append('or', '(user_name.is.null,user_name.eq.)');
@@ -56,7 +62,7 @@ const backfillMissingUserNames = async (userId: string, userName: string) => {
       headers: {
         'Content-Type': 'application/json',
         apikey: key,
-        Authorization: `Bearer ${key}`,
+        Authorization: `Bearer ${sessionToken}`,
         Prefer: 'return=minimal',
       },
       body: JSON.stringify({ user_name: userName }),
@@ -88,6 +94,15 @@ const syncManualEntryToSupabase = async ({
       return;
     }
 
+    // Require a real session JWT. Without one the request would run as `anon` role, which has
+    // no INSERT policy for this user's own rows once RLS is tightened — mirrors
+    // history.tsx's syncHistoryEditsToSupabase. Leave the record pending for retry on next sync.
+    const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
+    if (!sessionToken) {
+      console.log('[Manual] MANUAL_SYNC_FAILED reason=no-session (stays pending)');
+      return;
+    }
+
     const payload = buildSupabaseHistoryPayload({
       date: selectedDateTime,
       malas: malaNum,
@@ -111,7 +126,7 @@ const syncManualEntryToSupabase = async ({
       headers: {
         'Content-Type': 'application/json',
         apikey: key,
-        Authorization: `Bearer ${key}`,
+        Authorization: `Bearer ${sessionToken}`,
         Prefer: 'return=minimal,resolution=merge-duplicates',
       },
       body: JSON.stringify(payload),

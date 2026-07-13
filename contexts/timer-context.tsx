@@ -820,17 +820,27 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         const encUid = encodeURIComponent(uid);
         let remoteTomb: string[] = [];
         try {
-          const tRes = await fetch(
-            `${url}/rest/v1/deleted_completions?user_id=eq.${encUid}&select=completion_id`,
-            { headers: { apikey: key, Authorization: `Bearer ${key}` } }
-          );
-          if (tRes.ok) {
-            remoteTomb = ((await tRes.json()) as { completion_id?: string }[]).map((r) =>
-              String(r.completion_id)
-            );
-            console.log('[TOMBSTONE_REMOTE_COUNT] count=%d', remoteTomb.length);
+          // Require a real session JWT — an anon-key request has no SELECT policy for this
+          // user's own tombstones once RLS is tightened (mirrors syncPendingHistory's
+          // session-token preference below). No session leaves remoteTomb empty; localTomb
+          // (already loaded above) is still honored, so no tombstone is lost.
+          const { data: tombSessionData } = await supabase.auth.getSession();
+          const tombSessionToken = tombSessionData.session?.access_token;
+          if (!tombSessionToken) {
+            console.log('[TOMBSTONE_FETCH_SKIPPED] reason=no-session');
           } else {
-            console.log('[TOMBSTONE_FETCH_SKIPPED] status=%d', tRes.status);
+            const tRes = await fetch(
+              `${url}/rest/v1/deleted_completions?user_id=eq.${encUid}&select=completion_id`,
+              { headers: { apikey: key, Authorization: `Bearer ${tombSessionToken}` } }
+            );
+            if (tRes.ok) {
+              remoteTomb = ((await tRes.json()) as { completion_id?: string }[]).map((r) =>
+                String(r.completion_id)
+              );
+              console.log('[TOMBSTONE_REMOTE_COUNT] count=%d', remoteTomb.length);
+            } else {
+              console.log('[TOMBSTONE_FETCH_SKIPPED] status=%d', tRes.status);
+            }
           }
         } catch {
           console.log('[TOMBSTONE_FETCH_SKIPPED] reason=network');
@@ -896,11 +906,17 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       const storedUserName = (await AsyncStorage.getItem('userName')) || '';
       const storedUserEmail = (await AsyncStorage.getItem('userEmail')) || '';
       const fallbackUserName = storedUserName || storedUserEmail || 'Unknown User';
-      // Prefer the authenticated session's access token so this upload is subject to the
+      // Require the authenticated session's access token so this upload is subject to the
       // authenticated RLS policy on japam_history (mirrors history.tsx's saveToSupabase and the
-      // tombstone-push path above); fall back to the anon key only when genuinely signed out.
+      // tombstone-push path above). Fail closed (leave 'pending' for retry) rather than falling
+      // back to the anon key, which has no INSERT policy for this user's own rows once RLS is
+      // tightened.
       const { data: sessionData } = await supabase.auth.getSession();
-      const uploadToken = sessionData.session?.access_token || key;
+      const uploadToken = sessionData.session?.access_token;
+      if (!uploadToken) {
+        console.log('[Stats] STATS_SYNC_SKIPPED reason=no-session pendingCount=%d', pending.length);
+        return;
+      }
       const syncedIds: string[] = [];
       for (const rec of pending) {
         const payload = buildSupabaseHistoryPayload(rec, uid, fallbackUserName);

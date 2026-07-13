@@ -236,12 +236,16 @@ export default function TimerScreen() {
     if (userId) {
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-      if (url && key) {
+      // Require a real session JWT — an anon-key request has no SELECT policy for this user's
+      // rows once RLS is tightened (mirrors syncPendingHistory's session-token preference). No
+      // session means mergedHistory stays local-only below (no remote merge attempted).
+      const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
+      if (url && key && sessionToken) {
         try {
           const encodedUserId = encodeURIComponent(userId);
           const res = await fetch(
             `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,completion_id&order=created_at.asc&limit=10000`,
-            { headers: { apikey: key, Authorization: `Bearer ${key}` } }
+            { headers: { apikey: key, Authorization: `Bearer ${sessionToken}` } }
           );
           if (res.ok) {
             const rows: {
