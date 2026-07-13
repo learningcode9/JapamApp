@@ -12,6 +12,7 @@ import { PaperProvider } from 'react-native-paper';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { ZEN_BACKGROUND } from '@/constants/assets';
 import { repairLegacyStoredUserId } from '@/lib/anonymousAuth';
+import { DisplayProfileSyncRunner } from '@/components/display-profile-sync-runner';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -193,6 +194,7 @@ export default function RootLayout() {
 
   return (
     <View style={{ flex: 1, backgroundColor: '#edf7f4' }}>
+      <DisplayProfileSyncRunner />
       <PaperProvider>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <Stack>

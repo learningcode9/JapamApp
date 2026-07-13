@@ -6,7 +6,7 @@ jest.mock('../supabase', () => ({
 }));
 
 import { supabase } from '../supabase';
-import { joinGroupByInviteCode } from '../groupsRepository';
+import { getGroupDashboard, joinGroupByInviteCode } from '../groupsRepository';
 
 const mockedSupabase = supabase as unknown as {
   auth: { getSession: jest.Mock };
@@ -78,5 +78,79 @@ describe('joinGroupByInviteCode', () => {
       error: null,
     });
     await expect(joinGroupByInviteCode('OFF', 'Dev User')).resolves.toEqual({ kind: 'inactive' });
+  });
+});
+
+describe('getGroupDashboard display-name contract', () => {
+  it('keeps the canonical server-resolved name, role, member count, and totals intact', async () => {
+    mockedSupabase.rpc.mockResolvedValue({
+      data: [
+        {
+          user_id: '63782858-afab-4b60-96bf-34a525d96719',
+          user_name: 'Subbarao',
+          role: 'member',
+          joined_at: '2026-07-12T00:00:00Z',
+          today_malas: 2,
+          today_count: 216,
+          total_malas: 31,
+          total_count: 3348,
+          last_updated: '2026-07-12T12:00:00Z',
+        },
+      ],
+      error: null,
+    });
+
+    const rows = await getGroupDashboard('group-id', 'viewer-id', 'today-start', 'today-end');
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      userId: '63782858-afab-4b60-96bf-34a525d96719',
+      userName: 'Subbarao',
+      role: 'member',
+      todayMalas: 2,
+      todayCount: 216,
+      totalMalas: 31,
+      totalCount: 3348,
+    });
+  });
+
+  it('keeps snapshot fallback names for missing profiles and legacy non-UUID member IDs', async () => {
+    mockedSupabase.rpc.mockResolvedValue({
+      data: [
+        {
+          user_id: '104462459725571711632',
+          user_name: 'Bellam',
+          role: 'member',
+          joined_at: '2026-07-12T00:00:00Z',
+          today_malas: 0,
+          today_count: 0,
+          total_malas: 0,
+          total_count: 0,
+          last_updated: null,
+        },
+        {
+          user_id: 'legacy@example.invalid',
+          user_name: 'Unknown',
+          role: 'member',
+          joined_at: '2026-07-12T00:00:00Z',
+          today_malas: 0,
+          today_count: 0,
+          total_malas: 0,
+          total_count: 0,
+          last_updated: null,
+        },
+      ],
+      error: null,
+    });
+
+    const rows = await getGroupDashboard('group-id', 'viewer-id', 'today-start', 'today-end');
+
+    expect(rows).toHaveLength(2);
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ userId: '104462459725571711632', userName: 'Bellam' }),
+        expect.objectContaining({ userId: 'legacy@example.invalid', userName: 'Unknown' }),
+      ])
+    );
   });
 });
