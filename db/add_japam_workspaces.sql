@@ -100,29 +100,49 @@ create index if not exists japams_user_id_idx
 create index if not exists japams_user_id_archived_at_display_order_idx
   on public.japams (user_id, archived_at, display_order);
 
--- 2c. RLS -- mirrors japam_history's existing policy shape exactly (see schema.sql): permissive
--- anon+authenticated INSERT/SELECT (this app writes/reads via the anon key in flows that predate a
--- live auth session), authenticated-only UPDATE/DELETE scoped to the owning user via auth.uid()
--- with a fallback to the JWT's Google "sub" claim (for users not yet migrated to Supabase UUID
--- ids -- same fallback used by japam_history's own update/delete policies).
+-- 2c. RLS -- authenticated-only, ownership-scoped on all four operations. Identity is derived
+-- exclusively from auth.uid() (with a fallback to the JWT's user_metadata.sub claim for accounts
+-- not yet migrated to a Supabase UUID id -- the same dual-check already used by japam_history's
+-- own update/delete policies and standardized across the F15 (japam_history/deleted_completions),
+-- F7 (japam_user_totals/japam_timer_state), and F14 (Groups RPCs) remediations). anon has zero
+-- policies and zero grants on this table -- see Section 2d.
+--
+-- This corrects an earlier draft of this migration (never applied to any environment -- this
+-- table does not exist anywhere yet) that gave INSERT/SELECT to `authenticated, anon` with
+-- `USING/WITH CHECK (true)`, i.e. no ownership check and open to the unauthenticated anon key --
+-- exactly the F15/F7/F14 vulnerability class. That draft's own justification ("this app
+-- writes/reads via the anon key in flows that predate a live auth session") does not hold: as of
+-- this migration, lib/japamsRepository.ts and lib/japamsStorage.ts persist Japams to
+-- AsyncStorage only -- no client code anywhere makes a REST call to public.japams (Supabase sync
+-- is explicitly future work, per japamsRepository.ts's own header comment). Tightening RLS here
+-- requires zero client-code changes because there is currently zero client traffic to this table.
 alter table public.japams enable row level security;
 
 drop policy if exists "allow_japams_insert" on public.japams;
-create policy "allow_japams_insert"
+drop policy if exists "authenticated_insert_own_japams" on public.japams;
+create policy "authenticated_insert_own_japams"
   on public.japams
   for insert
-  to authenticated, anon
-  with check (true);
+  to authenticated
+  with check (
+    (auth.uid()::text = user_id)
+    or ((auth.jwt() -> 'user_metadata' ->> 'sub') = user_id)
+  );
 
 drop policy if exists "allow_japams_select" on public.japams;
-create policy "allow_japams_select"
+drop policy if exists "authenticated_select_own_japams" on public.japams;
+create policy "authenticated_select_own_japams"
   on public.japams
   for select
-  to authenticated, anon
-  using (true);
+  to authenticated
+  using (
+    (auth.uid()::text = user_id)
+    or ((auth.jwt() -> 'user_metadata' ->> 'sub') = user_id)
+  );
 
 drop policy if exists "Users can update their own japams" on public.japams;
-create policy "Users can update their own japams"
+drop policy if exists "authenticated_update_own_japams" on public.japams;
+create policy "authenticated_update_own_japams"
   on public.japams
   for update
   to authenticated
@@ -136,7 +156,8 @@ create policy "Users can update their own japams"
   );
 
 drop policy if exists "Users can delete their own japams" on public.japams;
-create policy "Users can delete their own japams"
+drop policy if exists "authenticated_delete_own_japams" on public.japams;
+create policy "authenticated_delete_own_japams"
   on public.japams
   for delete
   to authenticated
@@ -145,7 +166,16 @@ create policy "Users can delete their own japams"
     or ((auth.jwt() -> 'user_metadata' ->> 'sub') = user_id)
   );
 
--- 2d. japam_history.japam_id -- stable identity. Nullable: null means "no Japam" (legacy row, or a
+-- 2d. Grants -- defense in depth, same rationale as the F15/F7 hotfixes: with zero anon policies
+-- left, RLS already blocks anon entirely, but a bare table-level grant with no matching policy is
+-- still an unnecessary privilege. anon loses all access; authenticated is scoped to exactly the
+-- four operations its policies above cover -- no TRUNCATE/REFERENCES/TRIGGER. service_role/
+-- postgres (the table owner) are untouched.
+revoke all on public.japams from anon;
+revoke all on public.japams from authenticated;
+grant select, insert, update, delete on public.japams to authenticated;
+
+-- 2e. japam_history.japam_id -- stable identity. Nullable: null means "no Japam" (legacy row, or a
 -- completion saved before the user ever created a Japam), which falls back to the "Japam" default
 -- label in lib/historyStore.ts. `on delete set null` is deliberate: even a future permanent-delete
 -- feature for a Japam must never cascade-delete its history -- archiving is the supported way to
@@ -156,7 +186,7 @@ create policy "Users can delete their own japams"
 alter table public.japam_history
   add column if not exists japam_id uuid references public.japams(id) on delete set null;
 
--- 2e. japam_history.japam_name -- denormalized display-name snapshot (idempotent: may already
+-- 2f. japam_history.japam_name -- denormalized display-name snapshot (idempotent: may already
 -- exist on some environments from an earlier, now-superseded design; safe either way).
 alter table public.japam_history
   add column if not exists japam_name text;
@@ -166,7 +196,7 @@ comment on column public.japam_history.japam_id is
 comment on column public.japam_history.japam_name is
   'Denormalized snapshot of the Japam''s name at completion time, for display/CSV without a join and for legacy-row fallback. Never typed by the user per session. NULL/blank displays as "Japam".';
 
--- 2f. Index supporting per-Japam history queries (History, Today's Total, Lifetime Total, CSV
+-- 2g. Index supporting per-Japam history queries (History, Today's Total, Lifetime Total, CSV
 -- export, future Dashboard/Statistics/Widgets -- see the architecture discussion on centralizing
 -- Japam-scoped selectors around this exact access pattern).
 create index if not exists japam_history_user_id_japam_id_created_at_idx
@@ -176,7 +206,8 @@ create index if not exists japam_history_user_id_japam_id_created_at_idx
 -- ─── SECTION 3: POST-APPLY VERIFICATION (read-only) ──────────────────────────
 --
 -- Expected after applying:
---   - japams: exists, with the 4 policies below
+--   - japams: exists, with the 4 policies below, all `to authenticated` only
+--   - anon: zero policies and zero grants on japams (last two queries below both return 0 rows)
 --   - japam_history.japam_id: data_type=uuid, is_nullable=YES
 --   - japam_history.japam_name: data_type=text, is_nullable=YES
 
@@ -190,6 +221,25 @@ from pg_policies
 where schemaname = 'public'
   and tablename = 'japams'
 order by cmd, policyname;
+
+-- Expect exactly 4 rows above: authenticated_{select,insert,update,delete}_own_japams, each with
+-- roles = {authenticated} -- if `anon` appears in any row's roles, or fewer/more than 4 rows come
+-- back, this migration's RLS did not apply as intended and must not be treated as verified.
+
+-- Expect ZERO rows: anon must have no policy left on japams.
+select policyname, cmd, roles
+from pg_policies
+where schemaname = 'public'
+  and tablename = 'japams'
+  and 'anon' = any(roles);
+
+-- Expect ZERO rows: anon must have no table-level grant left on japams either (defense in depth
+-- -- RLS already blocks anon with zero policies, but a stray grant should not exist regardless).
+select grantee, privilege_type
+from information_schema.role_table_grants
+where table_schema = 'public'
+  and table_name = 'japams'
+  and grantee = 'anon';
 
 select column_name, data_type, is_nullable
 from information_schema.columns
