@@ -18,7 +18,12 @@
 -- SECURITY DEFINER RPC that derives identity from auth.uid() internally — so no direct
 -- authenticated INSERT/UPDATE/DELETE policy is added there.
 --
--- DO NOT RUN until explicitly approved. Not yet executed anywhere (no staging, no production).
+-- STATUS: Executed and verified — production (F15, production-verified). On staging, this script's
+-- pre-apply guard correctly no-op'd: staging's public.japam_history baseline already matched the
+-- target authenticated-only/ownership-scoped state, so no mutation was needed or performed there.
+-- The remaining public.deleted_completions gap on staging was closed separately by
+-- db/rls_staging_hotfix_deleted_completions.sql. Originally marked "DO NOT RUN until explicitly
+-- approved" pending review; that approval was granted and this script has since been run.
 -- Run in: Supabase SQL editor (or psql), against ONE environment at a time.
 -- Paste and run this entire file as one script — it is one transaction (BEGIN..COMMIT). Any
 -- guard failure RAISEs an EXCEPTION, which aborts the whole transaction automatically (Postgres

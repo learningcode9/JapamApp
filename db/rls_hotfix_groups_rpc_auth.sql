@@ -40,9 +40,14 @@
 -- harmless enough to leave in place for a security-relevant identity-resolution helper, even one
 -- that only ever returns information about the caller's own session.
 --
--- DO NOT RUN until explicitly approved. NOT executed against any database yet (no staging, no
--- production). Run in: Supabase SQL editor (or psql), against ONE environment at a time, staging
--- first. Paste and run this entire file as one script -- it is one transaction (BEGIN..COMMIT).
+-- STATUS: Executed and verified -- staging, then production (F14, production-verified). Run
+-- against staging first, confirmed all 8 RPCs still function correctly there (including with the
+-- helper EXECUTE hardening in place) and that the original client-supplied-identity bypass is
+-- rejected, then run unchanged against production. Originally marked "DO NOT RUN until explicitly
+-- approved" pending review; that approval was granted and this script has since been run against
+-- both environments in that order. Run in: Supabase SQL editor (or psql), against ONE environment
+-- at a time, staging first. Paste and run this entire file as one script -- it is one transaction
+-- (BEGIN..COMMIT).
 
 BEGIN;
 

@@ -38,13 +38,13 @@
 --   Guest/anonymous-mode users (no session) simply skip these two syncs, same as history already
 --   does for guests today.
 --
--- DO NOT RUN until explicitly approved. NOT executed against any database yet (no staging, no
--- production). This SQL file is identical for both environments (staging's baseline was confirmed
--- byte-identical to production's for these two tables) — run it in STAGING FIRST as its own
--- transaction, confirm the app still functions end-to-end there (Tap Japam total sync, Timer
--- background-state save/restore) with the client migration above deployed to staging, THEN run
--- unchanged against production. Do not run against both environments in the same sitting without
--- that staging confirmation step in between.
+-- STATUS: Executed and verified — staging, then production (F7, production-verified). This SQL
+-- file is identical for both environments (staging's baseline was confirmed byte-identical to
+-- production's for these two tables); it was run against staging first, the app was confirmed to
+-- function end-to-end there (Tap Japam total sync, Timer background-state save/restore) with the
+-- client migration deployed, and it was then run unchanged against production. Originally marked
+-- "DO NOT RUN until explicitly approved" pending review; that approval was granted and this
+-- script has since been run against both environments in that order.
 -- Run in: Supabase SQL editor (or psql), against ONE environment at a time.
 -- Paste and run this entire file as one script — it is one transaction (BEGIN..COMMIT). Any guard
 -- failure RAISEs an EXCEPTION, aborting the whole transaction automatically (Postgres DDL is fully

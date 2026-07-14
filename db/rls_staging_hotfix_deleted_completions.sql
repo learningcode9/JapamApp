@@ -21,7 +21,9 @@
 -- identity from auth.uid() internally, so no direct authenticated INSERT/UPDATE/DELETE policy is
 -- added.
 --
--- DO NOT RUN until explicitly approved. Not yet executed anywhere.
+-- STATUS: Executed and verified — staging (this script is staging-only by design and does not
+-- apply to production; see the scope note above). Originally marked "DO NOT RUN until explicitly
+-- approved" pending review; that approval was granted and this script has since been run.
 -- Run in: Supabase SQL editor (or `supabase db query --linked -f`), against STAGING
 -- (nhacglvxdypevrbvvkhn) ONLY. Never run against production (rftlqybgnbixotnpanec) — production's
 -- public.deleted_completions is covered by db/rls_hotfix_japam_history_deleted_completions.sql
