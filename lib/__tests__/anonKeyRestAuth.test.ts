@@ -1,17 +1,20 @@
 /**
- * Regression guard for the Phase 1 RLS-hotfix client migration.
+ * Regression guard for the Phase 1 + Phase 2 RLS-hotfix client migrations.
  *
  * A live production audit found that several client REST calls touching
- * `japam_history`/`deleted_completions` authenticated with the raw
- * EXPO_PUBLIC_SUPABASE_ANON_KEY (via `Authorization: Bearer ${key}` /
+ * `japam_history`/`deleted_completions` (Phase 1) and, separately,
+ * `japam_user_totals`/`japam_timer_state` (Phase 2 — F7) authenticated with
+ * the raw EXPO_PUBLIC_SUPABASE_ANON_KEY (via `Authorization: Bearer ${key}` /
  * `${supabaseKey}`) instead of the signed-in user's session JWT. Once RLS is
- * tightened (Phase 3), any such call silently starts failing (403), so a
- * regression here is a real breakage risk, not just a style issue.
+ * tightened (see db/rls_hotfix_japam_history_deleted_completions.sql and
+ * db/rls_hotfix_japam_totals_timer_state.sql), any such call silently starts
+ * failing (403), so a regression here is a real breakage risk, not just a
+ * style issue.
  *
  * This is a static source scan, not a runtime/component test — none of the
  * files below have (or need) React Native/Expo mocking infrastructure for
  * this purpose, and the fix is a literal find-and-replace of an auth header,
- * not business logic. The scan finds every REST call touching the two
+ * not business logic. The scan finds every REST call touching the four
  * audited tables and asserts none of them still send the raw anon key as the
  * `Authorization` bearer token.
  */
@@ -29,7 +32,8 @@ const FILES_TO_SCAN = [
   'contexts/timer-context.tsx',
 ];
 
-const AUDITED_TABLE_PATTERN = /rest\/v1\/(japam_history|deleted_completions)/g;
+const AUDITED_TABLE_PATTERN =
+  /rest\/v1\/(japam_history|deleted_completions|japam_user_totals|japam_timer_state)/g;
 
 // The exact literal patterns this codebase used everywhere for the raw anon key variable.
 const RAW_ANON_KEY_BEARER_PATTERN = /Authorization:\s*`Bearer \$\{\s*(key|supabaseKey)\s*\}`/;
@@ -38,7 +42,7 @@ const RAW_ANON_KEY_BEARER_PATTERN = /Authorization:\s*`Bearer \$\{\s*(key|supaba
 // codebase defines its `headers: { ... }` within a few lines of the URL.
 const WINDOW_CHARS = 500;
 
-describe('japam_history / deleted_completions REST calls never use the raw anon key', () => {
+describe('japam_history / deleted_completions / japam_user_totals / japam_timer_state REST calls never use the raw anon key', () => {
   for (const relativePath of FILES_TO_SCAN) {
     it(`${relativePath} has no anon-key Authorization header on an audited-table request`, () => {
       const filePath = path.join(REPO_ROOT, relativePath);
