@@ -106,9 +106,15 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const selectJapam = useCallback((japamId: string | null) => {
+    const fromJapamId = currentJapamId;
+    // Emit BEFORE the state change so the timer context can save the current Japam's timer
+    // state (including a running timer's position) to the FROM Japam's per-Japam slot.
+    DeviceEventEmitter.emit('japam-will-switch', { fromJapamId, toJapamId: japamId });
     setCurrentJapamIdState(japamId);
     void japamsRepository.saveCurrentJapamId(userIdRef.current, japamId);
-  }, []);
+    // Emit AFTER the state change so the timer context can load the TO Japam's timer state.
+    DeviceEventEmitter.emit('japam-did-switch', { japamId });
+  }, [currentJapamId]);
 
   const createJapam = useCallback(async (rawName: string): Promise<Japam | null> => {
     const result = await japamsRepository.createJapam(userIdRef.current, rawName);

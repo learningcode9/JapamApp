@@ -72,6 +72,7 @@ export const STD_DURATIONS = [1, 3, 5, 10, 15];
 export const LOOP_OPTIONS = [1, 2, 3, 5, 10];
 
 const getUserKey = (key: string, uid: string) => `${key}:${uid}`;
+const getJapamKey = (key: string, uid: string, japamId: string) => `${key}:${uid}:${japamId}`;
 export const formatTimer = (s: number) =>
   `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
@@ -216,6 +217,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   // Japam the completion is attributed to (see the architecture review on Timer capture-at-Start).
   const activeJapamIdRef = useRef<string | null>(null);
   const activeJapamNameRef = useRef<string | null>(null);
+  // Which Japam's timer state is currently loaded in this TimerProvider's React state.
+  // Updated on cold-start restore (reads currentJapamId:uid from storage) and on every
+  // japam switch (japam-did-switch event). Used by persistState to write per-Japam keys.
+  const currentJapamIdRef = useRef<string | null>(null);
 
   useEffect(() => { secondsRef.current = seconds; }, [seconds]);
   useEffect(() => { isRunningRef.current = isRunning; }, [isRunning]);
@@ -427,6 +432,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
   const persistState = useCallback(async (running: boolean) => {
     const uid = userIdRef.current;
+    const japamId = currentJapamIdRef.current;
     const tSec = selectedDurationRef.current * 60;
     const currentSeconds =
       running && timerStartedAtRef.current !== null
@@ -455,26 +461,37 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       await AsyncStorage.multiSet(pairs);
       if (uid) {
         await AsyncStorage.multiSet(pairs.map(([k, v]) => [getUserKey(k, uid), v] as [string, string]));
+        if (japamId) {
+          await AsyncStorage.multiSet(pairs.map(([k, v]) => [getJapamKey(k, uid, japamId), v] as [string, string]));
+        }
       }
     } catch {}
   }, []);
 
   const persistCompletedLoops = useCallback(async (nextCompletedLoops: number) => {
     const uid = userIdRef.current;
+    const japamId = currentJapamIdRef.current;
     const value = String(clampCompletedLoops(nextCompletedLoops, selectedLoopsRef.current));
     try {
       await AsyncStorage.setItem(TIMER_COMPLETED_LOOPS_KEY, value);
       if (uid) {
         await AsyncStorage.setItem(getUserKey(TIMER_COMPLETED_LOOPS_KEY, uid), value);
+        if (japamId) {
+          await AsyncStorage.setItem(getJapamKey(TIMER_COMPLETED_LOOPS_KEY, uid, japamId), value);
+        }
       }
     } catch {}
   }, []);
 
   const readPersistedCompletedLoops = useCallback(async () => {
     const uid = userIdRef.current;
+    const japamId = currentJapamIdRef.current;
     try {
       const raw = uid
-        ? (await AsyncStorage.getItem(getUserKey(TIMER_COMPLETED_LOOPS_KEY, uid))) ??
+        ? (japamId
+            ? (await AsyncStorage.getItem(getJapamKey(TIMER_COMPLETED_LOOPS_KEY, uid, japamId))) ??
+              (await AsyncStorage.getItem(getUserKey(TIMER_COMPLETED_LOOPS_KEY, uid)))
+            : await AsyncStorage.getItem(getUserKey(TIMER_COMPLETED_LOOPS_KEY, uid))) ??
           (await AsyncStorage.getItem(TIMER_COMPLETED_LOOPS_KEY))
         : await AsyncStorage.getItem(TIMER_COMPLETED_LOOPS_KEY);
       return clampCompletedLoops(Number(raw) || 0, selectedLoopsRef.current);
@@ -1560,10 +1577,23 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         const uid = await AsyncStorage.getItem(USER_ID_KEY) || '';
         userIdRef.current = uid;
         setUserId(uid);
-        const get = async (key: string) =>
-          uid
-            ? (await AsyncStorage.getItem(getUserKey(key, uid))) ?? (await AsyncStorage.getItem(key))
-            : AsyncStorage.getItem(key);
+        // Read the current Japam ID from the same key CurrentJapamContext uses, so timer
+        // state is restored from the correct per-Japam slot. Falls back to null (no Japam
+        // selected), which makes the get() helper below fall through to user-scoped then bare keys.
+        const japamId = uid ? await AsyncStorage.getItem(`currentJapamId:${uid}`) : null;
+        currentJapamIdRef.current = japamId;
+        const get = async (key: string) => {
+          // Try per-Japam key (uid:japamId), then user-scoped (uid), then bare.
+          if (uid && japamId) {
+            const japamVal = await AsyncStorage.getItem(getJapamKey(key, uid, japamId));
+            if (japamVal !== null) return japamVal;
+          }
+          if (uid) {
+            const userVal = await AsyncStorage.getItem(getUserKey(key, uid));
+            if (userVal !== null) return userVal;
+          }
+          return AsyncStorage.getItem(key);
+        };
         const [sec, target, dur, loops, paused, completed, running, startedAt, sessionId] = await Promise.all([
           get(TIMER_SECONDS_KEY),
           get(TIMER_TARGET_KEY),
@@ -1656,10 +1686,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const restoreRunningTimerFromStorage = useCallback(async () => {
     try {
       const uid = await AsyncStorage.getItem(USER_ID_KEY) || '';
-      const get = async (key: string) =>
-        uid
-          ? (await AsyncStorage.getItem(getUserKey(key, uid))) ?? (await AsyncStorage.getItem(key))
-          : AsyncStorage.getItem(key);
+      const japamId = currentJapamIdRef.current;
+      const get = async (key: string) => {
+        if (uid && japamId) {
+          const japamVal = await AsyncStorage.getItem(getJapamKey(key, uid, japamId));
+          if (japamVal !== null) return japamVal;
+        }
+        if (uid) {
+          const userVal = await AsyncStorage.getItem(getUserKey(key, uid));
+          if (userVal !== null) return userVal;
+        }
+        return AsyncStorage.getItem(key);
+      };
       const [sec, target, dur, loops, completed, running, startedAt, sessionId] = await Promise.all([
         get(TIMER_SECONDS_KEY),
         get(TIMER_TARGET_KEY),
@@ -2109,6 +2147,134 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     void persistState(false);
     console.log('[TimerBG] Timer reset');
   }, [clearCompletionNotification, clearTimerInterval, hideNotification, persistState, releaseWakeLock]);
+
+  // Per-Japam timer state: saves the current timer state and loads the next Japam's state
+  // when the user switches Japams. The will-switch handler fires BEFORE the Japam context
+  // changes the selection, and the did-switch handler fires AFTER the change completes.
+  useEffect(() => {
+    const willSwitchSub = DeviceEventEmitter.addListener(
+      'japam-will-switch',
+      async ({ fromJapamId, toJapamId }: { fromJapamId: string | null; toJapamId: string | null }) => {
+        const uid = userIdRef.current;
+        if (!uid) return;
+        // If a timer is actively running, pause it (which also saves state to :uid and bare keys).
+        if (isRunningRef.current) {
+          pause();
+        }
+        // Save current in-memory timer state to the FROM Japam's per-Japam slot.
+        const tSec = selectedDurationRef.current * 60;
+        const secondsNow = secondsRef.current;
+        const wasPaused = !isRunningRef.current && secondsNow > 0 && secondsNow < tSec;
+        const jPairs: [string, string][] = [
+          [TIMER_SECONDS_KEY, String(secondsNow)],
+          [TIMER_RUNNING_KEY, String(false)],
+          [TIMER_TARGET_KEY, String(tSec)],
+          [TIMER_PAUSED_KEY, String(wasPaused)],
+          [TIMER_COMPLETED_LOOPS_KEY, String(completedLoopsRef.current)],
+          [TIMER_STARTED_AT_KEY, ''],
+          [TIMER_SESSION_ID_KEY, timerSessionIdRef.current],
+          [T_DURATION_KEY, String(selectedDurationRef.current)],
+          [T_LOOPS_KEY, String(selectedLoopsRef.current)],
+        ];
+        if (fromJapamId) {
+          try {
+            await AsyncStorage.multiSet(
+              jPairs.map(([k, v]) => [getJapamKey(k, uid, fromJapamId), v] as [string, string])
+            );
+          } catch {}
+        }
+      }
+    );
+
+    const didSwitchSub = DeviceEventEmitter.addListener(
+      'japam-did-switch',
+      async ({ japamId }: { japamId: string | null }) => {
+        currentJapamIdRef.current = japamId;
+        const uid = userIdRef.current;
+        if (!uid) return;
+        // Build a get() that tries per-Japam keys first, then user-scoped, then bare.
+        const get = async (key: string) => {
+          if (japamId) {
+            const jv = await AsyncStorage.getItem(getJapamKey(key, uid, japamId));
+            if (jv !== null) return jv;
+          }
+          const uv = await AsyncStorage.getItem(getUserKey(key, uid));
+          if (uv !== null) return uv;
+          return AsyncStorage.getItem(key);
+        };
+        const [sec, target, dur, loops, paused, completed, running, startedAt, sessionId] = await Promise.all([
+          get(TIMER_SECONDS_KEY),
+          get(TIMER_TARGET_KEY),
+          get(T_DURATION_KEY),
+          get(T_LOOPS_KEY),
+          get(TIMER_PAUSED_KEY),
+          get(TIMER_COMPLETED_LOOPS_KEY),
+          get(TIMER_RUNNING_KEY),
+          get(TIMER_STARTED_AT_KEY),
+          get(TIMER_SESSION_ID_KEY),
+        ]);
+        // Apply loaded state with the same cold-start restore decision logic.
+        const savedSec = Number(sec) || 0;
+        const savedTarget = Number(target) || 0;
+        const savedDur = Number(dur) || 0;
+        const savedLoops = Number(loops) || 0;
+        const savedCompletedLoops = Math.max(0, Number(completed) || 0);
+        const savedPaused = paused === 'true';
+        const savedRunning = running === 'true';
+        const savedStartedAt = Number(startedAt) || 0;
+        const savedSessionId = sessionId || '';
+        timerSessionIdRef.current = savedSessionId;
+        if (savedDur > 0) {
+          setSelectedDurationDiag(savedDur, 'session-restore');
+        } else if (savedTarget > 0) {
+          const mins = Math.round(savedTarget / 60);
+          setSelectedDurationDiag(mins, 'session-restore');
+        }
+        if (LOOP_OPTIONS.includes(savedLoops)) {
+          setSelectedLoops(savedLoops);
+          selectedLoopsRef.current = savedLoops;
+        }
+        const activeLoopLimit = LOOP_OPTIONS.includes(savedLoops) ? savedLoops : selectedLoopsRef.current;
+        const safeCompletedLoops = Math.min(savedCompletedLoops, Math.max(0, activeLoopLimit - 1));
+        if (safeCompletedLoops > 0) {
+          setCompletedLoops(safeCompletedLoops);
+          completedLoopsRef.current = safeCompletedLoops;
+        }
+        const restoredTarget = savedTarget || selectedDurationRef.current * 60;
+        const restoreDecision = computeColdStartRestoreDecision({
+          savedRunning,
+          savedPaused,
+          savedSec,
+          savedTarget: restoredTarget,
+          savedCompletedLoops,
+          activeLoopLimit,
+        });
+        const { outcome, restoredSeconds } = restoreDecision;
+        if (outcome === 'paused') {
+          setSeconds(restoredSeconds);
+          secondsRef.current = restoredSeconds;
+          setIsRunning(false);
+          isRunningRef.current = false;
+          timerStartedAtRef.current = null;
+          updateTimerState({ sessionId: savedSessionId });
+        } else {
+          // No saved timer state for this Japam — fresh start.
+          setSeconds(0);
+          secondsRef.current = 0;
+          setCompletedLoops(0);
+          completedLoopsRef.current = 0;
+          timerStartedAtRef.current = null;
+          timerSessionIdRef.current = '';
+          updateTimerState({ sessionId: '' });
+        }
+      }
+    );
+
+    return () => {
+      willSwitchSub.remove();
+      didSwitchSub.remove();
+    };
+  }, [pause, setSelectedDurationDiag, computeColdStartRestoreDecision]);
 
   const selectDuration = useCallback((mins: number) => {
     if (isRunningRef.current) return;
