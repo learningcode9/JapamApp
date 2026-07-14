@@ -456,12 +456,21 @@ export default function JapamMain() {
       if (!url || !key) return;
 
       try {
+        // Require a real session JWT — an anon-key request has no INSERT/UPDATE policy for this
+        // user's own row once RLS is tightened (mirrors syncPendingHistory's session-token
+        // preference in contexts/timer-context.tsx). No session: skip this pass, retry next time.
+        const { data: bgSessionData } = await supabase.auth.getSession();
+        const bgSessionToken = bgSessionData.session?.access_token;
+        if (!bgSessionToken) {
+          console.log('[TimerState] BACKGROUND_SAVE_SKIPPED reason=no-session');
+          return;
+        }
         await fetch(`${url}/rest/v1/japam_timer_state?on_conflict=user_id`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             apikey: key,
-            Authorization: `Bearer ${key}`,
+            Authorization: `Bearer ${bgSessionToken}`,
             Prefer: 'resolution=merge-duplicates,return=minimal',
           },
           body: JSON.stringify({
@@ -670,6 +679,16 @@ export default function JapamMain() {
     const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
     if (!url || !key || !userId) return;
 
+    // Require a real session JWT — an anon-key request has no INSERT/UPDATE policy for this
+    // user's own row once RLS is tightened (mirrors syncPendingHistory's session-token preference
+    // in contexts/timer-context.tsx). No session: skip this pass, retry next time.
+    const { data: totalSessionData } = await supabase.auth.getSession();
+    const totalSessionToken = totalSessionData.session?.access_token;
+    if (!totalSessionToken) {
+      console.log('[UserTotal] SAVE_SKIPPED reason=no-session');
+      return;
+    }
+
     const safeTotal = Math.max(0, Math.floor(Number(totalValue) || 0));
 
     const response = await fetch(`${url}/rest/v1/japam_user_totals?on_conflict=user_id`, {
@@ -677,7 +696,7 @@ export default function JapamMain() {
       headers: {
         'Content-Type': 'application/json',
         apikey: key,
-        Authorization: `Bearer ${key}`,
+        Authorization: `Bearer ${totalSessionToken}`,
         Prefer: 'resolution=merge-duplicates,return=minimal',
       },
       body: JSON.stringify({
@@ -1035,12 +1054,22 @@ export default function JapamMain() {
     const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
     if (!url || !key || !userId) return;
 
+    // Require a real session JWT — an anon-key request has no INSERT/UPDATE policy for this
+    // user's own row once RLS is tightened (mirrors syncPendingHistory's session-token preference
+    // in contexts/timer-context.tsx). No session: skip this pass, retry next time.
+    const { data: stateSessionData } = await supabase.auth.getSession();
+    const stateSessionToken = stateSessionData.session?.access_token;
+    if (!stateSessionToken) {
+      console.log('[TimerState] SAVE_SKIPPED reason=no-session');
+      return;
+    }
+
     await fetch(`${url}/rest/v1/japam_timer_state?on_conflict=user_id`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         apikey: key,
-        Authorization: `Bearer ${key}`,
+        Authorization: `Bearer ${stateSessionToken}`,
         Prefer: 'resolution=merge-duplicates,return=minimal',
       },
       body: JSON.stringify({
@@ -1097,10 +1126,17 @@ export default function JapamMain() {
     const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
     if (!url || !key || !userId) return null;
 
+    // Require a real session JWT — an anon-key request has no SELECT policy for this user's own
+    // row once RLS is tightened (mirrors syncPendingHistory's session-token preference in
+    // contexts/timer-context.tsx). No session: treat as "nothing to restore" this pass.
+    const { data: fetchSessionData } = await supabase.auth.getSession();
+    const fetchSessionToken = fetchSessionData.session?.access_token;
+    if (!fetchSessionToken) return null;
+
     const encodedUserId = encodeURIComponent(userId);
     const response = await fetch(
       `${url}/rest/v1/japam_timer_state?user_id=eq.${encodedUserId}&select=seconds,is_running,target_seconds,minutes_input,loop_timer,updated_at&limit=1`,
-      { headers: { apikey: key, Authorization: `Bearer ${key}` } }
+      { headers: { apikey: key, Authorization: `Bearer ${fetchSessionToken}` } }
     );
 
     if (!response.ok) return null;

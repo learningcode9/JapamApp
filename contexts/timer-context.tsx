@@ -930,6 +930,16 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
       if (!url || !key || !uid) return;
 
+      // Require a real session JWT — an anon-key request has no INSERT/UPDATE policy for this
+      // user's own row once RLS is tightened (mirrors syncPendingHistory's session-token
+      // preference above). No session: skip this pass, retry next time.
+      const { data: totalSessionData } = await supabase.auth.getSession();
+      const totalSessionToken = totalSessionData.session?.access_token;
+      if (!totalSessionToken) {
+        console.log('[TimerLifetimeTotal] SYNC_SKIPPED reason=no-session');
+        return;
+      }
+
       const ownRecords = dedupeByCompletionId(history).filter(
         (r) => (r.userId || null) === uid && r.totalCount > 0
       );
@@ -942,7 +952,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         headers: {
           'Content-Type': 'application/json',
           apikey: key,
-          Authorization: `Bearer ${key}`,
+          Authorization: `Bearer ${totalSessionToken}`,
           Prefer: 'resolution=merge-duplicates,return=minimal',
         },
         body: JSON.stringify({
