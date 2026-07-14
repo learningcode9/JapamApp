@@ -123,6 +123,33 @@ describe('force-stop restore: selected Japam persists', () => {
     });
     expect(result.outcome).toBe('none');
   });
+
+  it('empty per-Japam timer keys on switch must NOT fall through to :uid user keys', () => {
+    // When switching to Japam B, the did-switch handler only reads :uid:japamB keys.
+    // Even if :uid or bare keys have legacy data (from Japam A's persistState),
+    // those must NOT be consulted — B shows fresh Start, not A's timer.
+    const bNoState = computeColdStartRestoreDecision({
+      savedRunning: false,
+      savedPaused: false,
+      savedSec: 0,
+      savedTarget: 0,
+      savedCompletedLoops: 0,
+      activeLoopLimit: 1,
+    });
+    expect(bNoState.outcome).toBe('none');
+
+    // Meanwhile A's paused state (:uid:japamA keys) should be unaffected
+    const aPaused = computeColdStartRestoreDecision({
+      savedRunning: false,
+      savedPaused: true,
+      savedSec: 120,
+      savedTarget: 300,
+      savedCompletedLoops: 0,
+      activeLoopLimit: 1,
+    });
+    expect(aPaused.outcome).toBe('paused');
+    expect(aPaused.restoredSeconds).toBe(120);
+  });
 });
 
 describe('running-session attribution stays with Japam captured at Start', () => {

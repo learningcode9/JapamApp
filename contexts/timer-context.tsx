@@ -2192,15 +2192,15 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         currentJapamIdRef.current = japamId;
         const uid = userIdRef.current;
         if (!uid) return;
-        // Build a get() that tries per-Japam keys first, then user-scoped, then bare.
+        // Only read per-Japam keys on switch — falling through to :uid or bare keys
+        // would leak the previous Japam's timer state into the new Japam (since persistState
+        // writes both :uid:japamId and :uid fallback keys). A Japam with no saved timer
+        // state must show a fresh Start, not the other Japam's data.
         const get = async (key: string) => {
           if (japamId) {
-            const jv = await AsyncStorage.getItem(getJapamKey(key, uid, japamId));
-            if (jv !== null) return jv;
+            return AsyncStorage.getItem(getJapamKey(key, uid, japamId));
           }
-          const uv = await AsyncStorage.getItem(getUserKey(key, uid));
-          if (uv !== null) return uv;
-          return AsyncStorage.getItem(key);
+          return null;
         };
         const [sec, target, dur, loops, paused, completed, running, startedAt, sessionId] = await Promise.all([
           get(TIMER_SECONDS_KEY),
