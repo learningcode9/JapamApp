@@ -32,9 +32,13 @@
 -- duplicated 8 times with a chance of drifting:
 --   public._groups_require_caller_id() -- returns auth.uid()::text, or raises if auth.uid() IS NULL.
 --   public._groups_legacy_sub()        -- returns the JWT's user_metadata.sub claim, or NULL. Never raises.
--- Both are STABLE, read no tables, and are not meant to be called directly by clients (no anon/
--- authenticated grant added beyond Postgres's normal PUBLIC EXECUTE default on new functions,
--- which is harmless since they only read the calling session's own JWT claims).
+-- Both are STABLE and read no tables. They are not meant to be called directly by any client --
+-- only from inside the 8 SECURITY DEFINER RPCs, which need no grant on them to keep working (a
+-- SECURITY DEFINER function's internal calls execute as its OWNER, not the original caller, and
+-- both the RPCs and the helpers are owned by postgres). Section 4 revokes PUBLIC/anon/authenticated
+-- EXECUTE on both helpers -- Postgres's normal PUBLIC EXECUTE default on new functions is not
+-- harmless enough to leave in place for a security-relevant identity-resolution helper, even one
+-- that only ever returns information about the caller's own session.
 --
 -- DO NOT RUN until explicitly approved. NOT executed against any database yet (no staging, no
 -- production). Run in: Supabase SQL editor (or psql), against ONE environment at a time, staging
@@ -554,6 +558,23 @@ REVOKE EXECUTE ON FUNCTION public.remove_group_member(uuid, text, text) FROM ano
 REVOKE EXECUTE ON FUNCTION public.leave_group(uuid, text) FROM anon;
 REVOKE EXECUTE ON FUNCTION public.delete_group(uuid, text) FROM anon;
 
+-- The two identity-derivation helpers are never meant to be called directly by any client --
+-- only from inside the 8 SECURITY DEFINER RPCs above, all of which are owned by the same role as
+-- the helpers (postgres). A SECURITY DEFINER function's internal calls execute AS ITS OWNER, not
+-- as the original external caller, and an object's owner always has implicit EXECUTE on their own
+-- objects regardless of ACL state -- so the 8 RPCs need no grant on these helpers to keep working.
+-- New functions in this schema pick up a PUBLIC EXECUTE grant by default (confirmed live: both
+-- helpers had an explicit PUBLIC entry in pg_proc.proacl, in addition to anon/authenticated),
+-- which a per-role REVOKE alone would not close -- REVOKE ... FROM PUBLIC is required too, or
+-- anon/authenticated remain able to call them via the inherited PUBLIC grant regardless of the
+-- per-role revokes below.
+REVOKE EXECUTE ON FUNCTION public._groups_require_caller_id() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public._groups_require_caller_id() FROM anon;
+REVOKE EXECUTE ON FUNCTION public._groups_require_caller_id() FROM authenticated;
+REVOKE EXECUTE ON FUNCTION public._groups_legacy_sub() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public._groups_legacy_sub() FROM anon;
+REVOKE EXECUTE ON FUNCTION public._groups_legacy_sub() FROM authenticated;
+
 
 -- ─── SECTION 5: POST-APPLY GUARD (fail closed) ─────────────────────────────────
 
@@ -662,6 +683,40 @@ BEGIN
       AND r.rolname = 'service_role'
   ) <> 8 THEN
     RAISE EXCEPTION 'POST-VERIFY FAILED: service_role EXECUTE on the Groups RPCs looks reduced.';
+  END IF;
+
+  -- 5f. the two helpers have zero EXECUTE grants left for PUBLIC, anon, or authenticated -- only
+  -- postgres (owner, implicit) and service_role may call them directly. The 8 RPCs above do not
+  -- need any grant here to keep working (see Section 4's comment) -- this check would fail loudly
+  -- if that assumption is ever wrong, since 5c already re-verified all 8 RPCs still reference the
+  -- helper by name after this revoke.
+  IF (
+    SELECT count(*)
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace,
+    LATERAL (SELECT (aclexplode(p.proacl)).grantee AS grantee_oid) g
+    LEFT JOIN pg_roles r ON r.oid = g.grantee_oid
+    WHERE n.nspname = 'public'
+      AND p.proname IN ('_groups_require_caller_id', '_groups_legacy_sub')
+      AND (r.rolname IN ('anon', 'authenticated') OR g.grantee_oid = 0) -- grantee_oid 0 = PUBLIC
+  ) <> 0 THEN
+    RAISE EXCEPTION
+      'POST-VERIFY FAILED: the identity-derivation helpers still have a PUBLIC/anon/authenticated '
+      'EXECUTE grant -- they must only be reachable via postgres (owner) and service_role.';
+  END IF;
+
+  IF (
+    SELECT count(*)
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace,
+    LATERAL (SELECT (aclexplode(p.proacl)).grantee AS grantee_oid) g
+    JOIN pg_roles r ON r.oid = g.grantee_oid
+    WHERE n.nspname = 'public'
+      AND p.proname IN ('_groups_require_caller_id', '_groups_legacy_sub')
+      AND r.rolname = 'service_role'
+  ) <> 2 THEN
+    RAISE EXCEPTION
+      'POST-VERIFY FAILED: service_role EXECUTE on the identity-derivation helpers looks reduced.';
   END IF;
 END $$;
 

@@ -110,6 +110,33 @@ describe('db/rls_hotfix_groups_rpc_auth.sql structural contract', () => {
     expect(body).toMatch(/raise exception/i);
   });
 
+  it.each(HELPER_FUNCTIONS)(
+    'helper function %s has active REVOKEs from PUBLIC, anon, and authenticated',
+    (helperName) => {
+      for (const grantee of ['PUBLIC', 'anon', 'authenticated']) {
+        const pattern = new RegExp(
+          `REVOKE EXECUTE ON FUNCTION public\\.${helperName}\\(\\) FROM ${grantee};`
+        );
+        expect(active).toMatch(pattern);
+      }
+    }
+  );
+
+  it('no active statement grants PUBLIC, anon, or authenticated EXECUTE on either helper', () => {
+    for (const helperName of HELPER_FUNCTIONS) {
+      const pattern = new RegExp(
+        `GRANT EXECUTE ON FUNCTION public\\.${helperName}\\(\\) TO (PUBLIC|anon|authenticated)`,
+        'i'
+      );
+      expect(active).not.toMatch(pattern);
+    }
+  });
+
+  it('post-apply guard verifies the helpers have zero PUBLIC/anon/authenticated grants', () => {
+    expect(active).toMatch(/identity-derivation helpers still have a PUBLIC\/anon\/authenticated/);
+    expect(active).toMatch(/grantee_oid = 0/); // PUBLIC's grantee OID in pg_proc.proacl
+  });
+
   it.each(TARGET_RPCS)('%s has an active REVOKE of anon EXECUTE', (rpcName) => {
     const pattern = new RegExp(
       `REVOKE EXECUTE ON FUNCTION public\\.${rpcName}\\([^)]*\\) FROM anon;`
