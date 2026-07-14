@@ -169,6 +169,18 @@
       "hasRollbackNotes": true,
       "isIdempotent": true,
       "features": ["history", "auth"]
+    },
+    {
+      "id": "rls_staging_hotfix_deleted_completions",
+      "file": "db/rls_staging_hotfix_deleted_completions.sql",
+      "firstCommitted": "unversioned (untracked as of this session)",
+      "purpose": "Staging-only: removes anon access to public.deleted_completions, replacing it with an authenticated-only ownership-scoped SELECT policy. Deliberately does not touch public.japam_history, which is already authenticated-only/ownership-scoped on staging (confirmed live via supabase db query --linked and schema_staging.sql) — db/rls_hotfix_japam_history_deleted_completions.sql's guard correctly refused to run on staging for exactly this reason. Guarded, transactional, fails closed on baseline mismatch.",
+      "selfReportedStatus": "DO NOT RUN until explicitly approved.",
+      "verification": "pending-do-not-run",
+      "verificationNote": "Written after a real (safe, no-op) execution attempt of rls_hotfix_japam_history_deleted_completions.sql against staging (nhacglvxdypevrbvvkhn) showed its pre-apply guard correctly aborting on the japam_history baseline mismatch. Not yet run against staging.",
+      "hasRollbackNotes": true,
+      "isIdempotent": true,
+      "features": ["history", "auth"]
     }
   ]
 }
