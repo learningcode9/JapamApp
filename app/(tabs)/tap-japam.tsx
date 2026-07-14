@@ -17,6 +17,7 @@ import {
 } from '../../lib/malaCompletion';
 import { useCurrentJapam } from '../../contexts/current-japam-context';
 import CurrentJapamHeaderButton from '../../components/CurrentJapamHeaderButton';
+import { CircularProgressArc } from '../../components/CircularProgressArc';
 import { getWebOmAudioUri } from '../../lib/webOmAudio';
 import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
@@ -2343,10 +2344,28 @@ export default function JapamMain() {
                 pressed && styles.progressPressed,
               ]}
             >
-              <View style={[styles.progressRing, progressRingBackground]}>
-                <View style={styles.progressInner}>
-                  <Text style={styles.progressCount}>{count}</Text>
-                  <Text style={styles.progressGoal}>/ 108 malas</Text>
+              <View style={{ width: progressRingSize, height: progressRingSize }}>
+                {Platform.OS !== 'web' && (
+                  <View style={StyleSheet.absoluteFillObject}>
+                    <CircularProgressArc
+                      size={progressRingSize}
+                      progress={progressPercent}
+                      color="#0F8F87"
+                      trackColor="rgba(15,143,135,0.14)"
+                    />
+                  </View>
+                )}
+                <View
+                  style={[
+                    styles.progressRing,
+                    progressRingBackground,
+                    Platform.OS !== 'web' && styles.progressRingNativeOverlay,
+                  ]}
+                >
+                  <View style={styles.progressInner}>
+                    <Text style={styles.progressCount}>{count}</Text>
+                    <Text style={styles.progressGoal}>/ 108 malas</Text>
+                  </View>
                 </View>
               </View>
             </Pressable>
@@ -2965,6 +2984,9 @@ const styles = StyleSheet.create({
     ...(Platform.OS === 'web'
       ? ({ transition: 'background 360ms ease, transform 220ms ease, opacity 220ms ease' } as any)
       : {}),
+  },
+  progressRingNativeOverlay: {
+    backgroundColor: 'transparent',
   },
   progressInner: {
     width: '100%',
