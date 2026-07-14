@@ -2151,6 +2151,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   // Per-Japam timer state: saves the current timer state and loads the next Japam's state
   // when the user switches Japams. The will-switch handler fires BEFORE the Japam context
   // changes the selection, and the did-switch handler fires AFTER the change completes.
+  // DeviceEventEmitter.emit is synchronous, so will-switch's async multiSet runs as a
+  // microtask — did-switch fires before the write completes unless we use a promise barrier.
+  const switchSavePromiseRef = useRef<Promise<void> | null>(null);
+
   useEffect(() => {
     const willSwitchSub = DeviceEventEmitter.addListener(
       'japam-will-switch',
@@ -2176,13 +2180,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           [T_DURATION_KEY, String(selectedDurationRef.current)],
           [T_LOOPS_KEY, String(selectedLoopsRef.current)],
         ];
-        if (fromJapamId) {
-          try {
-            await AsyncStorage.multiSet(
-              jPairs.map(([k, v]) => [getJapamKey(k, uid, fromJapamId), v] as [string, string])
-            );
-          } catch {}
-        }
+        // Expose the save promise so did-switch can await it before reading TO state.
+        const savePromise = (async () => {
+          if (fromJapamId) {
+            try {
+              await AsyncStorage.multiSet(
+                jPairs.map(([k, v]) => [getJapamKey(k, uid, fromJapamId), v] as [string, string])
+              );
+            } catch {}
+          }
+        })();
+        switchSavePromiseRef.current = savePromise;
+        await savePromise;
       }
     );
 
@@ -2192,6 +2201,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         currentJapamIdRef.current = japamId;
         const uid = userIdRef.current;
         if (!uid) return;
+        // Wait for will-switch's AsyncStorage save to complete before reading.
+        // DeviceEventEmitter fires synchronously, so the async will-switch handler
+        // has not yet committed its multiSet by the time did-switch runs.
+        if (switchSavePromiseRef.current) {
+          try { await switchSavePromiseRef.current; } catch {}
+          switchSavePromiseRef.current = null;
+        }
         // Only read per-Japam keys on switch — falling through to :uid or bare keys
         // would leak the previous Japam's timer state into the new Japam (since persistState
         // writes both :uid:japamId and :uid fallback keys). A Japam with no saved timer
