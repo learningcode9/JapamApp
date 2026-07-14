@@ -1,12 +1,12 @@
 /**
  * Static content tests for db/rls_hotfix_japam_history_deleted_completions.sql.
  *
- * This migration is NOT executed anywhere yet (no staging, no production) — see the file's own
- * "DO NOT RUN until explicitly approved" header. There is no live database to test against in
- * CI, so — mirroring lib/__tests__/anonKeyRestAuth.test.ts's approach for the client-side half of
- * this same RLS hotfix — these are source-text assertions over the SQL file itself: they prove
- * the migration's *shape* (what it drops, what it creates, what it deliberately leaves alone,
- * that it's guarded and transactional) without requiring a database connection.
+ * This migration (F15) has been executed and verified in production — see the file's own
+ * "STATUS: Executed and verified" header. There is no live database to test against in CI, so —
+ * mirroring lib/__tests__/anonKeyRestAuth.test.ts's approach for the client-side half of this
+ * same RLS hotfix — these are source-text assertions over the SQL file itself: they prove the
+ * migration's *shape* (what it drops, what it creates, what it deliberately leaves alone, that
+ * it's guarded and transactional) without requiring a database connection.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -26,8 +26,9 @@ const OWNERSHIP_EXPR_FRAGMENTS = [
 ];
 
 describe('rls_hotfix_japam_history_deleted_completions.sql', () => {
-  it('has not been marked as run (still says DO NOT RUN)', () => {
-    expect(sql).toMatch(/DO NOT RUN until explicitly approved/);
+  it('is marked as executed and verified (production)', () => {
+    expect(sql).toMatch(/STATUS: Executed and verified/);
+    expect(sql).not.toMatch(/^-- DO NOT RUN until explicitly approved\. Not yet executed/m);
   });
 
   it('is wrapped in exactly one transaction (BEGIN ... COMMIT)', () => {

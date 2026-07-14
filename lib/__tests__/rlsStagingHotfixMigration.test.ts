@@ -1,8 +1,8 @@
 /**
  * Static content tests for db/rls_staging_hotfix_deleted_completions.sql.
  *
- * Not executed anywhere yet (no staging, no production) — see the file's own "DO NOT RUN until
- * explicitly approved" header. No live database in CI, so — mirroring
+ * This migration (F15, staging-only) has been executed and verified in staging — see the file's
+ * own "STATUS: Executed and verified" header. No live database in CI, so — mirroring
  * lib/__tests__/rlsHotfixMigration.test.ts's approach for the broader production migration —
  * these are source-text assertions over the SQL file itself.
  */
@@ -20,8 +20,9 @@ const OWNERSHIP_EXPR_FRAGMENTS = [
 ];
 
 describe('rls_staging_hotfix_deleted_completions.sql', () => {
-  it('has not been marked as run (still says DO NOT RUN)', () => {
-    expect(sql).toMatch(/DO NOT RUN until explicitly approved/);
+  it('is marked as executed and verified (staging)', () => {
+    expect(sql).toMatch(/STATUS: Executed and verified/);
+    expect(sql).not.toMatch(/^-- DO NOT RUN until explicitly approved\. Not yet executed/m);
   });
 
   it('is scoped to staging only and warns against production', () => {
