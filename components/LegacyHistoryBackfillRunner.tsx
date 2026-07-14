@@ -47,6 +47,7 @@ import { Alert } from 'react-native';
 import { useCurrentJapam } from '../contexts/current-japam-context';
 import * as historyRepository from '../lib/historyRepository';
 import { planLegacyHistoryBackfill } from '../lib/legacyHistoryBackfill';
+import { supabase } from '../lib/supabase';
 import {
   isLegacyHistoryBackfillComplete,
   markLegacyHistoryBackfillComplete,
@@ -63,19 +64,31 @@ const CHECK_ONLY_PLACEHOLDER = '__legacy_backfill_check_only__';
  * user, if present and non-blank, else DEFAULT_JAPAM_NAME. Guests, missing env config, a
  * not-found/empty profile row, a blank name, or any network/parse error all fall through to the
  * same generic default -- this never throws.
+ *
+ * Uses the signed-in user's session JWT, not the anon key (mirrors the F15/F7 session-token
+ * pattern from syncPendingHistory/saveToSupabase in lib/historyStore.ts and app/(tabs)/index.tsx).
+ * No session: skip the lookup entirely and return DEFAULT_JAPAM_NAME — fail-closed, never falls
+ * back to the anon key.
  */
 const fetchSuggestedJapamName = async (userId: string | null): Promise<string> => {
   if (!userId) return DEFAULT_JAPAM_NAME;
 
   try {
     const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-    if (!supabaseUrl || !supabaseKey) return DEFAULT_JAPAM_NAME;
+    const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseAnonKey) return DEFAULT_JAPAM_NAME;
+
+    // Require a real session JWT. No session: skip, same fail-closed discipline as the F15/F7
+    // session-token guards (index.tsx's saveUserTotalToSupabase, timer-context.tsx's
+    // syncPendingHistory, etc.).
+    const { data: sessionData } = await supabase.auth.getSession();
+    const sessionToken = sessionData.session?.access_token;
+    if (!sessionToken) return DEFAULT_JAPAM_NAME;
 
     const encodedUserId = encodeURIComponent(userId);
     const response = await fetch(
       `${supabaseUrl}/rest/v1/user_profiles?user_id=eq.${encodedUserId}&select=japam_name`,
-      { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` } }
+      { headers: { apikey: supabaseAnonKey, Authorization: `Bearer ${sessionToken}` } }
     );
     if (!response.ok) return DEFAULT_JAPAM_NAME;
 
