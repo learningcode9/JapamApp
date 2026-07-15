@@ -2166,25 +2166,28 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       async ({ fromJapamId, toJapamId }: { fromJapamId: string | null; toJapamId: string | null }) => {
         const uid = userIdRef.current;
         if (!uid) return;
-        // If a timer is actively running, pause it (which also saves state to :uid and bare keys).
+        // Stop the timer if actively running. Skip persistState here — the
+        // saveJapamTimerState call below writes the single authoritative
+        // per-Japam snapshot for the FROM Japam, avoiding a race between
+        // fire-and-forget persistState and the awaited saveJapamTimerState.
         if (isRunningRef.current) {
-          pause();
+          clearTimerInterval();
+          releaseWakeLock();
+          setIsRunning(false);
+          isRunningRef.current = false;
+          updateTimerState({
+            sessionId: timerSessionIdRef.current,
+            startedAt: null,
+            isCompleting: false,
+          });
+          void hideNotification();
+          clearCompletionNotification();
+          if (Platform.OS === 'android') void pauseForegroundService();
         }
         // Save current in-memory timer state to the FROM Japam's per-Japam slot.
         const tSec = selectedDurationRef.current * 60;
         const secondsNow = secondsRef.current;
         const wasPaused = !isRunningRef.current && secondsNow > 0 && secondsNow < tSec;
-        const jPairs: [string, string][] = [
-          [TIMER_SECONDS_KEY, String(secondsNow)],
-          [TIMER_RUNNING_KEY, String(false)],
-          [TIMER_TARGET_KEY, String(tSec)],
-          [TIMER_PAUSED_KEY, String(wasPaused)],
-          [TIMER_COMPLETED_LOOPS_KEY, String(completedLoopsRef.current)],
-          [TIMER_STARTED_AT_KEY, ''],
-          [TIMER_SESSION_ID_KEY, timerSessionIdRef.current],
-          [T_DURATION_KEY, String(selectedDurationRef.current)],
-          [T_LOOPS_KEY, String(selectedLoopsRef.current)],
-        ];
         // Expose the save promise so did-switch can await it before reading TO state.
         const savePromise = (async () => {
           if (fromJapamId) {
@@ -2295,7 +2298,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       willSwitchSub.remove();
       didSwitchSub.remove();
     };
-  }, [pause, setSelectedDurationDiag, computeColdStartRestoreDecision]);
+  }, [clearCompletionNotification, clearTimerInterval, hideNotification, releaseWakeLock, setSelectedDurationDiag, computeColdStartRestoreDecision]);
 
   const selectDuration = useCallback((mins: number) => {
     if (isRunningRef.current) return;
@@ -2307,7 +2310,15 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     processedCompletionLoopsRef.current.clear();
     timerStartedAtRef.current = null;
     timerSessionIdRef.current = '';
+    const uid = userIdRef.current;
+    const japamId = currentJapamIdRef.current;
     void AsyncStorage.setItem(T_DURATION_KEY, String(mins));
+    if (uid) {
+      void AsyncStorage.setItem(getUserKey(T_DURATION_KEY, uid), String(mins));
+      if (japamId) {
+        void AsyncStorage.setItem(getJapamKey(T_DURATION_KEY, uid, japamId), String(mins));
+      }
+    }
   }, []);
 
   const selectLoops = useCallback((loops: number) => {
@@ -2316,7 +2327,15 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     selectedLoopsRef.current = loops;
     processedCompletionLoopsRef.current.clear();
     timerSessionIdRef.current = '';
+    const uid = userIdRef.current;
+    const japamId = currentJapamIdRef.current;
     void AsyncStorage.setItem(T_LOOPS_KEY, String(loops));
+    if (uid) {
+      void AsyncStorage.setItem(getUserKey(T_LOOPS_KEY, uid), String(loops));
+      if (japamId) {
+        void AsyncStorage.setItem(getJapamKey(T_LOOPS_KEY, uid, japamId), String(loops));
+      }
+    }
   }, []);
 
   const value = useMemo<TimerContextValue>(() => ({
