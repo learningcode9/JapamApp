@@ -18,6 +18,20 @@ export function getUserKey(key: string, uid: string): string {
   return `${key}:${uid}`;
 }
 
+export function buildSelectionPairs(
+  bareKey: string, value: string,
+  uid: string | null, japamId: string | null
+): [string, string][] {
+  const pairs: [string, string][] = [[bareKey, value]];
+  if (uid) {
+    pairs.push([getUserKey(bareKey, uid), value]);
+    if (japamId) {
+      pairs.push([getJapamKey(bareKey, uid, japamId), value]);
+    }
+  }
+  return pairs;
+}
+
 export const PER_JAPAM_KEYS = [
   TIMER_SECONDS_KEY,
   TIMER_TARGET_KEY,

@@ -8,6 +8,7 @@ import { usePathname, useRouter } from 'expo-router';
 import { getTimerState, updateTimerState } from '../lib/timerState';
 import { computeColdStartRestoreDecision } from '../lib/timerColdStartRestore';
 import {
+  buildSelectionPairs,
   saveJapamTimerState,
   readJapamTimerState,
   type TimerStateSnapshot,
@@ -78,6 +79,7 @@ export const LOOP_OPTIONS = [1, 2, 3, 5, 10];
 
 const getUserKey = (key: string, uid: string) => `${key}:${uid}`;
 const getJapamKey = (key: string, uid: string, japamId: string) => `${key}:${uid}:${japamId}`;
+
 export const formatTimer = (s: number) =>
   `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
@@ -2310,15 +2312,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     processedCompletionLoopsRef.current.clear();
     timerStartedAtRef.current = null;
     timerSessionIdRef.current = '';
-    const uid = userIdRef.current;
-    const japamId = currentJapamIdRef.current;
-    void AsyncStorage.setItem(T_DURATION_KEY, String(mins));
-    if (uid) {
-      void AsyncStorage.setItem(getUserKey(T_DURATION_KEY, uid), String(mins));
-      if (japamId) {
-        void AsyncStorage.setItem(getJapamKey(T_DURATION_KEY, uid, japamId), String(mins));
-      }
-    }
+    void AsyncStorage.multiSet(
+      buildSelectionPairs(T_DURATION_KEY, String(mins), userIdRef.current, currentJapamIdRef.current)
+    );
   }, []);
 
   const selectLoops = useCallback((loops: number) => {
@@ -2327,15 +2323,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     selectedLoopsRef.current = loops;
     processedCompletionLoopsRef.current.clear();
     timerSessionIdRef.current = '';
-    const uid = userIdRef.current;
-    const japamId = currentJapamIdRef.current;
-    void AsyncStorage.setItem(T_LOOPS_KEY, String(loops));
-    if (uid) {
-      void AsyncStorage.setItem(getUserKey(T_LOOPS_KEY, uid), String(loops));
-      if (japamId) {
-        void AsyncStorage.setItem(getJapamKey(T_LOOPS_KEY, uid, japamId), String(loops));
-      }
-    }
+    void AsyncStorage.multiSet(
+      buildSelectionPairs(T_LOOPS_KEY, String(loops), userIdRef.current, currentJapamIdRef.current)
+    );
   }, []);
 
   const value = useMemo<TimerContextValue>(() => ({
