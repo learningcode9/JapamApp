@@ -7,14 +7,7 @@ import {
   saveJapamTimerState,
   readJapamTimerState,
   type TimerStateSnapshot,
-  TIMER_SECONDS_KEY,
-  TIMER_TARGET_KEY,
-  TIMER_PAUSED_KEY,
-  TIMER_RUNNING_KEY,
-  TIMER_COMPLETED_LOOPS_KEY,
-  T_DURATION_KEY,
-  T_LOOPS_KEY,
-  TIMER_SESSION_ID_KEY,
+  type RawJapamTimerState,
 } from '../perJapamTimerState';
 
 const UID = 'test-user-123';
@@ -37,9 +30,71 @@ function pausedSnapshot(overrides: Partial<TimerStateSnapshot> = {}): TimerState
   };
 }
 
-async function readRaw(uid: string, japamId: string): Promise<Record<string, string | null>> {
-  return readJapamTimerState(uid, japamId) as unknown as Record<string, string | null>;
-}
+// Regression guard: this describe block reproduces the exact access pattern used by
+// the japam-did-switch handler in timer-context.tsx.  It must use dot notation on
+// the RawJapamTimerState interface — no bracket access with storage-key constants,
+// no intermediate helpers, no type escapes.
+describe('regression: readJapamTimerState returns a real RawJapamTimerState', () => {
+  beforeEach(async () => {
+    await AsyncStorage.clear();
+  });
+
+  it('all nine semantic properties contain the stored string values', async () => {
+    await saveJapamTimerState(UID, JAPAM_A, {
+      seconds: 120,
+      running: false,
+      target: 300,
+      paused: true,
+      completedLoops: 1,
+      startedAt: '',
+      sessionId: 'sess-regression',
+      duration: 5,
+      loops: 3,
+    });
+
+    // Exactly as the production did-switch handler reads it:
+    const raw: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_A);
+
+    // Production code would destructure these to feed restore decision:
+    const [sec, target, dur, loops, paused, completed, running, startedAt, sessionId] = [
+      raw.seconds, raw.target, raw.duration, raw.loops,
+      raw.paused, raw.completedLoops, raw.running,
+      raw.startedAt, raw.sessionId,
+    ];
+
+    const savedSec = Number(sec) || 0;
+    const savedTarget = Number(target) || 0;
+    const savedDur = Number(dur) || 0;
+    const savedLoops = Number(loops) || 0;
+    const savedCompletedLoops = Math.max(0, Number(completed) || 0);
+    const savedPaused = paused === 'true';
+    const savedRunning = running === 'true';
+    const savedSessionId = sessionId || '';
+
+    expect(savedSec).toBe(120);
+    expect(savedTarget).toBe(300);
+    expect(savedDur).toBe(5);
+    expect(savedLoops).toBe(3);
+    expect(savedPaused).toBe(true);
+    expect(savedCompletedLoops).toBe(1);
+    expect(savedRunning).toBe(false);
+    expect(savedSessionId).toBe('sess-regression');
+  });
+
+  it('unsaved Japam returns all nulls, not undefined', async () => {
+    const raw: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_B);
+
+    expect(raw.seconds).toBeNull();
+    expect(raw.target).toBeNull();
+    expect(raw.duration).toBeNull();
+    expect(raw.loops).toBeNull();
+    expect(raw.paused).toBeNull();
+    expect(raw.completedLoops).toBeNull();
+    expect(raw.running).toBeNull();
+    expect(raw.startedAt).toBeNull();
+    expect(raw.sessionId).toBeNull();
+  });
+});
 
 describe('per-Japam timer switch flow isolation', () => {
   beforeEach(async () => {
@@ -56,11 +111,11 @@ describe('per-Japam timer switch flow isolation', () => {
       duration: 5,
     }));
 
-    const r = await readRaw(UID, JAPAM_A);
-    expect(r[TIMER_SECONDS_KEY]).toBe('120');
-    expect(r[TIMER_PAUSED_KEY]).toBe('true');
-    expect(r[TIMER_TARGET_KEY]).toBe('300');
-    expect(r[TIMER_RUNNING_KEY]).toBe('false');
+    const r: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_A);
+    expect(r.seconds).toBe('120');
+    expect(r.paused).toBe('true');
+    expect(r.target).toBe('300');
+    expect(r.running).toBe('false');
   });
 
   // ─── No fallback ─────────────────────────────────────────────────
@@ -71,14 +126,14 @@ describe('per-Japam timer switch flow isolation', () => {
       paused: true,
     }));
 
-    const b = await readRaw(UID, JAPAM_B);
-    expect(b[TIMER_SECONDS_KEY]).toBeNull();
-    expect(b[TIMER_TARGET_KEY]).toBeNull();
-    expect(b[T_DURATION_KEY]).toBeNull();
-    expect(b[TIMER_PAUSED_KEY]).toBeNull();
+    const b: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_B);
+    expect(b.seconds).toBeNull();
+    expect(b.target).toBeNull();
+    expect(b.duration).toBeNull();
+    expect(b.paused).toBeNull();
 
-    const a = await readRaw(UID, JAPAM_A);
-    expect(a[TIMER_SECONDS_KEY]).toBe('120');
+    const a: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_A);
+    expect(a.seconds).toBe('120');
   });
 
   // ─── Round-trip isolation ────────────────────────────────────────
@@ -92,13 +147,13 @@ describe('per-Japam timer switch flow isolation', () => {
       seconds: 45, paused: true, target: 180, duration: 3,
     }));
 
-    const a = await readRaw(UID, JAPAM_A);
-    expect(a[TIMER_SECONDS_KEY]).toBe('120');
-    expect(a[TIMER_TARGET_KEY]).toBe('300');
+    const a: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_A);
+    expect(a.seconds).toBe('120');
+    expect(a.target).toBe('300');
 
-    const b = await readRaw(UID, JAPAM_B);
-    expect(b[TIMER_SECONDS_KEY]).toBe('45');
-    expect(b[TIMER_TARGET_KEY]).toBe('180');
+    const b: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_B);
+    expect(b.seconds).toBe('45');
+    expect(b.target).toBe('180');
   });
 
   // ─── Pause before save ───────────────────────────────────────────
@@ -112,10 +167,10 @@ describe('per-Japam timer switch flow isolation', () => {
       startedAt: '',
     }));
 
-    const a = await readRaw(UID, JAPAM_A);
-    expect(a[TIMER_RUNNING_KEY]).toBe('false');
-    expect(a[TIMER_SECONDS_KEY]).toBe('90');
-    expect(a[TIMER_PAUSED_KEY]).toBe('true');
+    const a: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_A);
+    expect(a.running).toBe('false');
+    expect(a.seconds).toBe('90');
+    expect(a.paused).toBe('true');
   });
 
   // ─── Loop state ──────────────────────────────────────────────────
@@ -130,10 +185,10 @@ describe('per-Japam timer switch flow isolation', () => {
       loops: 3,
     }));
 
-    const a = await readRaw(UID, JAPAM_A);
-    expect(a[TIMER_COMPLETED_LOOPS_KEY]).toBe('2');
-    expect(a[T_LOOPS_KEY]).toBe('3');
-    expect(a[TIMER_SECONDS_KEY]).toBe('200');
+    const a: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_A);
+    expect(a.completedLoops).toBe('2');
+    expect(a.loops).toBe('3');
+    expect(a.seconds).toBe('200');
   });
 
   // ─── Three-way isolation ─────────────────────────────────────────
@@ -149,20 +204,20 @@ describe('per-Japam timer switch flow isolation', () => {
       seconds: 10, paused: true, target: 60, duration: 1,
     }));
 
-    expect((await readRaw(UID, JAPAM_A))[TIMER_SECONDS_KEY]).toBe('120');
-    expect((await readRaw(UID, JAPAM_B))[TIMER_SECONDS_KEY]).toBe('45');
-    expect((await readRaw(UID, JAPAM_C))[TIMER_SECONDS_KEY]).toBe('10');
+    expect((await readJapamTimerState(UID, JAPAM_A)).seconds).toBe('120');
+    expect((await readJapamTimerState(UID, JAPAM_B)).seconds).toBe('45');
+    expect((await readJapamTimerState(UID, JAPAM_C)).seconds).toBe('10');
 
     await saveJapamTimerState(UID, JAPAM_A, pausedSnapshot({
       seconds: 150, paused: true, target: 300, duration: 5, completedLoops: 1,
     }));
 
-    const aFinal = await readRaw(UID, JAPAM_A);
-    expect(aFinal[TIMER_SECONDS_KEY]).toBe('150');
-    expect(aFinal[TIMER_COMPLETED_LOOPS_KEY]).toBe('1');
+    const aFinal: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_A);
+    expect(aFinal.seconds).toBe('150');
+    expect(aFinal.completedLoops).toBe('1');
 
-    const bUnchanged = await readRaw(UID, JAPAM_B);
-    expect(bUnchanged[TIMER_SECONDS_KEY]).toBe('45');
+    const bUnchanged: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_B);
+    expect(bUnchanged.seconds).toBe('45');
   });
 
   // ─── Session ID ──────────────────────────────────────────────────
@@ -178,67 +233,52 @@ describe('per-Japam timer switch flow isolation', () => {
       seconds: 45, paused: true, sessionId: sessionB,
     }));
 
-    const a = await readRaw(UID, JAPAM_A);
-    expect(a[TIMER_SESSION_ID_KEY]).toBe(sessionA);
-    expect(a[TIMER_SECONDS_KEY]).toBe('120');
+    const a: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_A);
+    expect(a.sessionId).toBe(sessionA);
+    expect(a.seconds).toBe('120');
 
-    const b = await readRaw(UID, JAPAM_B);
-    expect(b[TIMER_SESSION_ID_KEY]).toBe(sessionB);
-    expect(b[TIMER_SECONDS_KEY]).toBe('45');
+    const b: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_B);
+    expect(b.sessionId).toBe(sessionB);
+    expect(b.seconds).toBe('45');
   });
 
   // ─── Orchestration: ordered save-then-read ────────────────────────
-  // The switch orchestration in timer-context.tsx saves FROM state
-  // (will-switch) before loading TO state (did-switch).  These tests
-  // verify that the helper pair enforces this ordering at the
-  // storage layer.
 
   it('8. ordered save-then-read: save resolves before read returns saved data', async () => {
     await saveJapamTimerState(UID, JAPAM_A, pausedSnapshot({
       seconds: 120, paused: true, target: 300, duration: 5,
     }));
-    // Read immediately after save — must see the persisted value
-    const a = await readRaw(UID, JAPAM_A);
-    expect(a[TIMER_SECONDS_KEY]).toBe('120');
+    const a: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_A);
+    expect(a.seconds).toBe('120');
   });
 
   it('9. sequential save chain: A→B→A preserves each latest value', async () => {
-    // Simulates: will-switch saves A at 120s → will-switch saves B at 45s
-    // → did-switch reads A — must see A's latest (120s), not B's (45s)
     await saveJapamTimerState(UID, JAPAM_A, pausedSnapshot({
       seconds: 120, paused: true, target: 300, duration: 5,
     }));
     await saveJapamTimerState(UID, JAPAM_B, pausedSnapshot({
       seconds: 45, paused: true, target: 180, duration: 3,
     }));
-    expect((await readRaw(UID, JAPAM_A))[TIMER_SECONDS_KEY]).toBe('120');
+    expect((await readJapamTimerState(UID, JAPAM_A)).seconds).toBe('120');
 
-    // Re-save A with updated value, read back — must see the update
     await saveJapamTimerState(UID, JAPAM_A, pausedSnapshot({
       seconds: 200, paused: true, target: 300, duration: 5,
     }));
-    expect((await readRaw(UID, JAPAM_A))[TIMER_SECONDS_KEY]).toBe('200');
-    // B must be unaffected
-    expect((await readRaw(UID, JAPAM_B))[TIMER_SECONDS_KEY]).toBe('45');
+    expect((await readJapamTimerState(UID, JAPAM_A)).seconds).toBe('200');
+    expect((await readJapamTimerState(UID, JAPAM_B)).seconds).toBe('45');
   });
 
   // ─── Orchestration: AsyncStorage rejection safety ────────────────
-  // The will-switch handler wraps saveJapamTimerState in .catch(() => {}).
-  // These tests verify the helper itself doesn't throw when the
-  // underlying storage rejects.
 
   it('10. saveJapamTimerState propagates multiSet rejection (caller must catch)', async () => {
     jest.spyOn(AsyncStorage, 'multiSet').mockRejectedValueOnce(new Error('storage full'));
 
-    // The helper correctly propagates the error; the switch handler
-    // in timer-context.tsx wraps this call in .catch(() => {}).
     await expect(
       saveJapamTimerState(UID, JAPAM_A, pausedSnapshot({
         seconds: 120, paused: true,
       }))
     ).rejects.toThrow('storage full');
 
-    // The rejection must not corrupt already-written data from prior saves
     await expect(
       readJapamTimerState(UID, JAPAM_A)
     ).resolves.toBeDefined();
@@ -247,22 +287,14 @@ describe('per-Japam timer switch flow isolation', () => {
   it('11. readJapamTimerState propagates multiGet rejection (caller must catch)', async () => {
     jest.spyOn(AsyncStorage, 'multiGet').mockRejectedValueOnce(new Error('storage lost'));
 
-    // The helper correctly propagates the error; the switch handler
-    // wraps the read in a try/catch or .catch() (the did-switch handler
-    // has no explicit catch but the DeviceEventEmitter error boundary
-    // ensures the event loop is not crashed).
     await expect(
       readJapamTimerState(UID, JAPAM_A)
     ).rejects.toThrow('storage lost');
   });
 
   // ─── Orchestration: rapid consecutive switches ───────────────────
-  // The Japam switch UI fires will-switch → did-switch per selection.
-  // Rapid A→B→A→B→A must not corrupt any Japam's stored state.
 
   it('12. rapid A→B→A→B→A consecutive switches preserve each Japam state', async () => {
-    // Alternating saves simulate the will-switch handler firing for
-    // each consecutive Japam selection.
     await saveJapamTimerState(UID, JAPAM_A, pausedSnapshot({
       seconds: 120, paused: true, target: 300, duration: 5,
     }));
@@ -279,57 +311,46 @@ describe('per-Japam timer switch flow isolation', () => {
       seconds: 60, paused: true, target: 300, duration: 5,
     }));
 
-    // Final reads — each Japam must reflect only its own latest write
-    const a = await readRaw(UID, JAPAM_A);
-    expect(a[TIMER_SECONDS_KEY]).toBe('60');
-    expect(a[TIMER_TARGET_KEY]).toBe('300');
+    const a: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_A);
+    expect(a.seconds).toBe('60');
+    expect(a.target).toBe('300');
 
-    const b = await readRaw(UID, JAPAM_B);
-    expect(b[TIMER_SECONDS_KEY]).toBe('30');
-    expect(b[TIMER_TARGET_KEY]).toBe('180');
+    const b: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_B);
+    expect(b.seconds).toBe('30');
+    expect(b.target).toBe('180');
   });
 
   // ─── Same-Japam re-selection ────────────────────────────────────
-  // Selecting the same Japam the user is already on should overwrite
-  // with the latest snapshot rather than corrupting or merging.
 
   it('13. same-Japam re-selection: save twice with different values, latest sticks', async () => {
     await saveJapamTimerState(UID, JAPAM_A, pausedSnapshot({
       seconds: 120, paused: true, target: 300, duration: 5,
     }));
-    // User re-selects the same Japam A — will-switch saves again
     await saveJapamTimerState(UID, JAPAM_A, pausedSnapshot({
       seconds: 200, paused: true, target: 300, duration: 5, completedLoops: 1,
     }));
 
-    const a = await readRaw(UID, JAPAM_A);
-    expect(a[TIMER_SECONDS_KEY]).toBe('200');
-    expect(a[TIMER_COMPLETED_LOOPS_KEY]).toBe('1');
-    // B (never saved) must still be null
-    const b = await readRaw(UID, JAPAM_B);
-    expect(b[TIMER_SECONDS_KEY]).toBeNull();
+    const a: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_A);
+    expect(a.seconds).toBe('200');
+    expect(a.completedLoops).toBe('1');
+    const b: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_B);
+    expect(b.seconds).toBeNull();
   });
 
   // ─── Listener cleanup / remount safety ──────────────────────────
-  // When the useEffect cleanup runs (unmount) and the effect re-runs
-  // (remount), no duplicate or stale subscriptions should exist.
-  // Simulated by: save → clear → re-save → read.
 
   it('14. simulated remount: save, clear, re-save does not corrupt state', async () => {
-    // First mount cycle
     await saveJapamTimerState(UID, JAPAM_A, pausedSnapshot({
       seconds: 120, paused: true,
     }));
     await AsyncStorage.clear();
 
-    // Re-init (simulating remount after cleanup)
     await saveJapamTimerState(UID, JAPAM_A, pausedSnapshot({
       seconds: 60, paused: true, target: 300, duration: 5,
     }));
 
-    const a = await readRaw(UID, JAPAM_A);
-    // Must see the new session, not stale data from the cleared first cycle
-    expect(a[TIMER_SECONDS_KEY]).toBe('60');
-    expect(a[TIMER_PAUSED_KEY]).toBe('true');
+    const a: RawJapamTimerState = await readJapamTimerState(UID, JAPAM_A);
+    expect(a.seconds).toBe('60');
+    expect(a.paused).toBe('true');
   });
 });

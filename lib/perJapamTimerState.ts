@@ -85,9 +85,15 @@ export async function readJapamTimerState(
 ): Promise<RawJapamTimerState> {
   const japamKeys = PER_JAPAM_KEYS.map(k => getJapamKey(k, uid, japamId));
   const entries = await AsyncStorage.multiGet(japamKeys);
-  const result: Record<string, string | null> = {};
-  for (let i = 0; i < PER_JAPAM_KEYS.length; i++) {
-    result[PER_JAPAM_KEYS[i]] = entries[i]?.[1] ?? null;
-  }
-  return result as unknown as RawJapamTimerState;
+  return {
+    seconds: entries[0]?.[1] ?? null,
+    target: entries[1]?.[1] ?? null,
+    duration: entries[2]?.[1] ?? null,
+    loops: entries[3]?.[1] ?? null,
+    paused: entries[4]?.[1] ?? null,
+    completedLoops: entries[5]?.[1] ?? null,
+    running: entries[6]?.[1] ?? null,
+    startedAt: entries[7]?.[1] ?? null,
+    sessionId: entries[8]?.[1] ?? null,
+  };
 }
