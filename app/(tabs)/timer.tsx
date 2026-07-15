@@ -248,39 +248,11 @@ export default function TimerScreen() {
       if (url && key && sessionToken) {
         try {
           const encodedUserId = encodeURIComponent(userId);
-          const requestUrl = `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,completion_id&order=created_at.asc&limit=10000`;
-          const requestHeaders = { apikey: key, Authorization: `Bearer ${sessionToken}` };
-          console.log(
-            '[TIMER_FETCH_DIAG] phase=request timestamp=%s url=%s encodedUserId=%s currentUserId=%s currentJapamId=%s apikeyLast6=%s cacheNoStore=%s',
-            new Date().toISOString(),
-            requestUrl,
-            encodedUserId,
-            userId,
-            currentJapam?.id ?? 'null',
-            key.slice(-6),
-            false
-          );
-          const res = await fetch(requestUrl, { headers: requestHeaders });
-          console.log(
-            '[TIMER_FETCH_DIAG] phase=response status=%d ok=%s url=%s headers=%o',
-            res.status,
-            res.ok,
-            res.url,
-            {
-              'content-type': res.headers.get('content-type'),
-              'content-length': res.headers.get('content-length'),
-              'cache-control': res.headers.get('cache-control'),
-              'x-powered-by': res.headers.get('x-powered-by'),
-              'content-range': res.headers.get('content-range'),
-            }
+          const res = await fetch(
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,completion_id&order=created_at.asc&limit=10000`,
+            { headers: { apikey: key, Authorization: `Bearer ${sessionToken}` } }
           );
           if (res.ok) {
-            const rawText = await res.clone().text();
-            console.log(
-              '[TIMER_FETCH_DIAG] phase=raw-body length=%d first500=%s',
-              rawText.length,
-              rawText.slice(0, 500)
-            );
             const rows: {
               id?: number | string;
               created_at: string;
@@ -289,13 +261,6 @@ export default function TimerScreen() {
               user_name?: string;
               completion_id?: string;
             }[] = await res.json();
-            console.log(
-              '[TIMER_FETCH_DIAG] phase=parsed isArray=%s type=%s length=%d firstRow=%o',
-              Array.isArray(rows),
-              typeof rows,
-              rows.length,
-              rows[0] ?? null
-            );
             rawSupabaseRows = rows.length;
             const remoteHistory: Session[] = rows.map((row) => ({
               date: row.created_at,
