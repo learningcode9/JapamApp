@@ -4,6 +4,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, BackHandler, DeviceEventEmitter, Dimensions, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { dedupeByCompletionId, type RawHistoryRecord } from '../../lib/historyStore';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
@@ -16,7 +17,24 @@ const TIMER_RUNNING_KEY = 'timerRunning';
 const TIMER_TARGET_KEY = 'timerTarget';
 const TIMER_MINUTES_KEY = 'timerMinutes';
 const TIMER_LOOP_KEY = 'timerLoop';
+const HISTORY_KEY = 'history';
 const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
+
+/**
+ * Combined (all-Japams) lifetime total for this user, computed directly from HISTORY_KEY --
+ * matches the exact same convention as contexts/timer-context.tsx's syncLifetimeTotalToSupabase
+ * (dedupe by completionId, keep this user's own positive-count records, sum totalCount). Groups
+ * Dashboard / japam_user_totals stays combined, so this deliberately does NOT filter by Japam.
+ * Kept independent of Tap Japam's own internal cache format on purpose -- this is a last-chance
+ * flush on logout and must not depend on another screen's private storage keys.
+ */
+const getCombinedLifetimeTotal = async (userId: string): Promise<number> => {
+  const raw = await AsyncStorage.getItem(HISTORY_KEY);
+  const history: RawHistoryRecord[] = raw ? JSON.parse(raw) : [];
+  return dedupeByCompletionId(history)
+    .filter((r) => (r.userId || null) === userId && r.totalCount > 0)
+    .reduce((sum, r) => sum + (Number(r.totalCount) || 0), 0);
+};
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -148,7 +166,7 @@ export default function SettingsScreen() {
         const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
         const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
         if (url && key) {
-          const storedTotal = Number((await AsyncStorage.getItem(getUserStorageKey('totalCount', currentUserId))) || '0');
+          const storedTotal = await getCombinedLifetimeTotal(currentUserId);
           const storedName = await AsyncStorage.getItem(USER_NAME_KEY);
           if (storedTotal > 0) {
             await fetch(`${url}/rest/v1/japam_user_totals?on_conflict=user_id`, {

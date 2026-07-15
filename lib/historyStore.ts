@@ -31,6 +31,13 @@ export interface HistoryRecord {
   remoteId?: number | string;
   completionId: string;
   syncStatus: SyncStatus;
+  /** Stable identity: which Japam (see the `japams` table) this completion belongs to. Null/absent
+   * means legacy/unassigned. This is the ONLY field that determines which Japam a record belongs
+   * to — japamName is a denormalized snapshot only, never used for identity or grouping. */
+  japamId?: string | null;
+  /** Denormalized snapshot of the Japam's display name at completion time, for display/CSV/legacy
+   * fallback without a join. Never typed per-session — see normalizeJapamName. */
+  japamName?: string | null;
 }
 
 export type SupabaseHistoryPayload = {
@@ -40,6 +47,24 @@ export type SupabaseHistoryPayload = {
   count: number;
   created_at: string;
   completion_id: string;
+  japam_id: string | null;
+  japam_name: string | null;
+};
+
+/**
+ * Single shared normalizer for the denormalized japam display-name snapshot — every read/write
+ * path must call this instead of re-implementing trim/blank handling.
+ */
+export const normalizeJapamName = (raw?: string | null): string | null => {
+  const trimmed = (raw || '').trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+/** Defensive normalization for a Japam id: any non-string or blank value becomes null. */
+const normalizeJapamId = (raw: unknown): string | null => {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
 };
 
 export type HistoryRecordUpdate = {
@@ -129,6 +154,8 @@ export const normalizeRecord = (raw: RawHistoryRecord): HistoryRecord => {
     remoteId: raw.remoteId ?? raw.remote_id,
     completionId: raw.completionId || makeCompletionId(userId, raw.date),
     syncStatus: raw.syncStatus === 'pending' ? 'pending' : 'synced',
+    japamId: normalizeJapamId(raw.japamId),
+    japamName: normalizeJapamName(raw.japamName),
   };
 };
 
@@ -163,6 +190,8 @@ export const appendCompletion = (
     userEmail?: string;
     source?: string;
     completionId?: string;
+    japamId?: string | null;
+    japamName?: string | null;
   }
 ): HistoryRecord[] => {
   const completionId = completion.completionId || makeCompletionId(completion.userId, completion.date);
@@ -182,6 +211,8 @@ export const appendCompletion = (
     source: completion.source,
     completionId,
     syncStatus: completion.userId ? 'pending' : 'synced',
+    japamId: normalizeJapamId(completion.japamId),
+    japamName: normalizeJapamName(completion.japamName),
   };
   return [record, ...normalized];
 };
@@ -269,12 +300,19 @@ export const planHistoryDayAdjustment = (
   userId: string | null | undefined,
   localDayKey: string,
   requestedTargetMalas: number,
+  japamId?: string | null,
 ): HistoryDayAdjustmentPlan => {
   const normalized = dedupeByCompletionId(records);
   const matchesUser = (record: HistoryRecord) =>
     userId ? record.userId === userId : !record.userId;
+  // Omitting japamId preserves the original, unscoped behavior (backward compatible with the one
+  // caller that predates Japam Workspaces). Passing it -- including explicitly as null, for the
+  // legacy/unassigned bucket -- scopes every count/update/delete to records matching exactly that
+  // Japam, leaving every other Japam's same-day records completely untouched.
+  const matchesJapam = (record: HistoryRecord) =>
+    japamId === undefined ? true : (record.japamId ?? null) === japamId;
   const dayRecords = normalized
-    .filter((record) => matchesUser(record) && toLocalDayKey(record.date) === localDayKey)
+    .filter((record) => matchesUser(record) && matchesJapam(record) && toLocalDayKey(record.date) === localDayKey)
     .map((record) => ({
       ...record,
       malas: Math.max(0, Math.floor(Number(record.malas) || 0)),
@@ -394,6 +432,15 @@ export const reconcileWithServer = (
 /**
  * Build the Supabase row from the local record. The important bit is `created_at: record.date`:
  * offline completions must upload with their actual completion time, not the later sync time.
+ *
+ * Stop-loss (Issue 1): japam_history.japam_id has a live FK to public.japams, but nothing yet
+ * writes rows to public.japams (Japam Sync is not implemented). Sending a real japamId here would
+ * make every tagged completion fail this FK and get stuck 'pending' forever. Until Japam Sync
+ * exists, we deliberately withhold japam_id from the remote payload (always null, which always
+ * satisfies the FK) while still sending japam_name (plain nullable text column, no FK) so a
+ * restored/cross-device copy at least has a human-readable label. Local japamId is untouched --
+ * this only affects what gets sent to Supabase, not local storage, filtering, or stats. Revert this
+ * one line once Japam Sync gives japam_id a real row to reference.
  */
 export const buildSupabaseHistoryPayload = (
   record: RawHistoryRecord,
@@ -411,6 +458,8 @@ export const buildSupabaseHistoryPayload = (
     count: normalized.totalCount,
     created_at: normalized.date,
     completion_id: normalized.completionId,
+    japam_id: null,
+    japam_name: normalized.japamName ?? null,
   };
 };
 
@@ -469,3 +518,106 @@ export const mergeTombstones = (a: Iterable<string>, b: Iterable<string>): strin
   for (const x of b) s.add(x);
   return [...s];
 };
+
+export type JapamStats = {
+  todayMalas: number;
+  todayTotalCount: number;
+  lifetimeMalas: number;
+  lifetimeTotalCount: number;
+};
+
+const ZERO_JAPAM_STATS: JapamStats = {
+  todayMalas: 0,
+  todayTotalCount: 0,
+  lifetimeMalas: 0,
+  lifetimeTotalCount: 0,
+};
+
+/**
+ * Today's and lifetime stats for EVERY Japam at once, keyed by japamId (null = legacy/unassigned
+ * history) — the centralized selector for any screen that needs Japam-scoped totals (My Japams,
+ * History, future Dashboard/Statistics/Widgets), so no caller ever needs to hand-write
+ * `records.filter(r => r.japamId === ...)` itself.
+ *
+ * This is a single-pass GROUP-BY, not a repeated single-Japam filter: the "My Japams" list needs
+ * every Japam's stats simultaneously, which is a different shape from "give me one Japam's
+ * total" — see japamStatsFor below for that single-Japam convenience accessor over this result.
+ *
+ * Reuses the exact same dedupe + userId-matching discipline as todayCountFor/todayStatsFor so the
+ * numbers here never disagree with those existing selectors.
+ */
+export const statsByJapam = (
+  records: RawHistoryRecord[],
+  userId: string | null | undefined,
+  todayKey: string,
+  toDayKey: (dateISO: string) => string
+): Map<string | null, JapamStats> => {
+  const map = new Map<string | null, JapamStats>();
+  for (const r of dedupeByCompletionId(records)) {
+    const matchesUser = userId ? r.userId === userId : !r.userId;
+    if (!matchesUser || r.totalCount <= 0) continue;
+    const key = r.japamId ?? null;
+    const existing = map.get(key) ?? { ...ZERO_JAPAM_STATS };
+    existing.lifetimeTotalCount += r.totalCount;
+    existing.lifetimeMalas = Math.floor(existing.lifetimeTotalCount / 108);
+    if (toDayKey(r.date) === todayKey) {
+      existing.todayTotalCount += r.totalCount;
+      existing.todayMalas = Math.floor(existing.todayTotalCount / 108);
+    }
+    map.set(key, existing);
+  }
+  return map;
+};
+
+/** Convenience accessor for one Japam's stats out of statsByJapam's result — all-zero (never
+ * throws) if that Japam has no completions yet. */
+export const japamStatsFor = (
+  statsMap: Map<string | null, JapamStats>,
+  japamId: string | null | undefined
+): JapamStats => statsMap.get(japamId ?? null) ?? ZERO_JAPAM_STATS;
+
+/**
+ * Consecutive-day streak (ending today, or yesterday if nothing logged yet today) for ONE Japam
+ * only — same userId/japamId matching discipline as statsByJapam, so it never disagrees with the
+ * Today/Lifetime numbers shown alongside it. getPreviousDayKey is injected (not reimplemented
+ * here) because it's plain calendar-day arithmetic that already exists per-screen (see
+ * getPreviousDateKey in timer.tsx/tap-japam.tsx) — this keeps historyStore.ts dependency-free
+ * rather than adding a third copy of the same date math.
+ */
+export const dayStreakForJapam = (
+  records: RawHistoryRecord[],
+  userId: string | null | undefined,
+  japamId: string | null | undefined,
+  todayKey: string,
+  toDayKey: (dateISO: string) => string,
+  getPreviousDayKey: (dayKey: string) => string
+): number => {
+  const targetJapamId = japamId ?? null;
+  const activeDays = new Set<string>();
+  for (const r of dedupeByCompletionId(records)) {
+    const matchesUser = userId ? r.userId === userId : !r.userId;
+    if (!matchesUser || r.totalCount <= 0) continue;
+    if ((r.japamId ?? null) !== targetJapamId) continue;
+    activeDays.add(toDayKey(r.date));
+  }
+
+  let cursor = activeDays.has(todayKey) ? todayKey : getPreviousDayKey(todayKey);
+  let streak = 0;
+  while (activeDays.has(cursor)) {
+    streak += 1;
+    cursor = getPreviousDayKey(cursor);
+  }
+  return streak;
+};
+
+/**
+ * Records belonging to exactly one Japam, deduped — the single centralized filter any screen
+ * scoped to "the current Japam" (History) should call, instead of hand-writing
+ * records.filter(r => r.japamId === ...) itself. japamId: null matches only legacy/unassigned
+ * records, mirroring statsByJapam/planHistoryDayAdjustment's own null-means-legacy convention.
+ */
+export const filterByJapam = (
+  records: RawHistoryRecord[],
+  japamId: string | null
+): HistoryRecord[] =>
+  dedupeByCompletionId(records).filter((r) => (r.japamId ?? null) === japamId);

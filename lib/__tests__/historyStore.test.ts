@@ -16,6 +16,11 @@ import {
   applyTombstones,
   mergeTombstones,
   planHistoryDayAdjustment,
+  normalizeJapamName,
+  statsByJapam,
+  japamStatsFor,
+  dayStreakForJapam,
+  filterByJapam,
   type HistoryRecord,
 } from '../historyStore';
 
@@ -23,6 +28,17 @@ const UID = 'user-123';
 // Local YYYY-MM-DD key, matching how the app buckets days.
 const toDayKey = (iso: string) => {
   const d = new Date(iso);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+// Same noon-anchored, calendar-day arithmetic as the app's own getPreviousDateKey
+// (app/(tabs)/timer.tsx and tap-japam.tsx) -- dayStreakForJapam takes this as an injected
+// parameter rather than reimplementing it, so tests must mirror the real implementation exactly.
+const getPreviousDayKey = (dayKey: string) => {
+  const d = new Date(`${dayKey}T12:00:00`);
+  d.setDate(d.getDate() - 1);
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
@@ -781,5 +797,410 @@ describe('planHistoryDayAdjustment', () => {
     });
     expect(plan.updatedRecords.find((record) => record.userId === 'other-user')).toBeTruthy();
     assertConsistentCounts(plan.updatedRecords);
+  });
+
+  describe('japamId scoping (optional 5th parameter)', () => {
+    it('omitting japamId preserves the original, unscoped behavior (backward compatible)', () => {
+      const records = [
+        session(at(10), { japamId: 'gayatri', syncStatus: 'synced' }),
+        session(at(11), { japamId: 'govinda', syncStatus: 'synced' }),
+      ];
+      const plan = planHistoryDayAdjustment(records, UID, day, 1);
+      expect(plan.currentMalas).toBe(2);
+      expect(plan.recordsToDelete).toHaveLength(1);
+    });
+
+    it('scopes currentMalas/targetMalas and edits to only the given Japam\'s same-day records', () => {
+      const records = [
+        session(at(10), { japamId: 'gayatri', malas: 2, totalCount: 216, syncStatus: 'synced' }),
+        session(at(11), { japamId: 'govinda', malas: 5, totalCount: 540, syncStatus: 'synced' }),
+      ];
+      const plan = planHistoryDayAdjustment(records, UID, day, 1, 'gayatri');
+
+      expect(plan.currentMalas).toBe(2); // only gayatri's malas, not 2+5
+      expect(plan.recordsToUpdate).toHaveLength(1);
+      expect(plan.recordsToUpdate[0].before.japamId).toBe('gayatri');
+      // govinda's same-day record is completely untouched
+      const govindaRecord = plan.updatedRecords.find((r) => r.japamId === 'govinda');
+      expect(govindaRecord).toMatchObject({ malas: 5, totalCount: 540 });
+    });
+
+    it('never deletes or updates a different Japam\'s record even when reducing to 0', () => {
+      const records = [
+        session(at(10), { japamId: 'gayatri', malas: 1, totalCount: 108, syncStatus: 'synced' }),
+        session(at(11), { japamId: 'govinda', malas: 1, totalCount: 108, syncStatus: 'synced' }),
+      ];
+      const plan = planHistoryDayAdjustment(records, UID, day, 0, 'gayatri');
+
+      expect(plan.deleteEntireDay).toBe(true);
+      expect(plan.recordsToDelete).toHaveLength(1);
+      expect(plan.recordsToDelete[0].japamId).toBe('gayatri');
+      expect(plan.updatedRecords.some((r) => r.japamId === 'govinda')).toBe(true);
+    });
+
+    it('passing japamId: null scopes to legacy/unassigned records only, excluding real Japams', () => {
+      const records = [
+        session(at(10), { japamId: null, malas: 1, totalCount: 108, syncStatus: 'synced' }),
+        session(at(11), { japamId: 'gayatri', malas: 4, totalCount: 432, syncStatus: 'synced' }),
+      ];
+      const plan = planHistoryDayAdjustment(records, UID, day, 0, null);
+
+      expect(plan.currentMalas).toBe(1);
+      expect(plan.recordsToDelete).toHaveLength(1);
+      expect(plan.recordsToDelete[0].japamId).toBeNull();
+      expect(plan.updatedRecords.some((r) => r.japamId === 'gayatri')).toBe(true);
+    });
+  });
+});
+
+const isoAt = (hour: number) => `2026-07-06T${String(hour).padStart(2, '0')}:00:00.000Z`;
+
+describe('normalizeJapamName', () => {
+  it('trims whitespace', () => {
+    expect(normalizeJapamName('  Gayatri  ')).toBe('Gayatri');
+  });
+  it('returns null for blank/whitespace-only input', () => {
+    expect(normalizeJapamName('')).toBeNull();
+    expect(normalizeJapamName('   ')).toBeNull();
+  });
+  it('returns null for null/undefined', () => {
+    expect(normalizeJapamName(null)).toBeNull();
+    expect(normalizeJapamName(undefined)).toBeNull();
+  });
+});
+
+describe('japamId: identity field on HistoryRecord', () => {
+  describe('normalizeRecord', () => {
+    it('carries a valid japamId and trims the japamName snapshot', () => {
+      const record = normalizeRecord(session(isoAt(0), {
+        japamId: 'japam-abc-123',
+        japamName: '  Gayatri  ',
+      }));
+      expect(record.japamId).toBe('japam-abc-123');
+      expect(record.japamName).toBe('Gayatri');
+    });
+    it('defaults japamId to null when absent', () => {
+      const record = normalizeRecord(session(isoAt(0)));
+      expect(record.japamId).toBeNull();
+      expect(record.japamName).toBeNull();
+    });
+    it('defaults a non-string japamId to null rather than crashing', () => {
+      const record = normalizeRecord(session(isoAt(0), { japamId: 12345 as unknown as string }));
+      expect(record.japamId).toBeNull();
+    });
+    it('defaults an empty-string japamId to null', () => {
+      const record = normalizeRecord(session(isoAt(0), { japamId: '' }));
+      expect(record.japamId).toBeNull();
+    });
+    it('preserves a japamName snapshot even when japamId is absent (legacy free-text row)', () => {
+      const record = normalizeRecord(session(isoAt(0), { japamName: 'Old Mantra' }));
+      expect(record.japamId).toBeNull();
+      expect(record.japamName).toBe('Old Mantra');
+    });
+  });
+
+  describe('appendCompletion', () => {
+    it('carries japamId and japamName through into the new record', () => {
+      const history = appendCompletion([], {
+        date: isoAt(0),
+        malas: 1,
+        totalCount: 108,
+        duration: 60,
+        userId: UID,
+        japamId: 'japam-abc-123',
+        japamName: 'Gayatri',
+      });
+      expect(history[0].japamId).toBe('japam-abc-123');
+      expect(history[0].japamName).toBe('Gayatri');
+    });
+    it('defaults to null when the caller omits japamId/japamName (e.g. a screen with no Japam picker)', () => {
+      const history = appendCompletion([], {
+        date: isoAt(0),
+        malas: 1,
+        totalCount: 108,
+        duration: 60,
+        userId: UID,
+      });
+      expect(history[0].japamId).toBeNull();
+      expect(history[0].japamName).toBeNull();
+    });
+    it('does not let a duplicate completionId change an already-appended record\'s japamId', () => {
+      const first = appendCompletion([], {
+        date: isoAt(0),
+        malas: 1,
+        totalCount: 108,
+        duration: 60,
+        userId: UID,
+        completionId: 'fixed-id',
+        japamId: 'japam-a',
+      });
+      const second = appendCompletion(first, {
+        date: isoAt(0),
+        malas: 1,
+        totalCount: 108,
+        duration: 60,
+        userId: UID,
+        completionId: 'fixed-id',
+        japamId: 'japam-b',
+      });
+      expect(second).toHaveLength(1);
+      expect(second[0].japamId).toBe('japam-a');
+    });
+  });
+
+  describe('buildSupabaseHistoryPayload', () => {
+    it('withholds japam_id (stop-loss: no FK-safe write path to public.japams yet) but preserves the trimmed japam_name snapshot', () => {
+      const record = normalizeRecord(session(isoAt(0), {
+        japamId: 'japam-abc-123',
+        japamName: '  Gayatri  ',
+      }));
+      const payload = buildSupabaseHistoryPayload(record, UID, 'Sravani');
+      expect(payload.japam_id).toBeNull();
+      expect(payload.japam_name).toBe('Gayatri');
+    });
+    it('sends null japam_id and japam_name when the record has neither, never crashing', () => {
+      const record = normalizeRecord(session(isoAt(0)));
+      const payload = buildSupabaseHistoryPayload(record, UID, 'Sravani');
+      expect(payload.japam_id).toBeNull();
+      expect(payload.japam_name).toBeNull();
+    });
+  });
+
+  describe('dedupeByCompletionId: identity is never overwritten by a later duplicate', () => {
+    it('keeps the first-seen record\'s japamId/japamName when upgrading pending to synced', () => {
+      const pendingFirst = session(isoAt(0), {
+        completionId: 'dup-id',
+        japamId: 'japam-a',
+        japamName: 'Gayatri',
+        syncStatus: 'pending',
+      });
+      const syncedDuplicate = session(isoAt(0), {
+        completionId: 'dup-id',
+        japamId: 'japam-b',
+        japamName: 'Different Name',
+        syncStatus: 'synced',
+      });
+      const result = dedupeByCompletionId([pendingFirst, syncedDuplicate]);
+      expect(result).toHaveLength(1);
+      expect(result[0].syncStatus).toBe('synced');
+      expect(result[0].japamId).toBe('japam-a');
+      expect(result[0].japamName).toBe('Gayatri');
+    });
+  });
+
+  describe('round trip: appendCompletion -> buildSupabaseHistoryPayload preserves identity', () => {
+    it('withholds japam_id from the remote payload (stop-loss) while japam_name still carries through', () => {
+      const history = appendCompletion([], {
+        date: isoAt(0),
+        malas: 1,
+        totalCount: 108,
+        duration: 60,
+        userId: UID,
+        japamId: 'japam-abc-123',
+        japamName: 'Gayatri',
+      });
+      const payload = buildSupabaseHistoryPayload(history[0], UID, 'Sravani');
+      expect(payload.japam_id).toBeNull();
+      expect(payload.japam_name).toBe('Gayatri');
+    });
+  });
+});
+
+describe('statsByJapam / japamStatsFor: centralized per-Japam stats selector', () => {
+  const TODAY = '2026-07-06';
+  const YESTERDAY = '2026-07-05';
+  const todayIso = (hour: number) => `${TODAY}T${String(hour).padStart(2, '0')}:00:00.000Z`;
+  const yesterdayIso = (hour: number) => `${YESTERDAY}T${String(hour).padStart(2, '0')}:00:00.000Z`;
+
+  it('computes today and lifetime malas for a single Japam across multiple days', () => {
+    const history = [
+      session(todayIso(9), { japamId: 'gayatri', malas: 1, totalCount: 108 }),
+      session(todayIso(10), { japamId: 'gayatri', malas: 1, totalCount: 108 }),
+      session(yesterdayIso(9), { japamId: 'gayatri', malas: 3, totalCount: 324 }),
+    ];
+    const statsMap = statsByJapam(history, UID, TODAY, toDayKey);
+    const stats = japamStatsFor(statsMap, 'gayatri');
+    expect(stats.todayMalas).toBe(2);
+    expect(stats.todayTotalCount).toBe(216);
+    expect(stats.lifetimeMalas).toBe(5); // 2 today + 3 yesterday
+    expect(stats.lifetimeTotalCount).toBe(540);
+  });
+
+  it('computes stats for every Japam simultaneously, never mixing them (the "My Japams" list needs all at once)', () => {
+    const history = [
+      session(todayIso(9), { japamId: 'gayatri', malas: 5, totalCount: 540 }),
+      session(todayIso(10), { japamId: 'govinda', malas: 2, totalCount: 216 }),
+    ];
+    const statsMap = statsByJapam(history, UID, TODAY, toDayKey);
+    expect(japamStatsFor(statsMap, 'gayatri').todayMalas).toBe(5);
+    expect(japamStatsFor(statsMap, 'govinda').todayMalas).toBe(2);
+  });
+
+  it('groups legacy/unassigned rows (no japamId) under the null key, separate from any real Japam', () => {
+    const history = [
+      session(todayIso(9), { japamId: null, malas: 1, totalCount: 108 }),
+      session(todayIso(10), { japamId: 'gayatri', malas: 1, totalCount: 108 }),
+    ];
+    const statsMap = statsByJapam(history, UID, TODAY, toDayKey);
+    expect(japamStatsFor(statsMap, null).todayMalas).toBe(1);
+    expect(japamStatsFor(statsMap, 'gayatri').todayMalas).toBe(1);
+  });
+
+  it('only counts this user\'s own records, matching todayStatsFor\'s existing userId convention', () => {
+    const history = [
+      session(todayIso(9), { japamId: 'gayatri', userId: UID, malas: 1, totalCount: 108 }),
+      session(todayIso(10), { japamId: 'gayatri', userId: 'other-user', malas: 9, totalCount: 972 }),
+    ];
+    const statsMap = statsByJapam(history, UID, TODAY, toDayKey);
+    expect(japamStatsFor(statsMap, 'gayatri').todayMalas).toBe(1);
+  });
+
+  it('dedupes by completionId, same as every other selector in this file', () => {
+    const dup = session(todayIso(9), { japamId: 'gayatri', malas: 1, totalCount: 108, completionId: 'dup-id' });
+    const history = [dup, { ...dup }];
+    const statsMap = statsByJapam(history, UID, TODAY, toDayKey);
+    expect(japamStatsFor(statsMap, 'gayatri').todayMalas).toBe(1);
+  });
+
+  describe('japamStatsFor: safe defaults', () => {
+    it('returns all-zero stats for a Japam with no completions rather than throwing', () => {
+      const statsMap = statsByJapam([], UID, TODAY, toDayKey);
+      expect(japamStatsFor(statsMap, 'never-used')).toEqual({
+        todayMalas: 0,
+        todayTotalCount: 0,
+        lifetimeMalas: 0,
+        lifetimeTotalCount: 0,
+      });
+    });
+    it('treats undefined the same as null (legacy bucket)', () => {
+      const history = [session(todayIso(9), { japamId: null, malas: 1, totalCount: 108 })];
+      const statsMap = statsByJapam(history, UID, TODAY, toDayKey);
+      expect(japamStatsFor(statsMap, undefined)).toEqual(japamStatsFor(statsMap, null));
+    });
+  });
+});
+
+describe('dayStreakForJapam: per-Japam consecutive-day streak', () => {
+  const DAY0 = '2026-07-06'; // "today" for these tests
+  const DAY1 = getPreviousDayKey(DAY0);
+  const DAY2 = getPreviousDayKey(DAY1);
+  const DAY3 = getPreviousDayKey(DAY2);
+  const at = (day: string, hour: number) => `${day}T${String(hour).padStart(2, '0')}:00:00.000Z`;
+
+  it('counts a streak for one Japam only, ignoring a different Japam\'s own history', () => {
+    const history = [
+      session(at(DAY0, 9), { japamId: 'gayatri' }),
+      session(at(DAY1, 9), { japamId: 'gayatri' }),
+      // govinda has its own unbroken streak too, but must not inflate gayatri's count
+      session(at(DAY0, 10), { japamId: 'govinda' }),
+      session(at(DAY1, 10), { japamId: 'govinda' }),
+      session(at(DAY2, 10), { japamId: 'govinda' }),
+    ];
+    expect(dayStreakForJapam(history, UID, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(2);
+    expect(dayStreakForJapam(history, UID, 'govinda', DAY0, toDayKey, getPreviousDayKey)).toBe(3);
+  });
+
+  it('returns 0 for a Japam with no completions at all, rather than throwing', () => {
+    const history = [session(at(DAY0, 9), { japamId: 'gayatri' })];
+    expect(dayStreakForJapam(history, UID, 'brand-new-japam', DAY0, toDayKey, getPreviousDayKey)).toBe(0);
+  });
+
+  it('a brand-new Japam with zero history has a 0 streak even when other Japams have activity today', () => {
+    const history = [session(at(DAY0, 9), { japamId: 'gayatri' })];
+    expect(dayStreakForJapam([], UID, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(0);
+    expect(dayStreakForJapam(history, UID, 'brand-new-japam', DAY0, toDayKey, getPreviousDayKey)).toBe(0);
+  });
+
+  it('groups legacy/unassigned rows (japamId null) separately from any real Japam', () => {
+    const history = [
+      session(at(DAY0, 9), { japamId: null }),
+      session(at(DAY1, 9), { japamId: null }),
+      session(at(DAY0, 10), { japamId: 'gayatri' }),
+    ];
+    expect(dayStreakForJapam(history, UID, null, DAY0, toDayKey, getPreviousDayKey)).toBe(2);
+    expect(dayStreakForJapam(history, UID, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(1);
+  });
+
+  it('only counts this user\'s own records for the Japam, matching statsByJapam\'s userId convention', () => {
+    const history = [
+      session(at(DAY0, 9), { japamId: 'gayatri', userId: UID }),
+      session(at(DAY0, 10), { japamId: 'gayatri', userId: 'other-user' }),
+      session(at(DAY1, 9), { japamId: 'gayatri', userId: 'other-user' }),
+    ];
+    expect(dayStreakForJapam(history, UID, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(1);
+  });
+
+  it('supports guest mode (userId null) the same way as statsByJapam', () => {
+    const history = [
+      session(at(DAY0, 9), { japamId: 'gayatri', userId: null }),
+      session(at(DAY1, 9), { japamId: 'gayatri', userId: null }),
+      session(at(DAY0, 10), { japamId: 'gayatri', userId: 'someone-signed-in' }),
+    ];
+    expect(dayStreakForJapam(history, null, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(2);
+  });
+
+  it('breaks the streak on a missing day rather than skipping over the gap', () => {
+    const history = [
+      session(at(DAY0, 9), { japamId: 'gayatri' }),
+      // DAY1 has no completion for this Japam -- gap
+      session(at(DAY2, 9), { japamId: 'gayatri' }),
+      session(at(DAY3, 9), { japamId: 'gayatri' }),
+    ];
+    expect(dayStreakForJapam(history, UID, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(1);
+  });
+
+  it('still counts yesterday\'s streak when nothing has been logged yet today', () => {
+    const history = [
+      session(at(DAY1, 9), { japamId: 'gayatri' }),
+      session(at(DAY2, 9), { japamId: 'gayatri' }),
+    ];
+    expect(dayStreakForJapam(history, UID, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(2);
+  });
+
+  it('dedupes by completionId, same as statsByJapam, so a duplicate record does not fabricate an extra active day', () => {
+    const dup = session(at(DAY0, 9), { japamId: 'gayatri', completionId: 'dup-id' });
+    const history = [dup, { ...dup }];
+    expect(dayStreakForJapam(history, UID, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(1);
+  });
+
+  it('ignores a zero/negative totalCount record (no real completion) when deciding if a day is active', () => {
+    // malas: 0 too -- normalizeRecord falls back to malas*108 when totalCount is falsy, same
+    // convention statsByJapam already relies on.
+    const history = [session(at(DAY0, 9), { japamId: 'gayatri', malas: 0, totalCount: 0 })];
+    expect(dayStreakForJapam(history, UID, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(0);
+  });
+});
+
+describe('filterByJapam', () => {
+  const at = (hour: number) => `2026-07-06T${String(hour).padStart(2, '0')}:00:00.000Z`;
+
+  it('returns only records matching the given japamId, never mixing other Japams in', () => {
+    const records = [
+      session(at(9), { japamId: 'gayatri', completionId: 'a' }),
+      session(at(10), { japamId: 'govinda', completionId: 'b' }),
+      session(at(11), { japamId: 'gayatri', completionId: 'c' }),
+    ];
+    const result = filterByJapam(records, 'gayatri');
+    expect(result.map((r) => r.completionId).sort()).toEqual(['a', 'c']);
+  });
+
+  it('japamId: null matches only legacy/unassigned records, excluding every real Japam', () => {
+    const records = [
+      session(at(9), { japamId: null, completionId: 'legacy' }),
+      session(at(10), { japamId: 'gayatri', completionId: 'gayatri-1' }),
+    ];
+    const result = filterByJapam(records, null);
+    expect(result.map((r) => r.completionId)).toEqual(['legacy']);
+  });
+
+  it('a Japam with no matching records returns an empty array, not every record', () => {
+    const records = [session(at(9), { japamId: 'govinda' })];
+    expect(filterByJapam(records, 'gayatri')).toEqual([]);
+  });
+
+  it('dedupes by completionId, same as every other selector in this file', () => {
+    const dup = session(at(9), { japamId: 'gayatri', completionId: 'dup' });
+    const result = filterByJapam([dup, { ...dup }], 'gayatri');
+    expect(result).toHaveLength(1);
   });
 });

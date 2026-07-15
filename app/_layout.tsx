@@ -13,6 +13,8 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { ZEN_BACKGROUND } from '@/constants/assets';
 import { repairLegacyStoredUserId } from '@/lib/anonymousAuth';
 import { TimerProvider } from '../contexts/timer-context';
+import { CurrentJapamProvider } from '../contexts/current-japam-context';
+import LegacyHistoryBackfillRunner from '../components/LegacyHistoryBackfillRunner';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -197,12 +199,16 @@ export default function RootLayout() {
       <PaperProvider>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <TimerProvider>
-            <Stack>
-              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-              <Stack.Screen name="privacy" options={{ headerShown: false }} />
-              <Stack.Screen name="delete-account" options={{ headerShown: false }} />
-              <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-            </Stack>
+            <CurrentJapamProvider>
+              <LegacyHistoryBackfillRunner />
+              <Stack>
+                <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                <Stack.Screen name="privacy" options={{ headerShown: false }} />
+                <Stack.Screen name="delete-account" options={{ headerShown: false }} />
+                <Stack.Screen name="my-japams" options={{ headerShown: false }} />
+                <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+              </Stack>
+            </CurrentJapamProvider>
           </TimerProvider>
           <StatusBar style="auto" />
         </ThemeProvider>

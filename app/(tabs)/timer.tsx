@@ -2,10 +2,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import {
+  dayStreakForJapam,
   dedupeByCompletionId,
+  japamStatsFor,
   mergeHistories,
   normalizeAll,
-  todayStatsFor,
+  statsByJapam,
   toLocalDayKey,
 } from '../../lib/historyStore';
 import { ZEN_BACKGROUND } from '../../constants/assets';
@@ -35,6 +37,8 @@ import {
   formatTimer,
   useTimer,
 } from '../../contexts/timer-context';
+import { useCurrentJapam } from '../../contexts/current-japam-context';
+import CurrentJapamHeaderButton from '../../components/CurrentJapamHeaderButton';
 import { ResponseType } from 'expo-auth-session';
 import { isIOSDeviceWeb, isStandaloneOrInstalledWeb } from '../../lib/pwaInstall';
 import {
@@ -132,6 +136,7 @@ const showGoogleSignInRequiredAlert = () => {
 export default function TimerScreen() {
   const router = useRouter();
   const timer = useTimer();
+  const { currentJapam } = useCurrentJapam();
   const insets = useSafeAreaInsets();
   // Mirror the floating tab bar geometry from _layout.tsx exactly.
   // _layout.tsx uses screenWidth < 500 as its isMobile threshold (different from
@@ -325,54 +330,38 @@ export default function TimerScreen() {
       return item.userId === userId;
     });
 
-    const totalByDay = new Map<string, number>();
-    history.forEach((item) => {
-      const dayKey = toLocalDayKey(item.date);
-      if (dayKey === 'unknown') return;
-      const totalCount = Number(item.totalCount) || (Number(item.malas) || 0) * 108;
-      if (totalCount <= 0) return;
-      console.log('[LOCAL_DAY_BUCKET] screen=timer userLocalDate=%s recordCreatedAtISO=%s recordLocalDay=%s recordUTCDate=%s completion_id=%s source=%s user_id=%s',
-        todayKey,
-        item.date,
-        dayKey,
-        item.date?.slice(0, 10),
-        item.completionId || '',
-        item.source || '',
-        item.userId || ''
-      );
-      totalByDay.set(dayKey, (totalByDay.get(dayKey) || 0) + totalCount);
-    });
-
-    const { totalCount: safeTodayTotal } = todayStatsFor(
+    // Scoped to the currently selected Japam only -- Home/Timer must never show a combined total
+    // across every Japam (product requirement: Home/Timer/Tap Japam always reflect the selected
+    // Japam, matching History/My Japams). null means legacy/unassigned history, same convention as
+    // statsByJapam/dayStreakForJapam everywhere else.
+    const japamId = currentJapam?.id ?? null;
+    const { todayTotalCount: safeTodayTotal } = japamStatsFor(
+      statsByJapam(history, userId, todayKey, toLocalDayKey),
+      japamId
+    );
+    const nextStreak = dayStreakForJapam(
       history,
       userId,
+      japamId,
       todayKey,
-      toLocalDayKey
+      toLocalDayKey,
+      getPreviousDateKey
     );
-    if (safeTodayTotal > 0) totalByDay.set(todayKey, safeTodayTotal);
-
-    const activeDays = new Set([...totalByDay.entries()].filter(([, total]) => total > 0).map(([day]) => day));
-    let cursor = activeDays.has(todayKey) ? todayKey : getPreviousDateKey(todayKey);
-    let nextStreak = 0;
-    while (activeDays.has(cursor)) {
-      nextStreak += 1;
-      cursor = getPreviousDateKey(cursor);
-    }
 
     setTodayCount(safeTodayTotal);
     setMalasToday(Math.floor(safeTodayTotal / 108));
     setDayStreak(nextStreak);
-    console.log('[TimerStatsDate] deviceLocalTime=%s userLocalDate=%s rawSupabaseRows=%d rawSupabaseCount=%d dedupedCount=%d appMalasToday=%d todayTotal=%d streak=%d',
+    console.log('[TimerStatsDate] deviceLocalTime=%s userLocalDate=%s japamId=%s rawSupabaseRows=%d rawSupabaseCount=%d appMalasToday=%d todayTotal=%d streak=%d',
       new Date().toString(),
       todayKey,
+      japamId || 'legacy',
       rawSupabaseRows,
       rawSupabaseCount,
-      safeTodayTotal,
       Math.floor(safeTodayTotal / 108),
       safeTodayTotal,
       nextStreak
     );
-  }, []);
+  }, [currentJapam]);
 
   useFocusEffect(
     useCallback(() => {
@@ -707,6 +696,10 @@ export default function TimerScreen() {
       openSignInModal();
       return;
     }
+    // Snapshot whichever Japam is current AT THIS EXACT MOMENT, once, before starting. Switching
+    // the app's current Japam later must never retroactively change what this running session's
+    // eventual completion is attributed to -- see setActiveJapamSelection in timer-context.tsx.
+    timer.setActiveJapamSelection(currentJapam?.id ?? null, currentJapam?.name ?? null);
     timer.start();
   };
 
@@ -791,7 +784,7 @@ export default function TimerScreen() {
           </View>
 
           <View style={styles.topControls}>
-            <View style={styles.headerSideSpacer} />
+            <CurrentJapamHeaderButton variant="timer" />
             <Text numberOfLines={1} style={styles.welcomeText}>Welcome</Text>
             <Pressable
               style={({ pressed }) => [styles.accountButton, pressed && styles.softPressed]}
@@ -1173,10 +1166,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: isShortMobile ? 8 : isMobile ? 8 : 18,
     gap: 10,
-  },
-  headerSideSpacer: {
-    flex: 1,
-    minWidth: 74,
   },
   welcomeText: {
     flex: 2,

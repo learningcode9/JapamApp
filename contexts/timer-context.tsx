@@ -7,6 +7,12 @@ import * as Notifications from 'expo-notifications';
 import { usePathname, useRouter } from 'expo-router';
 import { getTimerState, updateTimerState } from '../lib/timerState';
 import { computeColdStartRestoreDecision } from '../lib/timerColdStartRestore';
+import {
+  buildSelectionPairs,
+  saveJapamTimerState,
+  readJapamTimerState,
+  type TimerStateSnapshot,
+} from '../lib/perJapamTimerState';
 import { supabase } from '../lib/supabase';
 import {
   appendCompletion,
@@ -72,6 +78,8 @@ export const STD_DURATIONS = [1, 3, 5, 10, 15];
 export const LOOP_OPTIONS = [1, 2, 3, 5, 10];
 
 const getUserKey = (key: string, uid: string) => `${key}:${uid}`;
+const getJapamKey = (key: string, uid: string, japamId: string) => `${key}:${uid}:${japamId}`;
+
 export const formatTimer = (s: number) =>
   `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
@@ -129,6 +137,7 @@ type TimerContextValue = {
   reset: () => void;
   selectDuration: (minutes: number) => void;
   selectLoops: (loops: number) => void;
+  setActiveJapamSelection: (japamId: string | null, japamName: string | null) => void;
 };
 
 const TimerContext = createContext<TimerContextValue | null>(null);
@@ -207,6 +216,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   // lazy initializer, so two concurrently-mounted TimerProvider instances within the same JS
   // load can be told apart in the log stream — see GitHub Issues #19/#20.
   const timerProviderMountIdRef = useRef(`mount-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  // The Japam a running session belongs to, captured ONCE at the moment Start is pressed (see
+  // handleStart in timer.tsx, which calls setActiveJapamSelection immediately before start()).
+  // Refs, not state: saveSession can fire from a native background event with no live render
+  // cycle. Deliberately NOT kept in sync with CurrentJapamContext on every change -- switching the
+  // app's current Japam while this session is already running must NOT retroactively change which
+  // Japam the completion is attributed to (see the architecture review on Timer capture-at-Start).
+  const activeJapamIdRef = useRef<string | null>(null);
+  const activeJapamNameRef = useRef<string | null>(null);
+  // Which Japam's timer state is currently loaded in this TimerProvider's React state.
+  // Updated on cold-start restore (reads currentJapamId:uid from storage) and on every
+  // japam switch (japam-did-switch event). Used by persistState to write per-Japam keys.
+  const currentJapamIdRef = useRef<string | null>(null);
 
   useEffect(() => { secondsRef.current = seconds; }, [seconds]);
   useEffect(() => { isRunningRef.current = isRunning; }, [isRunning]);
@@ -244,6 +265,14 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     setSelectedDuration(value);
     selectedDurationRef.current = value;
   }, [logDiagM]);
+
+  // Called by the Timer screen's Start handler, immediately before start(), with whatever
+  // CurrentJapamContext currently holds -- a one-time snapshot, not a continuous subscription.
+  // Just updates the refs saveSession reads at completion time; no re-render needed.
+  const setActiveJapamSelection = useCallback((japamId: string | null, japamName: string | null) => {
+    activeJapamIdRef.current = japamId;
+    activeJapamNameRef.current = japamName;
+  }, []);
 
   const getCurrentRemainingSeconds = useCallback(() => (
     Math.max(0, selectedDurationRef.current * 60 - secondsRef.current)
@@ -410,6 +439,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
   const persistState = useCallback(async (running: boolean) => {
     const uid = userIdRef.current;
+    const japamId = currentJapamIdRef.current;
     const tSec = selectedDurationRef.current * 60;
     const currentSeconds =
       running && timerStartedAtRef.current !== null
@@ -438,26 +468,37 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       await AsyncStorage.multiSet(pairs);
       if (uid) {
         await AsyncStorage.multiSet(pairs.map(([k, v]) => [getUserKey(k, uid), v] as [string, string]));
+        if (japamId) {
+          await AsyncStorage.multiSet(pairs.map(([k, v]) => [getJapamKey(k, uid, japamId), v] as [string, string]));
+        }
       }
     } catch {}
   }, []);
 
   const persistCompletedLoops = useCallback(async (nextCompletedLoops: number) => {
     const uid = userIdRef.current;
+    const japamId = currentJapamIdRef.current;
     const value = String(clampCompletedLoops(nextCompletedLoops, selectedLoopsRef.current));
     try {
       await AsyncStorage.setItem(TIMER_COMPLETED_LOOPS_KEY, value);
       if (uid) {
         await AsyncStorage.setItem(getUserKey(TIMER_COMPLETED_LOOPS_KEY, uid), value);
+        if (japamId) {
+          await AsyncStorage.setItem(getJapamKey(TIMER_COMPLETED_LOOPS_KEY, uid, japamId), value);
+        }
       }
     } catch {}
   }, []);
 
   const readPersistedCompletedLoops = useCallback(async () => {
     const uid = userIdRef.current;
+    const japamId = currentJapamIdRef.current;
     try {
       const raw = uid
-        ? (await AsyncStorage.getItem(getUserKey(TIMER_COMPLETED_LOOPS_KEY, uid))) ??
+        ? (japamId
+            ? (await AsyncStorage.getItem(getJapamKey(TIMER_COMPLETED_LOOPS_KEY, uid, japamId))) ??
+              (await AsyncStorage.getItem(getUserKey(TIMER_COMPLETED_LOOPS_KEY, uid)))
+            : await AsyncStorage.getItem(getUserKey(TIMER_COMPLETED_LOOPS_KEY, uid))) ??
           (await AsyncStorage.getItem(TIMER_COMPLETED_LOOPS_KEY))
         : await AsyncStorage.getItem(TIMER_COMPLETED_LOOPS_KEY);
       return clampCompletedLoops(Number(raw) || 0, selectedLoopsRef.current);
@@ -1088,6 +1129,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       completionId: sessionId
         ? makeLoopCompletionId(uid || null, sessionId, completedLoopsRef.current)
         : undefined,
+      japamId: activeJapamIdRef.current,
+      japamName: activeJapamNameRef.current,
     };
 
     // Local save FIRST (offline-first) + event emission — awaited by completeCycle so stats
@@ -1098,11 +1141,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       const updatedHistory = appendCompletion(history, completion);
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
       console.log(
-        '[OFFLINE_SAVE_ACCEPTED] source=timer completionId=%s created_at=%s localDay=%s syncStatus=%s',
+        '[OFFLINE_SAVE_ACCEPTED] source=timer completionId=%s created_at=%s localDay=%s syncStatus=%s japamId=%s japamName=%s',
         updatedHistory[0]?.completionId,
         updatedHistory[0]?.date,
         toLocalDayKey(updatedHistory[0]?.date),
-        updatedHistory[0]?.syncStatus
+        updatedHistory[0]?.syncStatus,
+        updatedHistory[0]?.japamId,
+        updatedHistory[0]?.japamName
       );
 
       const after = await readMalasTodaySnapshot();
@@ -1539,10 +1584,23 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         const uid = await AsyncStorage.getItem(USER_ID_KEY) || '';
         userIdRef.current = uid;
         setUserId(uid);
-        const get = async (key: string) =>
-          uid
-            ? (await AsyncStorage.getItem(getUserKey(key, uid))) ?? (await AsyncStorage.getItem(key))
-            : AsyncStorage.getItem(key);
+        // Read the current Japam ID from the same key CurrentJapamContext uses, so timer
+        // state is restored from the correct per-Japam slot. Falls back to null (no Japam
+        // selected), which makes the get() helper below fall through to user-scoped then bare keys.
+        const japamId = uid ? await AsyncStorage.getItem(`currentJapamId:${uid}`) : null;
+        currentJapamIdRef.current = japamId;
+        const get = async (key: string) => {
+          // Try per-Japam key (uid:japamId), then user-scoped (uid), then bare.
+          if (uid && japamId) {
+            const japamVal = await AsyncStorage.getItem(getJapamKey(key, uid, japamId));
+            if (japamVal !== null) return japamVal;
+          }
+          if (uid) {
+            const userVal = await AsyncStorage.getItem(getUserKey(key, uid));
+            if (userVal !== null) return userVal;
+          }
+          return AsyncStorage.getItem(key);
+        };
         const [sec, target, dur, loops, paused, completed, running, startedAt, sessionId] = await Promise.all([
           get(TIMER_SECONDS_KEY),
           get(TIMER_TARGET_KEY),
@@ -1635,10 +1693,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const restoreRunningTimerFromStorage = useCallback(async () => {
     try {
       const uid = await AsyncStorage.getItem(USER_ID_KEY) || '';
-      const get = async (key: string) =>
-        uid
-          ? (await AsyncStorage.getItem(getUserKey(key, uid))) ?? (await AsyncStorage.getItem(key))
-          : AsyncStorage.getItem(key);
+      const japamId = currentJapamIdRef.current;
+      const get = async (key: string) => {
+        if (uid && japamId) {
+          const japamVal = await AsyncStorage.getItem(getJapamKey(key, uid, japamId));
+          if (japamVal !== null) return japamVal;
+        }
+        if (uid) {
+          const userVal = await AsyncStorage.getItem(getUserKey(key, uid));
+          if (userVal !== null) return userVal;
+        }
+        return AsyncStorage.getItem(key);
+      };
       const [sec, target, dur, loops, completed, running, startedAt, sessionId] = await Promise.all([
         get(TIMER_SECONDS_KEY),
         get(TIMER_TARGET_KEY),
@@ -2001,6 +2067,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       expectedEndTime: timerStartedAtRef.current !== null
         ? timerStartedAtRef.current + selectedDurationRef.current * 60 * 1000
         : null,
+      japamId: activeJapamIdRef.current,
+      japamName: activeJapamNameRef.current,
     });
     setIsRunning(true);
     isRunningRef.current = true;
@@ -2087,6 +2155,153 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     console.log('[TimerBG] Timer reset');
   }, [clearCompletionNotification, clearTimerInterval, hideNotification, persistState, releaseWakeLock]);
 
+  // Per-Japam timer state: saves the current timer state and loads the next Japam's state
+  // when the user switches Japams. The will-switch handler fires BEFORE the Japam context
+  // changes the selection, and the did-switch handler fires AFTER the change completes.
+  // DeviceEventEmitter.emit is synchronous, so will-switch's async multiSet runs as a
+  // microtask — did-switch fires before the write completes unless we use a promise barrier.
+  const switchSavePromiseRef = useRef<Promise<void> | null>(null);
+
+  useEffect(() => {
+    const willSwitchSub = DeviceEventEmitter.addListener(
+      'japam-will-switch',
+      async ({ fromJapamId, toJapamId }: { fromJapamId: string | null; toJapamId: string | null }) => {
+        const uid = userIdRef.current;
+        if (!uid) return;
+        // Stop the timer if actively running. Skip persistState here — the
+        // saveJapamTimerState call below writes the single authoritative
+        // per-Japam snapshot for the FROM Japam, avoiding a race between
+        // fire-and-forget persistState and the awaited saveJapamTimerState.
+        if (isRunningRef.current) {
+          clearTimerInterval();
+          releaseWakeLock();
+          setIsRunning(false);
+          isRunningRef.current = false;
+          updateTimerState({
+            sessionId: timerSessionIdRef.current,
+            startedAt: null,
+            isCompleting: false,
+          });
+          void hideNotification();
+          clearCompletionNotification();
+          if (Platform.OS === 'android') void pauseForegroundService();
+        }
+        // Save current in-memory timer state to the FROM Japam's per-Japam slot.
+        const tSec = selectedDurationRef.current * 60;
+        const secondsNow = secondsRef.current;
+        const wasPaused = !isRunningRef.current && secondsNow > 0 && secondsNow < tSec;
+        // Expose the save promise so did-switch can await it before reading TO state.
+        const savePromise = (async () => {
+          if (fromJapamId) {
+            const snapshot: TimerStateSnapshot = {
+              seconds: secondsNow,
+              running: false,
+              target: tSec,
+              paused: wasPaused,
+              completedLoops: completedLoopsRef.current,
+              startedAt: '',
+              sessionId: timerSessionIdRef.current,
+              duration: selectedDurationRef.current,
+              loops: selectedLoopsRef.current,
+            };
+            await saveJapamTimerState(uid, fromJapamId, snapshot).catch(() => {});
+          }
+        })();
+        switchSavePromiseRef.current = savePromise;
+        await savePromise;
+      }
+    );
+
+    const didSwitchSub = DeviceEventEmitter.addListener(
+      'japam-did-switch',
+      async ({ japamId }: { japamId: string | null }) => {
+        currentJapamIdRef.current = japamId;
+        const uid = userIdRef.current;
+        if (!uid) return;
+        // Wait for will-switch's AsyncStorage save to complete before reading.
+        // DeviceEventEmitter fires synchronously, so the async will-switch handler
+        // has not yet committed its multiSet by the time did-switch runs.
+        if (switchSavePromiseRef.current) {
+          try { await switchSavePromiseRef.current; } catch {}
+          switchSavePromiseRef.current = null;
+        }
+        // Only read per-Japam keys on switch — falling through to :uid or bare keys
+        // would leak the previous Japam's timer state into the new Japam (since persistState
+        // writes both :uid:japamId and :uid fallback keys). A Japam with no saved timer
+        // state must show a fresh Start, not the other Japam's data.
+        const raw = japamId ? await readJapamTimerState(uid, japamId) : {
+          seconds: null, target: null, duration: null, loops: null,
+          paused: null, completedLoops: null, running: null,
+          startedAt: null, sessionId: null,
+        };
+        const [sec, target, dur, loops, paused, completed, running, startedAt, sessionId] = [
+          raw.seconds, raw.target, raw.duration, raw.loops,
+          raw.paused, raw.completedLoops, raw.running,
+          raw.startedAt, raw.sessionId,
+        ];
+        // Apply loaded state with the same cold-start restore decision logic.
+        const savedSec = Number(sec) || 0;
+        const savedTarget = Number(target) || 0;
+        const savedDur = Number(dur) || 0;
+        const savedLoops = Number(loops) || 0;
+        const savedCompletedLoops = Math.max(0, Number(completed) || 0);
+        const savedPaused = paused === 'true';
+        const savedRunning = running === 'true';
+        const savedStartedAt = Number(startedAt) || 0;
+        const savedSessionId = sessionId || '';
+        timerSessionIdRef.current = savedSessionId;
+        if (savedDur > 0) {
+          setSelectedDurationDiag(savedDur, 'session-restore');
+        } else if (savedTarget > 0) {
+          const mins = Math.round(savedTarget / 60);
+          setSelectedDurationDiag(mins, 'session-restore');
+        }
+        if (LOOP_OPTIONS.includes(savedLoops)) {
+          setSelectedLoops(savedLoops);
+          selectedLoopsRef.current = savedLoops;
+        }
+        const activeLoopLimit = LOOP_OPTIONS.includes(savedLoops) ? savedLoops : selectedLoopsRef.current;
+        const safeCompletedLoops = Math.min(savedCompletedLoops, Math.max(0, activeLoopLimit - 1));
+        if (safeCompletedLoops > 0) {
+          setCompletedLoops(safeCompletedLoops);
+          completedLoopsRef.current = safeCompletedLoops;
+        }
+        const restoredTarget = savedTarget || selectedDurationRef.current * 60;
+        const restoreDecision = computeColdStartRestoreDecision({
+          savedRunning,
+          savedPaused,
+          savedSec,
+          savedTarget: restoredTarget,
+          savedCompletedLoops,
+          activeLoopLimit,
+        });
+        const { outcome, restoredSeconds } = restoreDecision;
+        if (outcome === 'paused') {
+          setSeconds(restoredSeconds);
+          secondsRef.current = restoredSeconds;
+          setIsRunning(false);
+          isRunningRef.current = false;
+          timerStartedAtRef.current = null;
+          updateTimerState({ sessionId: savedSessionId });
+        } else {
+          // No saved timer state for this Japam — fresh start.
+          setSeconds(0);
+          secondsRef.current = 0;
+          setCompletedLoops(0);
+          completedLoopsRef.current = 0;
+          timerStartedAtRef.current = null;
+          timerSessionIdRef.current = '';
+          updateTimerState({ sessionId: '' });
+        }
+      }
+    );
+
+    return () => {
+      willSwitchSub.remove();
+      didSwitchSub.remove();
+    };
+  }, [clearCompletionNotification, clearTimerInterval, hideNotification, releaseWakeLock, setSelectedDurationDiag, computeColdStartRestoreDecision]);
+
   const selectDuration = useCallback((mins: number) => {
     if (isRunningRef.current) return;
     setSelectedDurationDiag(mins, 'user-selection');
@@ -2097,7 +2312,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     processedCompletionLoopsRef.current.clear();
     timerStartedAtRef.current = null;
     timerSessionIdRef.current = '';
-    void AsyncStorage.setItem(T_DURATION_KEY, String(mins));
+    void AsyncStorage.multiSet(
+      buildSelectionPairs(T_DURATION_KEY, String(mins), userIdRef.current, currentJapamIdRef.current)
+    );
   }, []);
 
   const selectLoops = useCallback((loops: number) => {
@@ -2106,7 +2323,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     selectedLoopsRef.current = loops;
     processedCompletionLoopsRef.current.clear();
     timerSessionIdRef.current = '';
-    void AsyncStorage.setItem(T_LOOPS_KEY, String(loops));
+    void AsyncStorage.multiSet(
+      buildSelectionPairs(T_LOOPS_KEY, String(loops), userIdRef.current, currentJapamIdRef.current)
+    );
   }, []);
 
   const value = useMemo<TimerContextValue>(() => ({
@@ -2125,6 +2344,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     reset,
     selectDuration,
     selectLoops,
+    setActiveJapamSelection,
   }), [
     completedLoops,
     isCustomDuration,
@@ -2137,6 +2357,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     selectLoops,
     selectedDuration,
     selectedLoops,
+    setActiveJapamSelection,
     start,
     targetSeconds,
     timeLeft,

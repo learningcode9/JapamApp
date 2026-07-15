@@ -1,0 +1,1469 @@
+<!DOCTYPE html>
+<meta charset="UTF-8">
+<title>Japam App — Complete Code Guide</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{
+  --bg:#f6faf9; --bg-alt:#ffffff; --text:#16302c; --text-dim:#4c6864; --border:#d7e6e2;
+  --accent:#0f766e; --accent-dim:#0f8f87; --sidebar-bg:#eef7f5; --code-bg:#0f2924; --code-text:#d7f5ec;
+  --warn-bg:#fff4e0; --warn-border:#e0a530; --danger-bg:#fde8e8; --danger-border:#d64545;
+  --tip-bg:#e8f3ff; --tip-border:#3b82c4; --te-color:#8a5a00; --link:#0f766e;
+  --table-stripe:#f0f7f5; --shadow: 0 2px 10px rgba(15,60,50,0.08);
+}
+:root[data-theme="dark"]{
+  --bg:#0f1a18; --bg-alt:#152622; --text:#e5f3ef; --text-dim:#9db8b2; --border:#26433c;
+  --accent:#57d6c4; --accent-dim:#3fc2ae; --sidebar-bg:#122320; --code-bg:#08120f; --code-text:#bdf2e2;
+  --warn-bg:#3a2c0d; --warn-border:#caa23a; --danger-bg:#3a1616; --danger-border:#e07070;
+  --tip-bg:#0f2436; --tip-border:#5aa6e0; --te-color:#e8c165; --link:#6fe0cc;
+  --table-stripe:#12211d; --shadow: 0 2px 14px rgba(0,0,0,0.4);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1a18; --bg-alt:#152622; --text:#e5f3ef; --text-dim:#9db8b2; --border:#26433c;
+    --accent:#57d6c4; --accent-dim:#3fc2ae; --sidebar-bg:#122320; --code-bg:#08120f; --code-text:#bdf2e2;
+    --warn-bg:#3a2c0d; --warn-border:#caa23a; --danger-bg:#3a1616; --danger-border:#e07070;
+    --tip-bg:#0f2436; --tip-border:#5aa6e0; --te-color:#e8c165; --link:#6fe0cc;
+    --table-stripe:#12211d; --shadow: 0 2px 14px rgba(0,0,0,0.4);
+  }
+}
+*{box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  line-height:1.6; font-size:16px;
+}
+a{color:var(--link);}
+code, pre{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+code.inline{ background:var(--table-stripe); padding:2px 6px; border-radius:4px; font-size:0.92em; border:1px solid var(--border);}
+pre.code-block{
+  background:var(--code-bg); color:var(--code-text); padding:14px 16px; border-radius:10px;
+  overflow-x:auto; position:relative; font-size:0.86em; line-height:1.5;
+}
+pre.ascii{
+  background:var(--bg-alt); border:1px solid var(--border); border-radius:10px; padding:14px 16px;
+  overflow-x:auto; font-size:0.82em; line-height:1.35; color:var(--text);
+}
+.copy-btn{
+  position:absolute; top:8px; right:8px; background:rgba(255,255,255,0.12); color:var(--code-text);
+  border:1px solid rgba(255,255,255,0.25); border-radius:6px; padding:4px 9px; font-size:0.75em;
+  cursor:pointer;
+}
+.copy-btn:hover{ background:rgba(255,255,255,0.22); }
+
+/* Layout */
+#topbar{
+  position:fixed; top:0; left:0; right:0; height:58px; background:var(--bg-alt); border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:10px; padding:0 14px; z-index:200; box-shadow:var(--shadow);
+}
+#topbar .brand{ font-weight:800; color:var(--accent); font-size:1.05em; white-space:nowrap;}
+#searchBox{
+  flex:1; max-width:420px; padding:8px 12px; border-radius:20px; border:1px solid var(--border);
+  background:var(--bg); color:var(--text); font-size:0.95em;
+}
+.topbtn{
+  background:var(--bg); border:1px solid var(--border); color:var(--text); border-radius:8px;
+  padding:7px 11px; font-size:0.85em; cursor:pointer; white-space:nowrap;
+}
+.topbtn:hover{ border-color:var(--accent); color:var(--accent); }
+#menuToggle{ display:none; }
+
+#layout{ display:flex; padding-top:58px; min-height:100vh; }
+#sidebar{
+  width:300px; flex-shrink:0; background:var(--sidebar-bg); border-right:1px solid var(--border);
+  padding:16px 10px 60px 14px; position:fixed; top:58px; bottom:0; left:0; overflow-y:auto;
+}
+#sidebar h3{ font-size:0.78em; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-dim); margin:16px 0 6px;}
+#sidebar ul{ list-style:none; padding:0; margin:0; }
+#sidebar li{ margin:1px 0; }
+#sidebar a{
+  display:flex; align-items:center; gap:6px; text-decoration:none; color:var(--text); padding:5px 8px;
+  border-radius:6px; font-size:0.86em;
+}
+#sidebar a:hover{ background:var(--bg-alt); color:var(--accent); }
+#sidebar input[type=checkbox]{ flex-shrink:0; accent-color:var(--accent); }
+.toc-num{ color:var(--text-dim); font-variant-numeric:tabular-nums; width:1.6em; flex-shrink:0;}
+#progressBar{ height:6px; background:var(--border); border-radius:4px; overflow:hidden; margin:8px 4px 4px;}
+#progressFill{ height:100%; background:var(--accent); width:0%; transition:width .3s; }
+#progressLabel{ font-size:0.75em; color:var(--text-dim); padding:0 4px;}
+
+#content{ margin-left:300px; padding:24px 32px 80px; max-width:980px; width:100%; }
+#content h1{ font-size:1.9em; margin-top:0; }
+.doc-section{
+  border:1px solid var(--border); background:var(--bg-alt); border-radius:14px; padding:20px 22px;
+  margin-bottom:26px; scroll-margin-top:70px; box-shadow: var(--shadow);
+}
+.doc-section h2{ margin-top:0; color:var(--accent); font-size:1.4em; display:flex; gap:10px; align-items:baseline; }
+.doc-section h2 .num{ color:var(--text-dim); font-weight:400; font-size:0.7em; }
+.doc-section h3{ font-size:1.08em; margin-top:22px; color:var(--accent-dim); border-bottom:1px dashed var(--border); padding-bottom:4px;}
+.doc-section h4{ font-size:0.98em; margin-bottom:4px; }
+.back-to-top{ display:inline-block; margin-top:14px; font-size:0.82em; }
+table{ border-collapse:collapse; width:100%; margin:10px 0 16px; font-size:0.9em; }
+th,td{ border:1px solid var(--border); padding:7px 10px; text-align:left; vertical-align:top; }
+th{ background:var(--table-stripe); }
+tr:nth-child(even) td{ background:var(--table-stripe); }
+.callout{ border-left:4px solid; border-radius:8px; padding:10px 14px; margin:12px 0; font-size:0.93em; }
+.callout.warn{ background:var(--warn-bg); border-color:var(--warn-border); }
+.callout.danger{ background:var(--danger-bg); border-color:var(--danger-border); }
+.callout.tip{ background:var(--tip-bg); border-color:var(--tip-border); }
+.te{ color:var(--te-color); font-style:italic; }
+.badge{ display:inline-block; padding:2px 8px; border-radius:20px; font-size:0.72em; font-weight:700; margin-left:6px;}
+.badge.danger{ background:var(--danger-bg); color:var(--danger-border); border:1px solid var(--danger-border);}
+.badge.warn{ background:var(--warn-bg); color:var(--warn-border); border:1px solid var(--warn-border);}
+.badge.ok{ background:var(--tip-bg); color:var(--tip-border); border:1px solid var(--tip-border);}
+details{ border:1px solid var(--border); border-radius:8px; padding:8px 12px; margin:8px 0; background:var(--bg);}
+details summary{ cursor:pointer; font-weight:600; }
+.flow{ display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:14px 0; }
+.flow .step{ background:var(--tip-bg); border:1px solid var(--tip-border); border-radius:8px; padding:8px 12px; font-size:0.85em; }
+.flow .arrow{ color:var(--text-dim); font-weight:700; }
+.hidden-by-search{ display:none !important; }
+mark{ background:#ffe066; color:#222; border-radius:3px; }
+:root[data-theme="dark"] mark{ background:#7a6a1a; color:#fff9e0; }
+footer{ margin-left:300px; padding:20px 32px 60px; color:var(--text-dim); font-size:0.85em; border-top:1px solid var(--border); }
+@media (max-width: 900px){
+  #sidebar{ transform:translateX(-100%); transition:transform .2s; z-index:150; width:82vw; box-shadow: var(--shadow);}
+  #sidebar.open{ transform:translateX(0); }
+  #content, footer{ margin-left:0; padding:18px 16px 70px; }
+  #menuToggle{ display:inline-block; }
+}
+ul.compact li{ margin:3px 0; }
+.filekw{ font-weight:600; }
+</style>
+
+<div id="topbar">
+  <button id="menuToggle" class="topbtn" onclick="document.getElementById('sidebar').classList.toggle('open')">☰</button>
+  <span class="brand">🪔 Japam App — Complete Code Guide</span>
+  <input id="searchBox" type="text" placeholder="Search this guide… (e.g. timer, RLS, tombstone)" oninput="doSearch(this.value)">
+  <button class="topbtn" onclick="expandAll(true)">Expand all</button>
+  <button class="topbtn" onclick="expandAll(false)">Collapse all</button>
+  <button class="topbtn" id="themeBtn" onclick="toggleTheme()">🌓 Theme</button>
+</div>
+
+<div id="layout">
+<nav id="sidebar">
+  <div id="progressBar"><div id="progressFill"></div></div>
+  <div id="progressLabel">0 / 0 topics checked</div>
+  <h3>Start here</h3>
+  <ul id="tocList">
+    <li><a href="#s1"><input type="checkbox" class="prog"><span class="toc-num">1</span>App purpose &amp; features</a></li>
+    <li><a href="#s2"><input type="checkbox" class="prog"><span class="toc-num">2</span>Technology stack</a></li>
+    <li><a href="#s3"><input type="checkbox" class="prog"><span class="toc-num">3</span>Folder &amp; file structure</a></li>
+    <li><a href="#s4"><input type="checkbox" class="prog"><span class="toc-num">4</span>How the app starts</a></li>
+    <li><a href="#s5"><input type="checkbox" class="prog"><span class="toc-num">5</span>Expo Router &amp; navigation</a></li>
+    <li><a href="#s6"><input type="checkbox" class="prog"><span class="toc-num">6</span>Root layout &amp; providers</a></li>
+    <li><a href="#s7"><input type="checkbox" class="prog"><span class="toc-num">7</span>React Native basics used</a></li>
+    <li><a href="#s8"><input type="checkbox" class="prog"><span class="toc-num">8</span>Components/props/state/hooks</a></li>
+  </ul>
+  <h3>Timer</h3>
+  <ul>
+    <li><a href="#s9"><input type="checkbox" class="prog"><span class="toc-num">9</span>Timer architecture</a></li>
+    <li><a href="#s10"><input type="checkbox" class="prog"><span class="toc-num">10</span>Timer lifecycle flows</a></li>
+    <li><a href="#s11"><input type="checkbox" class="prog"><span class="toc-num">11</span>Android foreground service</a></li>
+    <li><a href="#s12"><input type="checkbox" class="prog"><span class="toc-num">12</span>Tap Japam architecture</a></li>
+    <li><a href="#s13"><input type="checkbox" class="prog"><span class="toc-num">13</span>Manual Japam flow</a></li>
+  </ul>
+  <h3>History &amp; Sync</h3>
+  <ul>
+    <li><a href="#s14"><input type="checkbox" class="prog"><span class="toc-num">14</span>History add/edit/delete</a></li>
+    <li><a href="#s15"><input type="checkbox" class="prog"><span class="toc-num">15</span>Offline-first architecture</a></li>
+    <li><a href="#s16"><input type="checkbox" class="prog"><span class="toc-num">16</span>Pending sync queue</a></li>
+    <li><a href="#s17"><input type="checkbox" class="prog"><span class="toc-num">17</span>Completion IDs</a></li>
+    <li><a href="#s18"><input type="checkbox" class="prog"><span class="toc-num">18</span>Tombstones &amp; deletion sync</a></li>
+    <li><a href="#s19"><input type="checkbox" class="prog"><span class="toc-num">19</span>AsyncStorage keys</a></li>
+  </ul>
+  <h3>Auth &amp; Backend</h3>
+  <ul>
+    <li><a href="#s20"><input type="checkbox" class="prog"><span class="toc-num">20</span>Authentication</a></li>
+    <li><a href="#s21"><input type="checkbox" class="prog"><span class="toc-num">21</span>Anonymous user flow</a></li>
+    <li><a href="#s22"><input type="checkbox" class="prog"><span class="toc-num">22</span>Google sign-in</a></li>
+    <li><a href="#s23"><input type="checkbox" class="prog"><span class="toc-num">23</span>Session JWT vs anon key</a></li>
+    <li><a href="#s24"><input type="checkbox" class="prog"><span class="toc-num">24</span>Supabase client architecture</a></li>
+    <li><a href="#s25"><input type="checkbox" class="prog"><span class="toc-num">25</span>Database tables</a></li>
+    <li><a href="#s26"><input type="checkbox" class="prog"><span class="toc-num">26</span>RLS policies</a></li>
+    <li><a href="#s27"><input type="checkbox" class="prog"><span class="toc-num">27</span>SECURITY DEFINER RPCs</a></li>
+  </ul>
+  <h3>Groups &amp; Workspaces</h3>
+  <ul>
+    <li><a href="#s28"><input type="checkbox" class="prog"><span class="toc-num">28</span>Groups feature</a></li>
+    <li><a href="#s29"><input type="checkbox" class="prog"><span class="toc-num">29</span>Display-name resolution</a></li>
+    <li><a href="#s30"><input type="checkbox" class="prog"><span class="toc-num">30</span>Workspaces / My Japams</a></li>
+    <li><a href="#s31"><input type="checkbox" class="prog"><span class="toc-num">31</span>Current Japam selection</a></li>
+  </ul>
+  <h3>Platform &amp; Ops</h3>
+  <ul>
+    <li><a href="#s32"><input type="checkbox" class="prog"><span class="toc-num">32</span>Web vs Android behavior</a></li>
+    <li><a href="#s33"><input type="checkbox" class="prog"><span class="toc-num">33</span>Expo OTA updates</a></li>
+    <li><a href="#s34"><input type="checkbox" class="prog"><span class="toc-num">34</span>Vercel deployment</a></li>
+    <li><a href="#s35"><input type="checkbox" class="prog"><span class="toc-num">35</span>Prod vs staging</a></li>
+    <li><a href="#s36"><input type="checkbox" class="prog"><span class="toc-num">36</span>Environment variables</a></li>
+    <li><a href="#s37"><input type="checkbox" class="prog"><span class="toc-num">37</span>Tests &amp; what they protect</a></li>
+  </ul>
+  <h3>When things break</h3>
+  <ul>
+    <li><a href="#s38"><input type="checkbox" class="prog"><span class="toc-num">38</span>Investigate a crash</a></li>
+    <li><a href="#s39"><input type="checkbox" class="prog"><span class="toc-num">39</span>Investigate a sync bug</a></li>
+    <li><a href="#s40"><input type="checkbox" class="prog"><span class="toc-num">40</span>Make a code change safely</a></li>
+    <li><a href="#s41"><input type="checkbox" class="prog"><span class="toc-num">41</span>Safe release workflow</a></li>
+    <li><a href="#s42"><input type="checkbox" class="prog"><span class="toc-num">42</span>Incidents &amp; lessons</a></li>
+    <li><a href="#s43"><input type="checkbox" class="prog"><span class="toc-num">43</span>Known technical debt</a></li>
+    <li><a href="#s44"><input type="checkbox" class="prog"><span class="toc-num">44</span>Remaining risks</a></li>
+  </ul>
+  <h3>Reference</h3>
+  <ul>
+    <li><a href="#s45"><input type="checkbox" class="prog"><span class="toc-num">45</span>Glossary</a></li>
+    <li><a href="#s46"><input type="checkbox" class="prog"><span class="toc-num">46</span>FAQ</a></li>
+    <li><a href="#s47"><input type="checkbox" class="prog"><span class="toc-num">47</span>Where should I look?</a></li>
+    <li><a href="#owner"><input type="checkbox" class="prog"><span class="toc-num">★</span>Owner quick reference</a></li>
+  </ul>
+</nav>
+
+<main id="content">
+<h1 id="top">🪔 Japam App — Complete Code Guide</h1>
+<p>This is a single, offline, self-contained learning file about the <b>Japam</b> (Mantra Japam) React Native / Expo app. You can save this file anywhere and open it by double-clicking — no internet, no login, no Claude subscription required. Everything here was written by reading the actual source code in this repository as it exists today, not from an idealized future design. File paths are repo-relative, e.g. <code class="inline">contexts/timer-context.tsx</code> — open that path from the project root to see the real file.</p>
+
+<div class="callout tip">
+<b>How to use this guide (ఈ గైడ్ ఎలా వాడాలి):</b> Use the search box at the top to jump to any topic. Use "Expand all" to read everything at once, or click each collapsible box to open it one at a time. Tick the checkboxes in the left sidebar as you learn each topic — your progress is remembered on this device (best effort; depends on your browser's local file security settings).
+</div>
+
+<section class="doc-section" id="s1">
+<h2><span class="num">1</span> App purpose and main features</h2>
+<p><b>Japam</b> (జపం) means the repeated chanting of a mantra. Traditionally this is counted using a <b>mala</b> (మాల) — a string of 108 beads, one bead per repetition. This app is a digital assistant for that practice: it counts repetitions for you and keeps a history of your practice over time.</p>
+<h3>Main features (as they exist in code today)</h3>
+<table>
+<tr><th>Feature</th><th>What it does</th><th>Main screen file</th></tr>
+<tr><td>Timer Japam</td><td>Pick a duration (e.g. 10 minutes) and chant continuously until the timer completes one "mala" cycle; can auto-repeat for multiple malas.</td><td><code class="inline">app/(tabs)/timer.tsx</code></td></tr>
+<tr><td>Tap Japam</td><td>Tap a button once per repetition; automatically completes a mala every 108 taps.</td><td><code class="inline">app/(tabs)/tap-japam.tsx</code></td></tr>
+<tr><td>Manual entry ("Add Japam")</td><td>Record japam done offline/without the app (e.g. with a physical mala).</td><td><code class="inline">app/(tabs)/manual.tsx</code></td></tr>
+<tr><td>History</td><td>View, edit, delete, and export a daily log of completed malas.</td><td><code class="inline">app/(tabs)/history.tsx</code></td></tr>
+<tr><td>Groups</td><td>Create/join a shared group; members can see each other's practice totals.</td><td><code class="inline">app/(tabs)/groups.tsx</code>, <code class="inline">app/(tabs)/groups-dashboard.tsx</code></td></tr>
+<tr><td>My Japams (workspaces)</td><td>Multiple named practices (e.g. "Gayatri", "Govinda"), each with its own history/stats.</td><td><code class="inline">app/my-japams.tsx</code></td></tr>
+<tr><td>Settings</td><td>Sound/vibration toggles, sign out, account info.</td><td><code class="inline">app/(tabs)/settings.tsx</code></td></tr>
+</table>
+<p>The app works fully <b>offline</b> — every action is saved to the phone first, and synced to the cloud (Supabase) only when possible. See <a href="#s15">§15 Offline-first architecture</a>.</p>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s2">
+<h2><span class="num">2</span> Technology stack</h2>
+<table>
+<tr><th>Layer</th><th>Technology</th><th>Notes</th></tr>
+<tr><td>App framework</td><td>React Native 0.81 + React 19, via <b>Expo SDK 54</b></td><td>One codebase runs on iOS, Android, and Web.</td></tr>
+<tr><td>Navigation</td><td><b>Expo Router v6</b> (file-based routing)</td><td>Every file in <code class="inline">app/</code> becomes a screen/route. See <a href="#s5">§5</a>.</td></tr>
+<tr><td>Language</td><td>TypeScript</td><td><code class="inline">tsconfig.json</code>; checked via <code class="inline">npx tsc --noEmit</code>.</td></tr>
+<tr><td>State</td><td>Plain React Context (no Redux/MobX/Zustand)</td><td>Only two global contexts exist: Timer and Current-Japam. See <a href="#s6">§6</a>.</td></tr>
+<tr><td>Local storage</td><td><code class="inline">@react-native-async-storage/async-storage</code></td><td>Key-value JSON storage on-device; the "local database" for offline-first data.</td></tr>
+<tr><td>Backend</td><td><b>Supabase</b> (hosted Postgres + Auth + REST API)</td><td>See <a href="#s24">§24</a>.</td></tr>
+<tr><td>Auth provider</td><td>Supabase Auth: Anonymous sign-in + Google Sign-In</td><td>See <a href="#s20">§20</a>.</td></tr>
+<tr><td>Native Android extension</td><td>Hand-written Kotlin foreground service</td><td><code class="inline">android-native/JapamTimerService.kt</code>. See <a href="#s11">§11</a>.</td></tr>
+<tr><td>Testing</td><td>Jest + <code class="inline">jest-expo</code></td><td>See <a href="#s37">§37</a>.</td></tr>
+<tr><td>Build/Deploy</td><td>EAS Build (native binaries), EAS Update (OTA), Vercel (web hosting)</td><td>See <a href="#s33">§33</a>, <a href="#s34">§34</a>.</td></tr>
+<tr><td>UI library</td><td><code class="inline">react-native-paper</code> (provider mounted, lightly used), mostly hand-written <code class="inline">StyleSheet</code> styling</td><td>Most screens use plain <code class="inline">View</code>/<code class="inline">Text</code>/<code class="inline">Pressable</code>, not a component library.</td></tr>
+</table>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s3">
+<h2><span class="num">3</span> Complete folder and file structure</h2>
+<pre class="ascii">
+JapamApp/
+├─ app/                        Screens (Expo Router — file path = URL path)
+│  ├─ _layout.tsx               Root layout: providers + Stack navigator
+│  ├─ index.tsx                 "/" route → redirects to /timer
+│  ├─ my-japams.tsx              "My Japams" workspace manager (pushed screen)
+│  ├─ modal.tsx, privacy.tsx, delete-account.tsx
+│  └─ (tabs)/                    Tab group
+│     ├─ _layout.tsx              Tab bar configuration
+│     ├─ timer.tsx                Timer Japam screen [visible tab]
+│     ├─ tap-japam.tsx            Tap Japam screen [visible tab]
+│     ├─ manual.tsx               Add Japam manual entry [hidden tab, pushed]
+│     ├─ history.tsx              History screen [visible tab]
+│     ├─ groups.tsx               Groups list/join/create [visible tab]
+│     ├─ groups-dashboard.tsx     One group's stats [hidden tab, pushed]
+│     ├─ settings.tsx             Settings [visible tab]
+│     ├─ faq.tsx                  Static FAQ [hidden tab, pushed]
+│     ├─ index.tsx                Legacy "Home" screen [hidden tab, pushed from manual.tsx]
+│     └─ __tests__/               Component render tests
+├─ contexts/                   Global React Context providers (only 2 exist)
+│  ├─ timer-context.tsx          The timer engine (~2270 lines)
+│  └─ current-japam-context.tsx  Which workspace is selected right now
+├─ lib/                        Business logic + persistence (NOT UI)
+│  ├─ historyStore.ts            Pure history/sync functions
+│  ├─ historyRepository.ts       AsyncStorage read/write for history
+│  ├─ japams.ts                  Pure workspace (Japam) functions
+│  ├─ japamsStorage.ts           AsyncStorage read/write for workspaces
+│  ├─ japamsRepository.ts        Orchestrates japams.ts + japamsStorage.ts
+│  ├─ groupsRepository.ts        Supabase RPC calls for Groups
+│  ├─ groupsTypes.ts             ⚠ Old design-only file, NOT what's actually used
+│  ├─ malaCompletion.ts          Mala-boundary-crossing detection (pure)
+│  ├─ timerState.ts              Plain-object shared timer state (non-React)
+│  ├─ timerColdStartRestore.ts   Pure decision logic for cold-start restore
+│  ├─ timerForegroundService.android.ts / .ts  JS↔Kotlin bridge (+ web/iOS stub)
+│  ├─ anonymousAuth.ts           Guest/anonymous + Google auth helpers
+│  ├─ supabase.ts                The Supabase client singleton
+│  └─ __tests__/                 Unit tests for the files above
+├─ components/                 Shared UI pieces
+│  ├─ CurrentJapamHeaderButton.tsx   The "which Japam" button on every screen
+│  ├─ LegacyHistoryBackfillRunner.tsx One-time migration runner (renders nothing)
+│  └─ ui/, themed-*.tsx, etc.    Mostly unused Expo template scaffolding
+├─ android-native/              Hand-written Kotlin foreground service
+│  ├─ JapamTimerService.kt
+│  ├─ JapamTimerModule.kt
+│  └─ JapamTimerPackage.kt
+├─ plugins/withJapamTimerService.js   Expo config plugin that wires the above into Android
+├─ db/                         Hand-written SQL migration/hotfix files (not an ORM/migration tool)
+├─ schema.sql / schema_staging.sql    Full database dumps — prod vs staging
+├─ testing/                    Structured test-planning JSON + SQL contracts (see §37, §42)
+├─ docs/                       Incident write-ups, release checklists, design docs
+├─ scripts/                    Node/bash helper scripts (release gates, contract tests, etc.)
+├─ app.json                    Expo app config (name, OTA, permissions, plugins)
+├─ eas.json                    EAS Build profiles (development/preview/production)
+├─ vercel.json                 Web hosting config for Vercel
+└─ package.json                Dependencies + npm scripts
+</pre>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s4">
+<h2><span class="num">4</span> How the app starts</h2>
+<p>Every screen in <code class="inline">app/</code> is wrapped by the root layout file, <span class="filekw">app/_layout.tsx</span>, which runs once when the app process starts.</p>
+<pre class="ascii">
+Process start
+   │
+   ▼
+app/_layout.tsx (RootLayout)
+   ├─ repairLegacyStoredUserId()      one-time identity cleanup (fire-and-forget, doesn't block render)
+   ├─ Asset.fromModule(bg).downloadAsync()  background image warm-up (never blocks render — a past
+   │                                         bug froze startup when this was awaited while offline)
+   ├─ Notifications.setNotificationHandler   configures which notifications show an alert
+   ├─ web-only: meta tags, PWA cache-busting, viewport fixes
+   ├─ Updates.checkForUpdateAsync()   OTA check on native, also re-checked on every app-foreground
+   ▼
+&lt;PaperProvider&gt;&lt;ThemeProvider&gt;
+  &lt;TimerProvider&gt;                    global timer state (mounted ONCE, at the true root)
+    &lt;CurrentJapamProvider&gt;           global "which workspace" state
+      &lt;LegacyHistoryBackfillRunner /&gt; renders nothing; runs a one-time data migration
+      &lt;Stack&gt;
+        &lt;Stack.Screen name="(tabs)" /&gt;   ← the tab group (anchor route)
+        ...other pushed screens...
+      &lt;/Stack&gt;
+</pre>
+<div class="callout tip"><b>Key fact:</b> rendering is <i>never</i> blocked on the network. The app always shows something immediately, even completely offline — this was a deliberate fix after a real bug where an image pre-load could hang forever offline and freeze the splash screen.</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s5">
+<h2><span class="num">5</span> Expo Router and navigation</h2>
+<p>Expo Router turns files in <code class="inline">app/</code> into routes automatically — a file <code class="inline">app/(tabs)/timer.tsx</code> becomes reachable at the path <code class="inline">/timer</code>. Folders in parentheses like <code class="inline">(tabs)</code> are "groups" — they organize files without adding a URL segment.</p>
+<pre class="ascii">
+Stack (root, in app/_layout.tsx)
+ ├─ (tabs)          ← anchor of the root Stack
+ │   ├─ timer          [visible tab, ALSO the anchor of the Tabs navigator]
+ │   ├─ tap-japam      [visible tab]
+ │   ├─ history        [visible tab]
+ │   ├─ groups         [visible tab]
+ │   ├─ settings       [visible tab]
+ │   ├─ manual         [href:null → reachable only via router.push, no tab icon]
+ │   ├─ groups-dashboard [href:null → pushed from groups.tsx with a groupId]
+ │   ├─ faq            [href:null]
+ │   └─ index          [href:null → the legacy "Home" screen, still reachable —
+ │                       manual.tsx calls router.push('/') to return here]
+ ├─ my-japams        (full-screen push, not a tab)
+ ├─ modal            (presented as a modal)
+ ├─ privacy
+ └─ delete-account
+</pre>
+<h3>Why Timer is the "home" screen, not index.tsx</h3>
+<p><code class="inline">app/(tabs)/_layout.tsx</code> sets <code class="inline">unstable_settings = { anchor: 'timer' }</code>. The code comment there explains why: without it, the hidden legacy <code class="inline">index</code> screen would be the tab navigator's back-stack root, and the Android hardware back button from Timer would reveal that old screen instead of exiting the app. So Timer is the true landing screen, and the top-level <code class="inline">app/index.tsx</code> (outside the tab group) is just <code class="inline">&lt;Redirect href="/timer" /&gt;</code> — a safety net for anyone who lands on the bare <code class="inline">/</code> path.</p>
+<div class="callout warn"><b>Uncertain / worth asking the team:</b> <code class="inline">app/(tabs)/index.tsx</code> is a ~3800-line near-duplicate of Tap Japam's whole screen (Google sign-in, tap counting, history save — everything). It's still reachable (only via <code class="inline">manual.tsx</code>'s one <code class="inline">router.push('/')</code> call and <code class="inline">CurrentJapamHeaderButton</code>'s <code class="inline">'home'</code> variant), so it is <b>not</b> dead code, but it's unclear whether keeping it wired up this way is intentional or a leftover from an earlier screen restructure.</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s6">
+<h2><span class="num">6</span> Root layout and provider hierarchy</h2>
+<p>A "Provider" in React lets many screens share the same data without passing it down manually through every component. This app has exactly <b>two</b> of them, both mounted once in <code class="inline">app/_layout.tsx</code>:</p>
+<pre class="ascii">
+&lt;TimerProvider&gt;              (contexts/timer-context.tsx)
+  &lt;CurrentJapamProvider&gt;     (contexts/current-japam-context.tsx)
+    ...the whole app...
+</pre>
+<h3>TimerProvider — why it exists</h3>
+<p>The chanting timer must keep working while you switch tabs, lock your phone, or even while Android freezes the JS engine in the background. A timer stored in one screen's local <code class="inline">useState</code> cannot survive any of that — so it lives at the very top of the app instead.</p>
+<div class="callout danger"><b>Real incident:</b> this provider used to live inside <code class="inline">app/(tabs)/_layout.tsx</code>. Expo Router mounted that layout <i>twice</i> during startup, creating two competing TimerProvider instances that both wrote to the same storage keys — causing a running timer to silently reset or change duration. The fix was moving it to the true root layout, which mounts exactly once. See <a href="#s42">§42</a>.</div>
+<h3>CurrentJapamProvider — why it exists</h3>
+<p>Tracks which "workspace" (Japam) is currently selected, so every screen agrees on the same answer. Its own code comment explains it was built this way specifically to avoid a bug class already found once: independent per-screen copies of the same selection going stale relative to each other.</p>
+<h3>What's notably missing: there is no AuthContext</h3>
+<p>Login state (<code class="inline">userId</code>, <code class="inline">userName</code>, guest-or-not) is <b>not</b> a Context anywhere. Every screen independently reads it from <code class="inline">AsyncStorage</code> and listens for a plain event named <code class="inline">'japam-auth-updated'</code> (fired via <code class="inline">DeviceEventEmitter</code> on native, and a matching <code class="inline">window</code> event on web) whenever login state changes. This explains why so many screens repeat the same <code class="inline">AsyncStorage.getItem('userId')</code> boilerplate.</p>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s7">
+<h2><span class="num">7</span> React Native basics used in this app</h2>
+<p>If you already know basic React (components, JSX, props), here's the React Native-specific vocabulary this codebase actually uses:</p>
+<table>
+<tr><th>Concept</th><th>What it means here</th></tr>
+<tr><td><code class="inline">View</code>, <code class="inline">Text</code>, <code class="inline">Pressable</code></td><td>The RN equivalents of <code class="inline">&lt;div&gt;</code>, text, and clickable elements. Almost every screen uses these directly rather than a component library.</td></tr>
+<tr><td><code class="inline">StyleSheet.create({...})</code></td><td>RN's way of defining CSS-like styles as JS objects. Every screen defines its own <code class="inline">styles</code> object at the bottom of the file.</td></tr>
+<tr><td><code class="inline">Platform.OS</code></td><td>Branches behavior for <code class="inline">'ios' | 'android' | 'web'</code>. Used constantly — e.g. Android has a native background timer service, web does not.</td></tr>
+<tr><td><code class="inline">AppState</code></td><td>Tells the app when it goes to background/foreground — the trigger for pausing/resuming/reconciling the timer.</td></tr>
+<tr><td><code class="inline">AsyncStorage</code></td><td>Key-value on-device storage (like <code class="inline">localStorage</code> on web, but async). This app's "local database."</td></tr>
+<tr><td><code class="inline">DeviceEventEmitter</code></td><td>A simple publish/subscribe event bus used for cross-screen signals like <code class="inline">'japam-auth-updated'</code> and <code class="inline">'japam-stats-updated'</code>, since there's no AuthContext.</td></tr>
+<tr><td><code class="inline">expo-notifications</code></td><td>Local notifications (e.g. "Mala completed") — different behavior per platform, see §32.</td></tr>
+<tr><td><code class="inline">expo-keep-awake</code></td><td>Prevents the screen from auto-locking while the Timer runs.</td></tr>
+<tr><td>NativeModules bridge</td><td>How JavaScript calls the hand-written Kotlin Android service. See §11.</td></tr>
+</table>
+<p><b>Template leftovers:</b> Expo's default project template included files like <code class="inline">components/themed-text.tsx</code>, <code class="inline">components/hello-wave.tsx</code>, <code class="inline">components/haptic-tab.tsx</code>, and <code class="inline">hooks/use-color-scheme.ts</code>. These still exist in the repo but the real screens (Timer, Tap Japam, History, etc.) do <b>not</b> use them — they use plain RN components and their own styling instead. Don't be confused if you see them; they're mostly unused scaffolding.</p>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s8">
+<h2><span class="num">8</span> Components, props, state, hooks, effects, refs, and contexts</h2>
+<p>Quick refresher, applied to this codebase specifically:</p>
+<ul class="compact">
+<li><b>Component</b> — a function that returns JSX. Example: <code class="inline">export default function TimerScreen() {...}</code> in <code class="inline">app/(tabs)/timer.tsx</code>.</li>
+<li><b>Props</b> — data passed into a component from its parent. Example: <code class="inline">&lt;CurrentJapamHeaderButton variant="timer" /&gt;</code> — <code class="inline">variant</code> is a prop.</li>
+<li><b>State (<code class="inline">useState</code>)</b> — data that changes over time and re-renders the component when it changes. Example: <code class="inline">const [seconds, setSeconds] = useState(0)</code> in <code class="inline">contexts/timer-context.tsx</code>.</li>
+<li><b>Effect (<code class="inline">useEffect</code>)</b> — code that runs after render, usually to synchronize with something outside React (storage, timers, event listeners). <code class="inline">timer-context.tsx</code> has over 15 separate <code class="inline">useEffect</code> blocks — one per concern (AppState listener, notification channel setup, sound loading, cold-start restore, etc.) rather than one giant effect.</li>
+<li><b>Ref (<code class="inline">useRef</code>)</b> — a mutable value that does <i>not</i> trigger a re-render when changed, and survives across renders. This app uses refs heavily for timer internals (e.g. <code class="inline">secondsRef</code>, <code class="inline">isRunningRef</code>) specifically so a background event (like a native Android broadcast) can read/update the "real" value without needing a live render cycle.</li>
+<li><b>Context (<code class="inline">createContext</code> / <code class="inline">useContext</code>)</b> — shares data across many components without prop-drilling. This app has exactly two: <code class="inline">useTimer()</code> and <code class="inline">useCurrentJapam()</code>. See §6.</li>
+<li><b><code class="inline">useCallback</code> / <code class="inline">useMemo</code></b> — memoize functions/values so they don't get recreated on every render (mainly used to keep <code class="inline">useEffect</code> dependency arrays stable).</li>
+</ul>
+<div class="callout tip"><span class="te">Telugu గమనిక:</span> Context అంటే — వేర్వేరు స్క్రీన్‌ల మధ్య ఒకే డేటాను పంచుకునే మార్గం (like a shared notice board every screen can read from).</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s9">
+<h2><span class="num">9</span> Timer architecture</h2>
+<h4>What it does</h4>
+<p>Counts down from a chosen duration (e.g. 10 minutes), plays a completion sound ("Om"), and can automatically repeat for multiple malas, all while surviving app backgrounding and even a full app kill on Android.</p>
+<h4>Why it exists</h4>
+<p>A simple in-component countdown breaks the moment you switch tabs or your phone locks. This app needed a timer that is correct even after the JS engine itself is paused or killed by the OS.</p>
+<h4>Important files</h4>
+<ul class="compact">
+<li><span class="filekw">contexts/timer-context.tsx</span> — the engine (~2270 lines)</li>
+<li><span class="filekw">lib/timerState.ts</span> — a plain (non-React) object holding the "live" timer numbers, readable outside of React render cycles</li>
+<li><span class="filekw">lib/timerColdStartRestore.ts</span> — pure, unit-tested decision logic for restoring after a real process kill</li>
+<li><span class="filekw">lib/timerForegroundService.android.ts</span> / <span class="filekw">lib/timerForegroundService.ts</span> — the JS-side bridge to the Kotlin service (real on Android, no-op stub elsewhere)</li>
+</ul>
+<h4>The three sources of truth for "how much time is left"</h4>
+<pre class="ascii">
+1. JS ticker            setInterval, recomputing elapsed = Date.now() - startedAtRef every second.
+                        Never trusts an incrementing counter — always anchored to a wall-clock
+                        timestamp, so switching apps briefly never desyncs it.
+
+2. Android native       JapamTimerService.kt keeps counting/completing malas even when the JS
+   foreground service   engine is fully frozen. Reconciled via reconcileNativeLoops() every time
+                        the app returns to foreground: replays any malas Kotlin completed while
+                        JS was asleep, then re-anchors the JS ticker to Kotlin's startedAt.
+
+3. AsyncStorage         A snapshot saved every ~10 seconds and on every state change. Read back
+   cold-start snapshot  ONLY after a genuine process restart (not a background/foreground cycle).
+                        computeColdStartRestoreDecision() decides what to do with it — see §10.
+</pre>
+<h4>Data flow</h4>
+<div class="flow">
+<span class="step">User taps Start</span><span class="arrow">→</span><span class="step">timer.tsx calls useTimer().start()</span><span class="arrow">→</span><span class="step">TimerProvider sets refs + state</span><span class="arrow">→</span><span class="step">setInterval ticks every 1s</span><span class="arrow">→</span><span class="step">on completion: saveSession() writes history + syncs</span>
+</div>
+<h4>Important functions</h4>
+<table>
+<tr><th>Function</th><th>Where</th><th>Purpose</th></tr>
+<tr><td><code class="inline">start / pause / reset</code></td><td>timer-context.tsx</td><td>Public API exposed via <code class="inline">useTimer()</code></td></tr>
+<tr><td><code class="inline">claimCompletionLoop()</code></td><td>timer-context.tsx:351-388</td><td>Single dedup gate — a Set of processed loop numbers — so a mala can never be double-saved no matter which of the 3 time sources triggers completion first</td></tr>
+<tr><td><code class="inline">reconcileNativeLoops()</code></td><td>timer-context.tsx</td><td>Replays malas completed natively while JS was asleep, re-anchors the JS ticker</td></tr>
+<tr><td><code class="inline">computeColdStartRestoreDecision()</code></td><td>lib/timerColdStartRestore.ts</td><td>Pure function deciding whether/how to restore after a real kill</td></tr>
+</table>
+<h4>Local storage involved</h4>
+<p>Keys like <code class="inline">timerSeconds</code>, <code class="inline">timerRunning</code>, <code class="inline">timerTarget</code>, <code class="inline">timerPaused</code>, <code class="inline">timerCompletedLoops</code>, <code class="inline">timerStartedAt</code>, <code class="inline">timerSessionId</code> — see §19 for the full table.</p>
+<h4>Supabase involved</h4>
+<p>On completion, writes to <code class="inline">japam_history</code> (via the same offline-first path as every other feature — see §15) and <code class="inline">japam_user_totals</code> (lifetime total cache).</p>
+<h4>Common failure cases</h4>
+<ul class="compact">
+<li>Backgrounding mid-session while a native completion is playing its ~6-second sound — a known past bug, see §42.</li>
+<li>Two TimerProvider instances mounted at once — a known past bug, now structurally prevented by mounting it only at the true root.</li>
+<li>Phone call interruptions — cannot be automated/tested reliably (see <code class="inline">testing/incidents/known-incidents.json</code>, marked permanently manual-only).</li>
+</ul>
+<h4>How to test</h4>
+<p><code class="inline">npm run test:timer</code> runs <span class="filekw">lib/__tests__/timerColdStartRestore.test.ts</span> and <span class="filekw">lib/__tests__/malaCompletion.test.ts</span>.</p>
+<div class="callout danger"><b>Don't change casually:</b> <code class="inline">computeColdStartRestoreDecision()</code> and <code class="inline">claimCompletionLoop()</code>. Both exist specifically to prevent silent double-counting or phantom completions — changes here need the accompanying unit tests updated and passing, not just a manual check.</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s10">
+<h2><span class="num">10</span> Timer start / pause / resume / reset / background / foreground / kill / restore / completion flows</h2>
+<table>
+<tr><th>Flow</th><th>What happens</th></tr>
+<tr><td><b>Start</b></td><td><code class="inline">start()</code> in timer-context.tsx sets <code class="inline">timerStartedAtRef = Date.now()</code>, begins the JS interval, requests a wake lock, shows a notification, and (Android) calls <code class="inline">startForegroundService()</code>.</td></tr>
+<tr><td><b>Pause</b></td><td>Clears the interval, releases the wake lock, hides notifications, and (Android) calls <code class="inline">pauseForegroundService()</code>. State is persisted immediately.</td></tr>
+<tr><td><b>Resume</b></td><td>Same as Start, but re-anchors <code class="inline">timerStartedAtRef</code> to <code class="inline">Date.now() - secondsAlreadyElapsed</code> so the countdown continues from where it left off.</td></tr>
+<tr><td><b>Reset</b></td><td>Fully clears all timer refs/state and persisted storage; stops the Android service.</td></tr>
+<tr><td><b>App → Background (normal, e.g. switching apps briefly)</b></td><td>The JS interval is cleared and the wake lock released (to save battery/comply with OS rules), <i>but</i> the wall-clock anchor and persisted state remain intact. When the app returns to foreground, elapsed time is recomputed from the wall clock — <b>this looks and behaves like the timer kept running</b> in terms of elapsed time, matching the intended rule that ordinary backgrounding must not lose progress.</td></tr>
+<tr><td><b>App → Foreground</b></td><td>(Android) <code class="inline">reconcileNativeLoops()</code> runs first — replays any malas the Kotlin service completed while JS was asleep. Then, if nothing is running yet, <code class="inline">restoreRunningTimerFromStorage()</code> recomputes elapsed time from the wall clock and resumes the JS ticker.</td></tr>
+<tr><td><b>App killed (force-close / OS reclaims memory) then relaunched</b></td><td>This is the one case that does <i>not</i> auto-resume. <code class="inline">computeColdStartRestoreDecision()</code> freezes the timer at the <i>last periodically-saved snapshot</i> (never recomputed from wall-clock dead-time) and shows it as <b>paused</b>, requiring an explicit tap on Resume. This is deliberate — auto-resuming would silently credit/debit the user for however long the app was actually dead.</td></tr>
+<tr><td><b>Mala completion</b></td><td><code class="inline">completeCycle()</code>/<code class="inline">claimCompletionLoop()</code> fire feedback (sound/haptics) and <code class="inline">saveSession()</code> (writes history), then either starts the next mala or fully stops if this was the final one.</td></tr>
+</table>
+<div class="callout warn"><b>The one rule that matters most:</b> normal backgrounding (switching apps, screen lock) must <i>never</i> lose progress; only a genuine kill/interruption freezes it, and even then it must never silently auto-resume or auto-complete.</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s11">
+<h2><span class="num">11</span> Android foreground service</h2>
+<h4>What it does</h4>
+<p>A "foreground service" is Android's way of letting an app keep running a task with a visible, persistent notification even when the app itself is in the background. This app uses one to keep the Timer running and completing malas even if the JavaScript engine is fully frozen (which Android does aggressively to save battery).</p>
+<h4>Important files</h4>
+<ul class="compact">
+<li><span class="filekw">android-native/JapamTimerService.kt</span> (~523 lines) — the actual Kotlin service</li>
+<li><span class="filekw">android-native/JapamTimerModule.kt</span> (~169 lines) — exposes JS-callable methods (the "bridge")</li>
+<li><span class="filekw">android-native/JapamTimerPackage.kt</span> — registers the module with React Native</li>
+<li><span class="filekw">plugins/withJapamTimerService.js</span> — an Expo config plugin that copies these files into the native Android project during <code class="inline">expo prebuild</code>, and declares the service + permissions in <code class="inline">AndroidManifest.xml</code></li>
+<li><span class="filekw">lib/timerForegroundService.android.ts</span> — the JS side of the bridge</li>
+</ul>
+<h4>How it works</h4>
+<ul class="compact">
+<li>Started via <code class="inline">startForegroundService()</code>/<code class="inline">startForeground()</code> with type <code class="inline">FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK</code> (required on Android 14+, or the OS kills the service with a <code class="inline">SecurityException</code>).</li>
+<li>A repeating <code class="inline">tickRunnable</code> checks every second using wall-clock math (<code class="inline">durationMs - (now - startedAt)</code>) — not a JS timer.</li>
+<li>Shows a notification with the current "Mala X / Y" and a live countdown, with Pause/Resume/Stop buttons.</li>
+<li>On mala completion (<code class="inline">handleLoopComplete</code>): if the app is currently in the foreground (checked via a SharedPreferences flag), it deliberately does <b>nothing</b> and lets JS handle the completion — avoiding double-counting. Only if the app is backgrounded does it increment the loop count itself, play the sound, vibrate, and post a completion notification.</li>
+<li>Persists its own state into Android <code class="inline">SharedPreferences</code> (a Kotlin-side key-value store, separate from the app's AsyncStorage) so JS can read it back via <code class="inline">getState()</code>.</li>
+</ul>
+<h4>JS ↔ Kotlin bridge methods</h4>
+<table>
+<tr><th>JS call (lib/timerForegroundService.android.ts)</th><th>What it does natively</th></tr>
+<tr><td><code class="inline">startForegroundService(params)</code></td><td>Calls <code class="inline">Native.startTimer(sessionId, durationSeconds, completedLoops, totalLoops, soundEnabled, vibrationEnabled, userId, startedAt)</code></td></tr>
+<tr><td><code class="inline">pauseForegroundService()</code></td><td><code class="inline">Native.pauseTimer()</code></td></tr>
+<tr><td><code class="inline">resumeForegroundService()</code></td><td><code class="inline">Native.resumeTimer()</code></td></tr>
+<tr><td><code class="inline">stopForegroundService()</code></td><td><code class="inline">Native.stopTimer()</code></td></tr>
+<tr><td><code class="inline">setNativeAppActive(bool)</code></td><td><code class="inline">Native.setAppActive(isActive)</code> — tells Kotlin whether JS is in the foreground</td></tr>
+<tr><td><code class="inline">getNativeTimerState()</code></td><td><code class="inline">Native.getState()</code> — returns the native side's current snapshot</td></tr>
+<tr><td><code class="inline">isForegroundServiceRunning()</code></td><td><code class="inline">Native.isServiceRunning()</code></td></tr>
+</table>
+<p>Events flow back to JS via a single event: <code class="inline">DeviceEventEmitter</code> listens for <code class="inline">'japamTimerLoopComplete'</code>, emitted by the Kotlin module when a mala completes while the app was backgrounded.</p>
+<h4>Common failure cases</h4>
+<p>The completion sound can take up to ~6 seconds to finish playing on the native side; a past bug treated "sound still playing" as "timer still running," leaving a stale in-progress display after all loops were actually done. See §42.</p>
+<div class="callout danger"><b>Don't change casually:</b> this file must stay in sync with <code class="inline">AndroidManifest.xml</code> permissions (<code class="inline">FOREGROUND_SERVICE_MEDIA_PLAYBACK</code>) declared in <code class="inline">app.json</code>. Removing/renaming a bridge method without updating both the Kotlin and TypeScript sides will crash silently on Android only (won't show up in web/iOS testing).</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s12">
+<h2><span class="num">12</span> Tap Japam architecture</h2>
+<h4>What it does</h4>
+<p>User taps a big circle once per repetition; the app counts up and automatically completes a "mala" every 108 taps.</p>
+<h4>Why it exists</h4>
+<p>Some practitioners prefer counting by touch rather than a timer — this mirrors using a physical mala bead-by-bead.</p>
+<h4>Important files</h4>
+<p><span class="filekw">app/(tabs)/tap-japam.tsx</span> (~3570 lines, component internally named <code class="inline">JapamMain</code>) and <span class="filekw">lib/malaCompletion.ts</span> (the pure crossing-detection logic it shares with other screens).</p>
+<h4>Data flow (button tap → database → screen refresh)</h4>
+<pre class="ascii">
+User taps the circle
+   │
+   ▼ handleTap()  (tap-japam.tsx)
+   Optimistic local counter update — the number on screen changes INSTANTLY, no waiting
+   │
+   ▼ detectMalaCrossing(previousTotal, nextTotal)   (lib/malaCompletion.ts)
+   A "crossing" check (floor-division), NOT an exact-multiple check — this matters: it catches
+   a mala boundary even if a duplicate/missed tap event jumps the total past 108 without landing
+   exactly on it.
+   │
+   ├─ no boundary crossed → just a small tap animation/haptic, done
+   │
+   └─ boundary crossed → runMalaCompletion({ guard, save, playFeedback })
+         The "guard" is checked+marked SYNCHRONOUSLY before anything async starts, so a duplicate/
+         concurrent call for the same boundary is rejected immediately — no race condition.
+         │
+         ├─ save(): appendCompletion() → AsyncStorage['history'] write (the local "truth")
+         │     → fires events so History/Stats screens refresh WITHOUT any network round trip
+         │
+         └─ playFeedback(): Om sound + haptics, runs in parallel — a failure here never blocks
+               the save, and vice versa (Promise.allSettled)
+   │
+   ▼ (separate, "fire and forget" — not awaited by the UI)
+   POST to Supabase japam_history — only if a login session exists; otherwise the record just
+   stays "pending" and uploads later. See §15.
+</pre>
+<h4>Important functions</h4>
+<table>
+<tr><th>Function</th><th>Where</th><th>Purpose</th></tr>
+<tr><td><code class="inline">detectMalaCrossing()</code></td><td>lib/malaCompletion.ts</td><td>Pure floor-division boundary check</td></tr>
+<tr><td><code class="inline">createMalaCompletionGuard()</code></td><td>lib/malaCompletion.ts</td><td>Tracks the highest completed boundary per screen session, prevents double-completion</td></tr>
+<tr><td><code class="inline">runMalaCompletion()</code></td><td>lib/malaCompletion.ts</td><td>Runs save + feedback together, guaranteeing neither blocks the other</td></tr>
+</table>
+<h4>Common failure cases</h4>
+<p>Rapid/duplicate taps landing exactly on or near a 108 boundary — this is precisely what the crossing-based (not exact-equality) detection was built to survive. See <code class="inline">lib/__tests__/malaCompletion.test.ts</code>'s "rapid taps cannot skip completion" test.</p>
+<h4>How to test</h4>
+<p><code class="inline">npm run test:tap-japam</code> (runs <code class="inline">lib/__tests__/malaCompletion.test.ts</code>).</p>
+<div class="callout warn"><b>Known duplication:</b> <code class="inline">app/(tabs)/index.tsx</code> (the hidden legacy Home screen) contains a near-complete second copy of this same tap-counting + auth logic. See §5 and §43.</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s13">
+<h2><span class="num">13</span> Manual Japam flow</h2>
+<h4>What it does</h4>
+<p>Lets a signed-in user record japam completed <i>without</i> the app (e.g. using a physical mala, or forgotten to track earlier).</p>
+<h4>Why it exists</h4>
+<p>So History and stats stay accurate even for practice done outside the app.</p>
+<h4>Important files</h4>
+<p><span class="filekw">app/(tabs)/manual.tsx</span> (~494 lines).</p>
+<h4>Data flow, step by step</h4>
+<ol>
+<li><b>Login check</b> (manual.tsx:192-209) — guests are blocked entirely with an alert routing to sign-in; unlike History's own "Add" modal, which allows guests.</li>
+<li><b>Date validation</b> (manual.tsx:211-230) — rejects malformed or impossible dates (e.g. Feb 30) and future dates.</li>
+<li><b>Malas/Total derivation</b> (manual.tsx:243-258) — you can type either "malas" or "total count"; the other is derived (1 mala = 108 count).</li>
+<li><b>Local save</b> (manual.tsx:260-290) via <code class="inline">appendCompletion()</code> — writes to <code class="inline">AsyncStorage['history']</code> first. A failure here <i>is</i> shown to the user via an alert.</li>
+<li><b>Event emission</b> (manual.tsx:294-299) — <code class="inline">DeviceEventEmitter.emit('japam-stats-updated'/'japam-history-updated')</code> so History/Home update immediately.</li>
+<li><b>Background Supabase sync</b> (manual.tsx:302-311, <code class="inline">syncManualEntryToSupabase</code>) — fire-and-forget; failures here are <i>not</i> shown to the user (they already saw "Saved").</li>
+<li><b>Confirmation</b> (manual.tsx:313) — an "Saved" alert appears regardless of whether the background sync ultimately succeeds.</li>
+</ol>
+<div class="callout warn"><b>Common failure case:</b> the user always sees "Saved" even if the Supabase upload later fails — the record simply stays <code class="inline">pending</code> and retries on the next sync opportunity (app foreground/launch/reconnect). This is intentional (offline-first) but means a manual entry can silently sit un-synced for a while with no visible indicator.</div>
+<h4>Local storage / Supabase involved</h4>
+<p>Same <code class="inline">history</code> AsyncStorage key and <code class="inline">japam_history</code> Supabase table as every other completion path — see §15-§17.</p>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s14">
+<h2><span class="num">14</span> History: add, edit, delete, restore, and reconciliation</h2>
+<h4>Important files</h4>
+<p><span class="filekw">app/(tabs)/history.tsx</span> (~2030 lines), <span class="filekw">lib/historyStore.ts</span>, <span class="filekw">lib/historyRepository.ts</span>.</p>
+<h4>Every action on the History screen</h4>
+<table>
+<tr><th>Action</th><th>Handler</th><th>Talks to Supabase?</th><th>Error shown to user?</th></tr>
+<tr><td>View history</td><td><code class="inline">loadHistory()</code> (:848-963)</td><td>Yes — merges local + a direct fetch of <code class="inline">japam_history</code></td><td>No — fetch failures just fall back to local-only, logged only</td></tr>
+<tr><td>Add Japam Count (manual, from History screen)</td><td><code class="inline">saveAddJapam()</code> (:737-847)</td><td>Yes, if signed in</td><td>Yes — validation errors and "saved locally only" both show an alert</td></tr>
+<tr><td>Edit a day's total</td><td><code class="inline">saveEditJapam()</code> (:1061-1174)</td><td>Yes, if signed in</td><td>Yes — several specific outcomes (blocked by permissions / inconclusive / not saved) each show a distinct alert</td></tr>
+<tr><td>Delete a day</td><td><code class="inline">performDelete()</code> (:968-1042)</td><td>Yes — calls the <code class="inline">delete_history_completions</code> RPC</td><td><b>No</b> — remote delete failures are logged only, never shown to the user</td></tr>
+<tr><td>Restore/undo a delete</td><td><b>Does not exist.</b> No undo feature was found anywhere in this file.</td><td>—</td><td>—</td></tr>
+<tr><td>Export CSV</td><td><code class="inline">exportHistory()</code> (:1211-1269)</td><td>No — reads only in-memory data</td><td>Yes — empty history / export failure / sharing unavailable all show an alert</td></tr>
+</table>
+<h4>How editing a day's total is reconciled against individual records</h4>
+<p>Handled by the pure function <code class="inline">planHistoryDayAdjustment()</code> in <span class="filekw">lib/historyStore.ts</span> (:298-396):</p>
+<ul class="compact">
+<li><b>Decreasing</b> a day's total walks that day's records <i>newest-first</i>, reducing or fully zeroing them until the reduction target is met. Records reduced to zero are deleted; partially-reduced ones are updated. Earliest records are preserved longest.</li>
+<li><b>Increasing</b> a day's total only bumps the <i>single earliest</i> record of that day — it never splits the increase across records or invents a new one.</li>
+<li>Editing a day down to exactly 0 malas is routed to the delete flow instead of an edit.</li>
+</ul>
+<h4>CSV export details</h4>
+<p>Exports 4 columns: <code class="inline">Date, Malas, Count, Accumulated</code>. On web it builds a Blob and triggers a download link; on native it uses <code class="inline">expo-file-system</code> to write the file and <code class="inline">expo-sharing</code> to open the share sheet.</p>
+<h4>Common failure cases</h4>
+<ul class="compact">
+<li>A delete's Supabase RPC call can fail (offline, expired session) with <b>no visible error</b> — the row is already gone from the screen locally, relying entirely on the tombstone system (§18) to keep things consistent later.</li>
+<li>A known, documented, currently <b>open</b> bug: <code class="inline">testing/incidents/known-incidents.json</code>'s <code class="inline">pgrst100-history-fetch</code> entry — a malformed remote fetch can, in a rare dual-fetch legacy-ID path, silently report success with fewer rows than actually exist remotely.</li>
+</ul>
+<h4>How to test</h4>
+<p><code class="inline">npm run test:history</code> (runs <code class="inline">lib/__tests__/historyStore.test.ts</code> and <code class="inline">legacyHistoryBackfill.test.ts</code>).</p>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s15">
+<h2><span class="num">15</span> Offline-first architecture</h2>
+<h4>What it does</h4>
+<p>Every user action is saved to the phone <i>first</i>, instantly, and works fully offline. Uploading to Supabase happens separately, in the background, whenever possible.</p>
+<h4>Why it exists</h4>
+<p>Chanting practice often happens without reliable internet (early morning, temples, travel) — the app must never lose a completed mala just because the network is down.</p>
+<h4>The full end-to-end flow (this is the single most important diagram in this guide)</h4>
+<div class="flow">
+<span class="step">1. User action<br><small>(tap, timer completes, manual save)</small></span><span class="arrow">→</span>
+<span class="step">2. React screen<br><small>calls a handler</small></span><span class="arrow">→</span>
+<span class="step">3. Context / business logic<br><small>lib/*.ts pure functions</small></span><span class="arrow">→</span>
+<span class="step">4. AsyncStorage local save<br><small>syncStatus: 'pending'</small></span><span class="arrow">→</span>
+<span class="step">5. UI refresh<br><small>via DeviceEventEmitter — INSTANT</small></span>
+</div>
+<div class="flow">
+<span class="step">6. Pending sync queue<br><small>getPending(history)</small></span><span class="arrow">→</span>
+<span class="step">7. POST to Supabase<br><small>on_conflict=completion_id</small></span><span class="arrow">→</span>
+<span class="step">8. markSynced()<br><small>syncStatus: 'synced'</small></span><span class="arrow">→</span>
+<span class="step">9. Local reconciliation<br><small>merge remote + local on next load</small></span>
+</div>
+<div class="callout tip"><b>Key mental model:</b> Supabase is a background replication target, <i>not</i> the thing the screen reads from on every action. The UI's instant feel comes entirely from the local write + event emission in steps 4-5; the network call (steps 6-9) is fully decoupled and can fail silently by design, retried later.</div>
+<h4>Important files</h4>
+<p><span class="filekw">lib/historyStore.ts</span> (pure logic: <code class="inline">appendCompletion</code>, <code class="inline">dedupeByCompletionId</code>, <code class="inline">mergeHistories</code>, stats selectors) and <span class="filekw">lib/historyRepository.ts</span> (the AsyncStorage read/write layer).</p>
+<div class="callout warn"><b>Known inconsistency:</b> the <i>read</i> path is centralized in <code class="inline">lib/historyRepository.ts</code>, but the <i>upload</i> path is not — the same "build payload → POST with on_conflict → require a login session else stay pending" logic is independently re-implemented in at least six places: <code class="inline">contexts/timer-context.tsx</code> (twice), <code class="inline">app/(tabs)/index.tsx</code>, <code class="inline">tap-japam.tsx</code>, <code class="inline">manual.tsx</code>, and <code class="inline">history.tsx</code> (twice more). See §43.</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s16">
+<h2><span class="num">16</span> Pending sync queue</h2>
+<h4>What it does</h4>
+<p>Every history record has a <code class="inline">syncStatus</code> field: <code class="inline">'pending'</code> (saved locally, not yet confirmed on Supabase) or <code class="inline">'synced'</code>. <code class="inline">getPending(history)</code> in <span class="filekw">lib/historyStore.ts</span> selects exactly the records that still need uploading.</p>
+<h4>When does sync actually run?</h4>
+<ul class="compact">
+<li>Whenever <code class="inline">TimerProvider</code> mounts (app launch).</li>
+<li>Whenever the app returns to the foreground (<code class="inline">AppState</code> → active).</li>
+<li>Whenever the browser fires an <code class="inline">'online'</code> event (web only).</li>
+<li>Immediately after a user signs in (guest → Google migration records get flushed right away).</li>
+</ul>
+<h4>Important functions</h4>
+<p><code class="inline">syncPendingHistory()</code> in <span class="filekw">contexts/timer-context.tsx</span> is the main sync loop. It has a concurrency guard (<code class="inline">syncInFlightRef</code>) — only one sync runs at a time, so overlapping triggers can't upload the same record twice.</p>
+<h4>Common failure cases</h4>
+<p>A known, currently <b>open</b> documented gap: <code class="inline">auth-token-missing</code> in <code class="inline">testing/incidents/known-incidents.json</code> — an upload attempted with an expired session can fail silently, leaving a record pending forever with no visible error to the user.</p>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s17">
+<h2><span class="num">17</span> Completion IDs and duplicate prevention</h2>
+<h4>What it does</h4>
+<p>Every history record gets a <code class="inline">completionId</code> — a stable, deterministic string, not a random one. It is the single most important idea protecting this app from double-counting.</p>
+<h4>How it's built</h4>
+<ul class="compact">
+<li><code class="inline">makeCompletionId(userId, dateISO)</code> — for manual/history-screen entries.</li>
+<li><code class="inline">makeLoopCompletionId(userId, sessionId, loopNumber)</code> — for Timer completions, one per mala within a session.</li>
+</ul>
+<p>Because it's computed from stable inputs (not "the time I happened to save"), re-processing the <i>same</i> loop after a crash or restart recomputes the exact same id and collapses onto the same record instead of creating a duplicate.</p>
+<h4>Where it's enforced</h4>
+<table>
+<tr><th>Layer</th><th>Mechanism</th></tr>
+<tr><td>Client, on save</td><td><code class="inline">appendCompletion()</code> skips appending if a record with that <code class="inline">completionId</code> already exists</td></tr>
+<tr><td>Client, on merge</td><td><code class="inline">dedupeByCompletionId()</code> collapses any duplicate to exactly one record</td></tr>
+<tr><td>Server (Supabase)</td><td><code class="inline">japam_history.completion_id</code> has a UNIQUE index; uploads use <code class="inline">on_conflict=completion_id</code> with <code class="inline">resolution=merge-duplicates</code>, making a re-upload a safe no-op</td></tr>
+</table>
+<div class="callout tip"><b>Real bug this fixed:</b> this exact mechanism was built in response to a real production incident (duplicated malas inflating a user's stats after a process restart) — see §42, <code class="inline">docs/BUGFIX_DUPLICATE_COMPLETION_ID.md</code>.</div>
+<h4>How to test</h4>
+<p><code class="inline">lib/__tests__/historyStore.test.ts</code>'s "bug reproduction: process-restart duplicate save collapses to one record" test is the direct regression guard.</p>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s18">
+<h2><span class="num">18</span> Tombstones and deletion sync</h2>
+<h4>What it does</h4>
+<p>A "tombstone" is a record that says "this completion was deleted" — kept <i>separately</i> from the history data itself, so deletion can sync across devices without the deleted item ever quietly reappearing.</p>
+<h4>Why it exists</h4>
+<p>If deletion just meant "not in my local list," a device that was offline during the delete would re-download the "deleted" row from Supabase and resurrect it. A tombstone is checked and applied on every merge, so a deleted record stays deleted everywhere.</p>
+<h4>How it works</h4>
+<pre class="ascii">
+1. Local delete:
+   AsyncStorage['deletedCompletions'] ← add completionId   (written BEFORE removing the row itself,
+                                                              so a same-tick remote refresh can't
+                                                              resurrect it)
+   AsyncStorage['history']            ← row removed
+
+2. Remote delete (single atomic call):
+   supabase.rpc('delete_history_completions', { p_completion_ids })
+      → one Postgres transaction that BOTH inserts into deleted_completions
+        AND deletes the matching japam_history row(s)
+
+3. Every future merge:
+   mergeTombstones(local, remote)  → union of both tombstone lists
+   applyTombstones(records, set)   → filters OUT any record whose id is tombstoned
+</pre>
+<div class="callout danger"><b>Past bug this fixed:</b> before this RPC existed, the tombstone-write and row-delete were two <i>separate</i> network calls. An interruption between them left a "zombie" row — tombstoned but still physically present in the database, which could inflate anything that directly sums <code class="inline">japam_history</code> (like the Groups dashboard). See <code class="inline">db/atomic_delete_history_rpc.sql</code> and §42.</div>
+<div class="callout warn"><b>Still-open related bug:</b> per <code class="inline">testing/incidents/known-incidents.json</code>'s <code class="inline">group-dashboard-tombstone-mismatch</code> entry — the <code class="inline">get_group_dashboard</code> RPC does <b>not</b> currently filter out tombstoned rows from its totals, despite a migration file claiming it does. This is a documented, currently open discrepancy, not something I'm speculating about.</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s19">
+<h2><span class="num">19</span> AsyncStorage keys and what each one stores</h2>
+<table>
+<tr><th>Key</th><th>Stores</th></tr>
+<tr><td><code class="inline">history</code></td><td>The full local array of completion records (the core "local database")</td></tr>
+<tr><td><code class="inline">deletedCompletions</code></td><td>Tombstone list of deleted completion IDs</td></tr>
+<tr><td><code class="inline">userId</code></td><td>Current identity — a Supabase UUID, or a legacy numeric Google id, or empty for guests</td></tr>
+<tr><td><code class="inline">userName</code> / <code class="inline">userEmail</code></td><td>Cached display name/email, used as fallbacks when writing a completion's <code class="inline">user_name</code></td></tr>
+<tr><td><code class="inline">isAnonymousUser</code></td><td>Whether the current session is an anonymous (guest) Supabase user</td></tr>
+<tr><td><code class="inline">legacyUserId</code></td><td>Temporary bridge: the pre-repair numeric id, kept until a one-time DB migration confirms clean</td></tr>
+<tr><td><code class="inline">timerSeconds / timerRunning / timerTarget / timerPaused / timerCompletedLoops / timerStartedAt / timerSessionId</code></td><td>Timer's periodically-saved snapshot, used only for cold-start restore</td></tr>
+<tr><td><code class="inline">timerTab_duration / timerTab_loops</code></td><td>User's selected duration/loop-count preference</td></tr>
+<tr><td><code class="inline">soundEnabled / vibrationEnabled</code></td><td>User preference toggles</td></tr>
+<tr><td><code class="inline">userJapams:&lt;userId or "guest"&gt;</code></td><td>This identity's list of workspaces (Japams)</td></tr>
+<tr><td><code class="inline">currentJapamId:&lt;userId or "guest"&gt;</code></td><td>Which workspace is currently selected</td></tr>
+<tr><td><code class="inline">authPending</code></td><td>Marks an in-flight web OAuth redirect, so a returning callback can be matched up</td></tr>
+</table>
+<div class="callout tip">Many of these keys are also stored per-user, suffixed like <code class="inline">timerSeconds:abcd-1234</code> — this lets multiple accounts share one device without mixing up each other's timer state.</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s20">
+<h2><span class="num">20</span> Authentication</h2>
+<h4>What it does</h4>
+<p>Lets a user practice as a Guest, or sign in with Google, so their history follows them across devices.</p>
+<h4>Important files</h4>
+<p><span class="filekw">lib/anonymousAuth.ts</span>, <span class="filekw">lib/supabase.ts</span>, plus large inline auth blocks in <span class="filekw">app/(tabs)/index.tsx</span> and <span class="filekw">tap-japam.tsx</span>.</p>
+<h4>The full flow</h4>
+<pre class="ascii">
+First launch → no userId, no userName saved yet
+   │
+   ├─ "Continue as Guest" → lib/anonymousAuth.ts's signInAsGuest()
+   │     → supabase.auth.signInAnonymously() → a REAL Supabase anonymous user is created
+   │     → USER_ID_KEY = that anonymous user's UUID
+   │     (falls back to today's "no-userId" guest behavior if this fails or is offline)
+   │
+   └─ Google Sign-In (native SDK on Android/iOS, OAuth redirect on web)
+         → obtain a Google idToken
+         → EITHER supabase.auth.signInWithIdToken()   (fresh sign-in)
+              OR   supabase.auth.linkIdentity()         (upgrade an existing anonymous session —
+                                                          if that Google account is already linked
+                                                          elsewhere, the user is asked to explicitly
+                                                          confirm switching into that account)
+         → USER_ID_KEY = the Supabase UUID
+         → any local history with no userId gets tagged to this uid and marked 'pending' to upload
+         → DeviceEventEmitter.emit('japam-auth-updated')
+</pre>
+<h4>A legacy wrinkle worth knowing</h4>
+<p>Some accounts predate Supabase Auth and still carry a raw numeric Google ID instead of a UUID as their stored identity. <code class="inline">repairLegacyStoredUserId()</code>, run once on every app boot, silently upgrades this when a valid session proves the correct UUID, keeping the old value under <code class="inline">legacyUserId</code> as a safety bridge.</p>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s21">
+<h2><span class="num">21</span> Anonymous user flow ("Guest Mode")</h2>
+<h4>What it does</h4>
+<p>Lets someone use the whole app — Timer, Tap Japam, History — without creating any account.</p>
+<h4>Two different kinds of "guest" exist in this codebase — worth being precise about</h4>
+<table>
+<tr><th>Kind</th><th>What it means</th></tr>
+<tr><td>Old-style guest (no <code class="inline">userId</code> at all)</td><td>Only a <code class="inline">userName</code> is saved. History is marked <code class="inline">synced</code> immediately (there's nothing to upload to) and never leaves the device.</td></tr>
+<tr><td>Supabase Anonymous Auth user</td><td>A real Supabase account exists (<code class="inline">is_anonymous: true</code>), with a real UUID. This is the modern, recommended path via <code class="inline">signInAsGuest()</code> and can later be upgraded to a full Google account via <code class="inline">linkIdentity()</code> without losing data.</td></tr>
+</table>
+<div class="callout warn"><b>Current UI state:</b> a code comment in <code class="inline">app/(tabs)/index.tsx</code> notes "Guest Mode is temporarily hidden — Google Sign-In is the only entry point for now," while none of the underlying guest/anonymous code was removed. So the Continue-as-Guest button may not currently be visible in the app even though the feature still exists in code.</div>
+<h4>How to test</h4>
+<p><code class="inline">npm run test:auth</code> runs <code class="inline">lib/__tests__/anonymousAuth.test.ts</code>, including a "truth table" for <code class="inline">shouldSkipRemoteSync</code> (guest vs. anonymous vs. real account).</p>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s22">
+<h2><span class="num">22</span> Google sign-in on Android and web</h2>
+<table>
+<tr><th>Platform</th><th>Mechanism</th><th>Key files/calls</th></tr>
+<tr><td>Android (and iOS)</td><td>Native SDK: <code class="inline">@react-native-google-signin/google-signin</code>. <code class="inline">GoogleSignin.configure()</code> then <code class="inline">GoogleSignin.signIn()</code> returns a Google idToken directly.</td><td><code class="inline">handleNativeGoogleSignIn()</code> in index.tsx/tap-japam.tsx</td></tr>
+<tr><td>Web</td><td>OAuth redirect flow via <code class="inline">expo-auth-session</code>: <code class="inline">promptAsync()</code> opens a Google login popup/redirect, the app receives an <code class="inline">id_token</code>/<code class="inline">access_token</code> back in the redirect response.</td><td><code class="inline">handleGoogleLogin()</code> effect watching the <code class="inline">response</code> from <code class="inline">useAuthRequest</code></td></tr>
+</table>
+<p>Both paths converge on the same next step: exchange the Google idToken for a Supabase session via <code class="inline">supabase.auth.signInWithIdToken({ provider: 'google', token: idToken })</code> (or <code class="inline">linkIdentity</code> if upgrading from anonymous).</p>
+<div class="callout danger"><b>Pre-build requirement:</b> per <code class="inline">STABILITY_AUDIT.md</code>, native Android Google Sign-In requires the app's package name and release-signing SHA-1 fingerprint to be registered in Google Cloud Console <i>before</i> a production build — otherwise sign-in fails with "app not authorized." See <code class="inline">ANDROID_GOOGLE_SIGNIN_SETUP.md</code>.</div>
+<div class="callout warn"><b>Known duplication:</b> per <code class="inline">docs/GUEST_TO_ANON_AUTH_MIGRATION.md</code>, this exact sign-in logic (<code class="inline">handleNativeGoogleSignIn</code>, <code class="inline">handleGoogleLogin</code>, guest-migration) is independently written <b>three separate times</b> across <code class="inline">index.tsx</code>, <code class="inline">tap-japam.tsx</code>, and <code class="inline">timer.tsx</code> — explicitly called out in that doc as "the primary migration risk." Any future change to sign-in must currently be made in three places.</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s23">
+<h2><span class="num">23</span> Session JWT versus anon key</h2>
+<p>Supabase gives every request one of two kinds of credential:</p>
+<table>
+<tr><th>Credential</th><th>What it proves</th><th>Used for</th></tr>
+<tr><td><b>Anon key</b> (<code class="inline">EXPO_PUBLIC_SUPABASE_ANON_KEY</code>)</td><td>"This request comes from our app" — nothing about <i>who</i> the user is</td><td>The base <code class="inline">apikey</code> header on every request; by itself only allowed to do whatever the <code class="inline">anon</code> database role's RLS policies permit</td></tr>
+<tr><td><b>Session JWT</b> (<code class="inline">Authorization: Bearer &lt;token&gt;</code>)</td><td>"This request comes from user X, who is currently signed in" (or anonymously authenticated)</td><td>Required for any write that must be scoped to "my own rows" — the database checks <code class="inline">auth.uid()</code> against this token</td></tr>
+</table>
+<p>Throughout the sync code (history uploads, tombstone pushes, manual entry sync), you'll see a consistent pattern: <code class="inline">const sessionToken = (await supabase.auth.getSession()).data.session?.access_token; if (!sessionToken) return;</code> — the request is skipped and left "pending" rather than falling back to the anon key, because the anon key has no per-user write permission once RLS is properly scoped.</p>
+<div class="callout danger"><b>Currently open, documented security finding:</b> <code class="inline">testing/incidents/known-incidents.json</code>'s <code class="inline">history-rls-anon-open-access</code> entry states that on the current production policies, the <code class="inline">anon</code> role can in fact <code class="inline">SELECT</code>/<code class="inline">INSERT</code> <b>any</b> user's <code class="inline">japam_history</code> rows — policy names literally contain the word "test," suggesting temporary rules that were never removed. This is marked <span class="badge danger">CRITICAL, CONFIRMED, OPEN</span> in that file. See §26 and §44.</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s24">
+<h2><span class="num">24</span> Supabase client architecture</h2>
+<p><span class="filekw">lib/supabase.ts</span> creates a single, shared <code class="inline">supabase-js</code> client:</p>
+<pre class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button>export const supabase = createClient(
+  process.env.EXPO_PUBLIC_SUPABASE_URL!,
+  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!,
+  { auth: { storage: AsyncStorage, autoRefreshToken: true, persistSession: true } }
+);</pre>
+<div class="callout warn"><b>Documented gap:</b> per <code class="inline">testing/incidents/known-incidents.json</code>'s <code class="inline">supabase-config-guard-missing</code> entry, this file has <b>no defensive guard</b> for missing environment variables — if the URL/key were ever undefined at build time, <code class="inline">createClient(undefined, undefined, ...)</code> would run unconditionally rather than failing in a clean, detectable way. A test file (<code class="inline">lib/__tests__/supabase.test.ts</code>) already expects an <code class="inline">isSupabaseConfigured</code> guard that does not yet exist in the source — this test is deliberately left red to track the gap.</div>
+<h4>The bigger architectural fact</h4>
+<p>Most business logic does <b>not</b> use <code class="inline">supabase-js</code>'s query builder. It calls the underlying PostgREST HTTP API directly with hand-built <code class="inline">fetch()</code> calls (seen throughout <code class="inline">timer-context.tsx</code>, <code class="inline">history.tsx</code>, <code class="inline">manual.tsx</code>, etc.), to get precise control over headers like <code class="inline">Prefer: resolution=merge-duplicates</code> and to explicitly choose between the anon key and a session token per request. <code class="inline">supabase-js</code> itself is mainly used for <code class="inline">auth.*</code> calls, and for <code class="inline">.rpc()</code>/<code class="inline">.from()</code> calls in <span class="filekw">lib/groupsRepository.ts</span>.</p>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s25">
+<h2><span class="num">25</span> Database tables and relationships</h2>
+<pre class="ascii">
+groups ──1:N── group_members     (the ONLY foreign key in the whole schema:
+                    │              group_members.group_id → groups.id, ON DELETE CASCADE)
+                    │ (joined only by a plain user_id TEXT column — no `users` table exists;
+                    │  identity comes entirely from Supabase Auth, checked at the RLS/RPC layer)
+                    ▼
+              japam_history  ◄── deleted_completions   (tombstones, matched by completion_id)
+                    │
+      ┌─────────────┼──────────────────┬─────────────────┐
+japam_user_totals  japam_timer_state  user_profiles   user_email_summaries
+(lifetime cache)   (per-user)         (display name)   (email digest tracking)
+
+feedback  (standalone table, no relations)
+</pre>
+<table>
+<tr><th>Table</th><th>Purpose</th></tr>
+<tr><td><code class="inline">japam_history</code></td><td>The core completion log — every mala ever recorded. Columns include <code class="inline">user_id</code> (text), <code class="inline">malas</code>, <code class="inline">count</code>, <code class="inline">completion_id</code> (unique), <code class="inline">created_at</code>.</td></tr>
+<tr><td><code class="inline">deleted_completions</code></td><td>Tombstones — <code class="inline">completion_id</code> (primary key), <code class="inline">user_id</code>, <code class="inline">deleted_at</code>.</td></tr>
+<tr><td><code class="inline">groups</code></td><td>A shared group — <code class="inline">id</code>, <code class="inline">name</code>, <code class="inline">invite_code</code> (unique), <code class="inline">created_by</code>, <code class="inline">is_active</code>.</td></tr>
+<tr><td><code class="inline">group_members</code></td><td>Join table — <code class="inline">group_id</code>, <code class="inline">user_id</code>, <code class="inline">role</code> ('admin'/'member'), unique on (group_id, user_id).</td></tr>
+<tr><td><code class="inline">japam_timer_state</code></td><td>One row per user — persisted paused-timer state for cross-device resume.</td></tr>
+<tr><td><code class="inline">japam_user_totals</code></td><td>One row per user — a cached lifetime total (avoids re-summing all of history every time).</td></tr>
+<tr><td><code class="inline">user_profiles</code></td><td>One row per user — <code class="inline">japam_name</code> (the custom name of their practice, NOT their personal display name).</td></tr>
+<tr><td><code class="inline">user_email_summaries</code></td><td>Tracks outbound periodic summary emails sent (one row per user/type/period).</td></tr>
+<tr><td><code class="inline">feedback</code></td><td>User-submitted feedback messages.</td></tr>
+</table>
+<div class="callout tip"><b>The single most important fact for your mental model:</b> there is <b>no <code class="inline">japams</code> table</b>. "My Japams" (workspaces) exist only on-device in AsyncStorage — never synced to Supabase. This is confirmed directly in <code class="inline">lib/japamsStorage.ts</code>'s own header comment. See §30.</div>
+<div class="callout warn"><b>Migration remnants:</b> <code class="inline">schema.sql</code> (looks like the current production dump) still contains several backup tables like <code class="inline">groups_backup_pre_uuid_migration</code> and <code class="inline">japam_history_zombie_backup</code> — evidence of a past identity-system migration and a past "zombie row" cleanup. <code class="inline">schema_staging.sql</code> no longer has these, and has tighter RLS on <code class="inline">japam_history</code> — see §35.</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s26">
+<h2><span class="num">26</span> RLS policies and why they matter</h2>
+<p><b>RLS (Row Level Security)</b> is Postgres's built-in permission system: even if a request reaches the database, RLS decides <i>which rows</i> it's allowed to see or change, based on who's asking. Without a matching policy, RLS denies by default.</p>
+<table>
+<tr><th>Table</th><th>Current policy shape (as read directly from schema.sql)</th></tr>
+<tr><td><code class="inline">japam_history</code> (production)</td><td><span class="badge danger">Loose</span> — SELECT/INSERT open to both <code class="inline">authenticated</code> AND <code class="inline">anon</code> with no per-user filter at all. Only UPDATE/DELETE are scoped to <code class="inline">auth.uid()</code>.</td></tr>
+<tr><td><code class="inline">japam_history</code> (schema_staging.sql)</td><td><span class="badge ok">Tighter</span> — SELECT/INSERT restricted to <code class="inline">authenticated</code> only, scoped to <code class="inline">auth.uid()</code> matching <code class="inline">user_id</code>.</td></tr>
+<tr><td><code class="inline">deleted_completions</code>, <code class="inline">japam_timer_state</code>, <code class="inline">japam_user_totals</code>, <code class="inline">user_profiles</code></td><td><span class="badge warn">Permissive "test" policies</span> — broad <code class="inline">anon</code> access gated on nothing (<code class="inline">USING (true)</code>). Policy names literally contain the word "test."</td></tr>
+<tr><td><code class="inline">groups</code>, backup tables</td><td>RLS enabled but <b>no policies at all</b> defined — meaning ordinary <code class="inline">anon</code>/<code class="inline">authenticated</code> roles cannot query them directly; all access must go through the SECURITY DEFINER RPCs (§27).</td></tr>
+</table>
+<div class="callout danger"><b>Why this matters, concretely:</b> the app's public "anon key" is bundled inside the app binary — anyone can extract it. If a table's RLS allows <code class="inline">anon</code> to read/write without a per-user filter, <i>anyone</i> with that key (not just this app) can read or write <i>any</i> user's rows on that table directly, bypassing the app UI entirely. This is exactly what <code class="inline">testing/incidents/known-incidents.json</code> documents as a currently open, confirmed, critical finding for <code class="inline">japam_history</code> in production. See §44.</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s27">
+<h2><span class="num">27</span> SECURITY DEFINER RPC functions</h2>
+<p>An RPC ("Remote Procedure Call") is a named function stored in the database that the app calls like <code class="inline">supabase.rpc('function_name', {...})</code>. <code class="inline">SECURITY DEFINER</code> means the function runs with the <i>database owner's</i> permissions, not the caller's — so it can safely do things RLS would otherwise block (like checking group membership across rows the caller couldn't directly SELECT), as long as the function's own internal logic checks permissions correctly.</p>
+<table>
+<tr><th>Function</th><th>What it does</th></tr>
+<tr><td><code class="inline">create_group</code></td><td>Generates a random invite code, creates the group, adds the creator as admin</td></tr>
+<tr><td><code class="inline">delete_history_completions</code></td><td>Atomically tombstones + deletes matching <code class="inline">japam_history</code> rows (see §18)</td></tr>
+<tr><td><code class="inline">find_group_by_invite_code</code></td><td>Looks up a group by its invite code (used by the Join flow)</td></tr>
+<tr><td><code class="inline">get_group_dashboard</code></td><td>Returns per-member stats for a group — the only place Groups and History data are joined together</td></tr>
+<tr><td><code class="inline">get_group_invite_code</code></td><td>Admin-only — returns the existing invite code</td></tr>
+<tr><td><code class="inline">get_my_groups</code></td><td>Lists all groups/roles for a user</td></tr>
+<tr><td><code class="inline">leave_group</code></td><td>Removes the caller's own membership (blocks the last admin from leaving)</td></tr>
+<tr><td><code class="inline">remove_group_member</code></td><td>Admin-only removal of another member</td></tr>
+<tr><td><code class="inline">rename_group</code>, <code class="inline">delete_group</code></td><td>Admin-only actions</td></tr>
+</table>
+<p>No <code class="inline">CREATE TRIGGER</code> statements exist anywhere in this schema — all side effects (invite code generation, admin bootstrapping) happen explicitly inside these RPC function bodies, not via database triggers.</p>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s28">
+<h2><span class="num">28</span> Groups: create, join, dashboard, roles, totals, rename, leave, remove, and delete</h2>
+<h4>What it does</h4>
+<p>Lets a set of users see each other's practice totals — e.g. a family or community chanting together.</p>
+<h4>Important files</h4>
+<p><span class="filekw">lib/groupsRepository.ts</span> (the real, implemented layer), <span class="filekw">app/(tabs)/groups.tsx</span> (list/create/join), <span class="filekw">app/(tabs)/groups-dashboard.tsx</span> (one group's member stats, hidden from the tab bar, reached by pushing with a <code class="inline">groupId</code>).</p>
+<h4>Actions</h4>
+<table>
+<tr><th>Action</th><th>Function</th><th>Backed by</th></tr>
+<tr><td>Create</td><td><code class="inline">createGroup()</code></td><td><code class="inline">create_group</code> RPC</td></tr>
+<tr><td>Join by invite code</td><td><code class="inline">joinGroupByInviteCode()</code></td><td><code class="inline">find_group_by_invite_code</code> RPC + a direct insert into <code class="inline">group_members</code></td></tr>
+<tr><td>View dashboard</td><td><code class="inline">getGroupDashboard()</code></td><td><code class="inline">get_group_dashboard</code> RPC</td></tr>
+<tr><td>See/share invite code</td><td><code class="inline">getGroupInviteCode()</code></td><td><code class="inline">get_group_invite_code</code> RPC (admin only)</td></tr>
+<tr><td>Rename / Leave / Remove member / Delete</td><td><code class="inline">renameGroup / leaveGroup / removeGroupMember / deleteGroup</code></td><td>matching RPCs; role/permission checks all happen inside the RPC, not the client</td></tr>
+</table>
+<h4>Roles and totals</h4>
+<p>Two roles exist: <code class="inline">'admin'</code> and <code class="inline">'member'</code>. The dashboard shows each member's <b>today</b> and <b>lifetime</b> malas/count, computed inside <code class="inline">get_group_dashboard</code> by summing that member's <code class="inline">japam_history</code> rows directly — <i>not</i> a stored/cached total.</p>
+<div class="callout warn"><b>Groups and Japams (workspaces) never intersect:</b> <code class="inline">get_group_dashboard</code> sums a member's <b>entire</b> history regardless of which personal workspace it came from. There is no way today for a Group to show "only Japam X's count."</div>
+<div class="callout danger"><b>Documented, unresolved crash report:</b> per <code class="inline">docs/investigations/GROUPS_CRASH_INVESTIGATION.md</code>, users reported crashes/blank screens opening specific groups. The investigation could not reproduce it on a test device and its own explicit conclusion is: "treat as unreproduced, not fixed." A <code class="inline">GroupsDashboardErrorBoundary</code> was added as containment (any crash inside the dashboard shows a recoverable "could not be displayed" message instead of a blank screen), but the original trigger remains unknown.</div>
+<h4>How to test</h4>
+<p><code class="inline">npm run test:groups</code> runs <code class="inline">lib/__tests__/groupsRepository.test.ts</code> and <code class="inline">app/(tabs)/__tests__/groups-dashboard.render.test.ts</code>.</p>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s29">
+<h2><span class="num">29</span> Provider/manual display-name resolution</h2>
+<h4>What it does</h4>
+<p>Decides what name to show for a person — e.g. on the Groups dashboard — when they haven't explicitly set one.</p>
+<h4>Client-side fallback chain (used when writing a new completion's <code class="inline">user_name</code>)</h4>
+<p><code class="inline">Google given name → Google full name → email → "Unknown User"</code> — computed once at write time and stored on that row (a snapshot, not a live lookup).</p>
+<h4>A real, documented postmortem</h4>
+<p>Per <code class="inline">docs/BUGFIX_GROUPS_SERVER_SIDE_PROVIDER_NAME_RESOLUTION.md</code>: an affected user's Groups dashboard displayed an incorrect, mangled name instead of their real name, because the dashboard was reading <code class="inline">group_members.user_name</code> — a write-once snapshot taken at the moment they joined — with no way to guarantee it was ever refreshed.</p>
+<div class="callout tip"><span class="te">(Note: the reporting user's real name has been intentionally omitted from this guide per project convention — see docs' own privacy handling.)</span></div>
+<ul class="compact">
+<li><b>Rejected fix:</b> a client-side "sync on entering Groups" approach was tried and rolled back — it depended on some device actually running the sync at the right moment, which couldn't be guaranteed (and couldn't help an offline session at all).</li>
+<li><b>Actual fix:</b> name resolution was moved entirely <i>server-side</i>, into <code class="inline">get_group_dashboard</code> itself, joining Supabase's own <code class="inline">auth.users</code> table with a documented precedence: manual override → provider's given name → first word of provider's full name → a canonical cached profile → the old snapshot → <code class="inline">"Unknown"</code>.</li>
+<li>The first production migration attempt for this fix rolled back safely due to a bug in its own post-check guard (a pattern-matching escape-character bug); a follow-up commit fixed the guard and the corrected migration succeeded.</li>
+</ul>
+<div class="callout tip"><b>Lesson recorded in the doc itself:</b> prefer a server-side, deterministic read over a client-maintained cache whenever the server already owns the underlying data — this avoids an entire class of "was the sync guaranteed to have run" bugs.</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s30">
+<h2><span class="num">30</span> Workspaces / My Japams</h2>
+<h4>What it does</h4>
+<p>Lets a user keep several separate named practices (e.g. "Gayatri Mantra," "Govinda"), each with its own history and stats.</p>
+<h4>Important files</h4>
+<p><span class="filekw">lib/japams.ts</span> (pure logic), <span class="filekw">lib/japamsStorage.ts</span> (AsyncStorage I/O), <span class="filekw">lib/japamsRepository.ts</span> (orchestration), <span class="filekw">contexts/current-japam-context.tsx</span> (runtime state), <span class="filekw">app/my-japams.tsx</span> (the management screen).</p>
+<h4>The four-layer split, and why</h4>
+<pre class="ascii">
+lib/japams.ts            Pure functions: createJapam, renameJapam, archiveJapam, restoreJapam,
+                          sortJapams. No I/O at all — fully unit-testable in plain Node.
+        │
+lib/japamsStorage.ts      Thin AsyncStorage read/write. No business logic — just gets/sets.
+        │
+lib/japamsRepository.ts   Orchestrates the two above: reads current state, applies a pure
+                          transformation, persists the result. The ONLY place that knows HOW
+                          Japams are persisted — if Supabase sync is ever added, it goes here
+                          and nowhere else needs to change.
+        │
+contexts/current-japam-context.tsx   Runtime state only: the in-memory list + which one is
+                          selected right now. Never touches AsyncStorage directly.
+</pre>
+<h4>Actions on the My Japams screen</h4>
+<table>
+<tr><th>Action</th><th>Handler</th><th>Notes</th></tr>
+<tr><td>Create</td><td><code class="inline">createJapam()</code></td><td>Auto-selects the newly created workspace</td></tr>
+<tr><td>Rename</td><td><code class="inline">renameJapam()</code></td><td>Blank names are rejected as a no-op</td></tr>
+<tr><td>Archive (long-press a card)</td><td><code class="inline">archiveJapam()</code></td><td>Never touches its history — archiving only hides it from the default list</td></tr>
+<tr><td>Restore</td><td><code class="inline">restoreJapam()</code></td><td>Deliberately does NOT change which workspace is "current"</td></tr>
+<tr><td>Select</td><td><code class="inline">selectJapam()</code></td><td>The only way to change the current selection</td></tr>
+</table>
+<h4>How you get to this screen</h4>
+<p>Via <span class="filekw">components/CurrentJapamHeaderButton.tsx</span> — one shared header button, used on Timer, Home, Tap Japam, Manual, and History screens (each with its own layout <code class="inline">variant</code>). History also has one extra, separate direct link to this screen. <b>Settings does not link here.</b></p>
+<div class="callout danger"><b>The single most important fact about this feature:</b> there is <b>no <code class="inline">japams</code> table in Supabase</b> — workspaces exist only in local AsyncStorage, per device, never synced. A signed-in user with two devices will end up with two different, independent workspace lists. This matches your own project memory note that "Multiple Japas" is parked behind release stabilization.</div>
+<h4>How stats are computed</h4>
+<p><code class="inline">loadJapamStats()</code>/<code class="inline">japamStatsFor()</code> in <span class="filekw">lib/historyRepository.ts</span> group all of a user's history by <code class="inline">japamId</code> and sum <code class="inline">totalCount</code> per group, splitting "today" vs "lifetime." Legacy pre-workspace history (no <code class="inline">japamId</code>) is handled by the one-time backfill described in §14.</p>
+<h4>How to test</h4>
+<p><code class="inline">npm run test:workspaces</code> runs <code class="inline">lib/__tests__/japams.test.ts</code>.</p>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s31">
+<h2><span class="num">31</span> Current Japam selection</h2>
+<p><code class="inline">CurrentJapamProvider</code> (<span class="filekw">contexts/current-japam-context.tsx</span>) is the single global source of truth for "which workspace am I looking at right now," exposed via <code class="inline">useCurrentJapam()</code>. On launch it auto-reopens the last-selected workspace if it still exists and isn't archived, falling back to the first active one, or <code class="inline">null</code> if none exist yet.</p>
+<div class="callout tip"><b>Important nuance:</b> the Timer engine (<code class="inline">TimerProvider</code>) does <i>not</i> subscribe to this context. A screen calls <code class="inline">setActiveJapamSelection(japamId, japamName)</code> once, right before pressing Start — a one-time snapshot, not a live link. This is deliberate: switching your current workspace mid-session must never retroactively reattribute an already-running session's completion to a different workspace.</div>
+<div class="callout warn"><b>Backlog, not yet approved:</b> per your project's own notes, the in-progress Tap Japam count is <i>not</i> currently scoped per-workspace the way History stats are — this is a documented backlog item, not yet implemented.</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s32">
+<h2><span class="num">32</span> Web versus Android behavior</h2>
+<table>
+<tr><th>Concern</th><th>Web</th><th>Android</th></tr>
+<tr><td>Timer survives backgrounding</td><td>Uses the Page Visibility API + a silent looping audio element trick to keep an AudioContext alive for the completion sound</td><td>A real native foreground service (§11) keeps counting even with JS fully frozen</td></tr>
+<tr><td>Completion notification</td><td>Browser <code class="inline">Notification</code> API (requires permission)</td><td>A native Android notification channel, with a scheduled fallback via <code class="inline">expo-notifications</code></td></tr>
+<tr><td>Google Sign-In</td><td>OAuth redirect flow (<code class="inline">expo-auth-session</code>)</td><td>Native <code class="inline">GoogleSignin</code> SDK</td></tr>
+<tr><td>Google Sign-In requirement</td><td>Web OAuth client ID</td><td>Package name + SHA-1 fingerprint registered in Google Cloud Console</td></tr>
+<tr><td>Screen wake lock</td><td>Browser <code class="inline">navigator.wakeLock</code> API</td><td><code class="inline">expo-keep-awake</code></td></tr>
+<tr><td>OTA updates</td><td>Not applicable — web is a normal static site redeploy</td><td><code class="inline">expo-updates</code>, checked on every load</td></tr>
+<tr><td>Vibration/haptics</td><td>Not available</td><td><code class="inline">expo-haptics</code> + <code class="inline">Vibration.vibrate()</code></td></tr>
+</table>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s33">
+<h2><span class="num">33</span> Expo OTA updates</h2>
+<p><b>OTA (Over-The-Air)</b> updates let Expo push a new JavaScript bundle to installed apps <i>without</i> going through the Play Store/App Store review process — as long as the change is JS-only (no new native code).</p>
+<table>
+<tr><th>Setting (app.json)</th><th>Value</th><th>Meaning</th></tr>
+<tr><td><code class="inline">runtimeVersion.policy</code></td><td><code class="inline">"appVersion"</code></td><td>An OTA update is only compatible with app installs on the exact same version string — bumping the app version always requires a fresh native build, never just an OTA push.</td></tr>
+<tr><td><code class="inline">updates.checkAutomatically</code></td><td><code class="inline">"ON_LOAD"</code></td><td>Checks for an update every time the app loads.</td></tr>
+<tr><td><code class="inline">updates.fallbackToCacheTimeout</code></td><td><code class="inline">0</code></td><td>Never blocks startup waiting for the check — shows the cached bundle immediately.</td></tr>
+</table>
+<div class="callout danger"><b>Real past incident:</b> per <code class="inline">testing/incidents/known-incidents.json</code>'s <code class="inline">ota-reload-crash</code> entry — an OTA update could crash the app outright on adoption (an audio/video player teardown running on the wrong thread), potentially requiring a reinstall to recover. Fixed in commit <code class="inline">7fe858f</code>. This class of bug is explicitly documented as device-only and not automatable — there is no permanent regression test for it, only a manual device-testing checklist (<code class="inline">docs/release-checklists/ota.md</code>).</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s34">
+<h2><span class="num">34</span> Vercel deployment</h2>
+<p>The web version of the app is a static export, hosted on Vercel. <span class="filekw">vercel.json</span> configures: <code class="inline">buildCommand</code> runs <code class="inline">expo export -p web</code> (Expo's static web build) then a post-process script, then copies extra static HTML files in; <code class="inline">outputDirectory: "dist"</code>; and a catch-all rewrite (<code class="inline">/:path* → /</code>) so Expo Router's client-side navigation handles every URL from one root <code class="inline">index.html</code> (a standard single-page-app hosting pattern).</p>
+<div class="callout warn">Your own project notes flag that <code class="inline">mantra-japam.vercel.app</code> is the real production site, while this repository's <i>linked</i> Vercel project can default to a staging project — always verify which Vercel project is targeted before deploying.</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s35">
+<h2><span class="num">35</span> Production versus staging environments</h2>
+<p>Two schema dumps exist in the repo root: <span class="filekw">schema.sql</span> and <span class="filekw">schema_staging.sql</span>. They are meaningfully different, not just copies:</p>
+<table>
+<tr><th></th><th>schema.sql</th><th>schema_staging.sql</th></tr>
+<tr><td>Backup/legacy tables</td><td>Present (5 of them — migration remnants)</td><td>Absent</td></tr>
+<tr><td><code class="inline">japam_history</code> RLS</td><td>Loose — <code class="inline">anon</code> can read/write with no per-user filter</td><td>Tight — <code class="inline">authenticated</code> only, scoped to <code class="inline">auth.uid()</code></td></tr>
+<tr><td>Best read as</td><td>A dump of current production, carrying historical debris</td><td>A target/in-progress schema with RLS cleanup already applied, not yet promoted</td></tr>
+</table>
+<p>This mirrors the same prod-vs-staging split noted elsewhere in this project for Vercel deployments — always confirm which environment you're actually looking at/changing before running any SQL.</p>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s36">
+<h2><span class="num">36</span> Environment variables and why missing values can crash the app</h2>
+<table>
+<tr><th>Variable</th><th>Used for</th></tr>
+<tr><td><code class="inline">EXPO_PUBLIC_SUPABASE_URL</code></td><td>Base URL for every Supabase/PostgREST request</td></tr>
+<tr><td><code class="inline">EXPO_PUBLIC_SUPABASE_ANON_KEY</code></td><td>The public "this is our app" API key (see §23)</td></tr>
+<tr><td><code class="inline">EXPO_PUBLIC_GOOGLE_CLIENT_ID</code></td><td>Web OAuth client ID for Google Sign-In</td></tr>
+<tr><td><code class="inline">EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID</code></td><td>Android-specific OAuth client ID</td></tr>
+</table>
+<p><em>(Only variable <b>names</b> are listed here — actual values live in untracked <code class="inline">.env</code>/<code class="inline">.env.local</code>/<code class="inline">.env.staging</code> files and are intentionally never reproduced in this guide.)</em></p>
+<div class="callout danger"><b>Why a missing value can crash the app, not just misbehave:</b> <span class="filekw">lib/supabase.ts</span> currently calls <code class="inline">createClient(url!, key!, ...)</code> — the <code class="inline">!</code> tells TypeScript "trust me, this isn't undefined," but does nothing at runtime. If either env var is genuinely missing at build time, this line still executes with literal <code class="inline">undefined</code> values instead of failing cleanly. This is a real, currently open, documented gap (<code class="inline">supabase-config-guard-missing</code> in <code class="inline">testing/incidents/known-incidents.json</code>) — a test already exists expecting a guard that isn't implemented yet.</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s37">
+<h2><span class="num">37</span> Tests and what they protect</h2>
+<table>
+<tr><th>Test file</th><th>Protects</th><th>Run via</th></tr>
+<tr><td><code class="inline">lib/__tests__/historyStore.test.ts</code></td><td>The whole offline-first engine: duplicate-save collapsing, dedup, merge without data loss, local-day date bucketing, tombstone sync, day-edit math, per-workspace stats — the single largest and most important test file (1200+ lines)</td><td><code class="inline">test:history</code>, <code class="inline">test:sync</code></td></tr>
+<tr><td><code class="inline">lib/__tests__/malaCompletion.test.ts</code></td><td>Mala boundary-crossing detection, rapid-tap safety, duplicate-completion prevention</td><td><code class="inline">test:timer</code>, <code class="inline">test:tap-japam</code></td></tr>
+<tr><td><code class="inline">lib/__tests__/timerColdStartRestore.test.ts</code></td><td>The rule that a killed session restores paused, frozen at the last snapshot — never wall-clock recomputed, never auto-resumed</td><td><code class="inline">test:timer</code></td></tr>
+<tr><td><code class="inline">lib/__tests__/anonymousAuth.test.ts</code></td><td>Guest/anonymous sign-in, Google linking vs. direct sign-in, account-collision handling, legacy ID repair</td><td><code class="inline">test:auth</code></td></tr>
+<tr><td><code class="inline">lib/__tests__/supabase.test.ts</code></td><td>The client doesn't crash when env vars are missing (currently red on purpose — see §36)</td><td><code class="inline">test:auth</code></td></tr>
+<tr><td><code class="inline">lib/__tests__/groupsRepository.test.ts</code></td><td>Every Groups RPC call/response mapping, duplicate-join handling, malformed-row containment</td><td><code class="inline">test:groups</code></td></tr>
+<tr><td><code class="inline">lib/__tests__/japams.test.ts</code></td><td>Workspace create/rename/archive/restore rules, safe parsing of corrupted storage</td><td><code class="inline">test:workspaces</code></td></tr>
+<tr><td><code class="inline">lib/__tests__/legacyHistoryBackfill.test.ts</code></td><td>The one-time migration that tags old history with a default workspace</td><td><code class="inline">test:history</code></td></tr>
+<tr><td><code class="inline">lib/__tests__/anonKeyRestAuth.test.ts</code></td><td>Scans source files to guarantee no REST call ever uses the raw anon key where a session token is required</td><td>full <code class="inline">jest</code> / <code class="inline">test:release</code> only</td></tr>
+<tr><td><code class="inline">lib/__tests__/rlsHotfixMigration.test.ts</code> / <code class="inline">rlsStagingHotfixMigration.test.ts</code></td><td>Static-text checks on not-yet-run SQL migration files, so a proposed RLS fix can be reviewed safely before ever touching a real database</td><td>full <code class="inline">jest</code> / <code class="inline">test:release</code> only</td></tr>
+<tr><td><code class="inline">app/(tabs)/__tests__/groups-dashboard.render.test.ts</code></td><td>The Groups dashboard screen renders without crashing for both a single-member and multi-member group</td><td><code class="inline">test:groups</code></td></tr>
+</table>
+<h4>Non-Jest checks</h4>
+<p><code class="inline">test:release</code> = <code class="inline">npx tsc --noEmit && jest && npx expo lint</code> (type-check + full test suite + lint). <code class="inline">test:contracts</code>, <code class="inline">test:migrations</code>, <code class="inline">validate:feature-map</code>, and <code class="inline">test:affected</code> are Node/bash scripts (not Jest) that check SQL contracts, migration files, and which tests a given code change requires.</p>
+<div class="callout tip"><b>Areas with NO automated test coverage, by design:</b> OTA adoption (<code class="inline">test:ota</code>) and static content (<code class="inline">test:static-content</code>) are both explicit no-op placeholders — these are documented as device-only/manual-verification areas, not oversights.</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s38">
+<h2><span class="num">38</span> How to investigate a crash</h2>
+<ol>
+<li>Figure out <b>which platform</b> (web/Android/iOS) and <b>which screen</b> — check whether it's reproducible on a plain phone first (many past "crash" reports turned out unreproducible on standard hardware — see §42).</li>
+<li>Check <code class="inline">testing/incidents/known-incidents.json</code> first — it may already be a documented, known issue with a status and root-cause notes.</li>
+<li>Search console logs for tagged prefixes this codebase already uses everywhere: <code class="inline">[TIMER_DIAG]</code>, <code class="inline">[TimerBG]</code>, <code class="inline">[GROUPS_DIAG]</code>, <code class="inline">[Stats]</code>, <code class="inline">[SYNC_*]</code> — these were added specifically to make past incidents diagnosable.</li>
+<li>If it's a Groups screen crash, check whether <code class="inline">GroupsDashboardErrorBoundary</code> caught it (a graceful fallback) versus a true unhandled crash.</li>
+<li>Never guess a fix from a single unreproduced report — this project's own investigation docs (§42) explicitly warn against "fixing" based on assumption alone; get a real reproduction first.</li>
+</ol>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s39">
+<h2><span class="num">39</span> How to investigate a sync bug</h2>
+<ol>
+<li>Determine which side is wrong: is the record missing locally (never saved), stuck <code class="inline">pending</code> (never uploaded), or duplicated (uploaded twice)?</li>
+<li>For "stuck pending": check whether a valid session exists (<code class="inline">supabase.auth.getSession()</code>) at the time of sync — a missing/expired session is a known, currently silent failure mode (§16, §23).</li>
+<li>For "duplicated": check whether the record's <code class="inline">completionId</code> is actually stable across the two copies — if they differ, something bypassed the deterministic id generation (§17).</li>
+<li>For "record vanished after sync": check the tombstone table (§18) — a record can be legitimately removed by a tombstone from another device.</li>
+<li>Remember: the sync-upload logic is duplicated across ~6 files (§15, §43) — a bug fixed in one file's copy may still be present in the others.</li>
+</ol>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s40">
+<h2><span class="num">40</span> How to safely make a code change</h2>
+<ol>
+<li>Run <code class="inline">npm run test:affected</code> first — it reads <code class="inline">testing/feature-map.json</code> and tells you exactly which <code class="inline">test:*</code> scripts, SQL contracts, and release checklists your changed files require.</li>
+<li>If you touch <span class="filekw">lib/historyStore.ts</span>, <span class="filekw">lib/timerColdStartRestore.ts</span>, or <span class="filekw">lib/malaCompletion.ts</span> — these are pure and unit-tested; run their exact test file and make sure you understand <i>why</i> each existing test asserts what it does before changing behavior.</li>
+<li>If you touch anything Timer-related, prefer testing on a <b>real Android device</b>, not just web/simulator — most of the worst past incidents here were background/lifecycle bugs invisible outside a real device (§42).</li>
+<li>Never run a database migration against production without first checking <code class="inline">testing/contracts/</code> and confirming which schema file (§35) you're actually targeting.</li>
+<li>If your change touches sync/upload logic, check whether the same logic exists in the other five duplicated locations (§15) — fixing only one copy is a common, easy mistake here.</li>
+</ol>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s41">
+<h2><span class="num">41</span> Safe release workflow</h2>
+<pre class="ascii">
+1. npm run test:release          (tsc --noEmit + full jest + expo lint)
+2. npm run test:affected         (confirms nothing required by your change was skipped)
+3. Manual device checklist       (docs/release-checklists/*, testing/device/*)
+   — required for Timer background/foreground/kill scenarios; cannot be automated
+4. EAS Build (preview channel)   → internal APK for QA
+5. EAS Build (production channel)→ AAB submitted to Play Store (internal/draft track first)
+6. OTA pushes (JS-only changes)  only valid for installs on the SAME app version
+   (see runtimeVersion.policy, §33) — a native change always needs a fresh build
+7. Web: Vercel deploy            confirm you're targeting the correct (prod vs staging) project
+</pre>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s42">
+<h2><span class="num">42</span> Important production incidents and lessons learned</h2>
+<p>All entries below are read directly from this repo's own incident documentation (<code class="inline">docs/BUGFIX_*.md</code>, <code class="inline">docs/investigations/*</code>, <code class="inline">testing/incidents/known-incidents.json</code>) — not speculation.</p>
+<details><summary>Duplicate TimerProvider mounts (Issues #19/#20)</summary>
+<p>Expo Router mounted the tab layout twice at startup; two competing <code class="inline">TimerProvider</code> instances both wrote to the same storage keys, causing a running timer to appear to reset or change duration. <b>Fix:</b> moved the provider to the true root layout (mounts exactly once). <b>Lesson:</b> global providers belong at the true app root, never in a layout that route resolution could duplicate; lifecycle bugs need real-device validation, not just logs.</p>
+</details>
+<details><summary>Duplicate completion records from process-restart races</summary>
+<p>Three duplicate-save guards existed only in memory, resetting on every JS restart — a restart at the wrong moment could re-save the same mala with a new, wall-clock-based id. <b>Fix:</b> deterministic <code class="inline">completionId</code>s (§17). <b>Known limitation:</b> does not retroactively repair already-affected devices — remediation for existing affected users was designed but explicitly shelved (insufficient evidence, unwillingness to risk hiding legitimate history on unproven signals).</p>
+</details>
+<details><summary>Timer restore showing a stale, already-completed session</summary>
+<p>A race between the Android completion sound (~6s to finish) and JS reconciliation left stale "in progress" state visible after all malas were actually done. <b>Fix:</b> simplified the cleanup condition to not depend on the native "still running" flag.</p>
+</details>
+<details><summary>Groups dashboard showing an incorrect display name</summary>
+<p>See §29 for the full story — moved from a write-once client snapshot to a server-side, deterministic name-resolution RPC.</p>
+</details>
+<details><summary>Groups crash / blank screen reports — unresolved</summary>
+<p>Reported on specific "Family"/"Test" groups; never reproduced on a test device. Explicit conclusion in the doc: "treat as unreproduced, not fixed." An error boundary was added as containment only.</p>
+</details>
+<details><summary>Timer background-pause reports — unresolved</summary>
+<p>Structured lifecycle testing (lock/unlock, force-stop, swipe-away) passed all scenarios on a test device; explicit conclusion: "No timer code change is justified from this evidence alone."</p>
+</details>
+<details><summary>Offline sync 401 on reconnect</summary>
+<p>The regular history-upload loop was found to hardcode the anon key instead of the session token in one code path, causing pending uploads to fail with 401 indefinitely. Later addressed via a guarded RLS/JWT migration (git commits <code class="inline">3189861</code>, <code class="inline">8f4e95d</code>, <code class="inline">672c0e6</code>).</p>
+</details>
+<details><summary>OTA adoption crash</summary>
+<p>An audio/player teardown running on the wrong thread during OTA update-adoption could crash the app outright. Fixed in commit <code class="inline">7fe858f</code>; device-only, no permanent automated test exists (by design).</p>
+</details>
+<div class="callout tip"><b>Recurring lesson across almost all of these:</b> small, focused fixes; real-device validation for anything lifecycle-related; do not guess a fix without a reproduction; and prefer a single server-side source of truth over client-side synchronization whenever the server already owns the data.</div>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s43">
+<h2><span class="num">43</span> Known technical debt</h2>
+<ul class="compact">
+<li><b>Sign-in logic duplicated three times</b> across <code class="inline">index.tsx</code>, <code class="inline">tap-japam.tsx</code>, <code class="inline">timer.tsx</code> — explicitly called the "primary migration risk" in <code class="inline">docs/GUEST_TO_ANON_AUTH_MIGRATION.md</code>.</li>
+<li><b>History-upload logic duplicated across ~6 files</b> (§15) — only the pure data-shaping helpers are shared; the network/upload code is copy-pasted.</li>
+<li><b><code class="inline">app/(tabs)/index.tsx</code> duplicates almost all of <code class="inline">tap-japam.tsx</code></b> — a full parallel screen implementation kept alive by one push call (§5, §12).</li>
+<li><b><code class="inline">lib/groupsTypes.ts</code> is superseded, unused planning scaffolding</b> — the real implementation is <code class="inline">lib/groupsRepository.ts</code>, with its own separate types.</li>
+<li><b><code class="inline">user_id</code> columns remain plain <code class="inline">text</code></b> across every table, not <code class="inline">uuid</code> — a deliberate compatibility choice to avoid breaking legacy Google numeric IDs, but it means no database-enforced identity integrity.</li>
+<li><b>RLS tightening is incremental/in-progress</b> — production still has looser policies than staging on <code class="inline">japam_history</code> (§26, §35).</li>
+<li><b>Two independent timer systems (Home tab vs. Timer tab)</b> use separate AsyncStorage namespaces and share no state — intentional, but flagged as a QA-confusion risk.</li>
+<li><b>Remediation for already-affected duplicate-history users is deferred</b>, not implemented — pending more evidence and a risk-tolerance decision.</li>
+<li><b>Multiple Japas (workspaces) syncing to Supabase</b> is parked behind release stabilization — not yet approved for implementation.</li>
+<li><b>Per-workspace scoping of in-progress Tap Japam counts</b> is a backlog item, not implemented.</li>
+</ul>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s44">
+<h2><span class="num">44</span> Remaining risks and future work</h2>
+<div class="callout danger"><b>Highest-priority open finding (documented in-repo, not my own speculation):</b> <code class="inline">testing/incidents/known-incidents.json</code>'s <code class="inline">history-rls-anon-open-access</code> entry states the public <code class="inline">anon</code> role can currently read and write <b>any</b> user's <code class="inline">japam_history</code> rows in production, with no per-user restriction — policy names literally contain the word "test." Marked <span class="badge danger">CRITICAL, CONFIRMED LIVE, OPEN</span>, with an explicit recommendation for a dedicated, separately-approved security review.</div>
+<div class="callout warn"><b>Second open finding:</b> <code class="inline">lib/supabase.ts</code> has no guard for missing environment variables at runtime (§24, §36) — a red test already exists pinning this gap.</div>
+<div class="callout warn"><b>Third open finding:</b> the <code class="inline">pgrst100-history-fetch</code> bug (§14) — a malformed remote-fetch filter can, in a narrow legacy dual-fetch path, silently under-report the true remote row count. Described in its own tracking entry as "the single highest-priority code-level finding across all testing-infrastructure sessions."</div>
+<p>Other open items: <code class="inline">group-dashboard-tombstone-mismatch</code> (§18), several "OPEN — no regression test exists" entries for timer duplicate-provider/duplicate-listener scenarios that have never been directly root-caused, and pre-build blockers noted in <code class="inline">STABILITY_AUDIT.md</code> (Google Cloud Console SHA-1 registration, EAS secrets, hosted privacy policy, incomplete Play Store listing assets).</p>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s45">
+<h2><span class="num">45</span> Glossary of coding terms</h2>
+<table>
+<tr><th>Term</th><th>Plain-English meaning</th></tr>
+<tr><td>Mala (మాల)</td><td>A set of 108 mantra repetitions — one full cycle of a traditional prayer bead string.</td></tr>
+<tr><td>Japam (జపం)</td><td>The practice of repeated mantra chanting.</td></tr>
+<tr><td>Component</td><td>A reusable piece of UI written as a function returning JSX.</td></tr>
+<tr><td>Props</td><td>Data passed into a component by its parent.</td></tr>
+<tr><td>State</td><td>Data that changes over time and causes a re-render.</td></tr>
+<tr><td>Hook</td><td>A special React function (starts with "use") for state, effects, refs, or context.</td></tr>
+<tr><td>Context</td><td>A way to share data across many components without passing it down manually.</td></tr>
+<tr><td>Ref</td><td>A mutable value that survives re-renders without triggering one itself.</td></tr>
+<tr><td>AsyncStorage</td><td>The phone's local key-value storage — this app's "local database."</td></tr>
+<tr><td>Offline-first</td><td>Design where every action saves locally first and syncs to the cloud only when possible.</td></tr>
+<tr><td>Idempotent</td><td>Doing the same operation twice has the same effect as doing it once — no duplicate side effects.</td></tr>
+<tr><td>RLS (Row Level Security)</td><td>Database-level rule that decides which rows a request is allowed to see/change.</td></tr>
+<tr><td>RPC</td><td>A named function stored in the database, callable like an API endpoint.</td></tr>
+<tr><td>SECURITY DEFINER</td><td>A database function that runs with elevated (owner) permissions rather than the caller's own.</td></tr>
+<tr><td>JWT (JSON Web Token)</td><td>A signed token proving who is making a request — here, a Supabase login session.</td></tr>
+<tr><td>Anon key</td><td>A public API key proving "this request is from our app," with no user identity attached.</td></tr>
+<tr><td>Tombstone</td><td>A record marking something as deleted, kept so the deletion can sync correctly everywhere.</td></tr>
+<tr><td>OTA (Over-The-Air) update</td><td>Pushing a new JS bundle to installed apps without an app-store review.</td></tr>
+<tr><td>Foreground service (Android)</td><td>A background task with a persistent notification, allowed to keep running even when the app isn't visible.</td></tr>
+</table>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s46">
+<h2><span class="num">46</span> Frequently asked questions</h2>
+<details><summary>Why does the timer sometimes show "Resume" instead of "Start" after I force-close the app?</summary>
+<p>This is intentional. A genuine app kill freezes the timer at its last saved snapshot and requires an explicit Resume tap — it deliberately never auto-resumes counting time that passed while the app was dead. See §10.</p>
+</details>
+<details><summary>Why are there two almost-identical screens for tap counting?</summary>
+<p><code class="inline">app/(tabs)/tap-japam.tsx</code> is the real, visible tab. <code class="inline">app/(tabs)/index.tsx</code> is a hidden legacy duplicate, still reachable via one push call. See §5, §12, §43.</p>
+</details>
+<details><summary>Why does a manual entry always say "Saved" even if I'm offline?</summary>
+<p>Because the local save (instant, on-device) is what "Saved" refers to — the Supabase upload is a separate, best-effort background step that retries later. See §13, §15.</p>
+</details>
+<details><summary>Can I see my Group's stats scoped to just one of my Japams?</summary>
+<p>No — Groups sum a member's entire history across all their personal workspaces; there's no per-workspace Group view today. See §28.</p>
+</details>
+<details><summary>Is my data safe if I delete a history entry offline?</summary>
+<p>Yes — a tombstone is written locally before the entry is removed, and it's pushed to Supabase (atomically, along with the row delete) the next time you're online. See §18.</p>
+</details>
+<details><summary>Why does the app need my Google account's SHA-1 fingerprint?</summary>
+<p>Google requires this for native Android sign-in to trust the app; without registering it, sign-in fails with "app not authorized." See §22.</p>
+</details>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="s47">
+<h2><span class="num">47</span> "Where should I look?" troubleshooting map</h2>
+<table>
+<tr><th>Symptom</th><th>Start here</th></tr>
+<tr><td>Timer resets, loses duration, or shows wrong mala count after backgrounding</td><td><span class="filekw">contexts/timer-context.tsx</span> — search for <code class="inline">[TIMER_DIAG]</code> logs; §9, §10, §42</td></tr>
+<tr><td>A mala/count appears twice in History</td><td><span class="filekw">lib/historyStore.ts</span>'s <code class="inline">dedupeByCompletionId</code>/<code class="inline">makeLoopCompletionId</code>; §17</td></tr>
+<tr><td>A completion never appears on another device</td><td>Check <code class="inline">syncStatus</code> and session validity; §16, §23</td></tr>
+<tr><td>A deleted entry reappears</td><td><span class="filekw">lib/historyStore.ts</span>'s tombstone functions; §18</td></tr>
+<tr><td>Groups dashboard shows a wrong name</td><td>§29 — check if the server-side resolution RPC covers this case</td></tr>
+<tr><td>Groups screen crashes or is blank</td><td><span class="filekw">app/(tabs)/groups-dashboard.tsx</span>'s error boundary; §28, §42</td></tr>
+<tr><td>Sign-in fails only on a production Android build</td><td>Google Cloud Console SHA-1 registration; §22</td></tr>
+<tr><td>App crashes right after an OTA update</td><td>§33 — check whether it's the known audio/player teardown class of bug</td></tr>
+<tr><td>Someone worries about data privacy/security</td><td>§26, §44 — the documented open RLS finding</td></tr>
+<tr><td>"It works on web but not Android" (or vice versa)</td><td>§32 — check <code class="inline">Platform.OS</code> branches near the feature in question</td></tr>
+</table>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+<section class="doc-section" id="owner">
+<h2>★ App Owner Quick Reference</h2>
+<h3>Most important 20 files</h3>
+<ol>
+<li><code class="inline">contexts/timer-context.tsx</code> — the timer engine</li>
+<li><code class="inline">lib/historyStore.ts</code> — the offline-sync/history brain</li>
+<li><code class="inline">lib/historyRepository.ts</code> — history's AsyncStorage layer</li>
+<li><code class="inline">lib/timerColdStartRestore.ts</code> — cold-start restore rules</li>
+<li><code class="inline">lib/malaCompletion.ts</code> — mala boundary detection</li>
+<li><code class="inline">lib/supabase.ts</code> — the Supabase client</li>
+<li><code class="inline">lib/anonymousAuth.ts</code> — guest/Google auth helpers</li>
+<li><code class="inline">lib/groupsRepository.ts</code> — Groups backend calls</li>
+<li><code class="inline">lib/japams.ts</code> / <code class="inline">japamsRepository.ts</code> — workspaces</li>
+<li><code class="inline">contexts/current-japam-context.tsx</code> — workspace selection state</li>
+<li><code class="inline">app/_layout.tsx</code> — the true app root</li>
+<li><code class="inline">app/(tabs)/_layout.tsx</code> — tab bar + navigation anchor</li>
+<li><code class="inline">app/(tabs)/timer.tsx</code>, <code class="inline">tap-japam.tsx</code>, <code class="inline">history.tsx</code>, <code class="inline">manual.tsx</code> — the four core screens</li>
+<li><code class="inline">android-native/JapamTimerService.kt</code> — Android background timer</li>
+<li><code class="inline">schema.sql</code> / <code class="inline">schema_staging.sql</code> — database contract</li>
+<li><code class="inline">testing/incidents/known-incidents.json</code> — living incident/risk registry</li>
+<li><code class="inline">testing/feature-map.json</code> — what tests a change requires</li>
+<li><code class="inline">app.json</code> / <code class="inline">eas.json</code> — build &amp; OTA config</li>
+<li><code class="inline">vercel.json</code> — web hosting config</li>
+<li><code class="inline">package.json</code> — all scripts, especially <code class="inline">test:release</code></li>
+</ol>
+
+<h3>Most dangerous 10 areas to modify</h3>
+<ol>
+<li><code class="inline">claimCompletionLoop()</code> / <code class="inline">completeCycle()</code> in timer-context.tsx — duplicate-completion dedup gate</li>
+<li><code class="inline">computeColdStartRestoreDecision()</code> — silent data-loss/phantom-completion risk if changed casually</li>
+<li>Any RLS policy on <code class="inline">japam_history</code> or <code class="inline">deleted_completions</code> — see §26/§44's open finding first</li>
+<li><code class="inline">delete_history_completions</code> RPC — must stay atomic (tombstone + delete together)</li>
+<li><code class="inline">makeCompletionId</code>/<code class="inline">makeLoopCompletionId</code> — changing the id formula breaks dedup for all existing records</li>
+<li>Any of the ~6 duplicated Supabase-upload code paths — fixing one copy without the others reintroduces the bug elsewhere</li>
+<li><code class="inline">android-native/JapamTimerService.kt</code> bridge method signatures — must stay in sync with the TS wrapper, or it fails silently on Android only</li>
+<li><code class="inline">get_group_dashboard</code> RPC — currently not tombstone-aware; changing its totals logic without checking this can make it worse</li>
+<li><code class="inline">runtimeVersion.policy</code> in app.json — controls OTA compatibility; a careless change can break OTA delivery entirely</li>
+<li>Anything under <code class="inline">db/*.sql</code> — these are hand-written, unreviewed-by-tooling migrations; always check <code class="inline">testing/contracts/</code> first</li>
+</ol>
+
+<h3>Production release checklist</h3>
+<ul class="compact">
+<li>☐ <code class="inline">npm run test:release</code> passes</li>
+<li>☐ <code class="inline">npm run test:affected</code> run against your actual diff</li>
+<li>☐ Manual device checklist completed for any Timer/background change (docs/release-checklists/, testing/device/)</li>
+<li>☐ Confirm target schema/environment (prod vs staging, §35)</li>
+<li>☐ Google Cloud Console SHA-1 + package name registered (if first native build, or signing changed)</li>
+<li>☐ EAS secrets present for the target build profile</li>
+<li>☐ Play Store listing assets complete (if user-facing store changes)</li>
+</ul>
+
+<h3>Staging release checklist</h3>
+<ul class="compact">
+<li>☐ Confirm you're pointed at <code class="inline">schema_staging.sql</code>'s project, not production</li>
+<li>☐ Run the same automated test suite as production</li>
+<li>☐ OTA channel set to <code class="inline">preview</code>, not <code class="inline">production</code> (eas.json)</li>
+</ul>
+
+<h3>Database migration checklist</h3>
+<ul class="compact">
+<li>☐ Read <code class="inline">testing/contracts/structural-contracts.sql</code>, <code class="inline">migration-invariants.sql</code>, <code class="inline">security-contracts.sql</code> first</li>
+<li>☐ Confirm whether the migration is guarded (wrapped in one transaction with pre/post checks) — follow the existing pattern in <code class="inline">db/rls_hotfix_japam_history_deleted_completions.sql</code></li>
+<li>☐ Never run an untested migration directly against production — staging first</li>
+<li>☐ Check for an existing regression test in <code class="inline">lib/__tests__/*MigrationTest*</code>-style files before writing SQL by hand</li>
+</ul>
+
+<h3>Android crash checklist</h3>
+<ul class="compact">
+<li>☐ Check <code class="inline">testing/incidents/known-incidents.json</code> for an existing matching entry first</li>
+<li>☐ Reproduce on a real device — many past reports were unreproducible on standard hardware (§42)</li>
+<li>☐ Check <code class="inline">android-native/JapamTimerService.kt</code> logcat output around foreground-service lifecycle</li>
+<li>☐ Check whether it correlates with an OTA adoption event (§33)</li>
+</ul>
+
+<h3>Commands commonly used in this project</h3>
+<pre class="code-block"><button class="copy-btn" onclick="copyCode(this)">Copy</button>npm run start            # start the Expo dev server
+npm run android          # run on an Android device/emulator
+npm run ios              # run on iOS
+npm run web              # run the web build locally
+npm test                 # run the full Jest suite
+npm run test:release     # tsc --noEmit + jest + expo lint (pre-release gate)
+npm run test:affected    # tells you which tests YOUR change requires
+npm run test:timer       # timer-specific tests only
+npm run test:history     # history/sync-specific tests only
+npm run test:groups      # groups-specific tests only
+npm run lint             # expo lint</pre>
+
+<h3>Which actions require what</h3>
+<table>
+<tr><th>Change type</th><th>Requires</th></tr>
+<tr><td>JS/TS-only logic change, same app version</td><td>OTA push (EAS Update)</td></tr>
+<tr><td>New native permission, new native module, app version bump</td><td>Full native rebuild (EAS Build) + store submission</td></tr>
+<tr><td>Web-only UI/content change</td><td>Vercel redeploy</td></tr>
+<tr><td>New/changed database table, RLS policy, or RPC</td><td>SQL migration — staging first, then production, following the guarded-migration pattern</td></tr>
+<tr><td>Android foreground service / Kotlin change</td><td>Full native rebuild — cannot be delivered via OTA</td></tr>
+</table>
+<a class="back-to-top" href="#top">↑ Back to top</a>
+</section>
+
+</main>
+</div>
+<footer>Generated as a static, offline learning reference by reading the actual source code of this repository. No secrets, API keys, tokens, or real user data are included in this file. If the codebase changes significantly, portions of this guide may become outdated — treat it as a snapshot, and prefer re-reading the cited source files for anything safety-critical.</footer>
+
+<script>
+function toggleTheme(){
+  var root = document.documentElement;
+  var current = root.getAttribute('data-theme');
+  var next;
+  if(!current){
+    var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    next = prefersDark ? 'light' : 'dark';
+  } else {
+    next = current === 'dark' ? 'light' : 'dark';
+  }
+  root.setAttribute('data-theme', next);
+  try{ localStorage.setItem('japamGuideTheme', next); }catch(e){}
+}
+(function initTheme(){
+  try{
+    var saved = localStorage.getItem('japamGuideTheme');
+    if(saved) document.documentElement.setAttribute('data-theme', saved);
+  }catch(e){}
+})();
+
+function expandAll(open){
+  document.querySelectorAll('details').forEach(function(d){ d.open = open; });
+}
+
+function copyCode(btn){
+  var pre = btn.parentElement;
+  var text = pre.innerText.replace(/^Copy\s*/, '');
+  var done = function(){ var old = btn.textContent; btn.textContent = 'Copied!'; setTimeout(function(){ btn.textContent = old; }, 1200); };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(function(){ fallbackCopy(text, done); });
+  } else {
+    fallbackCopy(text, done);
+  }
+}
+function fallbackCopy(text, done){
+  var ta = document.createElement('textarea');
+  ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
+  document.body.appendChild(ta); ta.focus(); ta.select();
+  try{ document.execCommand('copy'); done(); }catch(e){}
+  document.body.removeChild(ta);
+}
+
+function doSearch(query){
+  var q = query.trim().toLowerCase();
+  var sections = document.querySelectorAll('.doc-section');
+  sections.forEach(function(sec){
+    if(q === ''){ sec.classList.remove('hidden-by-search'); return; }
+    var text = sec.innerText.toLowerCase();
+    if(text.indexOf(q) === -1){ sec.classList.add('hidden-by-search'); }
+    else { sec.classList.remove('hidden-by-search'); if(sec.querySelector('details')) sec.querySelectorAll('details').forEach(function(d){d.open = true;}); }
+  });
+  var tocLinks = document.querySelectorAll('#sidebar li');
+  tocLinks.forEach(function(li){
+    if(q === ''){ li.style.display=''; return; }
+    var t = li.innerText.toLowerCase();
+    li.style.display = t.indexOf(q) !== -1 ? '' : 'none';
+  });
+}
+
+function updateProgress(){
+  var boxes = document.querySelectorAll('.prog');
+  var total = boxes.length, checked = 0;
+  boxes.forEach(function(b){ if(b.checked) checked++; });
+  var pct = total ? Math.round(checked/total*100) : 0;
+  document.getElementById('progressFill').style.width = pct + '%';
+  document.getElementById('progressLabel').textContent = checked + ' / ' + total + ' topics checked';
+}
+(function initChecklist(){
+  var boxes = document.querySelectorAll('.prog');
+  var saved = {};
+  try{ saved = JSON.parse(localStorage.getItem('japamGuideProgress') || '{}'); }catch(e){}
+  boxes.forEach(function(b, i){
+    var key = 'chk' + i;
+    b.dataset.key = key;
+    if(saved[key]) b.checked = true;
+    b.addEventListener('change', function(){
+      saved[key] = b.checked;
+      try{ localStorage.setItem('japamGuideProgress', JSON.stringify(saved)); }catch(e){}
+      updateProgress();
+    });
+    b.addEventListener('click', function(e){ e.stopPropagation(); });
+  });
+  updateProgress();
+})();
+
+document.addEventListener('keydown', function(e){
+  if((e.ctrlKey || e.metaKey) && e.key === 'k'){
+    e.preventDefault();
+    document.getElementById('searchBox').focus();
+  }
+});
+</script>
