@@ -7,6 +7,11 @@ import * as Notifications from 'expo-notifications';
 import { usePathname, useRouter } from 'expo-router';
 import { getTimerState, updateTimerState } from '../lib/timerState';
 import { computeColdStartRestoreDecision } from '../lib/timerColdStartRestore';
+import {
+  saveJapamTimerState,
+  readJapamTimerState,
+  type TimerStateSnapshot,
+} from '../lib/perJapamTimerState';
 import { supabase } from '../lib/supabase';
 import {
   appendCompletion,
@@ -2183,11 +2188,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         // Expose the save promise so did-switch can await it before reading TO state.
         const savePromise = (async () => {
           if (fromJapamId) {
-            try {
-              await AsyncStorage.multiSet(
-                jPairs.map(([k, v]) => [getJapamKey(k, uid, fromJapamId), v] as [string, string])
-              );
-            } catch {}
+            const snapshot: TimerStateSnapshot = {
+              seconds: secondsNow,
+              running: false,
+              target: tSec,
+              paused: wasPaused,
+              completedLoops: completedLoopsRef.current,
+              startedAt: '',
+              sessionId: timerSessionIdRef.current,
+              duration: selectedDurationRef.current,
+              loops: selectedLoopsRef.current,
+            };
+            await saveJapamTimerState(uid, fromJapamId, snapshot).catch(() => {});
           }
         })();
         switchSavePromiseRef.current = savePromise;
@@ -2212,23 +2224,16 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         // would leak the previous Japam's timer state into the new Japam (since persistState
         // writes both :uid:japamId and :uid fallback keys). A Japam with no saved timer
         // state must show a fresh Start, not the other Japam's data.
-        const get = async (key: string) => {
-          if (japamId) {
-            return AsyncStorage.getItem(getJapamKey(key, uid, japamId));
-          }
-          return null;
+        const raw = japamId ? await readJapamTimerState(uid, japamId) : {
+          seconds: null, target: null, duration: null, loops: null,
+          paused: null, completedLoops: null, running: null,
+          startedAt: null, sessionId: null,
         };
-        const [sec, target, dur, loops, paused, completed, running, startedAt, sessionId] = await Promise.all([
-          get(TIMER_SECONDS_KEY),
-          get(TIMER_TARGET_KEY),
-          get(T_DURATION_KEY),
-          get(T_LOOPS_KEY),
-          get(TIMER_PAUSED_KEY),
-          get(TIMER_COMPLETED_LOOPS_KEY),
-          get(TIMER_RUNNING_KEY),
-          get(TIMER_STARTED_AT_KEY),
-          get(TIMER_SESSION_ID_KEY),
-        ]);
+        const [sec, target, dur, loops, paused, completed, running, startedAt, sessionId] = [
+          raw.seconds, raw.target, raw.duration, raw.loops,
+          raw.paused, raw.completedLoops, raw.running,
+          raw.startedAt, raw.sessionId,
+        ];
         // Apply loaded state with the same cold-start restore decision logic.
         const savedSec = Number(sec) || 0;
         const savedTarget = Number(target) || 0;
