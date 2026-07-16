@@ -51,7 +51,7 @@
 
 List protected files changed, or write `none`.
 
-- 
+-
 
 ## Database
 
@@ -110,4 +110,3 @@ List protected files changed, or write `none`.
 - Verification:
 
 ## Notes
-
