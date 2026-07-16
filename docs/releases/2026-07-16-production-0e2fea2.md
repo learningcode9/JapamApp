@@ -125,3 +125,16 @@ The following reviewed release-safety scripts are explicitly approved for this r
 - Android OTA: PENDING
 - Web deployment: PENDING
 - Production verification: PENDING
+
+## Post-Release Verification Evidence
+
+- Release SHA: `bf2dc345e1381d78bf1dbd114618f3fbc0aafeba`
+- Previous production commit: `ab1c9191bd3708fe6d41da2e6a4ac89756607810`
+- Android OTA ID: `019f6cf5-c20d-71c2-9bc1-7f7dc40e75a2`
+- Android OTA commit: `bf2dc345e1381d78bf1dbd114618f3fbc0aafeba`
+- Web deployment ID: `dpl_A8jogwWteA4rwi8NxoxAMu2fXbYj`
+- Web deployment commit: `bf2dc345e1381d78bf1dbd114618f3fbc0aafeba`
+- Production URL: `https://mantra-japam.vercel.app`
+- Git tag: `prod-2026-07-16-bf2dc34`
+- Verified at: `2026-07-16`
+- Release owner: `Sravani`

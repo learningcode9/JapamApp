@@ -1,12 +1,12 @@
 {
-  "production_commit": "ab1c9191bd3708fe6d41da2e6a4ac89756607810",
-  "previous_production_commit": "UNKNOWN",
+  "production_commit": "bf2dc345e1381d78bf1dbd114618f3fbc0aafeba",
+  "previous_production_commit": "ab1c9191bd3708fe6d41da2e6a4ac89756607810",
   "repository_remote": "https://github.com/learningcode9/JapamApp.git",
-  "android_ota": "019f697b-2e1a-7fa5-8d00-ffb6c13a95a8",
+  "android_ota": "019f6cf5-c20d-71c2-9bc1-7f7dc40e75a2",
   "android_runtime": "1.0.0",
   "android_package": "com.japamapp.mantrajapam",
   "android_version_code": 5,
-  "web_deployment": "dpl_4R4BfrLm2hvRnBhyBQMbyxXDBF9C",
+  "web_deployment": "dpl_A8jogwWteA4rwi8NxoxAMu2fXbYj",
   "production_url": "https://mantra-japam.vercel.app",
   "production_supabase_project": "rftlqybgnbixotnpanec",
   "staging_supabase_project": "nhacglvxdypevrbvvkhn",
@@ -18,6 +18,6 @@
   "staging_vercel_project": "mantra-japam",
   "version": "1.0.0",
   "verified": true,
-  "verified_at": "2026-07-15",
+  "verified_at": "2026-07-16",
   "release_owner": "Sravani"
 }
