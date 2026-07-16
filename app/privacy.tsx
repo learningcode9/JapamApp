@@ -34,7 +34,7 @@ const sections = [
   {
     title: 'Contact',
     items: [
-      'If you have questions about this Privacy Policy, your account, or would like to request deletion of your data, please contact learningcode9@gmail.com',
+      'If you have questions about this Privacy Policy, your account, or would like to request deletion of your data, please contact mantrajapamapp@gmail.com',
     ],
   },
 ];

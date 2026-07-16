@@ -1156,11 +1156,14 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       releaseWakeLock();
       setIsRunning(false);
       isRunningRef.current = false;
-      setCompletedLoops(selectedLoopsRef.current);
-      completedLoopsRef.current = selectedLoopsRef.current;
+      setSeconds(0);
+      secondsRef.current = 0;
+      setCompletedLoops(0);
+      completedLoopsRef.current = 0;
       timerSessionIdRef.current = '';
-      updateTimerState({ sessionId: '', completedLoops: selectedLoopsRef.current, isCompleting: false, startedAt: null });
+      updateTimerState({ sessionId: '', completedLoops: 0, isCompleting: false, startedAt: null });
       void hideNotification();
+      await persistCompletedLoops(0);
       void persistState(false);
       return;
     }
@@ -1274,9 +1277,14 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     await saveSession();
 
     if (isFinal) {
+      setSeconds(0);
+      secondsRef.current = 0;
+      setCompletedLoops(0);
+      completedLoopsRef.current = 0;
       timerSessionIdRef.current = '';
-      updateTimerState({ sessionId: '', isCompleting: false, startedAt: null });
+      updateTimerState({ sessionId: '', startedAt: null, completedLoops: 0, isCompleting: false });
       if (Platform.OS === 'android') void stopForegroundService();
+      await persistCompletedLoops(0);
       void persistState(false);
       isCompletingRef.current = false;
       console.log('[LoopComplete] All loops done in foreground');
