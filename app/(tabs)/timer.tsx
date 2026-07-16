@@ -15,6 +15,7 @@ import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
+  AppState,
   DeviceEventEmitter,
   Dimensions,
   ImageBackground,
@@ -158,7 +159,14 @@ export default function TimerScreen() {
   const [malasToday, setMalasToday] = useState(0);
   const [todayCount, setTodayCount] = useState(0);
   const [dayStreak, setDayStreak] = useState(0);
+  const [renderedDayKey, setRenderedDayKey] = useState(getLocalDateKey);
   const deferredInstallPromptRef = useRef<any>(null);
+  const renderedDayKeyRef = useRef(renderedDayKey);
+  const homeAppStateRef = useRef(AppState.currentState);
+  const midnightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const statsRefreshInFlightRef = useRef<Promise<void> | null>(null);
+  const statsRefreshDayRef = useRef('');
+  const pendingStatsRefreshDayRef = useRef<string | null>(null);
   const isIosDeviceWeb = isIOSDeviceWeb();
 
   const rawNonceRef = useRef<string>('');
@@ -374,11 +382,61 @@ export default function TimerScreen() {
     );
   }, []);
 
+  const runStatsRefresh = useCallback((dayKey: string) => {
+    if (statsRefreshInFlightRef.current) {
+      if (statsRefreshDayRef.current !== dayKey) pendingStatsRefreshDayRef.current = dayKey;
+      return;
+    }
+    statsRefreshDayRef.current = dayKey;
+    statsRefreshInFlightRef.current = loadStats().finally(() => {
+      statsRefreshInFlightRef.current = null;
+      const pendingDay = pendingStatsRefreshDayRef.current;
+      pendingStatsRefreshDayRef.current = null;
+      if (pendingDay && pendingDay !== statsRefreshDayRef.current) runStatsRefresh(pendingDay);
+    });
+  }, [loadStats]);
+
+  const refreshHomeStats = useCallback((force = false) => {
+    const currentDayKey = getLocalDateKey();
+    if (!force && currentDayKey === renderedDayKeyRef.current) return;
+    if (currentDayKey !== renderedDayKeyRef.current) {
+      renderedDayKeyRef.current = currentDayKey;
+      setRenderedDayKey(currentDayKey);
+    }
+    runStatsRefresh(currentDayKey);
+  }, [runStatsRefresh]);
+
+  const scheduleMidnightRefresh = useCallback(() => {
+    if (midnightTimeoutRef.current) clearTimeout(midnightTimeoutRef.current);
+    const nextMidnight = new Date();
+    nextMidnight.setHours(24, 0, 0, 100);
+    midnightTimeoutRef.current = setTimeout(() => {
+      midnightTimeoutRef.current = null;
+      refreshHomeStats();
+      scheduleMidnightRefresh();
+    }, nextMidnight.getTime() - Date.now());
+  }, [refreshHomeStats]);
+
   useFocusEffect(
     useCallback(() => {
+      homeAppStateRef.current = AppState.currentState;
+      refreshHomeStats(true);
       void loadUser();
-      void loadStats();
-    }, [loadStats, loadUser])
+      const appStateSub = AppState.addEventListener('change', (nextState) => {
+        const previousState = homeAppStateRef.current;
+        homeAppStateRef.current = nextState;
+        if (nextState === 'active' && (previousState === 'background' || previousState === 'inactive')) {
+          scheduleMidnightRefresh();
+          refreshHomeStats(true);
+        }
+      });
+      scheduleMidnightRefresh();
+      return () => {
+        appStateSub.remove();
+        if (midnightTimeoutRef.current) clearTimeout(midnightTimeoutRef.current);
+        midnightTimeoutRef.current = null;
+      };
+    }, [loadUser, refreshHomeStats, scheduleMidnightRefresh])
   );
 
   useEffect(() => {
@@ -803,7 +861,7 @@ export default function TimerScreen() {
             </Pressable>
           </View>
 
-          <Text style={styles.dateText}>Today · {todayLabel}</Text>
+          <Text key={renderedDayKey} style={styles.dateText}>Today · {todayLabel}</Text>
           <Text style={styles.subtitle}>Pick a duration, set loops, breathe.</Text>
 
       {showInstallBanner && !isStandaloneOrInstalledWeb() && (
