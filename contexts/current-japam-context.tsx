@@ -35,6 +35,7 @@ import React, {
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DeviceEventEmitter, Platform } from 'react-native';
+import { createDefaultJapamCreationCoordinator } from '../lib/defaultJapamCreationCoordinator';
 import { activeJapams, type Japam } from '../lib/japams';
 import * as japamsRepository from '../lib/japamsRepository';
 
@@ -66,26 +67,10 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   // again (auth change) while an earlier write is still in flight, so every action re-reads the
   // CURRENT userId from this ref rather than closing over a possibly-stale one from render time.
   const userIdRef = useRef<string | null>(null);
-  // Promise-based synchronization for default Japam creation.
-  //
-  // When multiple refresh() calls encounter zero active Japams concurrently, only the first call
-  // creates a shared promise that performs the actual japamsRepository.createJapam(). Every
-  // concurrent caller awaits the SAME promise. After the promise settles, every caller re-reads
-  // Japams from storage — ensuring they all see the same persisted state regardless of when they
-  // joined.
-  //
-  // A waiter counter tracks how many callers are still inside the creation block. When the last
-  // waiter exits, the promise reference is cleared, allowing a future creation cycle if the user
-  // again has zero active Japams (e.g. after archiving all Japams).
-  //
-  // Why this is safer than both busy-wait and skip-and-continue:
-  //   1. No spin-wait: no while-loop, no setTimeout, no busy consumption of microtasks.
-  //   2. No event-loop ordering dependency: every caller awaits the exact same Promise and re-reads
-  //      from storage after it settles — no caller relies on "my state update runs after theirs."
-  //   3. Deterministic: every concurrent path is identical (await promise → re-read storage).
-  //      There is no fast-path / slow-path divergence.
-  const defaultJapamPromiseRef = useRef<Promise<void> | null>(null);
-  const defaultJapamWaitersRef = useRef(0);
+  // Per-user in-flight creation coordinator. Uses a Map keyed by userId so A→B→A rapid auth
+  // switches never overwrite a still-in-flight entry — each user's creation promise and waiter
+  // count lives independently and is cleaned up only when that user's last caller exits.
+  const coordinator = useMemo(() => createDefaultJapamCreationCoordinator(), []);
 
   const refresh = useCallback(async () => {
     setIsLoading(true);
@@ -97,26 +82,13 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
     // This ensures Timer, Tap Japam, History, and Stats always have a real Japam ID to use
     // instead of falling through to null.
     if (activeJapams(loadedJapams).length === 0 && userId) {
-      if (!defaultJapamPromiseRef.current) {
-        // First caller: create the shared promise. All concurrent callers await the SAME instance.
-        defaultJapamPromiseRef.current = japamsRepository
-          .createJapam(userId, 'My Japam')
-          .then(() => {})
-          .catch(() => {});
-      }
-      defaultJapamWaitersRef.current++;
-      try {
-        await defaultJapamPromiseRef.current;
-        // Re-read from storage after creation settles. This is the ONLY way every caller gets the
-        // true persisted state — the promise's resolved value is unused precisely because it could
-        // be stale for late-arriving waiters.
-        loadedJapams = await japamsRepository.loadJapams(userId);
-      } finally {
-        defaultJapamWaitersRef.current--;
-        if (defaultJapamWaitersRef.current <= 0) {
-          defaultJapamPromiseRef.current = null;
-        }
-      }
+      await coordinator.ensureCreation(userId, () =>
+        japamsRepository.createJapam(userId, 'My Japam'),
+      );
+      // Re-read from storage after creation settles. This is the ONLY way every caller gets the
+      // true persisted state — the promise's resolved value is unused precisely because it could
+      // be stale for late-arriving waiters.
+      loadedJapams = await japamsRepository.loadJapams(userId);
     }
 
     const persistedCurrentId = await japamsRepository.loadCurrentJapamId(userId);
@@ -134,7 +106,7 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
       await japamsRepository.saveCurrentJapamId(userId, resolvedCurrentId);
     }
     setIsLoading(false);
-  }, []);
+  }, [coordinator]);
 
   useEffect(() => {
     void refresh();
