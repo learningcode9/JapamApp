@@ -227,4 +227,103 @@ describe('default Japam — repository-level behavior', () => {
 
     createSpy.mockRestore();
   });
+
+  it('cross-identity guard: each user gets their own default Japam when auth switches mid-flight', async () => {
+    const USER_A = 'user-a';
+    const USER_B = 'user-b';
+    let createCallCount = 0;
+    // Track which userId each createJapam call was made for
+    const createdFor: string[] = [];
+
+    const origCreate = japamsRepository.createJapam;
+    const createSpy = jest.spyOn(japamsRepository, 'createJapam').mockImplementation(
+      async (userId, name) => {
+        createCallCount++;
+        if (userId) createdFor.push(userId);
+        // Slow enough that a concurrent caller can enter the creation block
+        // before the first creation finishes
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return origCreate(userId, name);
+      },
+    );
+
+    // Replicate the FIXED component logic: per-user in-flight creation tracker
+    const inflightRef: {
+      current: { userId: string; promise: Promise<void>; waiters: number } | null;
+    } = { current: null };
+
+    async function simulateRefresh(userId: string): Promise<{
+      japams: Japam[];
+      currentId: string | null;
+    }> {
+      let loaded = await japamsRepository.loadJapams(userId);
+      if (loaded.filter((j) => j.archivedAt === null).length === 0 && userId) {
+        if (inflightRef.current?.userId === userId) {
+          inflightRef.current.waiters++;
+        } else {
+          inflightRef.current = {
+            userId,
+            waiters: 1,
+            promise: japamsRepository
+              .createJapam(userId, 'My Japam')
+              .then(() => {})
+              .catch(() => {}),
+          };
+        }
+        try {
+          await inflightRef.current.promise;
+          loaded = await japamsRepository.loadJapams(userId);
+        } finally {
+          if (inflightRef.current?.userId === userId) {
+            inflightRef.current.waiters--;
+            if (inflightRef.current.waiters <= 0) inflightRef.current = null;
+          }
+        }
+      }
+      const persistedCurrentId = await japamsRepository.loadCurrentJapamId(userId);
+      const active = loaded.filter((j) => j.archivedAt === null);
+      const stillActive = persistedCurrentId
+        ? active.find((j) => j.id === persistedCurrentId)
+        : undefined;
+      const resolvedCurrentId = stillActive?.id ?? active[0]?.id ?? null;
+      if (resolvedCurrentId !== persistedCurrentId) {
+        await japamsRepository.saveCurrentJapamId(userId, resolvedCurrentId);
+      }
+      return { japams: loaded, currentId: resolvedCurrentId };
+    }
+
+    // Start A's refresh but do NOT await it yet — let it get to the in-flight state
+    const aPromise = simulateRefresh(USER_A);
+    // Give A's async enough time to enter the creation block and set promiseRef
+    // but NOT enough for the 50ms createJapam delay to complete
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Now start B's refresh while A's createJapam is still in flight
+    const bPromise = simulateRefresh(USER_B);
+
+    const [aResult, bResult] = await Promise.all([aPromise, bPromise]);
+
+    // The bug: only ONE createJapam was called (for USER_A)
+    // USER_B never got their own creation because B reused A's promise
+    expect(createCallCount).toBe(2);  // ← THIS WILL FAIL with buggy logic
+
+    // Each user must have exactly one Japam
+    expect(aResult.japams).toHaveLength(1);
+    expect(bResult.japams).toHaveLength(1);
+
+    // Each user's Japam has the correct name
+    expect(aResult.japams[0].name).toBe('My Japam');
+    expect(bResult.japams[0].name).toBe('My Japam');
+
+    // Each user must resolve to their own Japam ID (not null, not the other's)
+    expect(aResult.currentId).not.toBeNull();
+    expect(bResult.currentId).not.toBeNull();
+    expect(aResult.currentId).not.toBe(bResult.currentId);
+
+    // Exactly one creation per user
+    expect(createdFor.filter((id) => id === USER_A)).toHaveLength(1);
+    expect(createdFor.filter((id) => id === USER_B)).toHaveLength(1);
+
+    createSpy.mockRestore();
+  });
 });
