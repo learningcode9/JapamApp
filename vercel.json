@@ -1,5 +1,5 @@
 {
-    "buildCommand": "expo export -p web && node scripts/postprocess-web-html.js && cp public/*.html dist/",
+    "buildCommand": "node scripts/validate-env.js && expo export -p web && node scripts/postprocess-web-html.js && cp public/*.html dist/",
     "outputDirectory": "dist",
     "devCommand": "expo",
     "cleanUrls": true,
