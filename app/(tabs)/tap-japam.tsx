@@ -12,9 +12,13 @@ import {
 } from '../../lib/historyStore';
 import {
   createMalaCompletionGuard,
-  detectMalaCrossing,
   runMalaCompletion,
 } from '../../lib/malaCompletion';
+import {
+  computeTapTransition,
+  createTapIdentitySnapshot,
+  type TapIdentitySnapshot,
+} from '../../lib/tapJapamBehavior';
 import { useCurrentJapam } from '../../contexts/current-japam-context';
 import CurrentJapamHeaderButton from '../../components/CurrentJapamHeaderButton';
 import { CircularProgressArc } from '../../components/CircularProgressArc';
@@ -286,7 +290,6 @@ export default function JapamMain() {
   const timerNotifUpdateRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const userIdRef = useRef<string | null>(null);
   const lastSavedSessionRef = useRef('');
-  const lastTapRef = useRef(0);
   const lastCompletedCycleRef = useRef<number>(0);
   const tapMalaCompletionGuardRef = useRef(createMalaCompletionGuard());
   const startTimerIntervalRef = useRef<() => void>(() => {});
@@ -1674,13 +1677,14 @@ export default function JapamMain() {
     sessionMalas: number,
     sessionTotal: number,
     accumulatedTotal: number,
-    source: 'tap' | 'timer' = 'timer'
+    source: 'tap' | 'timer' = 'timer',
+    identity?: TapIdentitySnapshot
   ): Promise<boolean> => {
     if (isSavingSessionRef.current) {
       if (source === 'tap') console.log('TAP_HISTORY_SAVE_SKIPPED reason=in-flight');
       return false;
     }
-    const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    const currentUserId = identity?.userId ?? await AsyncStorage.getItem(USER_ID_KEY);
     const sessionSignature = `${currentUserId || 'guest'}-${getLocalDateKey()}-${duration}-${sessionMalas}-${sessionTotal}-${accumulatedTotal}`;
     if (lastSavedSessionRef.current === sessionSignature) {
       if (source === 'tap') console.log('TAP_HISTORY_SAVE_SKIPPED reason=duplicate signature=%s', sessionSignature);
@@ -1712,8 +1716,8 @@ export default function JapamMain() {
         userName: userId ? historyUserName : undefined,
         userEmail: userId ? savedUserEmail || undefined : undefined,
         source,
-        japamId: activeJapamIdRef.current,
-        japamName: activeJapamNameRef.current,
+        japamId: identity?.japamId ?? activeJapamIdRef.current,
+        japamName: identity?.japamName ?? activeJapamNameRef.current,
       });
       const savedRecord = updatedHistory[0];
 
@@ -1824,9 +1828,7 @@ export default function JapamMain() {
       // on expo-haptics Heavy capping at 70/255). A single flat pulse of similar total length
       // reads as a smear/buzz on modern Samsung LRA motors; a short buzz-gap-buzz reads as a
       // firmer, more distinct "thump-thump" at the same perceived intensity budget.
-      // Total duration (90ms) is kept strictly under the 100ms tap debounce (lastTapRef) so the
-      // pattern always finishes and goes silent before the next legal tap's vibrate() call can
-      // land — no overlap/clipping even at the fastest tap rate the counting logic allows.
+      // Total duration (90ms) is kept short so the pattern stays crisp.
       // Each new Vibration.vibrate() call cancels the previous one, so rapid tapping never
       // accumulates overlapping buzzes — each tap gets its own clean pulse.
       Vibration.vibrate([0, 35, 15, 40]);
@@ -1965,11 +1967,12 @@ export default function JapamMain() {
 
   const handleTap = async () => {
     if (!requireLogin()) return;
+    const tapIdentity = createTapIdentitySnapshot(
+      userIdRef.current,
+      activeJapamIdRef.current,
+      activeJapamNameRef.current
+    );
     void primeWebCompletionAudio();
-
-    const now = Date.now();
-    if (now - lastTapRef.current < 100) return;
-    lastTapRef.current = now;
 
     rippleAnim.setValue(0);
     Animated.timing(rippleAnim, {
@@ -1978,17 +1981,16 @@ export default function JapamMain() {
       useNativeDriver: true,
     }).start();
 
-    const previousTotal = totalRef.current;
-    const nextTotal = previousTotal + 1;
-    const newTotal = setCountersFromTotal(nextTotal);
-    const crossing = detectMalaCrossing(previousTotal, nextTotal);
+    const tapTransition = computeTapTransition(totalRef.current);
+    const newTotal = setCountersFromTotal(tapTransition.nextTotal);
+    const crossing = tapTransition.crossing;
 
     if (crossing.crossed) {
       console.log('TAP_MALA_COMPLETE_REACHED total=%d count=%d', newTotal, newTotal % 108);
       await runMalaCompletion({
         boundaryKey: crossing.nextMala,
         guard: tapMalaCompletionGuardRef.current,
-        save: () => saveSession(0, 1, 108, newTotal, 'tap'),
+        save: () => saveSession(0, 1, 108, newTotal, 'tap', tapIdentity),
         playFeedback: () => completeFeedback('final'),
         onError: (stage, error) => console.log('TAP_MALA_COMPLETION_ERROR stage=%s', stage, error),
       });
