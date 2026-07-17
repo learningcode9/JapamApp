@@ -1,13 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import {
-  appendCompletion,
-  buildSupabaseHistoryPayload,
   dayStreakForJapam,
-  japamStatsFor,
-  markSynced,
   mergeHistories,
-  statsByJapam,
   toLocalDayKey,
 } from '../../lib/historyStore';
 import {
@@ -19,6 +14,7 @@ import {
   createTapIdentitySnapshot,
   type TapIdentitySnapshot,
 } from '../../lib/tapJapamBehavior';
+import { tapSaveSession } from '../../lib/tapSaveSession';
 import { useCurrentJapam } from '../../contexts/current-japam-context';
 import CurrentJapamHeaderButton from '../../components/CurrentJapamHeaderButton';
 import { CircularProgressArc } from '../../components/CircularProgressArc';
@@ -132,7 +128,6 @@ const USER_EMAIL_KEY = 'userEmail';
 const USER_ID_KEY = 'userId';
 const AUTH_PENDING_KEY = 'authPending';
 const LAST_TOTAL_KEY = 'lastTotal';
-const HISTORY_SYNC_VERSION_KEY = 'historyStatsSyncVersion';
 const NOTIF_PERMISSION_ASKED_KEY = 'notifPermissionAsked';
 const AUTH_PENDING_MAX_MS = 2 * 60 * 1000;
 const TIMER_SECONDS_KEY = 'timerSeconds';
@@ -1672,144 +1667,16 @@ export default function JapamMain() {
     }
   }, []);
 
-  const saveSession = useCallback(async (
-    duration: number,
-    sessionMalas: number,
-    sessionTotal: number,
-    accumulatedTotal: number,
-    source: 'tap' | 'timer' = 'timer',
-    identity?: TapIdentitySnapshot
-  ): Promise<boolean> => {
-    if (isSavingSessionRef.current) {
-      if (source === 'tap') console.log('TAP_HISTORY_SAVE_SKIPPED reason=in-flight');
-      return false;
-    }
-    const currentUserId = identity?.userId ?? await AsyncStorage.getItem(USER_ID_KEY);
-    const sessionSignature = `${currentUserId || 'guest'}-${getLocalDateKey()}-${duration}-${sessionMalas}-${sessionTotal}-${accumulatedTotal}`;
-    if (lastSavedSessionRef.current === sessionSignature) {
-      if (source === 'tap') console.log('TAP_HISTORY_SAVE_SKIPPED reason=duplicate signature=%s', sessionSignature);
-      return false;
-    }
-
-    isSavingSessionRef.current = true;
-    lastSavedSessionRef.current = sessionSignature;
-
-    try {
-      if (source === 'tap') {
-        console.log('TAP_HISTORY_SAVE_START signature=%s total=%d count=%d', sessionSignature, accumulatedTotal, sessionTotal);
-      }
-      const raw = await AsyncStorage.getItem(HISTORY_KEY);
-      const history: Session[] = raw ? JSON.parse(raw) : [];
-      const userId = currentUserId;
-      const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
-      const savedUserEmail = await AsyncStorage.getItem(USER_EMAIL_KEY);
-      const historyUserName = savedUserName || userName || savedUserEmail || 'Unknown User';
-
-      const sessionDate = new Date().toISOString();
-      const updatedHistory = appendCompletion(history, {
-        date: sessionDate,
-        malas: sessionMalas,
-        totalCount: sessionTotal,
-        duration,
-        manual: false,
-        userId: userId ?? null,
-        userName: userId ? historyUserName : undefined,
-        userEmail: userId ? savedUserEmail || undefined : undefined,
-        source,
-        japamId: identity?.japamId ?? activeJapamIdRef.current,
-        japamName: identity?.japamName ?? activeJapamNameRef.current,
-      });
-      const savedRecord = updatedHistory[0];
-
-      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
-      await AsyncStorage.setItem(HISTORY_SYNC_VERSION_KEY, String(Date.now()));
-      console.log(
-        '[OFFLINE_SAVE_ACCEPTED] source=%s completionId=%s created_at=%s localDay=%s syncStatus=%s',
-        source,
-        savedRecord.completionId,
-        savedRecord.date,
-        toLocalDayKey(savedRecord.date),
-        savedRecord.syncStatus
-      );
-      if (source === 'tap') {
-        console.log(
-          'TAP_HISTORY_SAVE_ACCEPTED completionId=%s userId=%s userName=%s',
-          savedRecord.completionId,
-          userId || 'guest',
-          historyUserName
-        );
-      }
-
-      // Emit immediately after local save — Home and History update without waiting for Supabase
-      DeviceEventEmitter.emit('japam-stats-updated');
-      DeviceEventEmitter.emit('japam-history-updated', { userId: userId || 'guest', todayTotal: accumulatedTotal });
-      if (Platform.OS === 'web' && typeof window !== 'undefined') {
-        window.dispatchEvent(new Event('japam-stats-updated'));
-        window.dispatchEvent(new Event('japam-history-updated'));
-      }
-      if (source === 'tap') {
-        console.log('TAP_STATS_EVENT_DISPATCHED completionId=%s', savedRecord.completionId);
-      }
-
-      if (userId) {
-        const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-        const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-
-        if (url && key) {
-          const payload = buildSupabaseHistoryPayload(savedRecord, userId, historyUserName);
-          console.log(
-            '[SYNC_PAYLOAD_CREATED_AT] source=%s completionId=%s created_at=%s localDay=%s',
-            source,
-            payload.completion_id,
-            payload.created_at,
-            toLocalDayKey(payload.created_at)
-          );
-          void (async () => {
-            try {
-              // Require a real session JWT — an anon-key request has no INSERT policy for this
-              // user's own rows once RLS is tightened (mirrors syncPendingHistory's session-token
-              // preference). No session leaves the record 'pending' for the next opportunistic sync.
-              const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
-              if (!sessionToken) {
-                console.log('[SYNC_FAILED] source=%s completionId=%s reason=no-session', source, payload.completion_id);
-                return;
-              }
-              const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', apikey: key, Authorization: `Bearer ${sessionToken}`, Prefer: 'return=minimal,resolution=merge-duplicates' },
-                body: JSON.stringify(payload),
-              });
-
-              if (!res.ok) {
-                console.log('[SYNC_FAILED] source=%s completionId=%s status=%d', source, payload.completion_id, res.status);
-                console.log('Tap Supabase save error:', await res.text());
-                return;
-              }
-              console.log('[SYNC_SUCCESS] source=%s completionId=%s', source, payload.completion_id);
-
-              const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
-              const latest = latestRaw ? JSON.parse(latestRaw) : [];
-              await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, [savedRecord.completionId])));
-              console.log('[MARK_SYNCED] source=%s completionId=%s', source, savedRecord.completionId);
-            } catch (error) {
-              console.log('[SYNC_FAILED] source=%s completionId=%s reason=network', source, payload.completion_id);
-              console.log('Tap Supabase save error:', error);
-            }
-          })();
-        }
-      }
-      return true;
-    } catch (error) {
-      console.log('Supabase save error:', error);
-      if (source === 'tap') {
-        lastSavedSessionRef.current = '';
-        console.log('TAP_HISTORY_SAVE_SKIPPED reason=error');
-      }
-      return false;
-    } finally {
-      isSavingSessionRef.current = false;
-    }
-  }, [userName]);
+  const saveSession = useCallback(
+    (duration: number, sessionMalas: number, sessionTotal: number, accumulatedTotal: number, source: 'tap' | 'timer' = 'timer', identity?: TapIdentitySnapshot) =>
+      tapSaveSession(duration, sessionMalas, sessionTotal, accumulatedTotal, source, {
+        isSavingSession: isSavingSessionRef,
+        lastSavedSession: lastSavedSessionRef,
+        activeJapamId: activeJapamIdRef,
+        activeJapamName: activeJapamNameRef,
+      }, identity, userName),
+    [userName]
+  );
 
 
   const tapFeedback = useCallback(() => {

@@ -1066,7 +1066,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const saveSession = useCallback(async () => {
-    const uid = userIdRef.current;
+    // Hydrate userIdRef from AsyncStorage if the ref is still empty (covers the race where the
+    // auth-updated event arrives before this component mounted its listener, or where the listener
+    // has been cleaned up and re-created while an auth event was in flight).
+    const uid = userIdRef.current || await AsyncStorage.getItem(USER_ID_KEY) || '';
+    if (!userIdRef.current && uid) {
+      userIdRef.current = uid;
+    }
     const duration = selectedDurationRef.current * 60;
     const before = await readMalasTodaySnapshot();
     const pausedNow = !isRunningRef.current && secondsRef.current > 0 && secondsRef.current < duration;
