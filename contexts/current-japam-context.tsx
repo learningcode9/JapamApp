@@ -35,6 +35,7 @@ import React, {
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DeviceEventEmitter, Platform } from 'react-native';
+import { createDefaultJapamCreationCoordinator } from '../lib/defaultJapamCreationCoordinator';
 import { activeJapams, type Japam } from '../lib/japams';
 import * as japamsRepository from '../lib/japamsRepository';
 
@@ -66,24 +67,10 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   // again (auth change) while an earlier write is still in flight, so every action re-reads the
   // CURRENT userId from this ref rather than closing over a possibly-stale one from render time.
   const userIdRef = useRef<string | null>(null);
-  // Per-user in-flight creation tracker.
-  //
-  // When multiple refresh() calls for the SAME user encounter zero active Japams, only the first
-  // call creates a shared promise. Every concurrent caller for that user awaits the SAME promise.
-  // This avoids duplicate createJapam calls for the same user.
-  //
-  // If a DIFFERENT user enters the block while a creation is in-flight (e.g. auth changed before
-  // the first user's promise settled), the stale entry is replaced with a new one for the current
-  // user. The old user still holds their own promise reference and finishes independently.
-  //
-  // The waiter counter tracks how many callers for the same user are inside the creation block.
-  // When the last waiter exits, the entry is cleared so a future creation cycle can start fresh
-  // (e.g. after the user archives all Japams).
-  const inflightCreationRef = useRef<{
-    userId: string;
-    promise: Promise<void>;
-    waiters: number;
-  } | null>(null);
+  // Per-user in-flight creation coordinator. Uses a Map keyed by userId so A→B→A rapid auth
+  // switches never overwrite a still-in-flight entry — each user's creation promise and waiter
+  // count lives independently and is cleaned up only when that user's last caller exits.
+  const coordinator = useMemo(() => createDefaultJapamCreationCoordinator(), []);
 
   const refresh = useCallback(async () => {
     setIsLoading(true);
@@ -95,40 +82,13 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
     // This ensures Timer, Tap Japam, History, and Stats always have a real Japam ID to use
     // instead of falling through to null.
     if (activeJapams(loadedJapams).length === 0 && userId) {
-      if (inflightCreationRef.current?.userId === userId) {
-        // An in-flight creation for THIS user already exists. Reuse it to prevent a duplicate
-        // Japam from a concurrent refresh() call (e.g. auth event while the first is still
-        // awaiting the repository).
-        inflightCreationRef.current.waiters++;
-      } else {
-        // No in-flight creation for this user (either first creation ever, or a stale entry from
-        // a previous user whose auth was switched away mid-flight). Create a new one.
-        inflightCreationRef.current = {
-          userId,
-          waiters: 1,
-          promise: japamsRepository
-            .createJapam(userId, 'My Japam')
-            .then(() => {})
-            .catch(() => {}),
-        };
-      }
-      try {
-        await inflightCreationRef.current.promise;
-        // Re-read from storage after creation settles. This is the ONLY way every caller gets the
-        // true persisted state — the promise's resolved value is unused precisely because it could
-        // be stale for late-arriving waiters.
-        loadedJapams = await japamsRepository.loadJapams(userId);
-      } finally {
-        if (inflightCreationRef.current?.userId === userId) {
-          inflightCreationRef.current.waiters--;
-          if (inflightCreationRef.current.waiters <= 0) {
-            inflightCreationRef.current = null;
-          }
-        }
-        // If the userId changed between entry and exit (e.g. the entry was for a user whose
-        // in-flight entry was already replaced by a newer user), do nothing — the newer entry's
-        // lifecycle is managed by the user who owns it.
-      }
+      await coordinator.ensureCreation(userId, () =>
+        japamsRepository.createJapam(userId, 'My Japam'),
+      );
+      // Re-read from storage after creation settles. This is the ONLY way every caller gets the
+      // true persisted state — the promise's resolved value is unused precisely because it could
+      // be stale for late-arriving waiters.
+      loadedJapams = await japamsRepository.loadJapams(userId);
     }
 
     const persistedCurrentId = await japamsRepository.loadCurrentJapamId(userId);
@@ -146,7 +106,7 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
       await japamsRepository.saveCurrentJapamId(userId, resolvedCurrentId);
     }
     setIsLoading(false);
-  }, []);
+  }, [coordinator]);
 
   useEffect(() => {
     void refresh();

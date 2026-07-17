@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { createDefaultJapamCreationCoordinator } from '../defaultJapamCreationCoordinator';
 import { type Japam } from '../japams';
 import * as japamsRepository from '../japamsRepository';
 
@@ -160,97 +161,19 @@ describe('default Japam — repository-level behavior', () => {
   });
 
   it('concurrent initialization creates exactly one "My Japam"', async () => {
+    const coordinator = createDefaultJapamCreationCoordinator();
     const CUID = 'concurrent-user';
-    let createCallCount = 0;
+
+    let openGate: () => void;
+    const creationGate = new Promise<void>((resolve) => { openGate = resolve; });
 
     const origCreate = japamsRepository.createJapam;
     const createSpy = jest.spyOn(japamsRepository, 'createJapam').mockImplementation(
       async (userId, name) => {
-        createCallCount++;
-        // Simulate a slow creation so concurrent callers overlap
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await creationGate;
         return origCreate(userId, name);
       },
     );
-
-    const promiseRef: { current: Promise<void> | null } = { current: null };
-    const waitersRef = { current: 0 };
-
-    async function simulateRefresh(): Promise<{
-      japams: Japam[];
-      currentId: string | null;
-    }> {
-      let loaded = await japamsRepository.loadJapams(CUID);
-      if (loaded.filter((j) => j.archivedAt === null).length === 0 && CUID) {
-        if (!promiseRef.current) {
-          promiseRef.current = japamsRepository
-            .createJapam(CUID, 'My Japam')
-            .then(() => {})
-            .catch(() => {});
-        }
-        waitersRef.current++;
-        try {
-          await promiseRef.current;
-          loaded = await japamsRepository.loadJapams(CUID);
-        } finally {
-          waitersRef.current--;
-          if (waitersRef.current <= 0) promiseRef.current = null;
-        }
-      }
-      const persistedCurrentId = await japamsRepository.loadCurrentJapamId(CUID);
-      const active = loaded.filter((j) => j.archivedAt === null);
-      const stillActive = persistedCurrentId
-        ? active.find((j) => j.id === persistedCurrentId)
-        : undefined;
-      const resolvedCurrentId = stillActive?.id ?? active[0]?.id ?? null;
-      if (resolvedCurrentId !== persistedCurrentId) {
-        await japamsRepository.saveCurrentJapamId(CUID, resolvedCurrentId);
-      }
-      return { japams: loaded, currentId: resolvedCurrentId };
-    }
-
-    const results = await Promise.all([
-      simulateRefresh(),
-      simulateRefresh(),
-      simulateRefresh(),
-    ]);
-
-    expect(createCallCount).toBe(1);
-    for (const r of results) {
-      expect(r.japams).toHaveLength(1);
-      expect(r.japams[0].name).toBe('My Japam');
-      expect(r.currentId).toBe(r.japams[0].id);
-      expect(r.currentId).not.toBeNull();
-    }
-    const ids = new Set(results.map((r) => r.currentId));
-    expect(ids.size).toBe(1);
-
-    createSpy.mockRestore();
-  });
-
-  it('cross-identity guard: each user gets their own default Japam when auth switches mid-flight', async () => {
-    const USER_A = 'user-a';
-    const USER_B = 'user-b';
-    let createCallCount = 0;
-    // Track which userId each createJapam call was made for
-    const createdFor: string[] = [];
-
-    const origCreate = japamsRepository.createJapam;
-    const createSpy = jest.spyOn(japamsRepository, 'createJapam').mockImplementation(
-      async (userId, name) => {
-        createCallCount++;
-        if (userId) createdFor.push(userId);
-        // Slow enough that a concurrent caller can enter the creation block
-        // before the first creation finishes
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        return origCreate(userId, name);
-      },
-    );
-
-    // Replicate the FIXED component logic: per-user in-flight creation tracker
-    const inflightRef: {
-      current: { userId: string; promise: Promise<void>; waiters: number } | null;
-    } = { current: null };
 
     async function simulateRefresh(userId: string): Promise<{
       japams: Japam[];
@@ -258,27 +181,10 @@ describe('default Japam — repository-level behavior', () => {
     }> {
       let loaded = await japamsRepository.loadJapams(userId);
       if (loaded.filter((j) => j.archivedAt === null).length === 0 && userId) {
-        if (inflightRef.current?.userId === userId) {
-          inflightRef.current.waiters++;
-        } else {
-          inflightRef.current = {
-            userId,
-            waiters: 1,
-            promise: japamsRepository
-              .createJapam(userId, 'My Japam')
-              .then(() => {})
-              .catch(() => {}),
-          };
-        }
-        try {
-          await inflightRef.current.promise;
-          loaded = await japamsRepository.loadJapams(userId);
-        } finally {
-          if (inflightRef.current?.userId === userId) {
-            inflightRef.current.waiters--;
-            if (inflightRef.current.waiters <= 0) inflightRef.current = null;
-          }
-        }
+        await coordinator.ensureCreation(userId, () =>
+          japamsRepository.createJapam(userId, 'My Japam'),
+        );
+        loaded = await japamsRepository.loadJapams(userId);
       }
       const persistedCurrentId = await japamsRepository.loadCurrentJapamId(userId);
       const active = loaded.filter((j) => j.archivedAt === null);
@@ -292,20 +198,88 @@ describe('default Japam — repository-level behavior', () => {
       return { japams: loaded, currentId: resolvedCurrentId };
     }
 
-    // Start A's refresh but do NOT await it yet — let it get to the in-flight state
-    const aPromise = simulateRefresh(USER_A);
-    // Give A's async enough time to enter the creation block and set promiseRef
-    // but NOT enough for the 50ms createJapam delay to complete
-    await new Promise((resolve) => setImmediate(resolve));
+    // Start all 3 calls synchronously. Each yields at its first await (loadJapams).
+    // Their continuations (microtasks) block on the creationGate inside the repository
+    // spy (call 1) or on the coordinator's shared promise (calls 2, 3).
+    const resultsPromise = Promise.all([
+      simulateRefresh(CUID),
+      simulateRefresh(CUID),
+      simulateRefresh(CUID),
+    ]);
 
-    // Now start B's refresh while A's createJapam is still in flight
+    // Drain microtasks so all 3 continuations reach their blocking points,
+    // then open the gate from a macrotask boundary.
+    setTimeout(openGate!, 0);
+
+    const results = await resultsPromise;
+
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    for (const r of results) {
+      expect(r.japams).toHaveLength(1);
+      expect(r.japams[0].name).toBe('My Japam');
+      expect(r.currentId).toBe(r.japams[0].id);
+      expect(r.currentId).not.toBeNull();
+    }
+    const ids = new Set(results.map((r) => r.currentId));
+    expect(ids.size).toBe(1);
+
+    createSpy.mockRestore();
+  });
+
+  it('cross-identity guard: each user gets their own default Japam when auth switches mid-flight', async () => {
+    const coordinator = createDefaultJapamCreationCoordinator();
+    const USER_A = 'user-a';
+    const USER_B = 'user-b';
+
+    let openGate: () => void;
+    const creationGate = new Promise<void>((resolve) => { openGate = resolve; });
+
+    const origCreate = japamsRepository.createJapam;
+    const createSpy = jest.spyOn(japamsRepository, 'createJapam').mockImplementation(
+      async (userId, name) => {
+        await creationGate;
+        return origCreate(userId, name);
+      },
+    );
+
+    async function simulateRefresh(userId: string): Promise<{
+      japams: Japam[];
+      currentId: string | null;
+    }> {
+      let loaded = await japamsRepository.loadJapams(userId);
+      if (loaded.filter((j) => j.archivedAt === null).length === 0 && userId) {
+        await coordinator.ensureCreation(userId, () =>
+          japamsRepository.createJapam(userId, 'My Japam'),
+        );
+        loaded = await japamsRepository.loadJapams(userId);
+      }
+      const persistedCurrentId = await japamsRepository.loadCurrentJapamId(userId);
+      const active = loaded.filter((j) => j.archivedAt === null);
+      const stillActive = persistedCurrentId
+        ? active.find((j) => j.id === persistedCurrentId)
+        : undefined;
+      const resolvedCurrentId = stillActive?.id ?? active[0]?.id ?? null;
+      if (resolvedCurrentId !== persistedCurrentId) {
+        await japamsRepository.saveCurrentJapamId(userId, resolvedCurrentId);
+      }
+      return { japams: loaded, currentId: resolvedCurrentId };
+    }
+
+    // Start A, then B, synchronously. Each yields at loadJapams.
+    // When microtasks drain, A's continuation blocks in the repository spy
+    // (inside ensureCreation) and B blocks in its own spy
+    // (separate Map entry — Map-based coordinator does not override).
+    const aPromise = simulateRefresh(USER_A);
     const bPromise = simulateRefresh(USER_B);
+
+    // Drain microtasks so both continuations reach their blocking points,
+    // then open the gate from a macrotask boundary.
+    setTimeout(openGate!, 0);
 
     const [aResult, bResult] = await Promise.all([aPromise, bPromise]);
 
-    // The bug: only ONE createJapam was called (for USER_A)
-    // USER_B never got their own creation because B reused A's promise
-    expect(createCallCount).toBe(2);  // ← THIS WILL FAIL with buggy logic
+    // Each user gets their own createJapam call — A's entry is NOT reused for B
+    expect(createSpy).toHaveBeenCalledTimes(2);
 
     // Each user must have exactly one Japam
     expect(aResult.japams).toHaveLength(1);
@@ -319,10 +293,6 @@ describe('default Japam — repository-level behavior', () => {
     expect(aResult.currentId).not.toBeNull();
     expect(bResult.currentId).not.toBeNull();
     expect(aResult.currentId).not.toBe(bResult.currentId);
-
-    // Exactly one creation per user
-    expect(createdFor.filter((id) => id === USER_A)).toHaveLength(1);
-    expect(createdFor.filter((id) => id === USER_B)).toHaveLength(1);
 
     createSpy.mockRestore();
   });
