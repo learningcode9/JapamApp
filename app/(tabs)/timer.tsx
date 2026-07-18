@@ -50,6 +50,11 @@ import {
 } from '../../lib/anonymousAuth';
 import { getJapamActionReadiness } from '../../lib/japamActionReadiness';
 import { supabase } from '../../lib/supabase';
+import {
+  clearPendingWebGoogleNonce,
+  readPendingWebGoogleNonce,
+  savePendingWebGoogleNonce,
+} from '../../lib/webGoogleNonce';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -171,6 +176,7 @@ export default function TimerScreen() {
 
   const rawNonceRef = useRef<string>('');
   const [hashedNonce, setHashedNonce] = useState<string>('');
+  const [nonceReady, setNonceReady] = useState(Platform.OS !== 'web');
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     const arr = new Uint8Array(16);
@@ -182,9 +188,9 @@ export default function TimerScreen() {
       const hashed = Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
       console.log('[NONCE_GEN] timer hashed_prefix=%s', hashed.slice(0, 8));
       setHashedNonce(hashed);
+      setNonceReady(true);
     });
   }, []);
-
 
   const [request, response, promptAsync] = Google.useAuthRequest({
     webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
@@ -192,8 +198,8 @@ export default function TimerScreen() {
     clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
     scopes: ['openid', 'profile', 'email'],
     redirectUri: Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : undefined,
-    responseType: Platform.OS === 'web' ? ResponseType.IdToken : undefined,
-    extraParams: Platform.OS === 'web' && hashedNonce ? { nonce: hashedNonce } : undefined,
+    responseType: Platform.OS === 'web' && nonceReady ? ResponseType.IdToken : undefined,
+    extraParams: Platform.OS === 'web' && nonceReady ? { nonce: hashedNonce } : undefined,
   });
 
   const loadUser = useCallback(async () => {
@@ -538,6 +544,7 @@ export default function TimerScreen() {
       console.log('[AUTH_CALLBACK] source=timer-web response.type=%s', response.type);
       if (response.type !== 'success') {
         setIsSigningIn(false);
+        await clearPendingWebGoogleNonce();
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
         if (!savedUserId) {
@@ -563,6 +570,7 @@ export default function TimerScreen() {
         'params' in response ? Object.keys(response.params ?? {}).join(',') : 'none');
 
       if (!accessToken && !idToken) {
+        await clearPendingWebGoogleNonce();
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         setIsSigningIn(false);
         setShowUserModal(true);
@@ -572,16 +580,30 @@ export default function TimerScreen() {
 
       try {
         if (idToken) {
-          console.log('[SUPABASE_AUTH] timer nonce_prefix=%s', rawNonceRef.current.slice(0, 8));
+          const persistedNonce = await readPendingWebGoogleNonce();
+          if (!persistedNonce) {
+            console.log('[SUPABASE_AUTH] timer missing persisted web nonce');
+            await clearPendingWebGoogleNonce();
+            setShowUserModal(true);
+            showGoogleSignInRequiredAlert();
+            return;
+          }
+          console.log('[SUPABASE_AUTH] timer nonce_prefix=%s', persistedNonce.slice(0, 8));
           const { error: supaAuthError } = await supabase.auth.signInWithIdToken({
             provider: 'google',
             token: idToken,
-            nonce: rawNonceRef.current,
+            nonce: persistedNonce,
           });
-          if (supaAuthError) console.log('[SUPABASE_AUTH] timer signInWithIdToken error:', supaAuthError.message);
-          else console.log('[SUPABASE_AUTH] timer web session established');
+          if (supaAuthError) {
+            console.log('[SUPABASE_AUTH] timer signInWithIdToken error:', supaAuthError.message);
+            await clearPendingWebGoogleNonce();
+          } else {
+            console.log('[SUPABASE_AUTH] timer web session established');
+            await clearPendingWebGoogleNonce();
+          }
         } else {
           console.log('[SUPABASE_AUTH] timer no id_token — session not established');
+          await clearPendingWebGoogleNonce();
         }
 
         const session = (await supabase.auth.getSession()).data.session;
@@ -597,6 +619,7 @@ export default function TimerScreen() {
         );
         if (!session?.access_token || sessionIsAnonymous) {
           console.log('[SUPABASE_AUTH] timer missing non-anonymous Supabase session after Google login');
+          await clearPendingWebGoogleNonce();
           setShowUserModal(true);
           showGoogleSignInRequiredAlert();
           return;
@@ -629,6 +652,7 @@ export default function TimerScreen() {
         }
 
         if (!googleUserId) {
+          await clearPendingWebGoogleNonce();
           setShowUserModal(true);
           showGoogleSignInRequiredAlert();
           return;
@@ -653,6 +677,7 @@ export default function TimerScreen() {
         void loadStats();
       } catch (error) {
         console.log('Google login error:', error);
+        await clearPendingWebGoogleNonce();
         setShowUserModal(true);
         showGoogleSignInRequiredAlert();
       } finally {
@@ -1009,8 +1034,8 @@ export default function TimerScreen() {
                   : 'Sign in with Google to sync your Japam across devices.'}
               </Text>
               <Pressable
-                disabled={Platform.OS === 'web' && !request}
-                style={[styles.modalButton, (Platform.OS === 'web' && !request) && styles.disabledButton]}
+                disabled={Platform.OS === 'web' && (!request || !nonceReady)}
+                style={[styles.modalButton, (Platform.OS === 'web' && (!request || !nonceReady)) && styles.disabledButton]}
                 onPress={() => {
                   if (Platform.OS !== 'web') {
                     void handleNativeGoogleSignIn();
@@ -1022,8 +1047,10 @@ export default function TimerScreen() {
                     void (async () => {
                       try {
                         await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
+                        await savePendingWebGoogleNonce(rawNonceRef.current);
                         const result = await promptAsync({ showInRecents: true });
                         if (result.type !== 'success') {
+                          await clearPendingWebGoogleNonce();
                           await AsyncStorage.removeItem(AUTH_PENDING_KEY);
                           setIsSigningIn(false);
                           setShowUserModal(true);
@@ -1031,6 +1058,7 @@ export default function TimerScreen() {
                         }
                       } catch (error) {
                         console.log('Google prompt error:', error);
+                        await clearPendingWebGoogleNonce();
                         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
                         setIsSigningIn(false);
                         setShowUserModal(true);
