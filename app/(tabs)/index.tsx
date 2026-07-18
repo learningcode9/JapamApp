@@ -2680,7 +2680,7 @@ export default function JapamMain() {
               <View style={styles.modalTopMark}>
                 <View style={styles.modalTopDot} />
               </View>
-              <Text style={styles.modalTitle}>What's your name?</Text>
+              <Text style={styles.modalTitle}>What&apos;s your name?</Text>
               <Text style={styles.modalSubtitle}>
                 Enter your name to personalise your Japam records.
               </Text>

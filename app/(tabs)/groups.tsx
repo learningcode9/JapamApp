@@ -199,7 +199,7 @@ export default function GroupsScreen() {
           <Text style={styles.errorText}>{listError}</Text>
         ) : groups.length === 0 ? (
           <Text style={styles.emptyText}>
-            You're not in any groups yet. Create one or join with an invite code.
+            You&apos;re not in any groups yet. Create one or join with an invite code.
           </Text>
         ) : (
           groups.map((group) => (
