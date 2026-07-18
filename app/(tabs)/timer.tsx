@@ -48,6 +48,7 @@ import {
   signInOrLinkGoogle,
   showGoogleAccountCollisionDialog,
 } from '../../lib/anonymousAuth';
+import { getJapamActionReadiness } from '../../lib/japamActionReadiness';
 import { supabase } from '../../lib/supabase';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -136,7 +137,7 @@ const showGoogleSignInRequiredAlert = () => {
 export default function TimerScreen() {
   const router = useRouter();
   const timer = useTimer();
-  const { currentJapam } = useCurrentJapam();
+  const { currentJapam, isLoading: isJapamLoading } = useCurrentJapam();
   const insets = useSafeAreaInsets();
   // Mirror the floating tab bar geometry from _layout.tsx exactly.
   // _layout.tsx uses screenWidth < 500 as its isMobile threshold (different from
@@ -153,6 +154,8 @@ export default function TimerScreen() {
   const [showCustomInput, setShowCustomInput] = useState(false);
   const [customText, setCustomText] = useState('');
   const [userName, setUserName] = useState('');
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [isAnonymousUser, setIsAnonymousUser] = useState(false);
   const [showUserModal, setShowUserModal] = useState(false);
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [showGuestWarningModal, setShowGuestWarningModal] = useState(false);
@@ -194,8 +197,23 @@ export default function TimerScreen() {
   });
 
   const loadUser = useCallback(async () => {
-    setUserName((await AsyncStorage.getItem(USER_NAME_KEY)) || '');
+    const [storedUserName, storedUserId, anonymous] = await Promise.all([
+      AsyncStorage.getItem(USER_NAME_KEY),
+      AsyncStorage.getItem(USER_ID_KEY),
+      getIsAnonymous(),
+    ]);
+    setUserName(storedUserName || '');
+    setCurrentUserId(storedUserId);
+    setIsAnonymousUser(anonymous);
   }, []);
+
+  const japamActionReadiness = getJapamActionReadiness({
+    userId: currentUserId,
+    isAnonymous: isAnonymousUser,
+    currentJapamId: currentJapam?.id ?? null,
+    isJapamLoading,
+  });
+  const isStartDisabled = !timer.isRunning && !japamActionReadiness.canAct;
 
   const openSignInModal = useCallback(() => {
     setIsSigningIn(false);
@@ -691,11 +709,23 @@ export default function TimerScreen() {
     };
   }, [isIosDeviceWeb]);
 
-  const handleStart = () => {
+  const handleStart = async () => {
     if (!timer.canStart) {
       openSignInModal();
       return;
     }
+    const [storedUserId, anonymous] = await Promise.all([
+      AsyncStorage.getItem(USER_ID_KEY),
+      getIsAnonymous(),
+    ]);
+    const resolvedReadiness = getJapamActionReadiness({
+      userId: currentUserId ?? storedUserId,
+      isAnonymous: currentUserId ? isAnonymousUser : anonymous,
+      currentJapamId: currentJapam?.id ?? null,
+      isJapamLoading,
+    });
+    if (!resolvedReadiness.canAct) return;
+    if (resolvedReadiness.requiresResolvedJapam && !currentJapam) return;
     // Snapshot whichever Japam is current AT THIS EXACT MOMENT, once, before starting. Switching
     // the app's current Japam later must never retroactively change what this running session's
     // eventual completion is attributed to -- see setActiveJapamSelection in timer-context.tsx.
@@ -833,12 +863,25 @@ export default function TimerScreen() {
 
           <View style={styles.controls}>
             <Pressable
-              style={({ pressed }) => [styles.startBtn, pressed && styles.softPressed]}
+              style={({ pressed }) => [
+                styles.startBtn,
+                pressed && !isStartDisabled && styles.softPressed,
+                isStartDisabled && styles.disabledButton,
+              ]}
               onPress={timer.isRunning ? timer.pause : handleStart}
+              disabled={isStartDisabled}
             >
               <Ionicons name={timer.isRunning ? 'pause' : 'play'} size={20} color="#fff" style={{ marginRight: 8 }} />
               <Text style={styles.startBtnText}>
-                {timer.isRunning ? 'Pause' : timer.isPaused ? 'Resume' : 'Start'}
+                {timer.isRunning
+                  ? 'Pause'
+                  : isStartDisabled && japamActionReadiness.isBlockedByLoading
+                    ? 'Loading Japam...'
+                    : isStartDisabled && japamActionReadiness.isBlockedByMissingJapam
+                      ? 'Select a Japam'
+                      : timer.isPaused
+                        ? 'Resume'
+                        : 'Start'}
               </Text>
             </Pressable>
             <Pressable

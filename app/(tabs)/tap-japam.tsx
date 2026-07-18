@@ -14,6 +14,8 @@ import {
   createTapIdentitySnapshot,
   type TapIdentitySnapshot,
 } from '../../lib/tapJapamBehavior';
+import { getIsAnonymous } from '../../lib/anonymousAuth';
+import { getJapamActionReadiness } from '../../lib/japamActionReadiness';
 import { tapSaveSession } from '../../lib/tapSaveSession';
 import { useCurrentJapam } from '../../contexts/current-japam-context';
 import CurrentJapamHeaderButton from '../../components/CurrentJapamHeaderButton';
@@ -204,7 +206,7 @@ const isAuthPending = async () => {
 };
 
 export default function JapamMain() {
-  const { currentJapam } = useCurrentJapam();
+  const { currentJapam, isLoading: isJapamLoading } = useCurrentJapam();
   // The Japam this screen's completions belong to. Tap Japam has no discrete "Start" button (see
   // handleStart below, which is not wired to any visible control on this screen) -- tapping the
   // circle is the actual interaction, with no clear start/stop boundary of its own. Treating
@@ -214,12 +216,6 @@ export default function JapamMain() {
   // state, matching the same discipline as Timer/Home's equivalent wiring.
   const activeJapamIdRef = useRef<string | null>(null);
   const activeJapamNameRef = useRef<string | null>(null);
-  useFocusEffect(
-    useCallback(() => {
-      activeJapamIdRef.current = currentJapam?.id ?? null;
-      activeJapamNameRef.current = currentJapam?.name ?? null;
-    }, [currentJapam])
-  );
 
   const insets = useSafeAreaInsets();
   const tabBarSpaceFromBottom = 74 + (isMobile
@@ -254,7 +250,23 @@ export default function JapamMain() {
   const [showGuestNameModal, setShowGuestNameModal] = useState(false);
   const [guestNameInput, setGuestNameInput] = useState('');
   const [isGuestMode, setIsGuestMode] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [isAnonymousUser, setIsAnonymousUser] = useState(false);
   const [authReady, setAuthReady] = useState(false);
+  const japamActionReadiness = getJapamActionReadiness({
+    userId: currentUserId,
+    isAnonymous: isAnonymousUser,
+    currentJapamId: currentJapam?.id ?? null,
+    isJapamLoading,
+  });
+  const isTapDisabled = !authReady || !japamActionReadiness.canAct;
+  useFocusEffect(
+    useCallback(() => {
+      if (!japamActionReadiness.canSnapshot) return;
+      activeJapamIdRef.current = currentJapam?.id ?? null;
+      activeJapamNameRef.current = currentJapam?.name ?? null;
+    }, [currentJapam, japamActionReadiness.canSnapshot])
+  );
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [repetitionSoundEnabled, setRepetitionSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
@@ -308,9 +320,15 @@ export default function JapamMain() {
   }, []);
 
   const syncStoredAuth = useCallback(async () => {
-    const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
-    const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-    const authPending = await isAuthPending();
+    const [savedUserName, savedUserId, authPending, anonymous] = await Promise.all([
+      AsyncStorage.getItem(USER_NAME_KEY),
+      AsyncStorage.getItem(USER_ID_KEY),
+      isAuthPending(),
+      getIsAnonymous(),
+    ]);
+
+    setCurrentUserId(savedUserId);
+    setIsAnonymousUser(anonymous);
 
     if (savedUserName && savedUserId) {
       userIdRef.current = savedUserId;
@@ -1834,12 +1852,24 @@ export default function JapamMain() {
 
   const handleTap = async () => {
     if (!requireLogin()) return;
+    if (!japamActionReadiness.canAct) return;
+    const resolvedCurrentJapam = currentJapam;
+    if (japamActionReadiness.requiresResolvedJapam && !resolvedCurrentJapam) return;
+    const scopedJapamId = japamActionReadiness.requiresResolvedJapam
+      ? resolvedCurrentJapam!.id
+      : activeJapamIdRef.current;
+    const scopedJapamName = japamActionReadiness.requiresResolvedJapam
+      ? resolvedCurrentJapam!.name
+      : activeJapamNameRef.current;
+    activeJapamIdRef.current = scopedJapamId;
+    activeJapamNameRef.current = scopedJapamName;
     const tapIdentity = createTapIdentitySnapshot(
       userIdRef.current,
-      activeJapamIdRef.current,
-      activeJapamNameRef.current
+      scopedJapamId,
+      scopedJapamName
     );
     void primeWebCompletionAudio();
+    triggerDeepHardwarePulse(55);
 
     rippleAnim.setValue(0);
     Animated.timing(rippleAnim, {
@@ -1868,6 +1898,8 @@ export default function JapamMain() {
 
   const handleStart = () => {
     if (!requireLogin()) return;
+    if (!japamActionReadiness.canAct) return;
+    if (japamActionReadiness.requiresResolvedJapam && !currentJapam) return;
     void primeWebCompletionAudio();
     const mins = Math.max(1, Math.floor(Number(minutesInput) || 1));
     const nextTargetSeconds = mins * 60;
@@ -2204,13 +2236,12 @@ export default function JapamMain() {
             <Pressable
               hitSlop={{ top: 40, bottom: 40, left: 40, right: 40 }}
               pressRetentionOffset={{ top: 45, bottom: 45, left: 45, right: 45 }}
-              onPress={() => {
-                triggerDeepHardwarePulse(55);
-                handleTap();
-              }}
+              onPress={handleTap}
+              disabled={isTapDisabled}
               style={({ pressed }) => [
                 styles.progressPressable,
-                pressed && styles.progressPressed,
+                pressed && !isTapDisabled && styles.progressPressed,
+                isTapDisabled && styles.disabledButton,
               ]}
             >
               <View style={{ width: progressRingSize, height: progressRingSize }}>

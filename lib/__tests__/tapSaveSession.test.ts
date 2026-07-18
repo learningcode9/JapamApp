@@ -38,6 +38,7 @@ const JAPAM_ID = 'my-japam-uuid-456def';
 const JAPAM_NAME = 'My Japam';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
+const IS_ANONYMOUS_KEY = 'isAnonymousUser';
 
 const today = () => {
   const d = new Date();
@@ -72,7 +73,23 @@ describe('tapSaveSession — real runtime pipeline', () => {
     await AsyncStorage.clear();
     await AsyncStorage.setItem(USER_ID_KEY, UID);
     await AsyncStorage.setItem(USER_NAME_KEY, 'Test User');
+    await AsyncStorage.setItem(IS_ANONYMOUS_KEY, 'false');
     resetStages();
+  });
+
+  it('blocks authenticated null-scoped completions at the save boundary', async () => {
+    const refs = makeRefs();
+    refs.activeJapamId.current = null;
+    refs.activeJapamName.current = null;
+
+    const result = await tapSaveSession(0, 1, 108, 108, 'tap', refs, {
+      userId: UID,
+      japamId: null,
+      japamName: null,
+    }, 'Test User');
+
+    expect(result).toBe(false);
+    expect(await AsyncStorage.getItem('history')).toBeNull();
   });
 
   it('completes one mala and persists through the entire pipeline', async () => {

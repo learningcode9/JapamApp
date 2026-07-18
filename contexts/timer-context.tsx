@@ -15,9 +15,9 @@ import {
 } from '../lib/perJapamTimerState';
 import { supabase } from '../lib/supabase';
 import {
-  appendCompletion,
   applyTombstones,
   buildSupabaseHistoryPayload,
+  appendCompletion,
   dedupeByCompletionId,
   getPending,
   makeLoopCompletionId,
@@ -26,6 +26,8 @@ import {
   toLocalDayKey,
   type HistoryRecord,
 } from '../lib/historyStore';
+import { getIsAnonymous } from '../lib/anonymousAuth';
+import { canPersistJapamCompletion } from '../lib/japamActionReadiness';
 import { getWebOmAudioUri } from '../lib/webOmAudio';
 import {
   getNativeTimerState,
@@ -1144,6 +1146,15 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     try {
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
       const history = raw ? JSON.parse(raw) : [];
+      const isAnonymous = uid ? await getIsAnonymous() : false;
+      if (!canPersistJapamCompletion({
+        userId: uid || null,
+        isAnonymous,
+        japamId: completion.japamId ?? null,
+      })) {
+        console.log('[Stats] STATS_SAVE_SKIPPED reason=missing-japam-scope userId=%s', uid || 'guest');
+        return;
+      }
       const updatedHistory = appendCompletion(history, completion);
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
       console.log(

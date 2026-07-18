@@ -7,6 +7,7 @@ import {
   markSynced,
   toLocalDayKey,
 } from './historyStore';
+import { canPersistJapamCompletion } from './japamActionReadiness';
 import { type TapIdentitySnapshot } from './tapJapamBehavior';
 
 export interface TapSaveSessionRefs {
@@ -51,6 +52,12 @@ export async function tapSaveSession(
   }
 
   const currentUserId = identity?.userId ?? await AsyncStorage.getItem(USER_ID_KEY);
+  const isAnonymousUser = (await AsyncStorage.getItem('isAnonymousUser')) === 'true';
+  const resolvedJapamId = identity?.japamId ?? refs.activeJapamId.current;
+  if (!canPersistJapamCompletion({ userId: currentUserId, isAnonymous: isAnonymousUser, japamId: resolvedJapamId })) {
+    console.log('TAP_HISTORY_SAVE_SKIPPED reason=missing-japam-scope userId=%s source=%s', currentUserId, source);
+    return false;
+  }
   const sessionSignature = `${currentUserId || 'guest'}-${getLocalDateKey()}-${duration}-${sessionMalas}-${sessionTotal}-${accumulatedTotal}`;
 
   if (refs.lastSavedSession.current === sessionSignature) {
@@ -73,7 +80,7 @@ export async function tapSaveSession(
     const savedUserEmail = await AsyncStorage.getItem(USER_EMAIL_KEY);
     const historyUserName = savedUserName || userName || savedUserEmail || 'Unknown User';
 
-    const japamId = identity?.japamId ?? refs.activeJapamId.current;
+    const japamId = resolvedJapamId;
     const japamName = identity?.japamName ?? refs.activeJapamName.current;
 
     console.log('TAP_SAVE_IDENTITY RESOLVED userId=%s japamId=%s japamName=%s', userId, japamId, japamName);
