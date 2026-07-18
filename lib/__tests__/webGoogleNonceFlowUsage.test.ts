@@ -108,4 +108,83 @@ describe('web Google nonce flow usage', () => {
       expect(source).toMatch(/setHashedNonce\(hashed\);\s*\n\s*setNonceReady\(true\);/);
     });
   });
+
+  it('declares handledAuthResponseRef for duplicate callback protection', () => {
+    screens.forEach((screen) => {
+      const source = repoFile(screen);
+      expect(source).toContain('const handledAuthResponseRef = useRef<string | null>(null);');
+    });
+  });
+
+  it('derives response identifier from response.params.state (safe non-secret field)', () => {
+    screens.forEach((screen) => {
+      const source = repoFile(screen);
+      expect(source).toMatch(/String\(response\.params\?\.state \?\? ''\)/);
+    });
+  });
+
+  it('returns early when the same successful response is handled twice', () => {
+    screens.forEach((screen) => {
+      const source = repoFile(screen);
+      const guard = source.match(/if \(responseId && handledAuthResponseRef\.current === responseId\) \{[\s\S]*?return;\s*\}/);
+      expect(guard).toBeTruthy();
+      expect(guard![0]).toContain('return;');
+    });
+  });
+
+  it('marks response as handled BEFORE any async work begins (no race window)', () => {
+    screens.forEach((screen) => {
+      const source = repoFile(screen);
+      // The id check + mark should come before setIsSigningIn / token extraction / signInWithIdToken
+      const handleLoginFn = source.match(/const handleGoogleLogin = async \(\) => \{[\s\S]*?\n  \};/);
+      expect(handleLoginFn).toBeTruthy();
+      const fnBody = handleLoginFn![0];
+      const responseIdLine = fnBody.indexOf('responseId && handledAuthResponseRef.current');
+      const markLine = fnBody.indexOf('handledAuthResponseRef.current = responseId');
+      const signInLine = fnBody.indexOf('setIsSigningIn(true)');
+      expect(responseIdLine).toBeGreaterThan(-1);
+      expect(markLine).toBeGreaterThan(-1);
+      expect(signInLine).toBeGreaterThan(-1);
+      // Mark must happen before setIsSigningIn (async work begins after setIsSigningIn)
+      expect(markLine).toBeLessThan(signInLine);
+    });
+  });
+
+  it('does not call signInWithIdToken again on duplicate response', () => {
+    screens.forEach((screen) => {
+      const source = repoFile(screen);
+      // The idempotency return guards must come BEFORE the web signInWithIdToken call
+      const guard = source.indexOf('handledAuthResponseRef.current === responseId)');
+      // Find the signInWithIdToken call inside handleGoogleLogin (web path, uses nonce)
+      const webSignInCall = source.indexOf("provider: 'google',\n            token: idToken,\n            nonce: persistedNonce,");
+      expect(guard).toBeGreaterThan(-1);
+      expect(webSignInCall).toBeGreaterThan(-1);
+      expect(guard).toBeLessThan(webSignInCall);
+    });
+  });
+
+  it('does not show Google Sign-In Required alert on duplicate response when session exists', () => {
+    screens.forEach((screen) => {
+      const source = repoFile(screen);
+      // The existingValid check inside !persistedNonce should silently return instead of alert
+      const existingValidBlock = source.match(/if \(!persistedNonce\) \{[\s\S]*?existingValid[\s\S]*?if \(existingValid\) \{[\s\S]*?return;/);
+      expect(existingValidBlock).toBeTruthy();
+      expect(existingValidBlock![0]).toContain('existingValid');
+      expect(existingValidBlock![0]).toContain('return;');
+      // When existingValid is true, alert must NOT be triggered inside this block
+      expect(existingValidBlock![0]).not.toContain('showGoogleSignInRequiredAlert');
+    });
+  });
+
+  it('a genuinely new response with a different state can still be processed', () => {
+    screens.forEach((screen) => {
+      const source = repoFile(screen);
+      // The guard only blocks when responseId matches handledAuthResponseRef.current
+      // A different responseId bypasses the guard and enters the normal flow
+      const guard = `if (responseId && handledAuthResponseRef.current === responseId) {`;
+      expect(source).toContain(guard);
+      // After the guard, normal processing continues with setIsSigningIn(true)
+      expect(source).toMatch(/handledAuthResponseRef\.current = responseId;[\s\S]*setIsSigningIn\(true\);/);
+    });
+  });
 });

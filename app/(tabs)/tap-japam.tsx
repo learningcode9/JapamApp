@@ -614,6 +614,7 @@ export default function JapamMain() {
   startTimerIntervalRef.current = startTimerInterval;
 
   const rawNonceRef = useRef<string>('');
+  const handledAuthResponseRef = useRef<string | null>(null);
   const [hashedNonce, setHashedNonce] = useState<string>('');
   const [nonceReady, setNonceReady] = useState(Platform.OS !== 'web');
   useEffect(() => {
@@ -1428,16 +1429,9 @@ export default function JapamMain() {
 
   useEffect(() => {
     const handleGoogleLogin = async () => {
-      if (Platform.OS !== 'web') return; // native platforms use handleNativeGoogleSignIn
+      if (Platform.OS !== 'web') return;
       if (!response) return;
-
-      // CHECKPOINT 1: AUTH_RESPONSE
-      console.log('[DIAG] AUTH_RESPONSE source=tap-japam-web response.type=%s hasAuth=%s paramKeys=%s',
-        response.type,
-        'authentication' in response ? 'yes' : 'no',
-        'params' in response ? Object.keys(response.params ?? {}).join(',') : 'none');
       if (response.type !== 'success') {
-        console.log('[DIAG] ALERT_TRIGGER reason=PROMPT_NOT_SUCCESS source=tap-japam-web response.type=%s', response.type);
         setIsSigningIn(false);
         await clearPendingWebGoogleNonce();
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
@@ -1447,6 +1441,15 @@ export default function JapamMain() {
           showGoogleSignInRequiredAlert();
         }
         return;
+      }
+
+      // Idempotency guard: derive stable identifier from safe non-secret fields
+      const responseId = 'params' in response ? String(response.params?.state ?? '') : '';
+      if (responseId && handledAuthResponseRef.current === responseId) {
+        return;
+      }
+      if (responseId) {
+        handledAuthResponseRef.current = responseId;
       }
 
       setIsSigningIn(true);
@@ -1460,19 +1463,7 @@ export default function JapamMain() {
         authentication?.idToken ||
         ('params' in response ? (response.params as Record<string, string>)?.id_token : undefined);
 
-      // CHECKPOINT 2: ID_TOKEN_SOURCE
-      console.log('[DIAG] ID_TOKEN_SOURCE source=tap-japam-web authIdToken=%s paramsId_token=%s paramsIdToken=%s hasAccessToken=%s',
-        !!authentication?.idToken,
-        'params' in response ? !!('params' in response ? (response.params as Record<string, string>)?.id_token : undefined) : false,
-        'params' in response ? ((response.params as Record<string, string>)?.idToken ? 'yes' : 'no') : 'n/a',
-        !!accessToken);
-
-      console.log('[AUTH_CALLBACK] source=tap-japam-web hasIdToken=%s hasAccessToken=%s paramKeys=%s',
-        !!idToken, !!accessToken,
-        'params' in response ? Object.keys(response.params ?? {}).join(',') : 'none');
-
       if (!accessToken && !idToken) {
-        console.log('[DIAG] ALERT_TRIGGER reason=NO_ID_TOKEN source=tap-japam-web');
         await clearPendingWebGoogleNonce();
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         setIsSigningIn(false);
@@ -1485,26 +1476,23 @@ export default function JapamMain() {
         if (idToken) {
           const persistedNonce = await readPendingWebGoogleNonce();
           if (!persistedNonce) {
-            console.log('[DIAG] ALERT_TRIGGER reason=NO_PERSISTED_NONCE source=tap-japam-web');
+            // Nonce already consumed — check if session is still valid
+            const existing = (await supabase.auth.getSession()).data.session;
+            const existingValid = existing?.access_token &&
+              !((existing?.user as { is_anonymous?: boolean } | undefined)?.is_anonymous);
+            if (existingValid) {
+              return;
+            }
             await clearPendingWebGoogleNonce();
             showGoogleSignInRequiredAlert();
             return;
           }
           console.log('[SUPABASE_AUTH] tap-japam nonce_prefix=%s', persistedNonce.slice(0, 8));
-          const { error: supaAuthError, data: supaData } = await supabase.auth.signInWithIdToken({
+          const { error: supaAuthError } = await supabase.auth.signInWithIdToken({
             provider: 'google',
             token: idToken,
             nonce: persistedNonce,
           });
-          // CHECKPOINT 3: SUPABASE_SIGNIN_RESULT
-          console.log('[DIAG] SUPABASE_SIGNIN_RESULT source=tap-japam-web errorName=%s errorStatus=%s errorCode=%s errorMsg=%s hasSession=%s hasUser=%s isAnonymous=%s',
-            supaAuthError?.name || 'none',
-            supaAuthError?.status ?? 'none',
-            supaAuthError?.code || 'none',
-            supaAuthError?.message ? supaAuthError.message.substring(0, 120) : 'none',
-            supaData?.session ? 'yes' : 'no',
-            supaData?.user ? 'yes' : 'no',
-            supaData?.user?.is_anonymous === true ? 'yes' : 'no');
           if (supaAuthError) {
             console.log('[SUPABASE_AUTH] tap-japam signInWithIdToken error:', supaAuthError.message);
             await clearPendingWebGoogleNonce();
@@ -1520,15 +1508,8 @@ export default function JapamMain() {
         const session = (await supabase.auth.getSession()).data.session;
         const sessionIsAnonymous =
           !!((session?.user as { is_anonymous?: boolean } | undefined)?.is_anonymous);
-        // CHECKPOINT 4: SESSION_AFTER_SIGNIN
-        console.log('[DIAG] SESSION_AFTER_SIGNIN source=tap-japam-web getSessionError=none hasSession=%s hasAccessToken=%s userId=%s isAnonymous=%s',
-          session ? 'yes' : 'no',
-          session?.access_token ? 'yes' : 'no',
-          session?.user?.id || 'none',
-          sessionIsAnonymous ? 'yes' : 'no');
         if (!session?.access_token || sessionIsAnonymous) {
-          console.log('[DIAG] ALERT_TRIGGER reason=%s source=tap-japam-web',
-            !session?.access_token ? 'NO_SESSION' : 'ANONYMOUS_SESSION');
+          console.log('[SUPABASE_AUTH] tap-japam missing non-anonymous Supabase session after Google login');
           await clearPendingWebGoogleNonce();
           showGoogleSignInRequiredAlert();
           return;
@@ -1561,7 +1542,6 @@ export default function JapamMain() {
         }
 
         if (!googleUserId) {
-          console.log('[DIAG] ALERT_TRIGGER reason=NO_USER_ID source=tap-japam-web');
           await clearPendingWebGoogleNonce();
           setShowUserModal(true);
           showGoogleSignInRequiredAlert();
@@ -1584,14 +1564,7 @@ export default function JapamMain() {
         }
         await migrateGuestHistoryToGoogle(userId);
         await AsyncStorage.setItem(USER_ID_KEY, userId);
-        // CHECKPOINT 5: LOCAL_IDENTITY_WRITE
-        console.log('[DIAG] LOCAL_IDENTITY_WRITE source=tap-japam-web userNameWrite=%s userIdWrite=%s userId=%s',
-          googleName ? 'attempted' : 'skipped',
-          userId ? 'attempted' : 'skipped',
-          userId ? userId.substring(0, 16) + '…' : 'none');
         userIdRef.current = userId;
-        // CHECKPOINT 6: AUTH_EVENT
-        console.log('[DIAG] AUTH_EVENT source=tap-japam-web dispatching=japam-auth-updated');
         DeviceEventEmitter.emit('japam-auth-updated');
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
           window.dispatchEvent(new Event('japam-auth-updated'));
@@ -1602,7 +1575,7 @@ export default function JapamMain() {
         await restoreHistoryFromSupabase(userId);
         await restoreTimerForUser(userId);
       } catch (error) {
-        console.log('[DIAG] ALERT_TRIGGER reason=SIGNIN_ERROR source=tap-japam-web error=%s', error instanceof Error ? error.message : String(error));
+        console.log('Google login error:', error);
         await clearPendingWebGoogleNonce();
         setShowUserModal(true);
         showGoogleSignInRequiredAlert();
@@ -2377,7 +2350,6 @@ export default function JapamMain() {
                         await savePendingWebGoogleNonce(rawNonceRef.current);
                         const result = await promptAsync({ showInRecents: true });
                         if (result.type !== 'success') {
-                          console.log('[DIAG] ALERT_TRIGGER reason=PROMPT_NOT_SUCCESS source=tap-japam-modal type=%s', result.type);
                           await clearPendingWebGoogleNonce();
                           await AsyncStorage.removeItem(AUTH_PENDING_KEY);
                           setIsSigningIn(false);
@@ -2385,7 +2357,7 @@ export default function JapamMain() {
                           showGoogleSignInRequiredAlert();
                         }
                       } catch (error) {
-                        console.log('[DIAG] ALERT_TRIGGER reason=PROMPT_ERROR source=tap-japam-modal');
+                        console.log('Google prompt error:', error);
                         await clearPendingWebGoogleNonce();
                         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
                         setIsSigningIn(false);
