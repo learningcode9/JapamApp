@@ -541,8 +541,13 @@ export default function TimerScreen() {
       if (Platform.OS !== 'web') return; // native platforms use handleNativeGoogleSignIn
       if (!response) return;
 
-      console.log('[AUTH_CALLBACK] source=timer-web response.type=%s', response.type);
+      // CHECKPOINT 1: AUTH_RESPONSE
+      console.log('[DIAG] AUTH_RESPONSE source=timer-web response.type=%s hasAuth=%s paramKeys=%s',
+        response.type,
+        'authentication' in response ? 'yes' : 'no',
+        'params' in response ? Object.keys(response.params ?? {}).join(',') : 'none');
       if (response.type !== 'success') {
+        console.log('[DIAG] ALERT_TRIGGER reason=PROMPT_NOT_SUCCESS source=timer-web response.type=%s', response.type);
         setIsSigningIn(false);
         await clearPendingWebGoogleNonce();
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
@@ -565,11 +570,19 @@ export default function TimerScreen() {
         authentication?.idToken ||
         ('params' in response ? (response.params as Record<string, string>)?.id_token : undefined);
 
+      // CHECKPOINT 2: ID_TOKEN_SOURCE
+      console.log('[DIAG] ID_TOKEN_SOURCE source=timer-web authIdToken=%s paramsId_token=%s paramsIdToken=%s hasAccessToken=%s',
+        !!authentication?.idToken,
+        'params' in response ? !!('params' in response ? (response.params as Record<string, string>)?.id_token : undefined) : false,
+        'params' in response ? ((response.params as Record<string, string>)?.idToken ? 'yes' : 'no') : 'n/a',
+        !!accessToken);
+
       console.log('[AUTH_CALLBACK] source=timer-web hasIdToken=%s hasAccessToken=%s paramKeys=%s',
         !!idToken, !!accessToken,
         'params' in response ? Object.keys(response.params ?? {}).join(',') : 'none');
 
       if (!accessToken && !idToken) {
+        console.log('[DIAG] ALERT_TRIGGER reason=NO_ID_TOKEN source=timer-web');
         await clearPendingWebGoogleNonce();
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         setIsSigningIn(false);
@@ -582,18 +595,27 @@ export default function TimerScreen() {
         if (idToken) {
           const persistedNonce = await readPendingWebGoogleNonce();
           if (!persistedNonce) {
-            console.log('[SUPABASE_AUTH] timer missing persisted web nonce');
+            console.log('[DIAG] ALERT_TRIGGER reason=NO_PERSISTED_NONCE source=timer-web');
             await clearPendingWebGoogleNonce();
             setShowUserModal(true);
             showGoogleSignInRequiredAlert();
             return;
           }
           console.log('[SUPABASE_AUTH] timer nonce_prefix=%s', persistedNonce.slice(0, 8));
-          const { error: supaAuthError } = await supabase.auth.signInWithIdToken({
+          const { error: supaAuthError, data: supaData } = await supabase.auth.signInWithIdToken({
             provider: 'google',
             token: idToken,
             nonce: persistedNonce,
           });
+          // CHECKPOINT 3: SUPABASE_SIGNIN_RESULT
+          console.log('[DIAG] SUPABASE_SIGNIN_RESULT source=timer-web errorName=%s errorStatus=%s errorCode=%s errorMsg=%s hasSession=%s hasUser=%s isAnonymous=%s',
+            supaAuthError?.name || 'none',
+            supaAuthError?.status ?? 'none',
+            supaAuthError?.code || 'none',
+            supaAuthError?.message ? supaAuthError.message.substring(0, 120) : 'none',
+            supaData?.session ? 'yes' : 'no',
+            supaData?.user ? 'yes' : 'no',
+            supaData?.user?.is_anonymous === true ? 'yes' : 'no');
           if (supaAuthError) {
             console.log('[SUPABASE_AUTH] timer signInWithIdToken error:', supaAuthError.message);
             await clearPendingWebGoogleNonce();
@@ -609,16 +631,15 @@ export default function TimerScreen() {
         const session = (await supabase.auth.getSession()).data.session;
         const sessionIsAnonymous =
           !!((session?.user as { is_anonymous?: boolean } | undefined)?.is_anonymous);
-        console.log(
-          '[SUPABASE_AUTH] timer session.user.id=%s session.user.email=%s hasAccessToken=%s tokenLength=%s isAnonymous=%s',
+        // CHECKPOINT 4: SESSION_AFTER_SIGNIN
+        console.log('[DIAG] SESSION_AFTER_SIGNIN source=timer-web getSessionError=none hasSession=%s hasAccessToken=%s userId=%s isAnonymous=%s',
+          session ? 'yes' : 'no',
+          session?.access_token ? 'yes' : 'no',
           session?.user?.id || 'none',
-          session?.user?.email || 'none',
-          !!session?.access_token,
-          session?.access_token?.length || 0,
-          sessionIsAnonymous
-        );
+          sessionIsAnonymous ? 'yes' : 'no');
         if (!session?.access_token || sessionIsAnonymous) {
-          console.log('[SUPABASE_AUTH] timer missing non-anonymous Supabase session after Google login');
+          console.log('[DIAG] ALERT_TRIGGER reason=%s source=timer-web',
+            !session?.access_token ? 'NO_SESSION' : 'ANONYMOUS_SESSION');
           await clearPendingWebGoogleNonce();
           setShowUserModal(true);
           showGoogleSignInRequiredAlert();
@@ -652,6 +673,7 @@ export default function TimerScreen() {
         }
 
         if (!googleUserId) {
+          console.log('[DIAG] ALERT_TRIGGER reason=NO_USER_ID source=timer-web');
           await clearPendingWebGoogleNonce();
           setShowUserModal(true);
           showGoogleSignInRequiredAlert();
@@ -666,8 +688,15 @@ export default function TimerScreen() {
         }
         await migrateGuestHistoryToGoogle(userId);
         await AsyncStorage.setItem(USER_ID_KEY, userId);
+        // CHECKPOINT 5: LOCAL_IDENTITY_WRITE
+        console.log('[DIAG] LOCAL_IDENTITY_WRITE source=timer-web userNameWrite=%s userIdWrite=%s userId=%s',
+          googleName ? 'attempted' : 'skipped',
+          userId ? 'attempted' : 'skipped',
+          userId ? userId.substring(0, 16) + '…' : 'none');
         setUserName(googleName);
         setShowUserModal(false);
+        // CHECKPOINT 6: AUTH_EVENT
+        console.log('[DIAG] AUTH_EVENT source=timer-web dispatching=japam-auth-updated');
         DeviceEventEmitter.emit('japam-auth-updated');
         DeviceEventEmitter.emit('japam-stats-updated');
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -676,7 +705,7 @@ export default function TimerScreen() {
         }
         void loadStats();
       } catch (error) {
-        console.log('Google login error:', error);
+        console.log('[DIAG] ALERT_TRIGGER reason=SIGNIN_ERROR source=timer-web error=%s', error instanceof Error ? error.message : String(error));
         await clearPendingWebGoogleNonce();
         setShowUserModal(true);
         showGoogleSignInRequiredAlert();
@@ -1050,6 +1079,7 @@ export default function TimerScreen() {
                         await savePendingWebGoogleNonce(rawNonceRef.current);
                         const result = await promptAsync({ showInRecents: true });
                         if (result.type !== 'success') {
+                          console.log('[DIAG] ALERT_TRIGGER reason=PROMPT_NOT_SUCCESS source=timer-modal type=%s', result.type);
                           await clearPendingWebGoogleNonce();
                           await AsyncStorage.removeItem(AUTH_PENDING_KEY);
                           setIsSigningIn(false);
@@ -1057,7 +1087,7 @@ export default function TimerScreen() {
                           showGoogleSignInRequiredAlert();
                         }
                       } catch (error) {
-                        console.log('Google prompt error:', error);
+                        console.log('[DIAG] ALERT_TRIGGER reason=PROMPT_ERROR source=timer-modal');
                         await clearPendingWebGoogleNonce();
                         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
                         setIsSigningIn(false);
