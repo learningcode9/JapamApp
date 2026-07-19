@@ -31,6 +31,7 @@ import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { runSharedLogoutFlow } from '../../lib/sharedLogout';
 
 import {
   Alert,
@@ -2083,37 +2084,33 @@ export default function JapamMain() {
     setHasSetName(false); // ✅ reset on logout
     setShowUserModal(false);
 
-    await AsyncStorage.removeItem(USER_NAME_KEY);
-    await AsyncStorage.removeItem(USER_EMAIL_KEY);
-    await AsyncStorage.removeItem(USER_ID_KEY);
-    DeviceEventEmitter.emit('japam-auth-updated');
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      window.dispatchEvent(new Event('japam-auth-updated'));
-    }
-
-    // TOTAL_KEY/MALAS_KEY/COUNT_KEY/MANUAL_* are no longer written under these bare names at all
-    // (see getJapamScopedKey) -- removing them here is now a harmless no-op for those names, kept
-    // only so a pre-upgrade install's leftover bare keys get cleaned up. The Japam that was active
-    // for this session is cleared explicitly by its real (scoped) key below, so no stale cached
-    // total for THIS Japam survives into the next sign-in on this device.
-    await AsyncStorage.multiRemove([
-      TOTAL_KEY,
-      COUNT_KEY,
-      MALAS_KEY,
-      MANUAL_TOTAL_KEY,
-      MANUAL_COUNT_KEY,
-      MANUAL_MALAS_KEY,
-      MANUAL_TOTAL_DATE_KEY,
-      LAST_TOTAL_KEY,
-      getJapamScopedKey(TOTAL_KEY, currentUserId, activeJapamIdRef.current),
-      getJapamScopedKey(COUNT_KEY, currentUserId, activeJapamIdRef.current),
-      getJapamScopedKey(MALAS_KEY, currentUserId, activeJapamIdRef.current),
-      getJapamScopedKey(TOTAL_DATE_KEY, currentUserId, activeJapamIdRef.current),
-      getJapamScopedKey(MANUAL_TOTAL_KEY, currentUserId, activeJapamIdRef.current),
-      getJapamScopedKey(MANUAL_COUNT_KEY, currentUserId, activeJapamIdRef.current),
-      getJapamScopedKey(MANUAL_MALAS_KEY, currentUserId, activeJapamIdRef.current),
-      getJapamScopedKey(MANUAL_TOTAL_DATE_KEY, currentUserId, activeJapamIdRef.current),
-    ]);
+    await runSharedLogoutFlow({
+      clearLocalState: async () => {
+        // TOTAL_KEY/MALAS_KEY/COUNT_KEY/MANUAL_* are no longer written under these bare names at all
+        // (see getJapamScopedKey) -- removing them here is now a harmless no-op for those names, kept
+        // only so a pre-upgrade install's leftover bare keys get cleaned up. The Japam that was active
+        // for this session is cleared explicitly by its real (scoped) key below, so no stale cached
+        // total for THIS Japam survives into the next sign-in on this device.
+        await AsyncStorage.multiRemove([
+          TOTAL_KEY,
+          COUNT_KEY,
+          MALAS_KEY,
+          MANUAL_TOTAL_KEY,
+          MANUAL_COUNT_KEY,
+          MANUAL_MALAS_KEY,
+          MANUAL_TOTAL_DATE_KEY,
+          LAST_TOTAL_KEY,
+          getJapamScopedKey(TOTAL_KEY, currentUserId, activeJapamIdRef.current),
+          getJapamScopedKey(COUNT_KEY, currentUserId, activeJapamIdRef.current),
+          getJapamScopedKey(MALAS_KEY, currentUserId, activeJapamIdRef.current),
+          getJapamScopedKey(TOTAL_DATE_KEY, currentUserId, activeJapamIdRef.current),
+          getJapamScopedKey(MANUAL_TOTAL_KEY, currentUserId, activeJapamIdRef.current),
+          getJapamScopedKey(MANUAL_COUNT_KEY, currentUserId, activeJapamIdRef.current),
+          getJapamScopedKey(MANUAL_MALAS_KEY, currentUserId, activeJapamIdRef.current),
+          getJapamScopedKey(MANUAL_TOTAL_DATE_KEY, currentUserId, activeJapamIdRef.current),
+        ]);
+      },
+    });
 
     totalRef.current = 0;
     setTotal(0);
