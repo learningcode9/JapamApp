@@ -23,6 +23,7 @@ import { useFocusEffect } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { isIOSDeviceWeb, isStandaloneOrInstalledWeb } from '../../lib/pwaInstall';
+import { runSharedLogoutFlow } from '../../lib/sharedLogout';
 import { supabase } from '../../lib/supabase';
 
 import {
@@ -2210,16 +2211,16 @@ export default function JapamMain() {
     setHasSetName(false); // ✅ reset on logout
     setShowUserModal(false);
 
-    await AsyncStorage.removeItem(USER_NAME_KEY);
-    await AsyncStorage.removeItem(USER_EMAIL_KEY);
-    await AsyncStorage.removeItem(USER_ID_KEY);
-
-    await AsyncStorage.multiRemove([
-      TOTAL_KEY,
-      COUNT_KEY,
-      MALAS_KEY,
-      LAST_TOTAL_KEY,
-    ]);
+    await runSharedLogoutFlow({
+      clearLocalState: async () => {
+        await AsyncStorage.multiRemove([
+          TOTAL_KEY,
+          COUNT_KEY,
+          MALAS_KEY,
+          LAST_TOTAL_KEY,
+        ]);
+      },
+    });
 
     totalRef.current = 0;
     setTotal(0);

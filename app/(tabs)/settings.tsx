@@ -5,6 +5,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, BackHandler, DeviceEventEmitter, Dimensions, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { dedupeByCompletionId, type RawHistoryRecord } from '../../lib/historyStore';
+import { runSharedLogoutFlow } from '../../lib/sharedLogout';
 
 const SOUND_ENABLED_KEY = 'soundEnabled';
 const REPETITION_SOUND_ENABLED_KEY = 'repetitionSoundEnabled';
@@ -193,29 +194,35 @@ export default function SettingsScreen() {
       }
     }
 
-    await AsyncStorage.removeItem(USER_NAME_KEY);
-    await AsyncStorage.removeItem(USER_EMAIL_KEY);
-    await AsyncStorage.removeItem(USER_ID_KEY);
-    await AsyncStorage.multiRemove([TIMER_SECONDS_KEY, TIMER_RUNNING_KEY, TIMER_TARGET_KEY, TIMER_MINUTES_KEY, TIMER_LOOP_KEY]);
-    DeviceEventEmitter.emit('japam-auth-updated');
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      window.dispatchEvent(new Event('japam-auth-updated'));
-    }
-    setUserId(null);
-    setUserName('');
-    setUserEmail('');
-    Alert.alert('Logged out', 'You have been logged out.');
+    await runSharedLogoutFlow({
+      clearLocalState: async () => {
+        await AsyncStorage.multiRemove([
+          TIMER_SECONDS_KEY,
+          TIMER_RUNNING_KEY,
+          TIMER_TARGET_KEY,
+          TIMER_MINUTES_KEY,
+          TIMER_LOOP_KEY,
+        ]);
+      },
+      onLoggedOut: () => {
+        setUserId(null);
+        setUserName('');
+        setUserEmail('');
+        Alert.alert('Logged out', 'You have been logged out.');
+      },
+    });
   };
 
   const clearGuestData = () => {
     const doClear = async () => {
-      await AsyncStorage.removeItem(USER_NAME_KEY);
-      setUserName('');
-      DeviceEventEmitter.emit('japam-auth-updated');
-      if (Platform.OS === 'web' && typeof window !== 'undefined') {
-        window.dispatchEvent(new Event('japam-auth-updated'));
-      }
-      router.navigate('/(tabs)/timer');
+      await runSharedLogoutFlow({
+        onLoggedOut: () => {
+          setUserId(null);
+          setUserName('');
+          setUserEmail('');
+          router.navigate('/(tabs)/timer');
+        },
+      });
     };
     if (Platform.OS === 'web') {
       if (window.confirm('Exit Guest Mode? Your guest history will stay on this device.')) void doClear();
