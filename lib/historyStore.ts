@@ -51,6 +51,19 @@ export type SupabaseHistoryPayload = {
   japam_name: string | null;
 };
 
+export type SupabaseHistoryReadRow = {
+  id?: number | string;
+  created_at?: string;
+  malas?: number | string;
+  count?: number | string;
+  user_id?: string;
+  user_name?: string;
+  user_email?: string;
+  completion_id?: string;
+  japam_id?: string | null;
+  japam_name?: string | null;
+};
+
 /**
  * Single shared normalizer for the denormalized japam display-name snapshot — every read/write
  * path must call this instead of re-implementing trim/blank handling.
@@ -161,6 +174,32 @@ export const normalizeRecord = (raw: RawHistoryRecord): HistoryRecord => {
 
 export const normalizeAll = (records: RawHistoryRecord[]): HistoryRecord[] =>
   (Array.isArray(records) ? records : []).map(normalizeRecord);
+
+/** Shared mapper for a Supabase japam_history row into the app's local HistoryRecord shape. */
+export const mapSupabaseHistoryRow = (
+  row: SupabaseHistoryReadRow,
+  fallbackUserId?: string | null,
+): HistoryRecord => {
+  const userId = fallbackUserId ?? row.user_id ?? null;
+  const malas = Number(row.malas) || 0;
+  const totalCount = Number(row.count) || malas * 108;
+  const date = row.created_at || new Date().toISOString();
+  return normalizeRecord({
+    date,
+    malas: malas || Math.floor(totalCount / 108),
+    totalCount,
+    duration: 0,
+    manual: false,
+    userId,
+    userName: row.user_name,
+    userEmail: row.user_email,
+    remoteId: row.id,
+    completionId: row.completion_id || makeCompletionId(userId, date),
+    syncStatus: 'synced',
+    japamId: row.japam_id ?? null,
+    japamName: row.japam_name ?? null,
+  });
+};
 
 /**
  * Build a new local record for a freshly completed mala. Records owned by a signed-in user start
@@ -433,14 +472,9 @@ export const reconcileWithServer = (
  * Build the Supabase row from the local record. The important bit is `created_at: record.date`:
  * offline completions must upload with their actual completion time, not the later sync time.
  *
- * Stop-loss (Issue 1): japam_history.japam_id has a live FK to public.japams, but nothing yet
- * writes rows to public.japams (Japam Sync is not implemented). Sending a real japamId here would
- * make every tagged completion fail this FK and get stuck 'pending' forever. Until Japam Sync
- * exists, we deliberately withhold japam_id from the remote payload (always null, which always
- * satisfies the FK) while still sending japam_name (plain nullable text column, no FK) so a
- * restored/cross-device copy at least has a human-readable label. Local japamId is untouched --
- * this only affects what gets sent to Supabase, not local storage, filtering, or stats. Revert this
- * one line once Japam Sync gives japam_id a real row to reference.
+ * buildSupabaseHistoryPayload is intentionally dumb: it mirrors the local record's stable identity.
+ * Callers are responsible for the FK precondition when `normalized.japamId` is non-null -- i.e.
+ * confirming/upserting the matching public.japams row first. Legacy/unassigned rows keep null.
  */
 export const buildSupabaseHistoryPayload = (
   record: RawHistoryRecord,
@@ -458,7 +492,7 @@ export const buildSupabaseHistoryPayload = (
     count: normalized.totalCount,
     created_at: normalized.date,
     completion_id: normalized.completionId,
-    japam_id: null,
+    japam_id: normalized.japamId ?? null,
     japam_name: normalized.japamName ?? null,
   };
 };

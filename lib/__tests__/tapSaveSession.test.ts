@@ -11,11 +11,14 @@ import {
   toLocalDayKey,
 } from '../historyStore';
 import * as historyRepository from '../historyRepository';
+import * as japamsRepository from '../japamsRepository';
+
+const mockGetSession = jest.fn();
 
 jest.mock('../supabase', () => ({
   supabase: {
     auth: {
-      getSession: jest.fn().mockResolvedValue({ data: { session: null }, error: null }),
+      getSession: (...args: unknown[]) => mockGetSession(...args),
     },
   },
 }));
@@ -39,6 +42,9 @@ const JAPAM_NAME = 'My Japam';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
 const IS_ANONYMOUS_KEY = 'isAnonymousUser';
+const fetchMock = jest.fn();
+
+(global as any).fetch = fetchMock;
 
 const today = () => {
   const d = new Date();
@@ -74,6 +80,11 @@ describe('tapSaveSession — real runtime pipeline', () => {
     await AsyncStorage.setItem(USER_ID_KEY, UID);
     await AsyncStorage.setItem(USER_NAME_KEY, 'Test User');
     await AsyncStorage.setItem(IS_ANONYMOUS_KEY, 'false');
+    fetchMock.mockReset();
+    mockGetSession.mockReset();
+    mockGetSession.mockResolvedValue({ data: { session: null }, error: null });
+    process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
+    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'anon-key';
     resetStages();
   });
 
@@ -257,5 +268,35 @@ describe('tapSaveSession — real runtime pipeline', () => {
       userId: UID,
       todayTotal: 108,
     }));
+  });
+
+  it('history with a real japamId waits for remote Japam confirmation before upload', async () => {
+    jest.spyOn(japamsRepository, 'ensureRemoteJapamExists').mockResolvedValue(false);
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: 'jwt-token' } }, error: null });
+    const refs = makeRefs();
+
+    await tapSaveSession(0, 1, 108, 108, 'tap', refs, identity, 'Test User');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    const saved = JSON.parse(await AsyncStorage.getItem('history') || '[]');
+    expect(saved[0].syncStatus).toBe('pending');
+    jest.restoreAllMocks();
+  });
+
+  it('successful remote Japam confirmation uploads history with the real japam_id', async () => {
+    jest.spyOn(japamsRepository, 'ensureRemoteJapamExists').mockResolvedValue(true);
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: 'jwt-token' } }, error: null });
+    fetchMock.mockResolvedValue({ ok: true, status: 200, text: async () => '', json: async () => [] });
+    const refs = makeRefs();
+
+    await tapSaveSession(0, 1, 108, 108, 'tap', refs, identity, 'Test User');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.japam_id).toBe(JAPAM_ID);
+    jest.restoreAllMocks();
   });
 });

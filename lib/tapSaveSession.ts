@@ -7,6 +7,7 @@ import {
   markSynced,
   toLocalDayKey,
 } from './historyStore';
+import * as japamsRepository from './japamsRepository';
 import { canPersistJapamCompletion } from './japamActionReadiness';
 import { type TapIdentitySnapshot } from './tapJapamBehavior';
 
@@ -157,6 +158,10 @@ export async function tapSaveSession(
             const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
             if (!sessionToken) {
               console.log('[SYNC_FAILED] source=%s completionId=%s reason=no-session', source, payload.completion_id);
+              return;
+            }
+            if (savedRecord.japamId && !(await japamsRepository.ensureRemoteJapamExists(userId, savedRecord.japamId))) {
+              console.log('[SYNC_FAILED] source=%s completionId=%s reason=missing-remote-japam', source, payload.completion_id);
               return;
             }
             const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {

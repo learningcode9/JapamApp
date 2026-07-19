@@ -10,6 +10,7 @@ import {
   todayCountFor,
   todayStatsFor,
   buildSupabaseHistoryPayload,
+  mapSupabaseHistoryRow,
   normalizeAll,
   reconcileWithServer,
   toLocalDayKey,
@@ -948,14 +949,14 @@ describe('japamId: identity field on HistoryRecord', () => {
     });
   });
 
-  describe('buildSupabaseHistoryPayload', () => {
-    it('withholds japam_id (stop-loss: no FK-safe write path to public.japams yet) but preserves the trimmed japam_name snapshot', () => {
+describe('buildSupabaseHistoryPayload', () => {
+    it('sends the record\'s japam_id and preserves the trimmed japam_name snapshot', () => {
       const record = normalizeRecord(session(isoAt(0), {
         japamId: 'japam-abc-123',
         japamName: '  Gayatri  ',
       }));
       const payload = buildSupabaseHistoryPayload(record, UID, 'Sravani');
-      expect(payload.japam_id).toBeNull();
+      expect(payload.japam_id).toBe('japam-abc-123');
       expect(payload.japam_name).toBe('Gayatri');
     });
     it('sends null japam_id and japam_name when the record has neither, never crashing', () => {
@@ -988,8 +989,8 @@ describe('japamId: identity field on HistoryRecord', () => {
     });
   });
 
-  describe('round trip: appendCompletion -> buildSupabaseHistoryPayload preserves identity', () => {
-    it('withholds japam_id from the remote payload (stop-loss) while japam_name still carries through', () => {
+describe('round trip: appendCompletion -> buildSupabaseHistoryPayload preserves identity', () => {
+    it('preserves japam_id in the remote payload while japam_name still carries through', () => {
       const history = appendCompletion([], {
         date: isoAt(0),
         malas: 1,
@@ -1000,8 +1001,41 @@ describe('japamId: identity field on HistoryRecord', () => {
         japamName: 'Gayatri',
       });
       const payload = buildSupabaseHistoryPayload(history[0], UID, 'Sravani');
-      expect(payload.japam_id).toBeNull();
+      expect(payload.japam_id).toBe('japam-abc-123');
       expect(payload.japam_name).toBe('Gayatri');
+    });
+  });
+
+  describe('mapSupabaseHistoryRow', () => {
+    it('preserves remote japam_id and japam_name', () => {
+      const mapped = mapSupabaseHistoryRow({
+        id: 10,
+        created_at: isoAt(0),
+        malas: 1,
+        count: 108,
+        user_id: UID,
+        user_name: 'Sravani',
+        completion_id: 'cid-1',
+        japam_id: 'japam-abc-123',
+        japam_name: 'Gayatri',
+      });
+      expect(mapped.japamId).toBe('japam-abc-123');
+      expect(mapped.japamName).toBe('Gayatri');
+      expect(mapped.remoteId).toBe(10);
+    });
+
+    it('preserves null legacy japam_id rows as legacy/unassigned', () => {
+      const mapped = mapSupabaseHistoryRow({
+        created_at: isoAt(0),
+        malas: 1,
+        count: 108,
+        user_id: UID,
+        completion_id: 'cid-2',
+        japam_id: null,
+        japam_name: null,
+      });
+      expect(mapped.japamId).toBeNull();
+      expect(mapped.japamName).toBeNull();
     });
   });
 });

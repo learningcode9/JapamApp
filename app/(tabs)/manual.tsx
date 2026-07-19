@@ -5,6 +5,7 @@ import {
   markSynced,
   toLocalDayKey,
 } from '../../lib/historyStore';
+import * as japamsRepository from '../../lib/japamsRepository';
 import { supabase } from '../../lib/supabase';
 import { useCurrentJapam } from '../../contexts/current-japam-context';
 import CurrentJapamHeaderButton from '../../components/CurrentJapamHeaderButton';
@@ -106,6 +107,11 @@ const syncManualEntryToSupabase = async ({
     const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
     if (!sessionToken) {
       console.log('[Manual] MANUAL_SYNC_FAILED reason=no-session (stays pending)');
+      return;
+    }
+
+    if (japamId && !(await japamsRepository.ensureRemoteJapamExists(userId, japamId))) {
+      console.log('[Manual] MANUAL_SYNC_FAILED reason=missing-remote-japam (stays pending)');
       return;
     }
 

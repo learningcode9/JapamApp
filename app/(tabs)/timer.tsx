@@ -5,6 +5,7 @@ import {
   dayStreakForJapam,
   dedupeByCompletionId,
   japamStatsFor,
+  mapSupabaseHistoryRow,
   mergeHistories,
   normalizeAll,
   statsByJapam,
@@ -49,6 +50,7 @@ import {
   showGoogleAccountCollisionDialog,
 } from '../../lib/anonymousAuth';
 import { getJapamActionReadiness } from '../../lib/japamActionReadiness';
+import { signInWithGoogleIdTokenAndStoreIdentity } from '../../lib/nativeGoogleAuth';
 import { supabase } from '../../lib/supabase';
 import {
   clearPendingWebGoogleNonce,
@@ -274,7 +276,7 @@ export default function TimerScreen() {
         try {
           const encodedUserId = encodeURIComponent(userId);
           const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,completion_id&order=created_at.asc&limit=10000`,
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,user_email,completion_id,japam_id,japam_name&order=created_at.asc&limit=10000`,
             { headers: { apikey: key, Authorization: `Bearer ${sessionToken}` } }
           );
           if (res.ok) {
@@ -284,20 +286,13 @@ export default function TimerScreen() {
               malas: number | string;
               count: number | string;
               user_name?: string;
+              user_email?: string;
+              japam_id?: string | null;
+              japam_name?: string | null;
               completion_id?: string;
             }[] = await res.json();
             rawSupabaseRows = rows.length;
-            const remoteHistory: Session[] = rows.map((row) => ({
-              date: row.created_at,
-              malas: Number(row.malas) || Math.floor((Number(row.count) || 0) / 108),
-              totalCount: Number(row.count) || (Number(row.malas) || 0) * 108,
-              duration: 0,
-              manual: false,
-              userId,
-              userName: row.user_name,
-              completionId: row.completion_id,
-              syncStatus: 'synced' as const,
-            }));
+            const remoteHistory: Session[] = rows.map((row) => mapSupabaseHistoryRow(row, userId));
             rawSupabaseCount = remoteHistory.reduce(
               (sum, row) => sum + (Number(row.totalCount) || 0),
               0
@@ -426,24 +421,20 @@ export default function TimerScreen() {
     }
   }, []);
 
-  // Shared tail of native Google sign-in: stores the Google identity locally and (unless this was
-  // a linkIdentity success, or the user chose to sign in anyway after a collision) migrates any
-  // local guest-only history rows to this googleUserId — same storage steps as today, just
-  // factored out so the collision dialog's "Sign In" button can reach them too.
+  // Shared tail of native Google sign-in: stores the Google profile locally and, for direct
+  // signed-in flows, migrates any guest-only history rows to the authenticated Supabase UUID.
   const finishGoogleSignIn = useCallback(async (
     googleName: string,
     googleEmail: string,
-    googleUserId: string,
+    userId: string | null,
     skipMigration: boolean
   ) => {
     await AsyncStorage.setItem(USER_NAME_KEY, googleName);
     if (googleEmail) await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
     if (!skipMigration) {
-      // Direct Google sign-in (no prior anonymous session): use the Supabase UUID that
-      // signInWithIdToken / signInOrLinkGoogle just established, falling back to the Google
-      // numeric ID only if the session is unexpectedly unavailable.
-      const session = (await supabase.auth.getSession()).data.session;
-      const userId = session?.user?.id ?? googleUserId;
+      if (!userId) {
+        return;
+      }
       await migrateGuestHistoryToGoogle(userId);
       await AsyncStorage.setItem(USER_ID_KEY, userId);
     }
@@ -493,10 +484,28 @@ export default function TimerScreen() {
         return;
       }
 
-      let skipMigration = false;
+      if (!idToken) {
+        setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
+        return;
+      }
 
-      if (idToken) {
-        const isAnonymous = await getIsAnonymous();
+      let skipMigration = false;
+      let authenticatedUserId: string | null = null;
+
+      const isAnonymous = await getIsAnonymous();
+      if (!isAnonymous) {
+        const authResult = await signInWithGoogleIdTokenAndStoreIdentity(idToken, googleName, googleEmail);
+        if (!authResult.ok) {
+          if (authResult.error) {
+            console.log('signInWithGoogleIdTokenAndStoreIdentity error:', authResult.error);
+          }
+          setShowUserModal(true);
+          showGoogleSignInRequiredAlert();
+          return;
+        }
+        authenticatedUserId = authResult.userId;
+      } else {
         const result = await signInOrLinkGoogle(idToken, isAnonymous);
 
         if (result.kind === 'collision') {
@@ -504,7 +513,7 @@ export default function TimerScreen() {
           // sign-in into the existing linked account, abandoning this device's anonymous
           // history; "Cancel" leaves the current anonymous session untouched.
           showGoogleAccountCollisionDialog(
-            () => { void finishGoogleSignIn(googleName, googleEmail, googleUserId, true); },
+            () => { void finishGoogleSignIn(googleName, googleEmail, null, true); },
             () => { /* leave the current anonymous session untouched */ }
           );
           return;
@@ -512,8 +521,7 @@ export default function TimerScreen() {
 
         if (result.kind === 'error') {
           console.log('signInOrLinkGoogle error:', result.error);
-          // Preserve today's tolerant behavior: a Supabase auth error was always discarded and
-          // never blocked sign-in, so fall through and store the Google identity locally anyway.
+          // Preserve today's tolerant behavior for anonymous-link attempts only.
         }
 
         if (result.kind === 'linked') {
@@ -522,7 +530,7 @@ export default function TimerScreen() {
         }
       }
 
-      await finishGoogleSignIn(googleName, googleEmail, googleUserId, skipMigration);
+      await finishGoogleSignIn(googleName, googleEmail, authenticatedUserId, skipMigration);
     } catch (error) {
       console.log('Native Google sign-in error:', error);
       setShowUserModal(true);

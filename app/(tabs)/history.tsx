@@ -4,7 +4,7 @@ import {
   appendCompletion,
   buildSupabaseHistoryPayload,
   dedupeByCompletionId,
-  makeCompletionId,
+  mapSupabaseHistoryRow,
   markSynced,
   mergeHistories,
   mergeTombstones,
@@ -15,6 +15,7 @@ import {
   type HistoryRecord,
 } from '../../lib/historyStore';
 import * as historyRepository from '../../lib/historyRepository';
+import * as japamsRepository from '../../lib/japamsRepository';
 import { useCurrentJapam } from '../../contexts/current-japam-context';
 import CurrentJapamHeaderButton from '../../components/CurrentJapamHeaderButton';
 import { repairLegacyStoredUserId, LEGACY_USER_ID_KEY } from '../../lib/anonymousAuth';
@@ -121,6 +122,8 @@ type RemoteHistoryRow = {
   count?: number | string;
   user_name?: string;
   user_email?: string;
+  japam_id?: string | null;
+  japam_name?: string | null;
   completion_id?: string;
 };
 
@@ -348,7 +351,7 @@ const fetchRemoteSessions = async (userId: string, legacyUserId?: string | null)
     // they merge/display/reconcile identically to rows fetched by the UUID itself.
     const fetchBy = async (field: 'user_id' | 'user_name', value: string, taggedUserId: string) => {
       const query = new URLSearchParams({
-        select: 'id,created_at,malas,count,user_name,completion_id',
+        select: 'id,created_at,malas,count,user_name,user_email,completion_id,japam_id,japam_name',
         [field]: `eq.${value}`,
         order: 'created_at.asc',
         limit: '10000',
@@ -369,23 +372,7 @@ const fetchRemoteSessions = async (userId: string, legacyUserId?: string | null)
 
       const rows: RemoteHistoryRow[] = await response.json();
 
-      return rows.map((row) => {
-        const malas = Number(row.malas) || 0;
-        const totalCount = Number(row.count) || malas * 108;
-
-        return {
-          date: row.created_at || new Date().toISOString(),
-          malas: malas || Math.floor(totalCount / 108),
-          totalCount,
-          duration: 0,
-          manual: false,
-          userId: taggedUserId,
-          userName: row.user_name || undefined,
-          remoteId: row.id,
-          completionId: row.completion_id || makeCompletionId(taggedUserId, row.created_at || new Date().toISOString()),
-          syncStatus: 'synced' as const,
-        };
-      });
+      return rows.map((row) => mapSupabaseHistoryRow(row, taggedUserId));
     };
 
     const primary = await fetchBy('user_id', userId, userId);
@@ -426,6 +413,11 @@ const saveToSupabase = async (
   // to the anon key.
   const accessToken = (await supabase.auth.getSession()).data.session?.access_token;
   if (!accessToken) return false;
+
+  if (japamId && !(await japamsRepository.ensureRemoteJapamExists(userId, japamId))) {
+    console.log('[SYNC_FAILED] source=history-manual completionId=%s reason=missing-remote-japam', completionId);
+    return false;
+  }
 
   try {
     const body = buildSupabaseHistoryPayload({
@@ -522,15 +514,26 @@ const syncHistoryEditsToSupabase = async (
   let inconclusive = false;
   const runVerify = async (token: string, remoteId: string | number | null | undefined, completionId: string) => {
     const verifyUrl = remoteId != null
-      ? `${url}/rest/v1/japam_history?id=eq.${encodeURIComponent(String(remoteId))}&select=id,completion_id,malas,count,created_at,user_id,user_name`
-      : `${url}/rest/v1/japam_history?completion_id=eq.${encodeURIComponent(completionId)}&select=id,completion_id,malas,count,created_at,user_id,user_name`;
+      ? `${url}/rest/v1/japam_history?id=eq.${encodeURIComponent(String(remoteId))}&select=id,completion_id,malas,count,created_at,user_id,user_name,japam_id,japam_name`
+      : `${url}/rest/v1/japam_history?completion_id=eq.${encodeURIComponent(completionId)}&select=id,completion_id,malas,count,created_at,user_id,user_name,japam_id,japam_name`;
     return fetch(verifyUrl, {
       method: 'GET',
       headers: { apikey: key, Authorization: `Bearer ${token}` },
       cache: 'no-store',
     });
   };
+  const ensuredJapams = new Map<string, boolean>();
   for (const record of records) {
+    const japamId = record.japamId ?? null;
+    if (japamId) {
+      const ensured = ensuredJapams.get(japamId)
+        ?? await japamsRepository.ensureRemoteJapamExists(userId, japamId);
+      ensuredJapams.set(japamId, ensured);
+      if (!ensured) {
+        console.log('[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=missing-remote-japam japamId=%s', record.completionId, japamId);
+        continue;
+      }
+    }
     const payload = buildSupabaseHistoryPayload(record, userId, fallbackUserName);
     try {
       const remoteId = record.remoteId;
@@ -545,6 +548,8 @@ const syncHistoryEditsToSupabase = async (
             user_name: payload.user_name,
             created_at: payload.created_at,
             completion_id: payload.completion_id,
+            japam_id: payload.japam_id,
+            japam_name: payload.japam_name,
           }
         : payload;
       console.log(

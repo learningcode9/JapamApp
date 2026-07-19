@@ -20,6 +20,7 @@ const makeJapam = (overrides: Partial<Japam> = {}): Japam => ({
   id: 'japam-1',
   userId: UID,
   name: 'Gayatri',
+  syncStatus: 'synced',
   displayOrder: null,
   createdAt: NOW,
   updatedAt: NOW,
@@ -54,6 +55,7 @@ describe('createJapam', () => {
     expect(japam).toMatchObject({
       userId: UID,
       name: 'Gayatri',
+      syncStatus: 'pending',
       displayOrder: null,
       createdAt: NOW,
       updatedAt: NOW,
@@ -74,6 +76,7 @@ describe('createJapam', () => {
   it('allows a null userId (guest, local-only Japam)', () => {
     const japam = createJapam(null, 'Gayatri', { now: NOW });
     expect(japam?.userId).toBeNull();
+    expect(japam?.syncStatus).toBe('synced');
   });
 
   describe('blank name is rejected safely, never crashes, never invents a name', () => {
@@ -95,6 +98,7 @@ describe('renameJapam', () => {
     const japam = makeJapam({ updatedAt: NOW });
     const renamed = renameJapam(japam, '  Sri Gayatri  ', '2026-07-06T11:00:00.000Z');
     expect(renamed.name).toBe('Sri Gayatri');
+    expect(renamed.syncStatus).toBe('pending');
     expect(renamed.updatedAt).toBe('2026-07-06T11:00:00.000Z');
     expect(renamed.id).toBe(japam.id); // identity never changes on rename
   });
@@ -121,6 +125,7 @@ describe('archiveJapam / restoreJapam', () => {
     const japam = makeJapam({ archivedAt: null });
     const archived = archiveJapam(japam, '2026-07-06T13:00:00.000Z');
     expect(archived.archivedAt).toBe('2026-07-06T13:00:00.000Z');
+    expect(archived.syncStatus).toBe('pending');
     expect(archived.updatedAt).toBe('2026-07-06T13:00:00.000Z');
     expect(archived.name).toBe(japam.name);
     expect(archived.id).toBe(japam.id);
@@ -129,6 +134,7 @@ describe('archiveJapam / restoreJapam', () => {
     const archived = makeJapam({ archivedAt: '2026-07-06T13:00:00.000Z' });
     const restored = restoreJapam(archived, '2026-07-06T14:00:00.000Z');
     expect(restored.archivedAt).toBeNull();
+    expect(restored.syncStatus).toBe('pending');
     expect(restored.updatedAt).toBe('2026-07-06T14:00:00.000Z');
   });
 });
@@ -232,6 +238,11 @@ describe('parseStoredJapams: safely reconstruct a Japams list from a raw AsyncSt
     expect(result).toHaveLength(2);
     expect(result.find((j) => j.id === 'j1')?.name).toBe('Gayatri');
     expect(result.find((j) => j.id === 'j2')?.archivedAt).toBe('2026-07-01T00:00:00.000Z');
+  });
+  it('backward-compatible: an existing stored Japam without syncStatus loads as pending for authenticated users', () => {
+    const raw = JSON.stringify([{ id: 'j1', userId: UID, name: 'Gayatri', createdAt: NOW, updatedAt: NOW, archivedAt: null }]);
+    const result = parseStoredJapams(raw);
+    expect(result[0].syncStatus).toBe('pending');
   });
   it('trims a stored name via normalizeJapamName', () => {
     const raw = JSON.stringify([makeJapam({ id: 'j1', name: '  Gayatri  ' })]);

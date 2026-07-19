@@ -23,6 +23,9 @@ export type Japam = {
   id: string;
   userId: string | null;
   name: string;
+  /** Local-only sync bookkeeping for authenticated users. Guest Japams stay local-only and are
+   * treated as synced so they never enter the remote retry path. */
+  syncStatus?: 'pending' | 'synced' | 'failed';
   /** Reserved for a future manual-reordering (drag-and-drop) feature. Not wired to any UI yet.
    * Null means "use createdAt order" — see sortJapams. */
   displayOrder: number | null;
@@ -64,6 +67,7 @@ export const createJapam = (
     id: options?.id ?? createJapamId(),
     userId: userId ?? null,
     name,
+    syncStatus: userId ? 'pending' : 'synced',
     displayOrder: null,
     createdAt: now,
     updatedAt: now,
@@ -83,12 +87,18 @@ export const renameJapam = (
 ): Japam => {
   const name = normalizeJapamName(rawName);
   if (name === null) return japam;
-  return { ...japam, name, updatedAt: now };
+  return {
+    ...japam,
+    name,
+    syncStatus: japam.userId ? 'pending' : 'synced',
+    updatedAt: now,
+  };
 };
 
 /** Archive: hides this Japam from the default list. Never touches its history. */
 export const archiveJapam = (japam: Japam, now: string = new Date().toISOString()): Japam => ({
   ...japam,
+  syncStatus: japam.userId ? 'pending' : 'synced',
   archivedAt: now,
   updatedAt: now,
 });
@@ -96,6 +106,7 @@ export const archiveJapam = (japam: Japam, now: string = new Date().toISOString(
 /** Restore a previously archived Japam back to the default list. */
 export const restoreJapam = (japam: Japam, now: string = new Date().toISOString()): Japam => ({
   ...japam,
+  syncStatus: japam.userId ? 'pending' : 'synced',
   archivedAt: null,
   updatedAt: now,
 });
@@ -168,7 +179,11 @@ export const parseStoredJapams = (raw: string | null | undefined): Japam[] => {
       : null;
     const archivedAt = typeof record.archivedAt === 'string' ? record.archivedAt : null;
     const userId = typeof record.userId === 'string' ? record.userId : null;
-    result.push({ id, userId, name, displayOrder, createdAt, updatedAt, archivedAt });
+    const rawSyncStatus = record.syncStatus;
+    const syncStatus = rawSyncStatus === 'pending' || rawSyncStatus === 'synced' || rawSyncStatus === 'failed'
+      ? rawSyncStatus
+      : (userId ? 'pending' : 'synced');
+    result.push({ id, userId, name, syncStatus, displayOrder, createdAt, updatedAt, archivedAt });
   }
   return result;
 };

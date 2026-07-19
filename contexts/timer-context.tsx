@@ -26,6 +26,7 @@ import {
   toLocalDayKey,
   type HistoryRecord,
 } from '../lib/historyStore';
+import * as japamsRepository from '../lib/japamsRepository';
 import { getIsAnonymous } from '../lib/anonymousAuth';
 import { canPersistJapamCompletion } from '../lib/japamActionReadiness';
 import { getWebOmAudioUri } from '../lib/webOmAudio';
@@ -961,7 +962,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         return;
       }
       const syncedIds: string[] = [];
+      const ensuredJapams = new Map<string, boolean>();
       for (const rec of pending) {
+        const japamId = rec.japamId ?? null;
+        if (japamId) {
+          const ensured = ensuredJapams.get(japamId)
+            ?? await japamsRepository.ensureRemoteJapamExists(uid, japamId);
+          ensuredJapams.set(japamId, ensured);
+          if (!ensured) {
+            console.log('[SYNC_FAILED] completionId=%s reason=missing-remote-japam japamId=%s', rec.completionId, japamId);
+            continue;
+          }
+        }
         const payload = buildSupabaseHistoryPayload(rec, uid, fallbackUserName);
         console.log(
           '[SYNC_PAYLOAD_CREATED_AT] completionId=%s created_at=%s localDay=%s',

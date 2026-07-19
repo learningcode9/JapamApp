@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import {
   dayStreakForJapam,
+  mapSupabaseHistoryRow,
   mergeHistories,
   toLocalDayKey,
 } from '../../lib/historyStore';
@@ -15,6 +16,7 @@ import {
   type TapIdentitySnapshot,
 } from '../../lib/tapJapamBehavior';
 import { getIsAnonymous } from '../../lib/anonymousAuth';
+import { signInWithGoogleIdTokenAndStoreIdentity } from '../../lib/nativeGoogleAuth';
 import { getJapamActionReadiness } from '../../lib/japamActionReadiness';
 import { tapSaveSession } from '../../lib/tapSaveSession';
 import { useCurrentJapam } from '../../contexts/current-japam-context';
@@ -849,7 +851,7 @@ export default function JapamMain() {
         if (url && key && sessionToken) {
           const encodedUserId = encodeURIComponent(savedUserId);
           const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,completion_id&order=created_at.asc`,
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,user_email,completion_id,japam_id,japam_name&order=created_at.asc`,
             { headers: { apikey: key, Authorization: `Bearer ${sessionToken}` } }
           );
           if (res.ok) {
@@ -858,20 +860,13 @@ export default function JapamMain() {
               malas: number | string;
               count: number | string;
               user_name?: string;
+              user_email?: string;
+              japam_id?: string | null;
+              japam_name?: string | null;
               completion_id?: string;
             }[] =
               await res.json();
-            remoteSessions = rows.map((row) => ({
-              date: row.created_at,
-              malas: Number(row.malas) || 0,
-              totalCount: Number(row.count) || 0,
-              duration: 0,
-              manual: false,
-              userId: savedUserId,
-              userName: row.user_name,
-              completionId: row.completion_id,
-              syncStatus: 'synced' as const,
-            }));
+            remoteSessions = rows.map((row) => mapSupabaseHistoryRow(row, savedUserId));
           }
         }
 
@@ -1285,18 +1280,7 @@ export default function JapamMain() {
       if (!response.ok) return;
 
       const rows = await response.json();
-      const remoteHistory: Session[] = rows.map((item: any) => ({
-        date: item.created_at,
-        malas: Number(item.malas) || 0,
-        totalCount: Number(item.count) || 0,
-        duration: 0,
-        manual: false,
-        userId: googleUserId,
-        userName: item.user_name,
-        userEmail: item.user_email,
-        completionId: item.completion_id,
-        syncStatus: 'synced' as const,
-      }));
+      const remoteHistory: Session[] = rows.map((item: any) => mapSupabaseHistoryRow(item, googleUserId));
 
       const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
       const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
@@ -1373,12 +1357,6 @@ export default function JapamMain() {
       }
       const { id, name, givenName, email } = userInfo.data.user;
       const { idToken } = userInfo.data;
-      let supabaseUuid: string | undefined;
-      if (idToken) {
-        const { data: authData, error: authError } = await supabase.auth.signInWithIdToken({ provider: 'google', token: idToken });
-        if (authError) console.log('Supabase signInWithIdToken error:', authError.message);
-        else supabaseUuid = authData?.user?.id;
-      }
       const googleName = givenName || name || email || 'User';
       const googleEmail = email || '';
       const googleUserId = String(id).trim();
@@ -1390,7 +1368,23 @@ export default function JapamMain() {
         return;
       }
 
-      const userId = supabaseUuid ?? googleUserId;
+      if (!idToken) {
+        setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
+        return;
+      }
+
+      const authResult = await signInWithGoogleIdTokenAndStoreIdentity(idToken, googleName, googleEmail);
+      if (!authResult.ok) {
+        if (authResult.error) {
+          console.log('Supabase signInWithIdToken error:', authResult.error);
+        }
+        setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
+        return;
+      }
+
+      const userId = authResult.userId;
       setHasRestoredTimer(false);
       setUserName(googleName);
       setIsGuestMode(false);
@@ -1399,10 +1393,7 @@ export default function JapamMain() {
       setShowUserMenu(false);
       await restoreTotal(0, { userId: null });
       totalRef.current = 0;
-      await AsyncStorage.setItem(USER_NAME_KEY, googleName);
-      if (googleEmail) await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
       await migrateGuestHistoryToGoogle(userId);
-      await AsyncStorage.setItem(USER_ID_KEY, userId);
       userIdRef.current = userId;
       DeviceEventEmitter.emit('japam-auth-updated');
 
