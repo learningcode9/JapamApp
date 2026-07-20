@@ -362,7 +362,6 @@ const fetchRemoteSessions = async (userId: string, legacyUserId?: string | null)
           apikey: key,
           Authorization: `Bearer ${sessionToken}`,
         },
-        cache: 'no-store',
       });
 
       if (!response.ok) {
