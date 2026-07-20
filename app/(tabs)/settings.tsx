@@ -195,11 +195,6 @@ export default function SettingsScreen() {
       }
     }
 
-    await AsyncStorage.removeItem(USER_NAME_KEY);
-    await AsyncStorage.removeItem(USER_EMAIL_KEY);
-    await AsyncStorage.removeItem(USER_ID_KEY);
-    await AsyncStorage.multiRemove([TIMER_SECONDS_KEY, TIMER_RUNNING_KEY, TIMER_TARGET_KEY, TIMER_MINUTES_KEY, TIMER_LOOP_KEY]);
-
     try {
       const { error } = await supabase.auth.signOut();
       if (error) {
@@ -208,6 +203,11 @@ export default function SettingsScreen() {
     } catch (error) {
       console.log('Supabase signOut error:', error);
     }
+
+    await AsyncStorage.removeItem(USER_NAME_KEY);
+    await AsyncStorage.removeItem(USER_EMAIL_KEY);
+    await AsyncStorage.removeItem(USER_ID_KEY);
+    await AsyncStorage.multiRemove([TIMER_SECONDS_KEY, TIMER_RUNNING_KEY, TIMER_TARGET_KEY, TIMER_MINUTES_KEY, TIMER_LOOP_KEY]);
 
     if (Platform.OS !== 'web') {
       try {

@@ -7,6 +7,7 @@
  * GUEST_TO_ANON_AUTH_MIGRATION.md for why this isn't guaranteed to stay that way forever).
  */
 import { supabase } from './supabase';
+import { resolveAuthenticatedSession } from './authLifecycle';
 
 export type GroupRole = 'admin' | 'member';
 export type GroupAdminActionOutcome =
@@ -49,16 +50,24 @@ export interface GroupDashboardRow {
   lastUpdated: string | null;
 }
 
-export async function getMyGroups(userId: string): Promise<MyGroup[]> {
+export type GetMyGroupsResult =
+  | { kind: 'SUCCESS'; groups: MyGroup[] }
+  | { kind: 'AUTH_REQUIRED' };
+
+export async function getMyGroups(userId: string): Promise<GetMyGroupsResult> {
+  const auth = await resolveAuthenticatedSession();
+  if (auth.kind === 'AUTH_REQUIRED') return auth;
+
   const { data, error } = await supabase.rpc('get_my_groups', { p_user_id: userId });
   if (error) throw error;
-  return ((data ?? []) as any[]).map((row) => ({
+  const groups = ((data ?? []) as any[]).map((row) => ({
     groupId: row.group_id,
     name: row.name,
     role: row.role,
     isActive: row.is_active,
     joinedAt: row.joined_at,
   }));
+  return { kind: 'SUCCESS', groups };
 }
 
 export async function createGroup(

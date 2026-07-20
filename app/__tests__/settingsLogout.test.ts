@@ -227,12 +227,12 @@ describe('Settings logout regression', () => {
     const googleOrder = mockGoogleSignOut.mock.invocationCallOrder[0];
     const eventOrder = (DeviceEventEmitter.emit as jest.Mock).mock.invocationCallOrder[0];
     const alertOrder = (Alert.alert as jest.Mock).mock.invocationCallOrder[0];
-    const finalLocalCleanupOrder = Math.max(...removeItemOrders, multiRemoveOrder);
+    const firstLocalCleanupOrder = Math.min(...removeItemOrders, multiRemoveOrder);
 
+    expect(supabaseOrder).toBeLessThan(firstLocalCleanupOrder);
     expect(removeItemOrders[0]).toBeLessThan(removeItemOrders[1]);
     expect(removeItemOrders[1]).toBeLessThan(removeItemOrders[2]);
-    expect(finalLocalCleanupOrder).toBeLessThan(supabaseOrder);
-    expect(supabaseOrder).toBeLessThan(googleOrder);
+    expect(multiRemoveOrder).toBeLessThan(googleOrder);
     expect(googleOrder).toBeLessThan(eventOrder);
     expect(eventOrder).toBeLessThan(alertOrder);
   });

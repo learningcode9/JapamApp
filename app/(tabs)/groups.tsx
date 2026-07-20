@@ -22,6 +22,7 @@ import {
   type CreateGroupResult,
   type MyGroup,
 } from '../../lib/groupsRepository';
+import { AUTH_REQUIRED_MESSAGE, getAuthRequiredMessage } from '../../lib/authLifecycle';
 
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
@@ -35,6 +36,7 @@ export default function GroupsScreen() {
   const [loading, setLoading] = useState(true);
   const [groups, setGroups] = useState<MyGroup[]>([]);
   const [listError, setListError] = useState('');
+  const [authMessage, setAuthMessage] = useState('');
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createName, setCreateName] = useState('');
@@ -55,17 +57,25 @@ export default function GroupsScreen() {
 
     if (!savedUserId) {
       setGroups([]);
+      setAuthMessage(getAuthRequiredMessage());
       setLoading(false);
       return;
     }
 
     setLoading(true);
     setListError('');
+    setAuthMessage('');
     try {
       const result = await getMyGroups(savedUserId);
-      setGroups(result);
-    } catch (error: any) {
-      setListError(error?.message || 'Could not load your groups.');
+      if (result.kind === 'AUTH_REQUIRED') {
+        setGroups([]);
+        setUserId(null);
+        setAuthMessage(AUTH_REQUIRED_MESSAGE);
+        return;
+      }
+      setGroups(result.groups);
+    } catch {
+      setListError('Could not load your groups. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -172,8 +182,7 @@ export default function GroupsScreen() {
         <Ionicons name="people-outline" size={48} color={TEAL} />
         <Text style={styles.signInTitle}>Sign in required</Text>
         <Text style={styles.signInBody}>
-          Groups require a Google account. Please sign in with Google from another tab to use
-          Family Japam Groups.
+          {authMessage || 'Groups require a Google account. Please sign in with Google from another tab to use Family Japam Groups.'}
         </Text>
       </LinearGradient>
     );

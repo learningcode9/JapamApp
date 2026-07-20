@@ -2133,9 +2133,24 @@ export default function JapamMain() {
     setHasSetName(false); // ✅ reset on logout
     setShowUserModal(false);
 
+    try {
+      await supabase.auth.signOut();
+    } catch (error) {
+      console.log('Supabase signOut error:', error);
+    }
+
     await AsyncStorage.removeItem(USER_NAME_KEY);
     await AsyncStorage.removeItem(USER_EMAIL_KEY);
     await AsyncStorage.removeItem(USER_ID_KEY);
+
+    if (Platform.OS !== 'web') {
+      try {
+        await GoogleSignin.signOut();
+      } catch (error) {
+        console.log('Google signOut error:', error);
+      }
+    }
+
     DeviceEventEmitter.emit('japam-auth-updated');
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       window.dispatchEvent(new Event('japam-auth-updated'));
