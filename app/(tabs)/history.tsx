@@ -351,7 +351,7 @@ const fetchRemoteSessions = async (userId: string, legacyUserId?: string | null)
     // they merge/display/reconcile identically to rows fetched by the UUID itself.
     const fetchBy = async (field: 'user_id' | 'user_name', value: string, taggedUserId: string) => {
       const query = new URLSearchParams({
-        select: 'id,created_at,malas,count,user_name,user_email,completion_id,japam_id,japam_name',
+        select: 'id,created_at,malas,count,user_name,completion_id,japam_id,japam_name',
         [field]: `eq.${value}`,
         order: 'created_at.asc',
         limit: '10000',

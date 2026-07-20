@@ -276,7 +276,7 @@ export default function TimerScreen() {
         try {
           const encodedUserId = encodeURIComponent(userId);
           const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,user_email,completion_id,japam_id,japam_name&order=created_at.asc&limit=10000`,
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,completion_id,japam_id,japam_name&order=created_at.asc&limit=10000`,
             { headers: { apikey: key, Authorization: `Bearer ${sessionToken}` } }
           );
           if (res.ok) {

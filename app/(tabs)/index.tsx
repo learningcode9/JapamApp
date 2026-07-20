@@ -775,7 +775,7 @@ export default function JapamMain() {
         if (url && key && sessionToken) {
           const encodedUserId = encodeURIComponent(savedUserId);
           const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,user_email,completion_id,japam_id,japam_name&order=created_at.asc&limit=10000`,
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,completion_id,japam_id,japam_name&order=created_at.asc&limit=10000`,
             { headers: { apikey: key, Authorization: `Bearer ${sessionToken}` }, cache: 'no-store' }
           );
           if (res.ok) {
