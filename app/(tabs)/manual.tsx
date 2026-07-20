@@ -61,7 +61,7 @@ const backfillMissingUserNames = async (userId: string, userName: string) => {
 
   try {
     const query = new URLSearchParams({ user_id: `eq.${userId}` });
-    query.append('or', '(user_name.is.null,user_name.eq.)');
+    query.append('or', '(user_name.is.null,user_name.eq."")');
     const response = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
       method: 'PATCH',
       headers: {
