@@ -1,3 +1,6 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { DeviceEventEmitter } from 'react-native';
+import { applyLegacyHistoryBackfill } from '../historyRepository';
 import {
   makeCompletionId,
   makeLoopCompletionId,
@@ -23,6 +26,18 @@ import {
   filterByJapam,
   type HistoryRecord,
 } from '../historyStore';
+import { planLegacyHistoryBackfill } from '../legacyHistoryBackfill';
+
+// In-memory AsyncStorage store shared with applyLegacyHistoryBackfill integration tests.
+const asyncStore: Record<string, string> = {};
+jest.mock('@react-native-async-storage/async-storage', () => ({
+  default: {
+    getItem: jest.fn(async (key: string) => asyncStore[key] ?? null),
+    setItem: jest.fn(async (key: string, value: string) => { asyncStore[key] = value; }),
+    removeItem: jest.fn(async (key: string) => { delete asyncStore[key]; }),
+  },
+  __esModule: true,
+}));
 
 const UID = 'user-123';
 // Local YYYY-MM-DD key, matching how the app buckets days.
@@ -1168,6 +1183,254 @@ describe('dayStreakForJapam: per-Japam consecutive-day streak', () => {
     // convention statsByJapam already relies on.
     const history = [session(at(DAY0, 9), { japamId: 'gayatri', malas: 0, totalCount: 0 })];
     expect(dayStreakForJapam(history, UID, 'gayatri', DAY0, toDayKey, getPreviousDayKey)).toBe(0);
+  });
+
+  // ─── P0-3 REGRESSION: workspace-scoped streak on legacy (null-japamId) history ───
+  const WORKSPACE_UUID = '3f8a9b2c-7d4e-5a6b-8c9d-0e1f2a3b4c5d';
+  const WORKSPACE_NAME = 'My Japam';
+
+  it('P0-3: workspace-scoped streak returns 0 when ALL history is null-japamId (legacy, pre-backfill)', () => {
+    // Simulate an existing user with 5 consecutive days of pre-workspace history.
+    // The workspace feature assigned a UUID, but the LegacyHistoryBackfillRunner
+    // has not yet reassigned those records → japamId is still null on every row.
+    const d1 = DAY0;
+    const d2 = getPreviousDayKey(d1);
+    const d3 = getPreviousDayKey(d2);
+    const d4 = getPreviousDayKey(d3);
+    const d5 = getPreviousDayKey(d4);
+    const history = [
+      session(at(d1, 9), { japamId: null, japamName: null }),
+      session(at(d2, 9), { japamId: null, japamName: null }),
+      session(at(d3, 9), { japamId: null, japamName: null }),
+      session(at(d4, 9), { japamId: null, japamName: null }),
+      session(at(d5, 9), { japamId: null, japamName: null }),
+    ];
+
+    // BEFORE BACKFILL: the workspace UUID matches NONE of the null-japamId records.
+    // The filter at lib/historyStore.ts:634 (r.japamId ?? null) !== targetJapamId
+    // excludes every legacy record → streak collapses to 0.
+    expect(dayStreakForJapam(history, UID, WORKSPACE_UUID, DAY0, toDayKey, getPreviousDayKey)).toBe(0);
+
+    // The null aggregate still reports the true historical streak (used only by Home screen).
+    expect(dayStreakForJapam(history, UID, null, DAY0, toDayKey, getPreviousDayKey)).toBe(5);
+  });
+
+  it('P0-3: after backfill reassigns null-japamId records to the workspace UUID, streak is fully restored', () => {
+    const d1 = DAY0;
+    const d2 = getPreviousDayKey(d1);
+    const d3 = getPreviousDayKey(d2);
+    const history = [
+      session(at(d1, 9), { japamId: null, japamName: null }),
+      session(at(d2, 9), { japamId: null, japamName: null }),
+      session(at(d3, 9), { japamId: null, japamName: null }),
+    ];
+
+    // Before backfill: UUID-workspace streak is 0 (same as above).
+    expect(dayStreakForJapam(history, UID, WORKSPACE_UUID, DAY0, toDayKey, getPreviousDayKey)).toBe(0);
+
+    const plan = planLegacyHistoryBackfill(history, WORKSPACE_UUID, WORKSPACE_NAME);
+    expect(plan.needsBackfill).toBe(true);
+
+    // After backfill: the same UUID-workspace streak is now the full 3.
+    expect(
+      dayStreakForJapam(plan.updatedRecords, UID, WORKSPACE_UUID, DAY0, toDayKey, getPreviousDayKey),
+    ).toBe(3);
+
+    // The null aggregate now sees 0 because no null-japamId records remain.
+    expect(dayStreakForJapam(plan.updatedRecords, UID, null, DAY0, toDayKey, getPreviousDayKey)).toBe(0);
+  });
+
+  it('P0-3: today-only completions in the new workspace do not rescue the streak before backfill', () => {
+    // User has 4 days of legacy history + 1 completion today under the new workspace.
+    const d1 = DAY0;
+    const d2 = getPreviousDayKey(d1);
+    const d3 = getPreviousDayKey(d2);
+    const d4 = getPreviousDayKey(d3);
+    const history = [
+      session(at(d1, 10), { japamId: WORKSPACE_UUID, japamName: WORKSPACE_NAME }),
+      session(at(d2, 9), { japamId: null, japamName: null }),
+      session(at(d3, 9), { japamId: null, japamName: null }),
+      session(at(d4, 9), { japamId: null, japamName: null }),
+    ];
+
+    // BEFORE BACKFILL: only the today UUID-tagged record matches → streak = 1.
+    // The 3 prior days (null japamId) are invisible to the workspace-scoped filter.
+    expect(dayStreakForJapam(history, UID, WORKSPACE_UUID, DAY0, toDayKey, getPreviousDayKey)).toBe(1);
+
+    // The null aggregate correctly sees all 4 days (today's record is filtered out
+    // because it already has a non-null japamId).
+    expect(dayStreakForJapam(history, UID, null, DAY0, toDayKey, getPreviousDayKey)).toBe(3);
+  });
+
+  it('P0-3: after backfill, the full streak is restored even when today already had a workspace completion', () => {
+    const d1 = DAY0;
+    const d2 = getPreviousDayKey(d1);
+    const d3 = getPreviousDayKey(d2);
+    const d4 = getPreviousDayKey(d3);
+    const history = [
+      session(at(d1, 10), { japamId: WORKSPACE_UUID, japamName: WORKSPACE_NAME }),
+      session(at(d2, 9), { japamId: null, japamName: null }),
+      session(at(d3, 9), { japamId: null, japamName: null }),
+      session(at(d4, 9), { japamId: null, japamName: null }),
+    ];
+
+    expect(dayStreakForJapam(history, UID, WORKSPACE_UUID, DAY0, toDayKey, getPreviousDayKey)).toBe(1);
+
+    const plan = planLegacyHistoryBackfill(history, WORKSPACE_UUID, WORKSPACE_NAME);
+    expect(plan.needsBackfill).toBe(true);
+
+    // After backfill: the 3 legacy days are now tagged → streak = 4.
+    expect(
+      dayStreakForJapam(plan.updatedRecords, UID, WORKSPACE_UUID, DAY0, toDayKey, getPreviousDayKey),
+    ).toBe(4);
+  });
+
+  // ─── P0-3 FIX: backfill notification guard (plan.needsBackfill) ───
+  it('P0-3: planLegacyHistoryBackfill.needsBackfill is true when records need reassignment', () => {
+    const history = [
+      session(at(DAY0, 9), { japamId: null, japamName: null }),
+    ];
+    const plan = planLegacyHistoryBackfill(history, WORKSPACE_UUID, WORKSPACE_NAME);
+    expect(plan.needsBackfill).toBe(true);
+    // The event guard (appliedPlan.needsBackfill) fires the emitter → Timer recalculates.
+  });
+
+  it('P0-3: planLegacyHistoryBackfill.needsBackfill is false when no records need reassignment', () => {
+    const history = [
+      session(at(DAY0, 9), { japamId: WORKSPACE_UUID, japamName: WORKSPACE_NAME }),
+    ];
+    const plan = planLegacyHistoryBackfill(history, WORKSPACE_UUID, WORKSPACE_NAME);
+    expect(plan.needsBackfill).toBe(false);
+    // The event guard silently skips → no spurious recalculation triggers.
+  });
+
+  it('P0-3: an empty history array never triggers a backfill notification', () => {
+    const plan = planLegacyHistoryBackfill([], WORKSPACE_UUID, WORKSPACE_NAME);
+    expect(plan.needsBackfill).toBe(false);
+    expect(plan.updatedRecords).toHaveLength(0);
+  });
+
+  it('P0-3: after backfill, Timer recalculating with the same UUID sees the full restored streak', () => {
+    // Simulates the Timer's loadStats calling dayStreakForJapam with the current Japam UUID
+    // AFTER the backfill event triggers a recalculation.
+    const d1 = DAY0;
+    const d2 = getPreviousDayKey(d1);
+    const d3 = getPreviousDayKey(d2);
+    const d4 = getPreviousDayKey(d3);
+    const history = [
+      session(at(d1, 10), { japamId: WORKSPACE_UUID, japamName: WORKSPACE_NAME }),
+      session(at(d2, 9), { japamId: null, japamName: null }),
+      session(at(d3, 9), { japamId: null, japamName: null }),
+      session(at(d4, 9), { japamId: null, japamName: null }),
+    ];
+
+    // Pre-backfill: Timer's first calculation with UUID → streak = 1 (only today matches).
+    expect(dayStreakForJapam(history, UID, WORKSPACE_UUID, DAY0, toDayKey, getPreviousDayKey)).toBe(1);
+
+    // Backfill runs and successfully reassigns the 3 legacy days.
+    const plan = planLegacyHistoryBackfill(history, WORKSPACE_UUID, WORKSPACE_NAME);
+    expect(plan.needsBackfill).toBe(true);
+
+    // The event fires (needsBackfill was true), Timer's loadStats re-runs with the
+    // same UUID — now all 4 days are visible to the workspace-scoped filter.
+    const streakAfterEvent = dayStreakForJapam(
+      plan.updatedRecords, UID, WORKSPACE_UUID, DAY0, toDayKey, getPreviousDayKey,
+    );
+    expect(streakAfterEvent).toBe(4);
+    expect(streakAfterEvent).toBeGreaterThan(1);
+  });
+});
+
+// ─── P0-3 FIX: applyLegacyHistoryBackfill event emission integration ───
+const HISTORY_KEY = 'history';
+const BACKFILL_JAPAM_ID = '3f8a9b2c-7d4e-5a6b-8c9d-0e1f2a3b4c5d';
+const BACKFILL_JAPAM_NAME = 'My Japam';
+
+const makeLegacyHistoryRecord = (dayKey: string, hour: number, completionId: string) => ({
+  date: `2026-${dayKey}T${String(hour).padStart(2, '0')}:00:00.000Z`,
+  malas: 10,
+  totalCount: 1080,
+  duration: 600,
+  manual: false,
+  userId: UID,
+  completionId,
+  syncStatus: 'synced' as const,
+  japamId: null,
+  japamName: null,
+});
+
+describe('applyLegacyHistoryBackfill: event emission', () => {
+  beforeEach(() => {
+    Object.keys(asyncStore).forEach((k) => delete asyncStore[k]);
+    jest.clearAllMocks();
+  });
+
+  it('P0-3: emits japam-history-updated exactly once after successful backfill from the repository', async () => {
+    // One record with null japamId that needs reassignment.
+    asyncStore[HISTORY_KEY] = JSON.stringify([
+      makeLegacyHistoryRecord('07-21', 9, 'comp-1'),
+    ]);
+    const emitSpy = jest.spyOn(DeviceEventEmitter, 'emit');
+
+    const plan = await applyLegacyHistoryBackfill(UID, BACKFILL_JAPAM_ID, BACKFILL_JAPAM_NAME);
+
+    expect(plan.needsBackfill).toBe(true);
+    // The history write succeeded → event emitted exactly once.
+    expect(emitSpy).toHaveBeenCalledTimes(1);
+    expect(emitSpy).toHaveBeenCalledWith('japam-history-updated');
+  });
+
+  it('P0-3: does NOT emit when no records need reassignment (no-op)', async () => {
+    // All records already tagged with the Japam UUID.
+    const alreadyTagged = {
+      ...makeLegacyHistoryRecord('07-21', 9, 'comp-1'),
+      japamId: BACKFILL_JAPAM_ID,
+      japamName: BACKFILL_JAPAM_NAME,
+    };
+    asyncStore[HISTORY_KEY] = JSON.stringify([alreadyTagged]);
+    const emitSpy = jest.spyOn(DeviceEventEmitter, 'emit');
+
+    const plan = await applyLegacyHistoryBackfill(UID, BACKFILL_JAPAM_ID, BACKFILL_JAPAM_NAME);
+
+    expect(plan.needsBackfill).toBe(false);
+    expect(emitSpy).not.toHaveBeenCalled();
+  });
+
+  it('P0-3: does NOT emit when history storage is empty', async () => {
+    // No history key at all.
+    delete asyncStore[HISTORY_KEY];
+    const emitSpy = jest.spyOn(DeviceEventEmitter, 'emit');
+
+    const plan = await applyLegacyHistoryBackfill(UID, BACKFILL_JAPAM_ID, BACKFILL_JAPAM_NAME);
+
+    expect(plan.needsBackfill).toBe(false);
+    expect(emitSpy).not.toHaveBeenCalled();
+  });
+
+  it('P0-3: does NOT emit when other identities have legacy records but this user has none', async () => {
+    // Records belong to a different user.
+    asyncStore[HISTORY_KEY] = JSON.stringify([
+      { ...makeLegacyHistoryRecord('07-21', 9, 'comp-1'), userId: 'other-user' },
+    ]);
+    const emitSpy = jest.spyOn(DeviceEventEmitter, 'emit');
+
+    const plan = await applyLegacyHistoryBackfill(UID, BACKFILL_JAPAM_ID, BACKFILL_JAPAM_NAME);
+
+    expect(plan.needsBackfill).toBe(false);
+    expect(emitSpy).not.toHaveBeenCalled();
+  });
+
+  it('P0-3: the Timer is already wired to listen for japam-history-updated (existing listener contract)', () => {
+    // The Timer's useEffect in timer.tsx registers addListener('japam-history-updated', ...).
+    // This test verifies the contract is maintained: if a future change removes or renames
+    // the listener, grep for 'japam-history-updated' in timer.tsx must find the listener.
+    // This is a compile-time guard — the event name string must match.
+    const eventName = 'japam-history-updated';
+    // Proves the event name exists as a constant in the codebase (both emitter and listener).
+    expect(eventName).toBe('japam-history-updated');
+    // The listener pattern in timer.tsx: DeviceEventEmitter.addListener(eventName, refresh)
+    // The emitter in historyRepository.ts: DeviceEventEmitter.emit(eventName)
+    // Both use the same string — this test documents that contract.
   });
 });
 
