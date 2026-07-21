@@ -621,3 +621,35 @@ export const filterByJapam = (
   japamId: string | null
 ): HistoryRecord[] =>
   dedupeByCompletionId(records).filter((r) => (r.japamId ?? null) === japamId);
+
+/**
+ * Construct the PostgREST or-filter for the backfillMissingUserNames PATCH request. Must never
+ * include an empty filter value (which would cause PGRST100: failed to parse filter).
+ *
+ * Prior to the PGRST100 fix this used '(user_name.is.null,user_name.eq.)' where the trailing
+ * dot after eq was parsed as an empty-string value, which PostgREST rejected.
+ */
+export const buildBackfillUserNameOrFilter = (): string => '(user_name.is.null)';
+
+const HISTORY_FETCH_SELECT = 'id,created_at,malas,count,user_name,completion_id';
+
+/**
+ * Defensive hardening: build the GET URL for fetching history rows from the japam_history
+ * table. Not the proven cause of the observed PGRST100 — that was the backfill or-filter
+ * `(user_name.is.null,user_name.eq.)`.
+ *
+ * Returns null when `value` is null, undefined, or whitespace-only, preventing malformed
+ * `field=eq.` requests that would cause PGRST100 from PostgREST.
+ *
+ * Centralises History fetch URL construction so every caller uses the same filter-first
+ * format, consistent with Timer, TapJapam, and Index.
+ */
+export const buildHistoryFetchUrl = (
+  baseUrl: string,
+  field: 'user_id' | 'user_name',
+  value: string | null | undefined,
+): string | null => {
+  if (value == null || value.trim() === '') return null;
+  const encoded = encodeURIComponent(value);
+  return `${baseUrl}/rest/v1/japam_history?${field}=eq.${encoded}&select=${HISTORY_FETCH_SELECT}&order=created_at.asc&limit=10000`;
+};

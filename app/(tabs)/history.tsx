@@ -2,6 +2,8 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   appendCompletion,
+  buildBackfillUserNameOrFilter,
+  buildHistoryFetchUrl,
   buildSupabaseHistoryPayload,
   dedupeByCompletionId,
   makeCompletionId,
@@ -186,7 +188,7 @@ const backfillMissingUserNames = async (userId: string, userName: string) => {
 
   try {
     const query = new URLSearchParams({ user_id: `eq.${userId}` });
-    query.append('or', '(user_name.is.null,user_name.eq.)');
+    query.append('or', buildBackfillUserNameOrFilter());
     const response = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
       method: 'PATCH',
       headers: {
@@ -347,14 +349,10 @@ const fetchRemoteSessions = async (userId: string, legacyUserId?: string | null)
     // taggedUserId lets a legacy-id query's rows be tagged as belonging to the canonical UUID, so
     // they merge/display/reconcile identically to rows fetched by the UUID itself.
     const fetchBy = async (field: 'user_id' | 'user_name', value: string, taggedUserId: string) => {
-      const query = new URLSearchParams({
-        select: 'id,created_at,malas,count,user_name,completion_id',
-        [field]: `eq.${value}`,
-        order: 'created_at.asc',
-        limit: '10000',
-      });
+      const fetchUrl = buildHistoryFetchUrl(url!, field, value);
+      if (fetchUrl == null) return null;
 
-      const response = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
+      const response = await fetch(fetchUrl, {
         headers: {
           apikey: key,
           Authorization: `Bearer ${sessionToken}`,
@@ -533,7 +531,7 @@ const syncHistoryEditsToSupabase = async (
   for (const record of records) {
     const payload = buildSupabaseHistoryPayload(record, userId, fallbackUserName);
     try {
-      const remoteId = record.remoteId;
+      const remoteId = record.remoteId != null && String(record.remoteId) !== '' ? record.remoteId : undefined;
       const requestUrl = remoteId != null
         ? `${url}/rest/v1/japam_history?id=eq.${encodeURIComponent(String(remoteId))}`
         : `${url}/rest/v1/japam_history?on_conflict=completion_id`;

@@ -13,6 +13,8 @@ import {
   todayCountFor,
   todayStatsFor,
   buildSupabaseHistoryPayload,
+  buildBackfillUserNameOrFilter,
+  buildHistoryFetchUrl,
   normalizeAll,
   reconcileWithServer,
   toLocalDayKey,
@@ -1465,5 +1467,116 @@ describe('filterByJapam', () => {
     const dup = session(at(9), { japamId: 'gayatri', completionId: 'dup' });
     const result = filterByJapam([dup, { ...dup }], 'gayatri');
     expect(result).toHaveLength(1);
+  });
+});
+
+describe('PGRST100 regression: buildBackfillUserNameOrFilter', () => {
+  it('does not produce an empty filter value (the user_name.eq. bug that caused PGRST100)', () => {
+    const filter = buildBackfillUserNameOrFilter();
+    // An empty filter value would look like "column.op." with nothing after the second dot.
+    // The filter must be a valid PostgREST or-filter expression.
+    expect(filter).not.toContain('eq.');
+    expect(filter).toBe('(user_name.is.null)');
+  });
+
+  it('produces a query string with no empty filter values when used with URLSearchParams', () => {
+    const userId = '00000000-0000-0000-0000-000000000000';
+    const params = new URLSearchParams({ user_id: `eq.${userId}` });
+    params.append('or', buildBackfillUserNameOrFilter());
+    const queryString = params.toString();
+
+    // The query string must not contain "eq." with nothing after it.
+    expect(queryString).not.toMatch(/(?<!\w)eq\.$/);
+
+    // The or filter value must be URL-encoded and contain a valid filter.
+    expect(queryString).toContain('user_id=eq.');
+    expect(queryString).toContain('user_name.is.null');
+  });
+
+  it('does not produce a request URL that would fail PostgREST parsing', () => {
+    const userId = '00000000-0000-0000-0000-000000000000';
+    const params = new URLSearchParams({ user_id: `eq.${userId}` });
+    params.append('or', buildBackfillUserNameOrFilter());
+    const requestUrl = `https://example.supabase.co/rest/v1/japam_history?${params.toString()}`;
+
+    // The URL must not contain any filter with an empty value (the pattern that causes
+    // PGRST100: "failed to parse filter").
+    // A malformed filter would be: "id=eq.&" or "&eq.&" or "user_name.eq."
+    const filterSegments = requestUrl.split('&');
+    for (const segment of filterSegments) {
+      if (segment.includes('eq.')) {
+        // Must have a non-empty value after eq.
+        const eqIdx = segment.indexOf('eq.');
+        const valueAfterEq = segment.slice(eqIdx + 3);
+        expect(valueAfterEq.length).toBeGreaterThan(0);
+      }
+    }
+  });
+});
+
+describe('Defensive hardening: buildHistoryFetchUrl', () => {
+  const EXAMPLE_URL = 'https://example.supabase.co';
+
+  it('produces a valid URL for a UUID user_id', () => {
+    const uuid = 'b6555264-2b17-49d5-9e75-a477efc3fcf1';
+    const url = buildHistoryFetchUrl(EXAMPLE_URL, 'user_id', uuid);
+
+    expect(url).not.toBeNull();
+    expect(url).toContain('user_id=eq.');
+    expect(url).toContain(uuid);
+    expect(url).toContain('select=id,created_at,malas,count,user_name,completion_id');
+    expect(url).toContain('order=created_at.asc');
+    expect(url).toContain('limit=10000');
+
+    // Filter must come before select/order/limit (matches Timer, TapJapam, Index pattern)
+    const queryPart = url!.split('?')[1];
+    const firstSegment = queryPart.split('&')[0];
+    expect(firstSegment).toContain('user_id=eq.');
+  });
+
+  it('produces a valid URL for a numeric legacy user_id', () => {
+    const numericId = '1784628702090';
+    const url = buildHistoryFetchUrl(EXAMPLE_URL, 'user_id', numericId);
+
+    expect(url).not.toBeNull();
+    expect(url).toContain('user_id=eq.');
+    expect(url).toContain(numericId);
+  });
+
+  it('handles user_name as the filter field', () => {
+    const userName = 'testuser@example.com';
+    const url = buildHistoryFetchUrl(EXAMPLE_URL, 'user_name', userName);
+
+    expect(url).not.toBeNull();
+    expect(url).toContain('user_name=eq.');
+    expect(url).toContain(encodeURIComponent(userName));
+  });
+
+  it('encodes spaces as %20 in the filter value', () => {
+    const url = buildHistoryFetchUrl(EXAMPLE_URL, 'user_name', 'user name with spaces');
+
+    expect(url).not.toBeNull();
+    expect(url).not.toContain(' ');
+    expect(url).toContain('user%20name%20with%20spaces');
+  });
+
+  it('returns null for null value', () => {
+    expect(buildHistoryFetchUrl(EXAMPLE_URL, 'user_id', null)).toBeNull();
+  });
+
+  it('returns null for undefined value', () => {
+    expect(buildHistoryFetchUrl(EXAMPLE_URL, 'user_id', undefined)).toBeNull();
+  });
+
+  it('returns null for empty string value', () => {
+    expect(buildHistoryFetchUrl(EXAMPLE_URL, 'user_id', '')).toBeNull();
+  });
+
+  it('returns null for whitespace-only value', () => {
+    expect(buildHistoryFetchUrl(EXAMPLE_URL, 'user_id', '   ')).toBeNull();
+  });
+
+  it('returns null for tab/newline whitespace value', () => {
+    expect(buildHistoryFetchUrl(EXAMPLE_URL, 'user_id', '\t\n')).toBeNull();
   });
 });
