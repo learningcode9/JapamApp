@@ -56,8 +56,8 @@ async function clearStaleCachedIdentity(): Promise<void> {
 async function persistAuthenticatedIdentity(session: Session): Promise<void> {
   if (!isAuthenticatedSession(session)) return;
   sessionExpired = false;
-  const metadata = session.user.user_metadata as { full_name?: string; name?: string } | undefined;
-  const userName = metadata?.full_name || metadata?.name;
+  const metadata = session.user.user_metadata as { given_name?: string; full_name?: string; name?: string; email?: string } | undefined;
+  const userName = metadata?.given_name || metadata?.full_name || metadata?.name || metadata?.email || 'User';
   const entries: [string, string][] = [[USER_ID_KEY, session.user.id]];
   if (userName) entries.push([USER_NAME_KEY, userName]);
   if (session.user.email) entries.push([USER_EMAIL_KEY, session.user.email]);

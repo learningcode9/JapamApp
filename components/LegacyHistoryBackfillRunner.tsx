@@ -45,6 +45,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useRef } from 'react';
 import { Alert } from 'react-native';
 import { useCurrentJapam } from '../contexts/current-japam-context';
+import { ensureDefaultJapam } from '../lib/ensureDefaultJapam';
 import * as historyRepository from '../lib/historyRepository';
 import { planLegacyHistoryBackfill } from '../lib/legacyHistoryBackfill';
 import { supabase } from '../lib/supabase';
@@ -102,7 +103,7 @@ const fetchSuggestedJapamName = async (userId: string | null): Promise<string> =
 };
 
 export default function LegacyHistoryBackfillRunner() {
-  const { isLoading, createJapam } = useCurrentJapam();
+  const { isLoading } = useCurrentJapam();
   // Identity-aware run guard, not a single boolean: this component is mounted once for the app's
   // whole lifetime (inside CurrentJapamProvider, which itself never unmounts), so a single
   // hasRunRef would permanently skip a NEW identity's own check for the rest of the session after
@@ -144,11 +145,13 @@ export default function LegacyHistoryBackfillRunner() {
         return;
       }
 
-      // Step 2: create the one default Japam, named after the best available existing name.
-      // createJapam already auto-selects it -- existing, untouched Context behavior.
+      // Step 2: create or reuse the one default Japam, named after the best available
+      // existing name. Uses the shared ensureDefaultJapam coordinator so a Japam created
+      // by CurrentJapamProvider.refresh() is found and reused instead of creating another.
+      if (!userId) return;
       const suggestedName = await fetchSuggestedJapamName(userId);
-      const created = await createJapam(suggestedName);
-      if (!created) return; // Defensive only: createJapam only returns null for a blank name.
+      const created = await ensureDefaultJapam(userId, suggestedName);
+      if (!created) return;
 
       // Step 3: persist the real reassignment using the just-created Japam's real id/name.
       await historyRepository.applyLegacyHistoryBackfill(userId, created.id, created.name);
@@ -175,7 +178,7 @@ export default function LegacyHistoryBackfillRunner() {
         checkedIdentitiesRef.current.delete(identityKeyBeingAttempted);
       }
     });
-  }, [isLoading, createJapam]);
+  }, [isLoading]);
 
   return null;
 }

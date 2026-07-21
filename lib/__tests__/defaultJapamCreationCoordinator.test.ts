@@ -93,4 +93,30 @@ describe('DefaultJapamCreationCoordinator', () => {
     await coordinator.ensureCreation('user', create);
     expect(create).toHaveBeenCalledTimes(2);
   });
+
+  it('concurrent calls return the same created value', async () => {
+    let resolve: (v: string) => void;
+    const deferred = new Promise<string>((r) => { resolve = r; });
+    const create = jest.fn().mockImplementation(async () => {
+      const result = await deferred;
+      return result;
+    });
+
+    const p1 = coordinator.ensureCreation('user', create);
+    const p2 = coordinator.ensureCreation('user', create);
+
+    expect(create).toHaveBeenCalledTimes(1);
+
+    resolve!('japam-42');
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1).toBe('japam-42');
+    expect(r2).toBe('japam-42');
+  });
+
+  it('non-void create return value is propagated', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 'j-1', name: 'My Japam' });
+
+    const result = await coordinator.ensureCreation('user', create);
+    expect(result).toEqual({ id: 'j-1', name: 'My Japam' });
+  });
 });

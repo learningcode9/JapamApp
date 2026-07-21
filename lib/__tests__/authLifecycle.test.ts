@@ -169,6 +169,95 @@ describe('React Native Supabase auth lifecycle', () => {
     expect(await AsyncStorage.getItem('userEmail')).toBe('user@example.com');
     lifecycle.stop();
   });
+
+  describe('name precedence — given_name wins over full_name and name', () => {
+    const sessionWith = (metadata: Record<string, unknown>) => ({
+      ...session(),
+      user: { ...session().user, user_metadata: metadata },
+    });
+
+    it('given_name is used when present', async () => {
+      const lifecycle = startAuthLifecycle();
+      await lifecycle.ready;
+      await AsyncStorage.multiRemove(['userName']);
+
+      authStateCallback?.('TOKEN_REFRESHED', sessionWith({
+        given_name: 'learn',
+        full_name: 'learncode',
+        name: 'learncode',
+      }));
+      await flush();
+
+      expect(await AsyncStorage.getItem('userName')).toBe('learn');
+      lifecycle.stop();
+    });
+
+    it('full_name is used when given_name is absent', async () => {
+      const lifecycle = startAuthLifecycle();
+      await lifecycle.ready;
+      await AsyncStorage.multiRemove(['userName']);
+
+      authStateCallback?.('TOKEN_REFRESHED', sessionWith({
+        full_name: 'Full Name',
+        name: 'just-name',
+      }));
+      await flush();
+
+      expect(await AsyncStorage.getItem('userName')).toBe('Full Name');
+      lifecycle.stop();
+    });
+
+    it('name is used when given_name and full_name are absent', async () => {
+      const lifecycle = startAuthLifecycle();
+      await lifecycle.ready;
+      await AsyncStorage.multiRemove(['userName']);
+
+      authStateCallback?.('TOKEN_REFRESHED', sessionWith({
+        name: 'only-name',
+      }));
+      await flush();
+
+      expect(await AsyncStorage.getItem('userName')).toBe('only-name');
+      lifecycle.stop();
+    });
+
+    it('falls back to email when no name fields exist', async () => {
+      const lifecycle = startAuthLifecycle();
+      await lifecycle.ready;
+      await AsyncStorage.multiRemove(['userName']);
+
+      authStateCallback?.('TOKEN_REFRESHED', sessionWith({
+        email: 'user@example.com',
+      }));
+      await flush();
+
+      expect(await AsyncStorage.getItem('userName')).toBe('user@example.com');
+      lifecycle.stop();
+    });
+
+    it('TOKEN_REFRESHED preserves the same resolved name as initial sign-in', async () => {
+      const lifecycle = startAuthLifecycle();
+      await lifecycle.ready;
+      await AsyncStorage.multiRemove(['userName']);
+
+      // Simulate the scenario from the Samsung device: Google returns
+      // given_name="learn", name="learncode". The sign-in handler stores
+      // "learn" (given_name || name). TOKEN_REFRESHED must NOT overwrite
+      // with "learncode" (full_name || name).
+      await AsyncStorage.setItem('userName', 'learn');
+
+      authStateCallback?.('TOKEN_REFRESHED', sessionWith({
+        given_name: 'learn',
+        full_name: 'learncode',
+        name: 'learncode',
+      }));
+      await flush();
+
+      // given_name wins → "learn" is preserved
+      expect(await AsyncStorage.getItem('userName')).toBe('learn');
+      lifecycle.stop();
+    });
+  });
 });
 
 afterAll(async () => {
