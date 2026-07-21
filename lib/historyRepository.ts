@@ -21,6 +21,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { DeviceEventEmitter, Platform } from 'react-native';
 import {
   normalizeAll,
   statsByJapam,
@@ -129,9 +130,15 @@ export const loadLifetimeStats = async (
  * identity, plan, merge back with everyone else's untouched records, and persist -- but only if
  * the plan actually found something to reassign, so a no-op call never rewrites storage.
  *
- * Callers (a future orchestration layer) are still responsible for: deciding japamId/japamName,
- * creating that Japam, checking/setting the per-identity "already backfilled" flag so this never
- * runs a second time, and showing any user-facing notice. None of that lives here.
+ * After a successful write, emits japam-history-updated (via DeviceEventEmitter + web fallback)
+ * so in-memory consumers (Timer streak, History screen, stats) recalculate immediately from the
+ * new persisted state without requiring a tab switch or cold restart. The event is NOT emitted
+ * for no-ops (needsBackfill=false) or any write/load failure.
+ *
+ * Callers (currently only LegacyHistoryBackfillRunner) are still responsible for: deciding
+ * japamId/japamName, creating that Japam, checking/setting the per-identity "already backfilled"
+ * flag so this never runs a second time, and showing any user-facing notice. None of that lives
+ * here.
  */
 export const applyLegacyHistoryBackfill = async (
   userId: string | null | undefined,
@@ -148,6 +155,11 @@ export const applyLegacyHistoryBackfill = async (
   if (plan.needsBackfill) {
     const merged = [...forOthers, ...plan.updatedRecords];
     await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(merged));
+
+    DeviceEventEmitter.emit('japam-history-updated');
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('japam-history-updated'));
+    }
   }
 
   return plan;
