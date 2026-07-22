@@ -37,6 +37,7 @@ export default function MyJapamsScreen() {
     renameJapam,
     archiveJapam,
     restoreJapam,
+    deleteJapam,
   } = useCurrentJapam();
 
   const [statsMap, setStatsMap] = useState<Map<string | null, JapamStats>>(new Map());
@@ -126,6 +127,23 @@ export default function MyJapamsScreen() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Archive', style: 'destructive', onPress: () => void archiveJapam(japam.id) },
     ]);
+  };
+
+  const confirmDeletePermanent = (japam: Japam) => {
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm(`Delete Workspace?\n\nThis will permanently delete this archived workspace.\nThis action cannot be undone.`)) {
+        void deleteJapam(japam.id);
+      }
+      return;
+    }
+    Alert.alert(
+      'Delete Workspace?',
+      'This will permanently delete this archived workspace.\nThis action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => void deleteJapam(japam.id) },
+      ],
+    );
   };
 
   const visibleJapams = activeJapams(japams);
@@ -255,6 +273,17 @@ export default function MyJapamsScreen() {
                       <Text style={styles.statValue}>{stats.lifetimeMalas} malas</Text>
                     </View>
                   </View>
+
+                  <Pressable
+                    style={styles.deleteButton}
+                    onPress={() => confirmDeletePermanent(japam)}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Delete ${japam.name} permanently`}
+                  >
+                    <Ionicons name="trash-outline" size={14} color="#b91c1c" />
+                    <Text style={styles.deleteButtonText}>Delete Permanently</Text>
+                  </Pressable>
                 </View>
               );
             })}
@@ -410,6 +439,24 @@ const styles = StyleSheet.create({
     color: '#0f766e',
     fontSize: 14,
     fontWeight: '800',
+  },
+  deleteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+    gap: 6,
+    minHeight: 36,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginTop: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(185, 28, 28, 0.08)',
+  },
+  deleteButtonText: {
+    color: '#b91c1c',
+    fontSize: 13,
+    fontWeight: '700',
   },
   statsRow: {
     flexDirection: 'row',

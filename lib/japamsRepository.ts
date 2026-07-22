@@ -98,6 +98,23 @@ export const restoreJapam = async (
   return updated;
 };
 
+/**
+ * Permanently delete an archived Japam. No-op if japamId isn't found.
+ * This is deliberately restricted to archived Japams only — active Japams must
+ * be archived first before they can be deleted.
+ */
+export const deleteJapam = async (
+  userId: string | null | undefined,
+  japamId: string,
+): Promise<Japam[]> => {
+  const existing = await loadJapamsFromStorage(userId);
+  const target = existing.find((j) => j.id === japamId);
+  if (!target) return existing;
+  const updated = existing.filter((j) => j.id !== japamId);
+  await saveJapamsToStorage(userId, updated);
+  return updated;
+};
+
 export const loadCurrentJapamId = (userId: string | null | undefined): Promise<string | null> =>
   loadCurrentJapamIdFromStorage(userId);
 
