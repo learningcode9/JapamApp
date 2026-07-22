@@ -517,7 +517,9 @@ export default function TimerScreen() {
       if (Platform.OS !== 'web') return; // native platforms use handleNativeGoogleSignIn
       if (!response) return;
 
+      console.log('[AUTH_DIAG] 1. Google callback received.');
       console.log('[AUTH_CALLBACK] source=timer-web response.type=%s', response.type);
+      console.log('[AUTH_DIAG] 2. response.type=' + response.type + ' (full)');
       if (response.type !== 'success') {
         setIsSigningIn(false);
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
@@ -533,6 +535,8 @@ export default function TimerScreen() {
       setShowUserModal(false);
 
       const { authentication } = response;
+      console.log('[AUTH_DIAG] 3. response.authentication present:', !!authentication);
+      console.log('[AUTH_DIAG] 4. response.params keys:', 'params' in response ? Object.keys(response.params ?? {}).join(',') : 'none');
       const accessToken =
         authentication?.accessToken ||
         ('params' in response ? response.params?.access_token : undefined);
@@ -540,6 +544,7 @@ export default function TimerScreen() {
         authentication?.idToken ||
         ('params' in response ? (response.params as Record<string, string>)?.id_token : undefined);
 
+      console.log('[AUTH_DIAG] 5. id_token present:', !!idToken, 'length:', idToken?.length);
       console.log('[AUTH_CALLBACK] source=timer-web hasIdToken=%s hasAccessToken=%s paramKeys=%s',
         !!idToken, !!accessToken,
         'params' in response ? Object.keys(response.params ?? {}).join(',') : 'none');
@@ -554,14 +559,21 @@ export default function TimerScreen() {
 
       try {
         if (idToken) {
+          console.log('[AUTH_DIAG] 6. Calling signInWithIdToken...');
           console.log('[SUPABASE_AUTH] timer nonce_prefix=%s', rawNonceRef.current.slice(0, 8));
           const { error: supaAuthError } = await supabase.auth.signInWithIdToken({
             provider: 'google',
             token: idToken,
             nonce: rawNonceRef.current,
           });
-          if (supaAuthError) console.log('[SUPABASE_AUTH] timer signInWithIdToken error:', supaAuthError.message);
-          else console.log('[SUPABASE_AUTH] timer web session established');
+          if (supaAuthError) {
+            console.log('[AUTH_DIAG] 7. signInWithIdToken failure');
+            console.log('[AUTH_DIAG] 8. Exact Supabase error body:', JSON.stringify(supaAuthError));
+            console.log('[SUPABASE_AUTH] timer signInWithIdToken error:', supaAuthError.message);
+          } else {
+            console.log('[AUTH_DIAG] 7. signInWithIdToken success');
+            console.log('[SUPABASE_AUTH] timer web session established');
+          }
         } else {
           console.log('[SUPABASE_AUTH] timer no id_token — session not established');
         }
@@ -570,7 +582,7 @@ export default function TimerScreen() {
         const sessionIsAnonymous =
           !!((session?.user as { is_anonymous?: boolean } | undefined)?.is_anonymous);
         console.log(
-          '[SUPABASE_AUTH] timer session.user.id=%s session.user.email=%s hasAccessToken=%s tokenLength=%s isAnonymous=%s',
+          '[AUTH_DIAG] 9. getSession() result: id=%s email=%s hasAccessToken=%s tokenLength=%s isAnonymous=%s',
           session?.user?.id || 'none',
           session?.user?.email || 'none',
           !!session?.access_token,
@@ -624,6 +636,7 @@ export default function TimerScreen() {
         }
         await migrateGuestHistoryToGoogle(userId);
         await AsyncStorage.setItem(USER_ID_KEY, userId);
+        console.log('[AUTH_DIAG] 10. Persisted userId=' + userId + ' userName=' + googleName);
         setUserName(googleName);
         setShowUserModal(false);
         DeviceEventEmitter.emit('japam-auth-updated');
@@ -633,7 +646,10 @@ export default function TimerScreen() {
           window.dispatchEvent(new Event('japam-stats-updated'));
         }
         void loadStats();
+        console.log('[AUTH_DIAG] 11. Final authenticated state: success');
       } catch (error) {
+        console.log('[AUTH_DIAG] 7. signInWithIdToken threw exception');
+        console.log('[AUTH_DIAG] 8. Error:', error);
         console.log('Google login error:', error);
         setShowUserModal(true);
         showGoogleSignInRequiredAlert();
