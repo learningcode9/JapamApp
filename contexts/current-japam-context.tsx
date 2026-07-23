@@ -107,6 +107,9 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
       await japamsRepository.saveCurrentJapamId(userId, resolvedCurrentId);
     }
     setIsLoading(false);
+    if (userId) {
+      void japamsRepository.reconcileAllJapams(userId);
+    }
   }, [coordinator]);
 
   useEffect(() => {
