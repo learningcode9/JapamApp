@@ -136,7 +136,7 @@ const showGoogleSignInRequiredAlert = () => {
 export default function TimerScreen() {
   const router = useRouter();
   const timer = useTimer();
-  const { currentJapam } = useCurrentJapam();
+  const { currentJapam, isLoading: japamLoading } = useCurrentJapam();
   const insets = useSafeAreaInsets();
   // Mirror the floating tab bar geometry from _layout.tsx exactly.
   // _layout.tsx uses screenWidth < 500 as its isMobile threshold (different from
@@ -696,10 +696,16 @@ export default function TimerScreen() {
       openSignInModal();
       return;
     }
+    // Block start while the CurrentJapamProvider hasn't finished initializing:
+    // without a resolved currentJapam, the timer would save with japamId: null
+    // and the entry would be invisible on the History screen.
+    if (japamLoading || !currentJapam) {
+      return;
+    }
     // Snapshot whichever Japam is current AT THIS EXACT MOMENT, once, before starting. Switching
     // the app's current Japam later must never retroactively change what this running session's
     // eventual completion is attributed to -- see setActiveJapamSelection in timer-context.tsx.
-    timer.setActiveJapamSelection(currentJapam?.id ?? null, currentJapam?.name ?? null);
+    timer.setActiveJapamSelection(currentJapam.id, currentJapam.name);
     timer.start();
   };
 

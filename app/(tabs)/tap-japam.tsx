@@ -205,7 +205,7 @@ const isAuthPending = async () => {
 };
 
 export default function JapamMain() {
-  const { currentJapam } = useCurrentJapam();
+  const { currentJapam, isLoading: japamLoading } = useCurrentJapam();
   // The Japam this screen's completions belong to. Tap Japam has no discrete "Start" button (see
   // handleStart below, which is not wired to any visible control on this screen) -- tapping the
   // circle is the actual interaction, with no clear start/stop boundary of its own. Treating
@@ -1835,10 +1835,14 @@ export default function JapamMain() {
 
   const handleTap = async () => {
     if (!requireLogin()) return;
+    // Block tap while the CurrentJapamProvider hasn't finished initializing:
+    // without a resolved currentJapam, the entry saves with japamId: null
+    // and is invisible on the History screen.
+    if (japamLoading || !currentJapam) return;
     const tapIdentity = createTapIdentitySnapshot(
       userIdRef.current,
-      activeJapamIdRef.current,
-      activeJapamNameRef.current
+      currentJapam.id,
+      currentJapam.name,
     );
     void primeWebCompletionAudio();
 
@@ -1869,6 +1873,7 @@ export default function JapamMain() {
 
   const handleStart = () => {
     if (!requireLogin()) return;
+    if (japamLoading || !currentJapam) return;
     void primeWebCompletionAudio();
     const mins = Math.max(1, Math.floor(Number(minutesInput) || 1));
     const nextTargetSeconds = mins * 60;

@@ -103,10 +103,22 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
       : undefined;
     const resolvedCurrentId = persistedStillActive?.id ?? active[0]?.id ?? null;
     setCurrentJapamIdState(resolvedCurrentId);
-    if (resolvedCurrentId !== persistedCurrentId) {
+    const idChanged = resolvedCurrentId !== persistedCurrentId;
+    if (idChanged) {
       await japamsRepository.saveCurrentJapamId(userId, resolvedCurrentId);
     }
     setIsLoading(false);
+    // Emit japam-did-switch so the timer context's currentJapamIdRef and
+    // activeJapamIdRef are updated. Without this, a refresh that resolves
+    // a non-null currentJapam (e.g. auto-creation of the default Japam)
+    // leaves the timer context seeing null, causing Timer/Tap saves to
+    // record japamId:null which the History screen then filters out.
+    if (resolvedCurrentId) {
+      DeviceEventEmitter.emit('japam-did-switch', { japamId: resolvedCurrentId });
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('japam-did-switch', { detail: { japamId: resolvedCurrentId } }));
+      }
+    }
     if (userId) {
       void japamsRepository.reconcileAllJapams(userId);
     }

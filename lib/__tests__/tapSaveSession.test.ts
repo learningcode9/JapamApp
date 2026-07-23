@@ -241,4 +241,100 @@ describe('tapSaveSession — real runtime pipeline', () => {
       todayTotal: 108,
     }));
   });
+
+  // ------------------------------------------------------------------
+  // Regression: japamId scoping — root cause of the "Tap/Timer saves
+  // but History screen shows nothing" bug.
+  //
+  // When currentJapam is null at capture time (refresh hasn't completed),
+  // activeJapamIdRef.current is null, so records save with japamId: null.
+  // loadHistoryForJapam filters by (r.japamId ?? null) === japamId, so
+  // null-japamId records disappear when currentJapamId is non-null.
+  // ------------------------------------------------------------------
+
+  it('null japamId → record is invisible to loadHistoryForJapam', async () => {
+    // Simulate the bug: activeJapamIdRef.current is null (Japam not yet
+    // initialized when Timer started or Tap screen focused).
+    const refs = makeRefs();
+    refs.activeJapamId.current = null;
+    refs.activeJapamName.current = null;
+    const identityNullJapam = { userId: UID, japamId: null, japamName: null };
+
+    const result = await tapSaveSession(0, 1, 108, 108, 'tap', refs, identityNullJapam, 'Test User');
+    expect(result).toBe(true);
+
+    // The record IS in AsyncStorage.
+    const all = JSON.parse((await AsyncStorage.getItem('history')) || '[]');
+    expect(all).toHaveLength(1);
+    expect(all[0].japamId).toBeNull();
+    expect(all[0].userId).toBe(UID);
+
+    // But loadHistoryForJapam with the real japamId DOES NOT find it.
+    const found = await historyRepository.loadHistoryForJapam(UID, JAPAM_ID);
+    expect(found).toHaveLength(0);
+
+    // loadHistoryForUser (no japam filter) DOES find it — confirming the
+    // scoping loss is in filterByJapam, not in loadHistoryForUser.
+    const forUser = await historyRepository.loadHistoryForUser(UID);
+    expect(forUser).toHaveLength(1);
+    expect(forUser[0].japamId).toBeNull();
+  });
+
+  it('non-null japamId → record is visible to loadHistoryForJapam', async () => {
+    const refs = makeRefs();
+
+    const result = await tapSaveSession(0, 1, 108, 108, 'tap', refs, identity, 'Test User');
+    expect(result).toBe(true);
+
+    // The record IS in AsyncStorage with the correct japamId.
+    const all = JSON.parse((await AsyncStorage.getItem('history')) || '[]');
+    expect(all).toHaveLength(1);
+    expect(all[0].japamId).toBe(JAPAM_ID);
+
+    // loadHistoryForJapam with the correct japamId FINDS it.
+    const found = await historyRepository.loadHistoryForJapam(UID, JAPAM_ID);
+    expect(found).toHaveLength(1);
+    expect(found[0].japamId).toBe(JAPAM_ID);
+  });
+
+  // ------------------------------------------------------------------
+  // Regression: timer completion path (source='timer', no identity) falls
+  // back to refs.activeJapamId.current. The ref must be non-null for the
+  // record to appear on the History screen.
+  // ------------------------------------------------------------------
+
+  it('timer completion (no identity) uses activeJapamIdRef fallback', async () => {
+    const refs = makeRefs();
+    refs.activeJapamId.current = JAPAM_ID;
+    refs.activeJapamName.current = JAPAM_NAME;
+
+    // Simulate completeTimerSession: source='timer', no identity, no userName
+    const result = await tapSaveSession(120, 1, 108, 108, 'timer', refs, undefined, 'Test User');
+    expect(result).toBe(true);
+
+    const found = await historyRepository.loadHistoryForJapam(UID, JAPAM_ID);
+    expect(found).toHaveLength(1);
+    expect(found[0].japamId).toBe(JAPAM_ID);
+    expect(found[0].source).toBe('timer');
+  });
+
+  it('timer completion with null ref → invisible to loadHistoryForJapam', async () => {
+    const refs = makeRefs();
+    // Root cause scenario: activeJapamIdRef.current is null because
+    // the Japam wasn't initialized when the timer started.
+    refs.activeJapamId.current = null;
+    refs.activeJapamName.current = null;
+
+    const result = await tapSaveSession(120, 1, 108, 108, 'timer', refs, undefined, 'Test User');
+    expect(result).toBe(true);
+
+    // Record saved with null japamId — invisible in the scoped query.
+    const found = await historyRepository.loadHistoryForJapam(UID, JAPAM_ID);
+    expect(found).toHaveLength(0);
+
+    // But IS findable by the unscoped user query.
+    const forUser = await historyRepository.loadHistoryForUser(UID);
+    expect(forUser).toHaveLength(1);
+    expect(forUser[0].japamId).toBeNull();
+  });
 });
