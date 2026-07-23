@@ -55,6 +55,7 @@ type CurrentJapamContextValue = {
   renameJapam: (japamId: string, rawName: string) => Promise<void>;
   archiveJapam: (japamId: string) => Promise<void>;
   restoreJapam: (japamId: string) => Promise<void>;
+  deleteJapam: (japamId: string) => Promise<void>;
 };
 
 const CurrentJapamContext = createContext<CurrentJapamContextValue | null>(null);
@@ -106,6 +107,9 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
       await japamsRepository.saveCurrentJapamId(userId, resolvedCurrentId);
     }
     setIsLoading(false);
+    if (userId) {
+      void japamsRepository.reconcileAllJapams(userId);
+    }
   }, [coordinator]);
 
   useEffect(() => {
@@ -167,6 +171,16 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
     // change currentJapamId.
   }, []);
 
+  const deleteJapam = useCallback(async (japamId: string): Promise<void> => {
+    const updated = await japamsRepository.deleteJapam(userIdRef.current, japamId);
+    setJapams(updated);
+    // If the deleted Japam was the current selection, fall back to the next active one.
+    if (currentJapamId === japamId) {
+      const nextActive = activeJapams(updated)[0]?.id ?? null;
+      selectJapam(nextActive);
+    }
+  }, [currentJapamId, selectJapam]);
+
   const currentJapam = useMemo(
     () => japams.find((j) => j.id === currentJapamId) ?? null,
     [japams, currentJapamId],
@@ -182,6 +196,7 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
     renameJapam,
     archiveJapam,
     restoreJapam,
+    deleteJapam,
   }), [
     japams,
     currentJapamId,
@@ -192,6 +207,7 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
     renameJapam,
     archiveJapam,
     restoreJapam,
+    deleteJapam,
   ]);
 
   return <CurrentJapamContext.Provider value={value}>{children}</CurrentJapamContext.Provider>;

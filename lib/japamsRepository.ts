@@ -32,6 +32,48 @@ import {
   saveCurrentJapamId as saveCurrentJapamIdToStorage,
 } from './japamsStorage';
 
+const syncInFlight = new Map<string, boolean>();
+
+const enqueueSync = (userId: string, japam: Japam): void => {
+  if (!userId) return;
+
+  if (syncInFlight.has(japam.id)) {
+    syncInFlight.set(japam.id, true);
+    return;
+  }
+
+  syncInFlight.set(japam.id, false);
+  void syncLoop(userId, japam.id);
+};
+
+const syncLoop = async (userId: string, japamId: string): Promise<void> => {
+  try {
+    while (syncInFlight.has(japamId)) {
+      syncInFlight.set(japamId, false);
+
+      const japams = await loadJapamsFromStorage(userId);
+      const japam = japams.find((j) => j.id === japamId);
+      if (!japam) {
+        syncInFlight.delete(japamId);
+        return;
+      }
+
+      const ok = await syncJapam(userId, japam);
+      if (!ok) {
+        syncInFlight.delete(japamId);
+        return;
+      }
+
+      if (!syncInFlight.get(japamId)) {
+        syncInFlight.delete(japamId);
+        return;
+      }
+    }
+  } catch {
+    syncInFlight.delete(japamId);
+  }
+};
+
 export const loadJapams = (userId: string | null | undefined): Promise<Japam[]> =>
   loadJapamsFromStorage(userId);
 
@@ -52,6 +94,7 @@ export const createJapam = async (
   if (created === null) return null;
   const updated = [...existing, created];
   await saveJapamsToStorage(userId, updated);
+  if (userId) enqueueSync(userId, created);
   return { created, japams: updated };
 };
 
@@ -67,6 +110,10 @@ export const renameJapam = async (
   const renamed = renameJapamPure(target, rawName);
   const updated = existing.map((j) => (j.id === japamId ? renamed : j));
   await saveJapamsToStorage(userId, updated);
+  if (userId) {
+    const current = updated.find((j) => j.id === japamId);
+    if (current) enqueueSync(userId, current);
+  }
   return updated;
 };
 
@@ -81,6 +128,10 @@ export const archiveJapam = async (
   const archived = archiveJapamPure(target);
   const updated = existing.map((j) => (j.id === japamId ? archived : j));
   await saveJapamsToStorage(userId, updated);
+  if (userId) {
+    const current = updated.find((j) => j.id === japamId);
+    if (current) enqueueSync(userId, current);
+  }
   return updated;
 };
 
@@ -95,6 +146,27 @@ export const restoreJapam = async (
   const restored = restoreJapamPure(target);
   const updated = existing.map((j) => (j.id === japamId ? restored : j));
   await saveJapamsToStorage(userId, updated);
+  if (userId) {
+    const current = updated.find((j) => j.id === japamId);
+    if (current) enqueueSync(userId, current);
+  }
+  return updated;
+};
+
+/**
+ * Permanently delete an archived Japam. No-op if japamId isn't found.
+ * This is deliberately restricted to archived Japams only — active Japams must
+ * be archived first before they can be deleted.
+ */
+export const deleteJapam = async (
+  userId: string | null | undefined,
+  japamId: string,
+): Promise<Japam[]> => {
+  const existing = await loadJapamsFromStorage(userId);
+  const target = existing.find((j) => j.id === japamId);
+  if (!target) return existing;
+  const updated = existing.filter((j) => j.id !== japamId);
+  await saveJapamsToStorage(userId, updated);
   return updated;
 };
 
@@ -105,3 +177,85 @@ export const saveCurrentJapamId = (
   userId: string | null | undefined,
   japamId: string | null,
 ): Promise<void> => saveCurrentJapamIdToStorage(userId, japamId);
+
+export const syncJapam = async (
+  userId: string,
+  japam: Japam,
+): Promise<boolean> => {
+  if (!userId) {
+    console.warn('[JAPAM_SYNC_FAILED]', {
+      japamId: japam.id,
+      code: 'MISSING_USER_ID',
+      message: 'Cannot sync Japam without an authenticated user',
+    });
+    return false;
+  }
+
+  if (japam.userId !== null && japam.userId !== userId) {
+    console.warn('[JAPAM_SYNC_FAILED]', {
+      japamId: japam.id,
+      code: 'USER_ID_MISMATCH',
+      message: 'Japam userId does not match authenticated user',
+    });
+    return false;
+  }
+
+  try {
+    // Temporary lazy require() to avoid breaking pre-existing tests that
+    // import japamsRepository.ts without mocking ../supabase. Replace with
+    // a top-level import when runtime wiring and test mocks are updated.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { supabase } = require('./supabase');
+    const { error } = await supabase
+      .from('japams')
+      .upsert(
+        {
+          id: japam.id,
+          user_id: userId,
+          name: japam.name,
+          archived_at: japam.archivedAt,
+        },
+        { onConflict: 'id' },
+      );
+
+    if (error) {
+      console.warn('[JAPAM_SYNC_FAILED]', {
+        japamId: japam.id,
+        code: error.code,
+        message: error.message,
+      });
+      return false;
+    }
+
+    return true;
+  } catch {
+    console.warn('[JAPAM_SYNC_FAILED]', {
+      japamId: japam.id,
+      code: 'NETWORK_ERROR',
+      message: 'Network error during Japam sync',
+    });
+    return false;
+  }
+};
+
+let reconciliationInFlight = false;
+
+export const reconcileAllJapams = async (
+  userId: string,
+): Promise<{ synced: number; failed: number }> => {
+  if (!userId || reconciliationInFlight) return { synced: 0, failed: 0 };
+  reconciliationInFlight = true;
+  try {
+    const japams = await loadJapamsFromStorage(userId);
+    let synced = 0;
+    let failed = 0;
+    for (const japam of japams) {
+      const ok = await syncJapam(userId, japam);
+      if (ok) synced++;
+      else failed++;
+    }
+    return { synced, failed };
+  } finally {
+    reconciliationInFlight = false;
+  }
+};
