@@ -49,6 +49,7 @@ import {
   showGoogleAccountCollisionDialog,
 } from '../../lib/anonymousAuth';
 import { supabase } from '../../lib/supabase';
+import { fetchJapamHistoryRows } from '../../lib/supabaseRestHelper';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -167,6 +168,7 @@ export default function TimerScreen() {
   const isIosDeviceWeb = isIOSDeviceWeb();
 
   const rawNonceRef = useRef<string>('');
+  const isRestoringRef = useRef(false);
   const [hashedNonce, setHashedNonce] = useState<string>('');
   useEffect(() => {
     if (Platform.OS !== 'web') return;
@@ -228,6 +230,9 @@ export default function TimerScreen() {
   }, [guestNameInput]);
 
   const loadStats = useCallback(async () => {
+    if (isRestoringRef.current) return;
+    isRestoringRef.current = true;
+    try {
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
     const todayKey = getLocalDateKey();
     const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
@@ -239,32 +244,17 @@ export default function TimerScreen() {
     // Option A: anonymous guest data syncs to Supabase immediately, same as a signed-in user —
     // no anonymous-specific suppression here.
     if (userId) {
-      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-      // Require a real session JWT — an anon-key request has no SELECT policy for this user's
-      // rows once RLS is tightened (mirrors syncPendingHistory's session-token preference). No
-      // session means mergedHistory stays local-only below (no remote merge attempted).
-      const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
-      if (url && key && sessionToken) {
         try {
-          const encodedUserId = encodeURIComponent(userId);
-          const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,completion_id,japam_id,japam_name&order=created_at.asc&limit=10000`,
-            { headers: { apikey: key, Authorization: `Bearer ${sessionToken}` } }
-          );
-          if (res.ok) {
-            const rows: {
-              id?: number | string;
-              created_at: string;
-              malas: number | string;
-              count: number | string;
-              user_name?: string;
-              completion_id?: string;
-              japam_id?: string | null;
-              japam_name?: string | null;
-            }[] = await res.json();
-            rawSupabaseRows = rows.length;
-            const remoteHistory: Session[] = rows.map((row) => ({
+          const remoteRows = await fetchJapamHistoryRows({
+            select: 'id,created_at,malas,count,user_name,completion_id,japam_id,japam_name',
+            userId,
+            order: { column: 'created_at', ascending: true },
+            limit: 10000,
+          });
+
+          if (remoteRows !== null) {
+            rawSupabaseRows = remoteRows.length;
+            const remoteHistory: Session[] = remoteRows.map((row: any) => ({
               date: row.created_at,
               malas: Number(row.malas) || Math.floor((Number(row.count) || 0) / 108),
               totalCount: Number(row.count) || (Number(row.malas) || 0) * 108,
@@ -291,7 +281,7 @@ export default function TimerScreen() {
                 );
               }
             }
-            const remoteCount = rows.length;
+            const remoteCount = remoteRows.length;
             const localSynced = localHistory.filter(
               (r) => r.userId === userId && r.syncStatus === 'synced'
             ).length;
@@ -320,14 +310,11 @@ export default function TimerScreen() {
               localHistory.filter((item) => item.userId === userId && item.syncStatus === 'pending').length
             );
             console.log('[MERGE_LOCAL_COUNT_AFTER] screen=timer count=%d', mergedHistory.length);
-          } else {
-            console.log('[SYNC_FAILED] source=timer-stats-restore status=%d', res.status);
           }
         } catch {
           console.log('[SYNC_FAILED] source=timer-stats-restore reason=network');
         }
       }
-    }
 
     const history = dedupeHistoryForStats(mergedHistory).filter((item) => {
       if (!userId) return !item.userId;
@@ -365,6 +352,9 @@ export default function TimerScreen() {
       safeTodayTotal,
       nextStreak
     );
+  } finally {
+    isRestoringRef.current = false;
+  }
   }, [currentJapam]);
 
   useFocusEffect(

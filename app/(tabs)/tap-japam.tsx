@@ -31,6 +31,7 @@ import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { fetchJapamHistoryRows } from '../../lib/supabaseRestHelper';
 import { runSharedLogoutFlow } from '../../lib/sharedLogout';
 
 import {
@@ -291,6 +292,7 @@ export default function JapamMain() {
   const startTimerIntervalRef = useRef<() => void>(() => {});
   const appStateRef = useRef(AppState.currentState);
   const restoreTodayTotalRef = useRef<() => Promise<void>>(async () => {});
+  const isRestoringRef = useRef(false);
 
   const glowAnim = useRef(new Animated.Value(0)).current;
 
@@ -779,6 +781,9 @@ export default function JapamMain() {
   };
 
   const restoreTodayTotal = useCallback(async (options?: { preserveManualCount?: boolean }) => {
+    if (isRestoringRef.current) return;
+    isRestoringRef.current = true;
+    try {
     const preserveManualCount = Boolean(options?.preserveManualCount);
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
     const todayKey = getLocalDateKey();
@@ -812,46 +817,28 @@ export default function JapamMain() {
       }
 
       try {
-        const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-        const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
         let remoteSessions: Session[] | null = null;
 
-        // Require a real session JWT — an anon-key request has no SELECT policy for another
-        // user's rows and none for this user's own rows once RLS is tightened (mirrors
-        // syncPendingHistory's session-token preference). No session means remoteSessions stays
-        // null below, which skips the merge and leaves local history untouched.
-        const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
-        if (url && key && sessionToken) {
-          const encodedUserId = encodeURIComponent(savedUserId);
-          const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,completion_id,japam_id,japam_name&order=created_at.asc`,
-            { headers: { apikey: key, Authorization: `Bearer ${sessionToken}` } }
-          );
-          if (res.ok) {
-            const rows: {
-              created_at: string;
-              malas: number | string;
-              count: number | string;
-              user_name?: string;
-              completion_id?: string;
-              japam_id?: string | null;
-              japam_name?: string | null;
-            }[] =
-              await res.json();
-            remoteSessions = rows.map((row) => ({
-              date: row.created_at,
-              malas: Number(row.malas) || 0,
-              totalCount: Number(row.count) || 0,
-              duration: 0,
-              manual: false,
-              userId: savedUserId,
-              userName: row.user_name,
-              completionId: row.completion_id,
-              syncStatus: 'synced' as const,
-              japamId: row.japam_id ?? null,
-              japamName: row.japam_name ?? null,
+        const remoteRows = await fetchJapamHistoryRows({
+          select: 'created_at,malas,count,user_name,completion_id,japam_id,japam_name',
+          userId: savedUserId,
+          order: { column: 'created_at', ascending: true },
+        });
+
+        if (remoteRows !== null) {
+          remoteSessions = remoteRows.map((row: any) => ({
+            date: row.created_at,
+            malas: Number(row.malas) || 0,
+            totalCount: Number(row.count) || 0,
+            duration: 0,
+            manual: false,
+            userId: savedUserId,
+            userName: row.user_name,
+            completionId: row.completion_id,
+            syncStatus: 'synced' as const,
+            japamId: row.japam_id ?? null,
+            japamName: row.japam_name ?? null,
             }));
-          }
         }
 
         if (remoteSessions !== null) {
@@ -907,6 +894,9 @@ export default function JapamMain() {
     }
     await refreshDayStreak({ userId: null, japamId });
     setHasRestoredTotal(true);
+  } finally {
+    isRestoringRef.current = false;
+  }
   }, [refreshDayStreak, restoreTotal]);
 
   useEffect(() => {
@@ -1245,26 +1235,15 @@ export default function JapamMain() {
 
   const restoreHistoryFromSupabase = useCallback(async (googleUserId: string) => {
     try {
-      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-      if (!supabaseUrl || !supabaseKey) return;
+      const remoteRows = await fetchJapamHistoryRows({
+        select: '*',
+        userId: googleUserId,
+        order: { column: 'created_at', ascending: true },
+      });
 
-      // Require a real session JWT — an anon-key request has no SELECT policy for this user's
-      // rows once RLS is tightened. No session means we leave local history untouched (same
-      // no-op path as any other fetch failure below).
-      const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
-      if (!sessionToken) return;
+      if (!remoteRows) return;
 
-      const encodedUserId = encodeURIComponent(googleUserId);
-      const response = await fetch(
-        `${supabaseUrl}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=*&order=created_at.asc`,
-        { headers: { apikey: supabaseKey, Authorization: `Bearer ${sessionToken}` } }
-      );
-
-      if (!response.ok) return;
-
-      const rows = await response.json();
-      const remoteHistory: Session[] = rows.map((item: any) => ({
+      const remoteHistory: Session[] = remoteRows.map((item: any) => ({
         date: item.created_at,
         malas: Number(item.malas) || 0,
         totalCount: Number(item.count) || 0,
