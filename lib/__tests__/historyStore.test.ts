@@ -1466,4 +1466,73 @@ describe('filterByJapam', () => {
     const result = filterByJapam([dup, { ...dup }], 'gayatri');
     expect(result).toHaveLength(1);
   });
+
+  // ── Legacy fallback: null japam_id + matching japam_name ──
+
+  it('includes legacy rows when japamName matches selected Japam (null japamId + same name)', () => {
+    const records = [
+      session(at(9), { japamId: 'uuid-gayatri', japamName: 'Gayatri', completionId: 'a' }),
+      session(at(10), { japamId: null, japamName: 'Gayatri', completionId: 'legacy-match' }),
+    ];
+    const result = filterByJapam(records, 'uuid-gayatri', 'Gayatri');
+    expect(result.map((r) => r.completionId).sort()).toEqual(['a', 'legacy-match']);
+  });
+
+  it('excludes legacy rows when japamName differs from selected Japam', () => {
+    const records = [
+      session(at(9), { japamId: 'uuid-gayatri', japamName: 'Gayatri', completionId: 'a' }),
+      session(at(10), { japamId: null, japamName: 'Govinda', completionId: 'legacy-other' }),
+    ];
+    const result = filterByJapam(records, 'uuid-gayatri', 'Gayatri');
+    expect(result.map((r) => r.completionId)).toEqual(['a']);
+  });
+
+  it('excludes legacy rows when japamName is not provided (backward compat)', () => {
+    const records = [
+      session(at(9), { japamId: 'uuid-gayatri', japamName: 'Gayatri', completionId: 'a' }),
+      session(at(10), { japamId: null, japamName: 'Gayatri', completionId: 'legacy-match' }),
+    ];
+    const result = filterByJapam(records, 'uuid-gayatri');
+    expect(result.map((r) => r.completionId)).toEqual(['a']);
+  });
+
+  it('isolates legacy rows by japamName — each Japam gets only its own', () => {
+    const records = [
+      session(at(9), { japamId: null, japamName: 'Gayatri', completionId: 'g-legacy' }),
+      session(at(10), { japamId: null, japamName: 'Govinda', completionId: 'v-legacy' }),
+      session(at(11), { japamId: 'uuid-gayatri', japamName: 'Gayatri', completionId: 'g-real' }),
+      session(at(12), { japamId: 'uuid-govinda', japamName: 'Govinda', completionId: 'v-real' }),
+    ];
+    const gayatri = filterByJapam(records, 'uuid-gayatri', 'Gayatri');
+    const govinda = filterByJapam(records, 'uuid-govinda', 'Govinda');
+    expect(gayatri.map((r) => r.completionId).sort()).toEqual(['g-legacy', 'g-real']);
+    expect(govinda.map((r) => r.completionId).sort()).toEqual(['v-legacy', 'v-real']);
+  });
+
+  it('null japamId without japamName still shows only legacy/unassigned records', () => {
+    const records = [
+      session(at(9), { japamId: null, japamName: 'Gayatri', completionId: 'legacy' }),
+      session(at(10), { japamId: 'uuid-gayatri', japamName: 'Gayatri', completionId: 'real' }),
+    ];
+    const result = filterByJapam(records, null);
+    expect(result.map((r) => r.completionId)).toEqual(['legacy']);
+  });
+
+  it('null japamName argument does not trigger fallback matching', () => {
+    const records = [
+      session(at(9), { japamId: 'uuid-gayatri', completionId: 'real' }),
+      session(at(10), { japamId: null, japamName: 'Gayatri', completionId: 'legacy' }),
+    ];
+    const result = filterByJapam(records, 'uuid-gayatri', null);
+    expect(result.map((r) => r.completionId)).toEqual(['real']);
+  });
+
+  it('legacy row with no japamName at all does not match any named Japam', () => {
+    const records = [
+      session(at(9), { japamId: 'uuid-gayatri', completionId: 'real' }),
+      session(at(10), { japamId: null, japamName: null, completionId: 'no-name' }),
+    ];
+    const result = filterByJapam(records, 'uuid-gayatri', 'Gayatri');
+    expect(result.map((r) => r.completionId)).toEqual(['real']);
+  });
 });
