@@ -630,6 +630,9 @@ export const filterByJapam = (
   dedupeByCompletionId(records).filter((r) => {
     const recordId = r.japamId ?? null;
     if (recordId === japamId) return true;
-    if (japamId !== null && recordId === null && japamName && r.japamName === japamName) return true;
+    if (japamId !== null && recordId === null) {
+      if (japamName && r.japamName === japamName) return true;
+      if (!r.japamName) return true;
+    }
     return false;
   });
