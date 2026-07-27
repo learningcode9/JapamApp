@@ -15,8 +15,6 @@
  * These functions take and return plain arrays — all AsyncStorage / network I/O stays in the
  * callers, which keeps this module pure and unit-testable in plain Node.
  */
-//// DIAGNOSTIC TRACE — remove after diagnosis
-import { newRequestId, trace, traceEnabled } from './diagnosticTrace';
 
 export type SyncStatus = 'pending' | 'synced';
 
@@ -418,24 +416,24 @@ export const markSynced = (
  * and whose completionId is not in remoteCompletionIds.
  * Always keeps: pending/offline records, guest records, other-user records, id-less records.
  * Only call after a confirmed HTTP 200 from a complete (limit=10000) Supabase fetch.
+ *
+ * SAFETY: If remoteCompletionIds is empty, reconciliation is skipped. An empty remote
+ * response can mean a fresh database (new user), a network truncation, or an accidental
+ * unauthenticated fetch — in all cases, deleting the user's entire local history based on
+ * a silent empty response is unrecoverable data loss. Only drop records when the remote
+ * source proves it has data to compare against.
  */
 export const reconcileWithServer = (
   merged: HistoryRecord[],
   remoteCompletionIds: Set<string>,
   currentUserId: string,
 ): HistoryRecord[] => {
-  const rid = newRequestId();
+  if (remoteCompletionIds.size === 0) return merged;
   const result = merged.filter((r) => {
     if (r.userId !== currentUserId) return true;
     if (!r.completionId) return true;
     if (r.syncStatus !== 'synced') return true;
     return remoteCompletionIds.has(r.completionId);
-  });
-  if (traceEnabled) trace(rid, 'historyStore', 'reconcileWithServer', 'EXIT', {}, {
-    inLen: merged.length,
-    outLen: result.length,
-    remoteIdsSize: remoteCompletionIds.size,
-    removed: merged.length - result.length,
   });
   return result;
 };
@@ -501,13 +499,7 @@ export const todayStatsFor = (
   toDayKey: (dateISO: string) => string
 ): { malas: number; totalCount: number } => {
   const totalCount = todayCountFor(records, userId, todayKey, toDayKey);
-  const result = { malas: Math.floor(totalCount / 108), totalCount };
-  const rid = newRequestId();
-  if (traceEnabled) trace(rid, 'historyStore', 'todayStatsFor', 'EXIT', {
-    userId: userId ?? 'null',
-    todayKey,
-  }, { inLen: records.length, totalCount, malas: result.malas });
-  return result;
+  return { malas: Math.floor(totalCount / 108), totalCount };
 };
 
 /**
@@ -643,10 +635,8 @@ export const filterByJapam = (
   records: RawHistoryRecord[],
   japamId: string | null,
   japamName?: string | null,
-): HistoryRecord[] => {
-  const rid = newRequestId();
-  const inLen = records.length;
-  const result = dedupeByCompletionId(records).filter((r) => {
+): HistoryRecord[] =>
+  dedupeByCompletionId(records).filter((r) => {
     const recordId = r.japamId ?? null;
     if (recordId === japamId) return true;
     if (japamId !== null && recordId === null) {
@@ -655,9 +645,3 @@ export const filterByJapam = (
     }
     return false;
   });
-  if (traceEnabled) trace(rid, 'historyStore', 'filterByJapam', 'EXIT', {
-    japamId: japamId ?? 'null',
-    japamName: japamName ?? 'null',
-  }, { inLen, outLen: result.length });
-  return result;
-};

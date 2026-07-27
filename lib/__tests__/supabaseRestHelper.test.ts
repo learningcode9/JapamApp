@@ -6,7 +6,7 @@
  *  2. Authorization header is present when authenticated
  *  3. Failed request does not cause infinite retry
  */
-import { fetchJapamHistoryRows } from '../supabaseRestHelper';
+import { fetchJapamHistoryRows, resetFetchCoalesceCache } from '../supabaseRestHelper';
 import { supabase } from '../supabase';
 
 jest.mock('../supabase', () => ({
@@ -31,6 +31,7 @@ function mockQueryChain(result: { data: unknown[] | null; error: { message: stri
 
 beforeEach(() => {
   jest.clearAllMocks();
+  resetFetchCoalesceCache();
 });
 
 // ─────── 1. session required guard ───────

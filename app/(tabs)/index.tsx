@@ -27,8 +27,6 @@ import { isIOSDeviceWeb, isStandaloneOrInstalledWeb } from '../../lib/pwaInstall
 import { runSharedLogoutFlow } from '../../lib/sharedLogout';
 import { supabase } from '../../lib/supabase';
 import { fetchJapamHistoryRows } from '../../lib/supabaseRestHelper';
-//// DIAGNOSTIC TRACE — remove after diagnosis
-import { newRequestId, trace, resetTrace } from '../../lib/diagnosticTrace';
 
 import {
   Alert,
@@ -197,10 +195,6 @@ const isAuthPending = async () => {
 
 export default function JapamMain() {
   const { currentJapam } = useCurrentJapam();
-  // DIAGNOSTIC: reset trace on fresh page load
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  useEffect(() => { resetTrace(); console.log('[DIAG] Trace reset'); return () => {}; }, []);
-  // END DIAGNOSTIC
   const currentJapamId = currentJapam?.id ?? null;
   const currentJapamName = currentJapam?.name ?? null;
   // The Japam this screen's own session belongs to, captured ONCE at the moment Start is pressed
@@ -298,8 +292,9 @@ export default function JapamMain() {
   const lastCompletedCycleRef = useRef<number>(0);
   const startTimerIntervalRef = useRef<() => void>(() => {});
   const appStateRef = useRef(AppState.currentState);
-  const restoreTodayTotalRef = useRef<() => Promise<void>>(async () => {});
+  const restoreTodayTotalRef = useRef<(_?: { skipRemoteFetch?: boolean }) => Promise<void>>(async () => {});
   const isRestoringRef = useRef(false);
+  const lastEventProcessedAtRef = useRef(0);
 
   const glowAnim = useRef(new Animated.Value(0)).current;
 
@@ -594,25 +589,18 @@ export default function JapamMain() {
 
   const restoreTotal = useCallback(
     async (nextTotal: number, options?: { userId?: string | null }) => {
-      const rid = newRequestId();
       const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
       const nextMalas = Math.floor(safeTotal / 108);
       const nextCount = safeTotal % 108;
-      const prevTotal = totalRef.current;
       const activeUserId =
         options?.userId === undefined
           ? await AsyncStorage.getItem(USER_ID_KEY)
           : options.userId;
 
-      const stateChanged = totalRef.current !== safeTotal;
       totalRef.current = safeTotal;
       setTotal(safeTotal);
       setMalas(nextMalas);
       setCount(nextCount);
-
-      trace(rid, 'index', 'restoreTotal', 'EXIT', {
-        prevTotal,
-      }, { nextTotal: safeTotal, nextMalas, nextCount, stateChanged, userId: activeUserId ?? 'null' });
 
       await AsyncStorage.setItem(TOTAL_KEY, String(safeTotal));
       await AsyncStorage.setItem(MALAS_KEY, String(nextMalas));
@@ -752,15 +740,10 @@ export default function JapamMain() {
       .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
   }, []);
 
-  const restoreTodayTotal = useCallback(async () => {
+  const restoreTodayTotal = useCallback(async (options?: { skipRemoteFetch?: boolean }) => {
+    const skipRemote = options?.skipRemoteFetch ?? false;
     if (isRestoringRef.current) return;
     isRestoringRef.current = true;
-    const rid = newRequestId();
-    trace(rid, 'index', 'restoreTodayTotal', 'ENTER', {
-      currentJapamId: currentJapamId ?? 'null',
-      currentJapamName: currentJapamName ?? 'null',
-      beforeTotalRef: totalRef.current,
-    });
     try {
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
 
@@ -782,18 +765,15 @@ export default function JapamMain() {
       try {
         let remoteSessions: Session[] | null = null;
 
-        trace(rid, 'index', 'restoreTodayTotal', 'FETCH_START', {}, { target: 'japam_history', userId: savedUserId });
-        const fetchStart = performance.now();
-        const remoteRows = await fetchJapamHistoryRows({
-          select: 'created_at,malas,count,user_name,completion_id,japam_id,japam_name',
-          userId: savedUserId,
-          order: { column: 'created_at', ascending: true },
-          limit: 10000,
-        });
-        const fetchDuration = Math.round(performance.now() - fetchStart);
-        trace(rid, 'index', 'restoreTodayTotal', 'FETCH_END', { success: remoteRows !== null }, { durationMs: fetchDuration, rowCount: remoteRows?.length ?? 0 });
+        if (!skipRemote) {
+          const remoteRows = await fetchJapamHistoryRows({
+            select: 'created_at,malas,count,user_name,completion_id,japam_id,japam_name',
+            userId: savedUserId,
+            order: { column: 'created_at', ascending: true },
+            limit: 10000,
+          });
 
-        if (remoteRows !== null) {
+          if (remoteRows !== null) {
           remoteSessions = remoteRows.map((row: any) => ({
             date: row.created_at,
             malas: Number(row.malas) || 0,
@@ -867,28 +847,48 @@ export default function JapamMain() {
             todayKey,
             toLocalDayKey
           );
-          await restoreTotal(safeTotal, { userId: savedUserId });
-          totalRef.current = safeTotal;
-          await refreshDayStreak({ userId: savedUserId, todayTotal: safeTotal });
+          const neverRegress = Math.max(safeTotal, totalRef.current);
+          await restoreTotal(neverRegress, { userId: savedUserId });
+          totalRef.current = neverRegress;
+          await refreshDayStreak({ userId: savedUserId, todayTotal: neverRegress });
         } else {
           // Supabase unreachable — use locally saved count (never go below what was tapped)
           const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
-          const safeTotal = localHistoryTotal;
-          await restoreTotal(safeTotal, { userId: savedUserId });
-          totalRef.current = safeTotal;
-          await refreshDayStreak({ userId: savedUserId, todayTotal: safeTotal });
+          const neverRegress = Math.max(localHistoryTotal, totalRef.current);
+          await restoreTotal(neverRegress, { userId: savedUserId });
+          totalRef.current = neverRegress;
+          await refreshDayStreak({ userId: savedUserId, todayTotal: neverRegress });
         }
+          } else {
+            // skipRemote — compute from local storage only, never regress
+            const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
+            const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
+            const japamId = currentJapamId;
+            const japamName = currentJapamName;
+            const scopedHistory = japamId !== null
+              ? filterByJapam(localHistory, japamId, japamName)
+              : localHistory;
+            const { totalCount: localTotal } = todayStatsFor(
+              scopedHistory,
+              savedUserId,
+              todayKey,
+              toLocalDayKey
+            );
+            const neverRegress = Math.max(localTotal, totalRef.current);
+            await restoreTotal(neverRegress, { userId: savedUserId });
+            totalRef.current = neverRegress;
+            await refreshDayStreak({ userId: savedUserId, todayTotal: neverRegress });
+          }
       } catch (error) {
         console.log('Stats sync error, using local data:', error);
         const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
-        const safeTotal = localHistoryTotal;
-        await restoreTotal(safeTotal, { userId: savedUserId });
-        totalRef.current = safeTotal;
-        await refreshDayStreak({ userId: savedUserId, todayTotal: safeTotal });
+        const neverRegress = Math.max(localHistoryTotal, totalRef.current);
+        await restoreTotal(neverRegress, { userId: savedUserId });
+        totalRef.current = neverRegress;
+        await refreshDayStreak({ userId: savedUserId, todayTotal: neverRegress });
       }
 
       setHasRestoredTotal(true);
-      trace(rid, 'index', 'restoreTodayTotal', 'EXIT', { path: 'loggedIn', totalRef: totalRef.current });
       return;
     }
 
@@ -897,7 +897,6 @@ export default function JapamMain() {
     totalRef.current = 0;
     await refreshDayStreak({ userId: null, todayTotal: 0 });
     setHasRestoredTotal(true);
-    trace(rid, 'index', 'restoreTodayTotal', 'EXIT', { path: 'guest', totalRef: totalRef.current });
   } finally {
     isRestoringRef.current = false;
   }
@@ -949,11 +948,6 @@ export default function JapamMain() {
   // the merged local history (same as Timer & History screens). Local-first — never waits for or
   // depends on Supabase, so offline completions count immediately.
   const loadHistoryStats = useCallback(async () => {
-    const rid = newRequestId();
-    trace(rid, 'index', 'loadHistoryStats', 'ENTER', {
-      currentJapamId: currentJapamId ?? 'null',
-      currentJapamName: currentJapamName ?? 'null',
-    });
     try {
       const uid = await AsyncStorage.getItem(USER_ID_KEY);
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
@@ -971,12 +965,6 @@ export default function JapamMain() {
       );
       setHistoryMalas(hMalas);
       setHistoryTotal(hTotal);
-      trace(rid, 'index', 'loadHistoryStats', 'EXIT', {
-        historyLen: history.length,
-        scopedLen: scopedHistory.length,
-        hMalas,
-        hTotal,
-      });
       const pending = history.filter((r: any) => r?.syncStatus === 'pending').length;
       const synced = history.length - pending;
       console.log('[StatsAudit] screen=main localHistoryCount=%d pendingCount=%d syncedCount=%d mainScreenMalasToday=%d historyMalasToday=%d',
@@ -985,27 +973,16 @@ export default function JapamMain() {
   }, [currentJapamId, currentJapamName]);
 
   useEffect(() => {
-    const rid = newRequestId();
-    trace(rid, 'index', 'eventListenerSetup', 'ENTER', {
-      currentJapamId: currentJapamId ?? 'null',
-      currentJapamName: currentJapamName ?? 'null',
-    });
-
     const onHistoryUpdated = () => {
-      const erid = newRequestId();
-      trace(erid, 'index', 'onHistoryUpdated', 'EVENT', {
-        currentJapamId: currentJapamId ?? 'null',
-        currentJapamName: currentJapamName ?? 'null',
-        totalRef: totalRef.current,
-        isRunning,
-      });
-      void restoreTodayTotal();
+      const now = Date.now();
+      if (now - lastEventProcessedAtRef.current < 500) return;
+      lastEventProcessedAtRef.current = now;
+
+      void restoreTodayTotal({ skipRemoteFetch: true });
       void loadHistoryStats();
     };
 
     void loadHistoryStats();
-
-    trace(rid, 'index', 'eventListenerSetup', 'EXIT', {}, { subscribed: true });
 
     const historySubscription = DeviceEventEmitter.addListener('japam-history-updated', onHistoryUpdated);
     const statsSubscription = DeviceEventEmitter.addListener('japam-stats-updated', onHistoryUpdated);
@@ -1035,10 +1012,7 @@ export default function JapamMain() {
   // Recompute the history-derived stat whenever the Main screen regains focus.
   useFocusEffect(
     useCallback(() => {
-      const rid = newRequestId();
-      trace(rid, 'index', 'useFocusEffect_loadHistoryStats', 'ENTER');
       void loadHistoryStats();
-      trace(rid, 'index', 'useFocusEffect_loadHistoryStats', 'EXIT');
     }, [loadHistoryStats])
   );
 
@@ -2141,16 +2115,9 @@ export default function JapamMain() {
   const completeTimerSession = useCallback(() => {
     if (isCompletingRef.current) return;
     isCompletingRef.current = true;
-    const rid = newRequestId();
     lastCompletedCycleRef.current = Date.now();
 
     const currentTotal = totalRef.current;
-    trace(rid, 'index', 'completeTimerSession', 'ENTER', {
-      prevTotalRef: currentTotal,
-      nextTotal: currentTotal + 108,
-      isRunning,
-      loopTimer,
-    });
     const nextTotal = currentTotal + 108;
     totalRef.current = nextTotal;
     void saveSession(targetSeconds, 1, 108, nextTotal);
@@ -2166,7 +2133,6 @@ export default function JapamMain() {
       setAutoCompletedMalas(nextLoopCount);
 
       if (nextLoopCount >= 5) {
-        trace(rid, 'index', 'completeTimerSession', 'EXIT', { loopAborted: true, nextLoopCount: 5 });
         clearTimerHandles();
         completedLoopMalasRef.current = 0;
         setAutoCompletedMalas(0);
@@ -2204,7 +2170,6 @@ export default function JapamMain() {
         isCompletingRef.current = false;
       }, 4000);
     } else {
-      trace(rid, 'index', 'completeTimerSession', 'EXIT', { loop: false, newTotalRef: totalRef.current });
       setSeconds(0);
       setIsRunning(false);
       isCompletingRef.current = false;
