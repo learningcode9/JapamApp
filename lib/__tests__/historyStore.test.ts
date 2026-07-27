@@ -1085,8 +1085,110 @@ describe('statsByJapam / japamStatsFor: centralized per-Japam stats selector', (
         todayTotalCount: 0,
         lifetimeMalas: 0,
         lifetimeTotalCount: 0,
-      });
-    });
+  });
+});
+
+// ─────── Home totals scoping (filterByJapam + todayStatsFor pipeline) ───────
+//
+// The Home screen computes displayed stats by pre-filtering records with
+// filterByJapam (currentJapamId, currentJapamName) then passing the result to
+// todayStatsFor. These tests prove the complete pipeline, not just filterByJapam
+// in isolation.
+
+describe('Home totals scoping (filterByJapam → todayStatsFor)', () => {
+  const UID = 'user-123';
+  const JAPAM_A_ID = 'uuid-gayatri';
+  const JAPAM_B_ID = 'uuid-govinda';
+  const JAPAM_A_NAME = 'Gayatri';
+  const JAPAM_B_NAME = 'Govinda';
+  const todayKey = '2026-07-06';
+  const toKey = (iso: string) => iso.slice(0, 10);
+  const todayISO = `${todayKey}T12:00:00.000Z`;
+
+  const session = (
+    dateISO: string,
+    overrides: Partial<HistoryRecord> = {},
+  ): HistoryRecord => ({
+    date: dateISO,
+    malas: overrides.malas ?? 1,
+    totalCount: overrides.totalCount ?? 108,
+    duration: 0,
+    manual: false,
+    userId: UID,
+    userName: 'Test User',
+    syncStatus: 'synced',
+    completionId: overrides.completionId ?? makeCompletionId(UID, dateISO),
+    japamId: overrides.japamId ?? null,
+    japamName: overrides.japamName ?? null,
+  });
+
+  const homePipeline = (
+    records: HistoryRecord[],
+    japamId: string | null,
+    japamName: string | null,
+  ) => {
+    const scoped = japamId !== null
+      ? filterByJapam(records, japamId, japamName)
+      : records;
+    return todayStatsFor(scoped, UID, todayKey, toKey).totalCount;
+  };
+
+  it('counts UUID-matched rows for the selected Japam', () => {
+    const records = [
+      session(todayISO, { japamId: JAPAM_A_ID, japamName: JAPAM_A_NAME, completionId: 'a1' }),
+      session(todayISO, { japamId: JAPAM_A_ID, japamName: JAPAM_A_NAME, completionId: 'a2' }),
+      session(todayISO, { japamId: JAPAM_B_ID, japamName: JAPAM_B_NAME, completionId: 'b1' }),
+    ];
+    expect(homePipeline(records, JAPAM_A_ID, JAPAM_A_NAME)).toBe(216);
+    expect(homePipeline(records, JAPAM_B_ID, JAPAM_B_NAME)).toBe(108);
+  });
+
+  it('counts legacy null-japamId rows when japamName matches', () => {
+    const records = [
+      session(todayISO, { japamId: JAPAM_A_ID, japamName: JAPAM_A_NAME, completionId: 'real' }),
+      session(todayISO, { japamId: null, japamName: JAPAM_A_NAME, completionId: 'legacy-match' }),
+    ];
+    expect(homePipeline(records, JAPAM_A_ID, JAPAM_A_NAME)).toBe(216);
+  });
+
+  it('excludes legacy rows with different japamName', () => {
+    const records = [
+      session(todayISO, { japamId: JAPAM_A_ID, japamName: JAPAM_A_NAME, completionId: 'real' }),
+      session(todayISO, { japamId: null, japamName: JAPAM_B_NAME, completionId: 'legacy-other' }),
+    ];
+    expect(homePipeline(records, JAPAM_A_ID, JAPAM_A_NAME)).toBe(108);
+  });
+
+  it('excludes rows belonging to a different UUID Japam', () => {
+    const records = [
+      session(todayISO, { japamId: JAPAM_A_ID, japamName: JAPAM_A_NAME, completionId: 'a' }),
+      session(todayISO, { japamId: JAPAM_B_ID, japamName: JAPAM_B_NAME, completionId: 'b' }),
+    ];
+    expect(homePipeline(records, JAPAM_A_ID, JAPAM_A_NAME)).toBe(108);
+  });
+
+  it('changing selected Japam recomputes totals correctly', () => {
+    const records = [
+      session(todayISO, { japamId: JAPAM_A_ID, japamName: JAPAM_A_NAME, completionId: 'a' }),
+      session(todayISO, { japamId: JAPAM_B_ID, japamName: JAPAM_B_NAME, completionId: 'b' }),
+      session(todayISO, { japamId: null, japamName: JAPAM_A_NAME, completionId: 'la' }),
+      session(todayISO, { japamId: null, japamName: JAPAM_B_NAME, completionId: 'lb' }),
+    ];
+    const totalA = homePipeline(records, JAPAM_A_ID, JAPAM_A_NAME);
+    const totalB = homePipeline(records, JAPAM_B_ID, JAPAM_B_NAME);
+    expect(totalA).toBe(216); // a (108) + la (108)
+    expect(totalB).toBe(216); // b (108) + lb (108)
+  });
+
+  it('null japamId (no Japam selected) aggregates all rows unfiltered', () => {
+    const records = [
+      session(todayISO, { japamId: JAPAM_A_ID, japamName: JAPAM_A_NAME, completionId: 'a' }),
+      session(todayISO, { japamId: JAPAM_B_ID, japamName: JAPAM_B_NAME, completionId: 'b' }),
+      session(todayISO, { japamId: null, japamName: JAPAM_A_NAME, completionId: 'la' }),
+    ];
+    expect(homePipeline(records, null, null)).toBe(324); // all three
+  });
+});
     it('treats undefined the same as null (legacy bucket)', () => {
       const history = [session(todayIso(9), { japamId: null, malas: 1, totalCount: 108 })];
       const statsMap = statsByJapam(history, UID, TODAY, toDayKey);
