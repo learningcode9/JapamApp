@@ -333,45 +333,32 @@ const buildDailyRows = (sessions: Session[]) => {
 // Remove legacyUserId support here (and its call site in loadHistory) once
 // db/migrate_numeric_user_ids_to_uuid.sql has been run and its post-verification query confirms
 // zero mappable numeric-id rows remain.
+let fetchRemoteSessionsInFlight = false;
+
 const fetchRemoteSessions = async (userId: string, legacyUserId?: string | null): Promise<Session[] | null> => {
-  const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-  const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+  if (!userId || fetchRemoteSessionsInFlight) return null;
 
-  if (!url || !key || !userId) return null;
-
-  // Require a real session JWT — an anon-key request has no SELECT policy for this user's rows
-  // once RLS is tightened (mirrors syncPendingHistory's session-token preference). No session
-  // returns null here, same as any other fetch failure below (caller keeps local history as-is).
   const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
   if (!sessionToken) return null;
 
+  fetchRemoteSessionsInFlight = true;
   try {
     // taggedUserId lets a legacy-id query's rows be tagged as belonging to the canonical UUID, so
     // they merge/display/reconcile identically to rows fetched by the UUID itself.
     const fetchBy = async (field: 'user_id' | 'user_name', value: string, taggedUserId: string) => {
-      const query = new URLSearchParams({
-        select: 'id,created_at,malas,count,user_name,completion_id,japam_id,japam_name',
-        [field]: `eq.${value}`,
-        order: 'created_at.asc',
-        limit: '10000',
-      });
+      const { data: rows, error } = await supabase
+        .from('japam_history')
+        .select('id,created_at,malas,count,user_name,completion_id,japam_id,japam_name')
+        .eq(field, value)
+        .order('created_at', { ascending: true })
+        .limit(10000);
 
-      const response = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
-        headers: {
-          apikey: key,
-          Authorization: `Bearer ${sessionToken}`,
-        },
-        cache: 'no-store',
-      });
-
-      if (!response.ok) {
-        console.log('Supabase history fetch error:', await response.text());
+      if (error || !rows) {
+        console.log('Supabase history fetch error:', error);
         return null;
       }
 
-      const rows: RemoteHistoryRow[] = await response.json();
-
-      return rows.map((row) => {
+      return rows.map((row: RemoteHistoryRow) => {
         const malas = Number(row.malas) || 0;
         const totalCount = Number(row.count) || malas * 108;
 
@@ -408,6 +395,8 @@ const fetchRemoteSessions = async (userId: string, legacyUserId?: string | null)
   } catch (error) {
     console.log('Supabase history fetch error:', error);
     return null;
+  } finally {
+    fetchRemoteSessionsInFlight = false;
   }
 };
 
