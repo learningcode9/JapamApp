@@ -525,9 +525,13 @@ describe('reconcileWithServer: drops Supabase-deleted records from local storage
   const cid = makeCompletionId(UID, iso);
 
   it('1. drops a synced record absent from remote (Supabase-deleted row disappears)', () => {
+    // Empty remote set is SKIPPED (safety: empty DB / new user). To prove a record IS
+    // dropped when the server has other records but not this one, provide a non-empty
+    // Set with a different record.
+    const otherCid = makeCompletionId(UID, '2026-06-06T19:00:00.000Z');
     const result = reconcileWithServer(
       normalizeAll([session(iso, { syncStatus: 'synced' })]),
-      new Set(), // remote has nothing
+      new Set([otherCid]), // remote has other data but not this record
       UID
     );
     expect(result).toHaveLength(0);
@@ -544,9 +548,10 @@ describe('reconcileWithServer: drops Supabase-deleted records from local storage
   });
 
   it('3. keeps a pending record even if absent from remote (unsynced offline mala is never dropped)', () => {
+    const otherCid = makeCompletionId(UID, '2026-06-06T19:00:00.000Z');
     const result = reconcileWithServer(
       normalizeAll([session(iso, { syncStatus: 'pending' })]),
-      new Set(), // remote has nothing
+      new Set([otherCid]), // remote has other data but not this pending record
       UID
     );
     expect(result).toHaveLength(1);
@@ -583,6 +588,15 @@ describe('reconcileWithServer: drops Supabase-deleted records from local storage
     );
     expect(dedupeByCompletionId(result)).toHaveLength(1);
   });
+
+  it('7. empty remote Set (0 rows) is SKIPPED — never drops records (safety: empty DB / new user)', () => {
+    const result = reconcileWithServer(
+      normalizeAll([session(iso, { syncStatus: 'synced' }), session('2026-06-07T10:00:00.000Z', { syncStatus: 'synced' })]),
+      new Set(),
+      UID
+    );
+    expect(result).toHaveLength(2);
+  });
 });
 
 describe('tombstone delete sync (explicit deletion propagates, offline-safe)', () => {
@@ -598,9 +612,11 @@ describe('tombstone delete sync (explicit deletion propagates, offline-safe)', (
 
   it('2. tombstoned record does NOT resurrect — reconcileWithServer drops it (absent from remote)', () => {
     // synced locally + absent remotely (deleted in Supabase) + tombstoned -> dropped by reconcile
+    // Provide a non-empty remote Set to prove the server HAS data but this record is absent.
+    const otherCid = makeCompletionId(UID, '2026-06-06T19:00:00.000Z');
     const result = reconcileWithServer(
       normalizeAll([session(iso, { syncStatus: 'synced' })]),
-      new Set(), // remote empty
+      new Set([otherCid]), // remote has other data, not this record
       UID
     );
     expect(result).toHaveLength(0);
@@ -629,9 +645,11 @@ describe('tombstone delete sync (explicit deletion propagates, offline-safe)', (
     const otherIso = '2026-06-06T21:00:00.000Z';
     const otherCid = makeCompletionId(UID, otherIso);
     // Both absent from remote -> both dropped by reconcileWithServer
+    // Provide a non-empty remote Set to prove the server HAS data but these records are absent.
+    const knownRemoteCid = makeCompletionId(UID, '2026-06-06T22:00:00.000Z');
     const result = reconcileWithServer(
       normalizeAll([session(iso, { syncStatus: 'synced' }), session(otherIso, { syncStatus: 'synced' })]),
-      new Set(), // both absent remotely
+      new Set([knownRemoteCid]), // remote has other data, not these two records
       UID
     );
     expect(result.map((r) => r.completionId)).not.toContain(cid);
@@ -1711,5 +1729,53 @@ describe('filterByJapam', () => {
     ];
     const gayatri = filterByJapam(records, 'uuid-gayatri', 'Gayatri');
     expect(gayatri.map((r) => r.completionId).sort()).toEqual(['g-legacy', 'g-real', 'orphan']);
+  });
+});
+
+// ── Regression: reconcileWithServer non-destructive (empty remote = safety skip) ──
+describe('reconcileWithServer non-destructive (empty remote does not erase local)', () => {
+  const uid = 'user-1';
+  const today = '2026-07-27';
+
+  it('empty remote preserves all local synced records', () => {
+    const local = [
+      session(`${today}T10:00:00.000Z`, { userId: uid, syncStatus: 'synced', completionId: 'a' }),
+      session(`${today}T11:00:00.000Z`, { userId: uid, syncStatus: 'synced', completionId: 'b' }),
+      session(`${today}T12:00:00.000Z`, { userId: uid, syncStatus: 'pending', completionId: 'c' }),
+    ];
+    const result = reconcileWithServer(normalizeAll(local), new Set(), uid);
+    expect(result.map((r) => r.completionId).sort()).toEqual(['a', 'b', 'c']);
+  });
+
+  it('full previous history + one current-session row survives empty remote', () => {
+    const local = [
+      session(`${today}T10:00:00.000Z`, { userId: uid, syncStatus: 'synced', completionId: 'old-1' }),
+      session(`${today}T11:00:00.000Z`, { userId: uid, syncStatus: 'synced', completionId: 'old-2' }),
+      session(`${today}T12:00:00.000Z`, { userId: uid, syncStatus: 'synced', completionId: 'old-3' }),
+      session(`${today}T13:00:00.000Z`, { userId: uid, syncStatus: 'synced', completionId: 'new-1' }),
+    ];
+    const result = reconcileWithServer(normalizeAll(local), new Set(), uid);
+    expect(result.map((r) => r.completionId).sort()).toEqual(['new-1', 'old-1', 'old-2', 'old-3']);
+  });
+
+  it('non-empty remote drops only absent records, preserves present ones', () => {
+    const local = [
+      session(`${today}T10:00:00.000Z`, { userId: uid, syncStatus: 'synced', completionId: 'keep' }),
+      session(`${today}T11:00:00.000Z`, { userId: uid, syncStatus: 'synced', completionId: 'drop' }),
+      session(`${today}T12:00:00.000Z`, { userId: uid, syncStatus: 'pending', completionId: 'keep-pending' }),
+    ];
+    // Remote has 'keep' but not 'drop' — 'drop' should be removed
+    const result = reconcileWithServer(normalizeAll(local), new Set(['keep']), uid);
+    expect(result.map((r) => r.completionId).sort()).toEqual(['keep', 'keep-pending']);
+  });
+
+  it('remote empty via query error preserves all records', () => {
+    const local = [
+      session(`${today}T10:00:00.000Z`, { userId: uid, syncStatus: 'synced', completionId: 'a' }),
+      session(`${today}T10:30:00.000Z`, { userId: uid, syncStatus: 'synced', completionId: 'b' }),
+    ];
+    // null remote (failed fetch) → callers skip reconcile entirely, but if they call it anyway
+    const result = reconcileWithServer(normalizeAll(local), new Set(), uid);
+    expect(result.map((r) => r.completionId).sort()).toEqual(['a', 'b']);
   });
 });
