@@ -249,7 +249,7 @@ export default function TimerScreen() {
         try {
           const encodedUserId = encodeURIComponent(userId);
           const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,completion_id&order=created_at.asc&limit=10000`,
+            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,completion_id,japam_id,japam_name&order=created_at.asc&limit=10000`,
             { headers: { apikey: key, Authorization: `Bearer ${sessionToken}` } }
           );
           if (res.ok) {
@@ -260,6 +260,8 @@ export default function TimerScreen() {
               count: number | string;
               user_name?: string;
               completion_id?: string;
+              japam_id?: string | null;
+              japam_name?: string | null;
             }[] = await res.json();
             rawSupabaseRows = rows.length;
             const remoteHistory: Session[] = rows.map((row) => ({
@@ -272,6 +274,8 @@ export default function TimerScreen() {
               userName: row.user_name,
               completionId: row.completion_id,
               syncStatus: 'synced' as const,
+              japamId: row.japam_id ?? null,
+              japamName: row.japam_name ?? null,
             }));
             rawSupabaseCount = remoteHistory.reduce(
               (sum, row) => sum + (Number(row.totalCount) || 0),
