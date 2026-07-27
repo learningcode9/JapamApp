@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   appendCompletion,
   buildSupabaseHistoryPayload,
+  filterByJapam,
   markSynced,
   mergeHistories,
   normalizeAll,
@@ -194,6 +195,8 @@ const isAuthPending = async () => {
 
 export default function JapamMain() {
   const { currentJapam } = useCurrentJapam();
+  const currentJapamId = currentJapam?.id ?? null;
+  const currentJapamName = currentJapam?.name ?? null;
   // The Japam this screen's own session belongs to, captured ONCE at the moment Start is pressed
   // (see handleStart below). Refs, not state, matching the same discipline as Timer's
   // activeJapamIdRef/activeJapamNameRef in contexts/timer-context.tsx: switching the app's current
@@ -830,8 +833,13 @@ export default function JapamMain() {
 
           await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(reconciledHistory));
 
+          const japamId = currentJapamId;
+          const japamName = currentJapamName;
+          const scopedHistory = japamId !== null
+            ? filterByJapam(reconciledHistory, japamId, japamName)
+            : reconciledHistory;
           const { totalCount: safeTotal } = todayStatsFor(
-            reconciledHistory,
+            scopedHistory,
             savedUserId,
             todayKey,
             toLocalDayKey
@@ -868,7 +876,7 @@ export default function JapamMain() {
   } finally {
     isRestoringRef.current = false;
   }
-  }, [getLocalTodayTotalForUser, refreshDayStreak, restoreTotal]);
+  }, [currentJapamId, currentJapamName, getLocalTodayTotalForUser, refreshDayStreak, restoreTotal]);
 
   useEffect(() => {
     restoreTodayTotalRef.current = restoreTodayTotal;
@@ -920,8 +928,13 @@ export default function JapamMain() {
       const uid = await AsyncStorage.getItem(USER_ID_KEY);
       const raw = await AsyncStorage.getItem(HISTORY_KEY);
       const history = Array.isArray(JSON.parse(raw || '[]')) ? JSON.parse(raw || '[]') : [];
+      const japamId = currentJapamId;
+      const japamName = currentJapamName;
+      const scopedHistory = japamId !== null
+        ? filterByJapam(history, japamId, japamName)
+        : history;
       const { malas: hMalas, totalCount: hTotal } = todayStatsFor(
-        history,
+        scopedHistory,
         uid,
         getLocalDateKey(),
         toLocalDayKey
@@ -933,7 +946,7 @@ export default function JapamMain() {
       console.log('[StatsAudit] screen=main localHistoryCount=%d pendingCount=%d syncedCount=%d mainScreenMalasToday=%d historyMalasToday=%d',
         history.length, pending, synced, hMalas, hMalas);
     } catch {}
-  }, []);
+  }, [currentJapamId, currentJapamName]);
 
   useEffect(() => {
     const onHistoryUpdated = () => {
