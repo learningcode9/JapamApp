@@ -15,6 +15,8 @@
  * These functions take and return plain arrays — all AsyncStorage / network I/O stays in the
  * callers, which keeps this module pure and unit-testable in plain Node.
  */
+//// DIAGNOSTIC TRACE — remove after diagnosis
+import { newRequestId, trace, traceEnabled } from './diagnosticTrace';
 
 export type SyncStatus = 'pending' | 'synced';
 
@@ -421,13 +423,22 @@ export const reconcileWithServer = (
   merged: HistoryRecord[],
   remoteCompletionIds: Set<string>,
   currentUserId: string,
-): HistoryRecord[] =>
-  merged.filter((r) => {
+): HistoryRecord[] => {
+  const rid = newRequestId();
+  const result = merged.filter((r) => {
     if (r.userId !== currentUserId) return true;
     if (!r.completionId) return true;
     if (r.syncStatus !== 'synced') return true;
     return remoteCompletionIds.has(r.completionId);
   });
+  if (traceEnabled) trace(rid, 'historyStore', 'reconcileWithServer', 'EXIT', {}, {
+    inLen: merged.length,
+    outLen: result.length,
+    remoteIdsSize: remoteCompletionIds.size,
+    removed: merged.length - result.length,
+  });
+  return result;
+};
 
 /**
  * Build the Supabase row from the local record. The important bit is `created_at: record.date`:
@@ -490,7 +501,13 @@ export const todayStatsFor = (
   toDayKey: (dateISO: string) => string
 ): { malas: number; totalCount: number } => {
   const totalCount = todayCountFor(records, userId, todayKey, toDayKey);
-  return { malas: Math.floor(totalCount / 108), totalCount };
+  const result = { malas: Math.floor(totalCount / 108), totalCount };
+  const rid = newRequestId();
+  if (traceEnabled) trace(rid, 'historyStore', 'todayStatsFor', 'EXIT', {
+    userId: userId ?? 'null',
+    todayKey,
+  }, { inLen: records.length, totalCount, malas: result.malas });
+  return result;
 };
 
 /**
@@ -626,8 +643,10 @@ export const filterByJapam = (
   records: RawHistoryRecord[],
   japamId: string | null,
   japamName?: string | null,
-): HistoryRecord[] =>
-  dedupeByCompletionId(records).filter((r) => {
+): HistoryRecord[] => {
+  const rid = newRequestId();
+  const inLen = records.length;
+  const result = dedupeByCompletionId(records).filter((r) => {
     const recordId = r.japamId ?? null;
     if (recordId === japamId) return true;
     if (japamId !== null && recordId === null) {
@@ -636,3 +655,9 @@ export const filterByJapam = (
     }
     return false;
   });
+  if (traceEnabled) trace(rid, 'historyStore', 'filterByJapam', 'EXIT', {
+    japamId: japamId ?? 'null',
+    japamName: japamName ?? 'null',
+  }, { inLen, outLen: result.length });
+  return result;
+};
