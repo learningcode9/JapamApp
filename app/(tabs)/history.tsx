@@ -951,7 +951,7 @@ export default function HistoryScreen() {
       setDailyRows([]);
       return;
     }
-    const japamScopedSessions = await historyRepository.loadHistoryForJapam(currentUserId, currentJapamId);
+    const japamScopedSessions = await historyRepository.loadHistoryForJapam(currentUserId, currentJapamId, currentJapam?.name);
     setDailyRows(buildDailyRows(japamScopedSessions));
   }, [currentJapamId]);
 

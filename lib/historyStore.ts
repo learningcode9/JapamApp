@@ -611,13 +611,25 @@ export const dayStreakForJapam = (
 };
 
 /**
- * Records belonging to exactly one Japam, deduped — the single centralized filter any screen
+ * Filter history records to exactly one Japam — the single place any screen
  * scoped to "the current Japam" (History) should call, instead of hand-writing
- * records.filter(r => r.japamId === ...) itself. japamId: null matches only legacy/unassigned
- * records, mirroring statsByJapam/planHistoryDayAdjustment's own null-means-legacy convention.
+ * records.filter(r => r.japamId === ...) itself.
+ *
+ * - japamId: null matches only legacy/unassigned records (unchanged).
+ * - japamId: a real UUID matches records with that UUID, PLUS legacy records
+ *   whose japam_id is null but whose japam_name equals the selected Japam's
+ *   current name (the "legacy fallback" — rows created before Japam
+ *   workspaces existed, or rows whose japam_id was dropped by a NULL FK).
+ * - japamName: ignored when japamId is null (legacy filtering stays strict).
  */
 export const filterByJapam = (
   records: RawHistoryRecord[],
-  japamId: string | null
+  japamId: string | null,
+  japamName?: string | null,
 ): HistoryRecord[] =>
-  dedupeByCompletionId(records).filter((r) => (r.japamId ?? null) === japamId);
+  dedupeByCompletionId(records).filter((r) => {
+    const recordId = r.japamId ?? null;
+    if (recordId === japamId) return true;
+    if (japamId !== null && recordId === null && japamName && r.japamName === japamName) return true;
+    return false;
+  });

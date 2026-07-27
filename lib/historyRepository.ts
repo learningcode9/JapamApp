@@ -73,16 +73,19 @@ export const loadHistoryForUser = async (
  * This user's history records for exactly one Japam, already scoped and deduped -- the single
  * place any screen scoped to "the current Japam" (History) asks for its records, instead of
  * loading history and calling a historyStore selector itself. Internally: load history, filter to
- * this user, then hand off to filterByJapam (which dedupes and matches the Japam). japamId: null
- * matches only legacy/unassigned records, mirroring lib/historyStore.ts's own null-means-legacy
- * convention throughout (statsByJapam, planHistoryDayAdjustment, filterByJapam).
+ * this user, then hand off to filterByJapam (which dedupes and matches the Japam).
+ *
+ * japamName is an optional fallback: when japamId is a real UUID, filterByJapam also includes
+ * legacy records whose japam_id is null but whose japam_name matches — rows created before Japam
+ * workspaces existed, or rows whose japam_id was dropped by a NULL FK.
  */
 export const loadHistoryForJapam = async (
   userId: string | null | undefined,
   japamId: string | null,
+  japamName?: string | null,
 ): Promise<HistoryRecord[]> => {
   const forUser = await loadHistoryForUser(userId);
-  return filterByJapam(forUser, japamId);
+  return filterByJapam(forUser, japamId, japamName);
 };
 
 /**
