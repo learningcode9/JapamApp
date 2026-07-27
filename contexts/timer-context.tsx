@@ -26,6 +26,8 @@ import {
   toLocalDayKey,
   type HistoryRecord,
 } from '../lib/historyStore';
+//// DIAGNOSTIC TRACE — remove after diagnosis
+import { newRequestId, trace } from '../lib/diagnosticTrace';
 import { getWebOmAudioUri } from '../lib/webOmAudio';
 import {
   getNativeTimerState,
@@ -832,6 +834,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
     const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
     if (!url || !key) return;
+    const rid = newRequestId();
+    trace(rid, 'timer-context', 'syncPendingHistory', 'ENTER', { uid });
     // Concurrency guard: only one sync runs at a time. Overlapping triggers (after completion +
     // app-foreground/launch, especially on reconnect) would otherwise both read the same record as
     // pending and POST it twice -> duplicate Supabase rows. Re-entrant calls are skipped.
@@ -897,6 +901,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           history = filtered;
           await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(filtered));
           console.log('[TOMBSTONE_APPLIED_LOCAL] removed=%d', beforeLen - filtered.length);
+          trace(rid, 'timer-context', 'syncPendingHistory', 'EXIT', { path: 'tombstoneApplied', removed: beforeLen - filtered.length });
           DeviceEventEmitter.emit('japam-stats-updated');
           DeviceEventEmitter.emit('japam-history-updated', { userId: uid });
           if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -943,7 +948,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
       const pending = getPending(history).filter((r) => r.userId === uid);
       console.log('[PENDING_RECORDS_COUNT] count=%d userId=%s', pending.length, uid);
-      if (pending.length === 0) return;
+      if (pending.length === 0) {
+        trace(rid, 'timer-context', 'syncPendingHistory', 'EXIT', { path: 'no-pending', historyLen: history.length });
+        return;
+      }
       const storedUserName = (await AsyncStorage.getItem('userName')) || '';
       const storedUserEmail = (await AsyncStorage.getItem('userEmail')) || '';
       const fallbackUserName = storedUserName || storedUserEmail || 'Unknown User';
@@ -999,6 +1007,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         const latest = latestRaw ? JSON.parse(latestRaw) : [];
         await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, syncedIds)));
         console.log('[MARK_SYNCED] count=%d ids=%s', syncedIds.length, syncedIds.join(','));
+        trace(rid, 'timer-context', 'syncPendingHistory', 'EXIT', { path: 'markSynced', syncedCount: syncedIds.length });
         DeviceEventEmitter.emit('japam-stats-updated');
         DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -1066,6 +1075,12 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const saveSession = useCallback(async () => {
+    const rid = newRequestId();
+    trace(rid, 'timer-context', 'saveSession', 'ENTER', {
+      isRunning: isRunningRef.current,
+      completedLoops: completedLoopsRef.current,
+      selectedLoops: selectedLoopsRef.current,
+    });
     // Hydrate userIdRef from AsyncStorage if the ref is still empty (covers the race where the
     // auth-updated event arrives before this component mounted its listener, or where the listener
     // has been cleaned up and re-created while an auth event was in flight).
@@ -1096,6 +1111,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       console.log('[Stats] STATS_SAVE_SKIPPED reason=bg-already-saved loop=%d lastSavedCompletedLoops=%d malasTodayBefore=%d',
         completedLoopsRef.current, getTimerState().lastSavedCompletedLoops, before.malas);
       // Still emit stats events in case the foreground listener missed the background emit
+      trace(rid, 'timer-context', 'saveSession', 'EXIT', { path: 'bg-already-saved' });
       DeviceEventEmitter.emit('japam-stats-updated');
       DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
       console.log('[StatsRefresh] Events re-emitted from foreground path');
@@ -1156,11 +1172,12 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         updatedHistory[0]?.japamName
       );
 
-      const after = await readMalasTodaySnapshot();
-      console.log('[Stats] STATS_SAVE_ACCEPTED completionSource=JS currentMala=%d targetMalaCount=%d malasTodayAfter=%d todayCountAfter=%d entriesAfter=%d',
-        completedLoopsRef.current, selectedLoopsRef.current, after.malas, after.count, after.entries);
-      DeviceEventEmitter.emit('japam-stats-updated');
-      DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
+        const after = await readMalasTodaySnapshot();
+        console.log('[Stats] STATS_SAVE_ACCEPTED completionSource=JS currentMala=%d targetMalaCount=%d malasTodayAfter=%d todayCountAfter=%d entriesAfter=%d',
+          completedLoopsRef.current, selectedLoopsRef.current, after.malas, after.count, after.entries);
+        trace(rid, 'timer-context', 'saveSession', 'EVENT', { path: 'emit-japam-events' }, { todayCountAfter: after.count });
+        DeviceEventEmitter.emit('japam-stats-updated');
+        DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.dispatchEvent(new Event('japam-stats-updated'));
         window.dispatchEvent(new Event('japam-history-updated'));

@@ -33,6 +33,8 @@ import React, {
   useState,
   type ReactNode,
 } from 'react';
+//// DIAGNOSTIC TRACE — remove after diagnosis
+import { newRequestId, trace } from '../lib/diagnosticTrace';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DeviceEventEmitter, Platform } from 'react-native';
 import { createDefaultJapamCreationCoordinator } from '../lib/defaultJapamCreationCoordinator';
@@ -74,6 +76,8 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   const coordinator = useMemo(() => createDefaultJapamCreationCoordinator(), []);
 
   const refresh = useCallback(async () => {
+    const rid = newRequestId();
+    trace(rid, 'japam-context', 'refresh', 'ENTER');
     setIsLoading(true);
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
     userIdRef.current = userId;
@@ -107,14 +111,25 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
       await japamsRepository.saveCurrentJapamId(userId, resolvedCurrentId);
     }
     setIsLoading(false);
+    trace(rid, 'japam-context', 'refresh', 'EXIT', {
+      resolvedCurrentId: resolvedCurrentId ?? 'null',
+      activeJapamCount: active.length,
+    });
     if (userId) {
       void japamsRepository.reconcileAllJapams(userId);
     }
   }, [coordinator]);
 
   useEffect(() => {
+    const rid = newRequestId();
+    trace(rid, 'japam-context', 'useEffect_refresh_mount', 'ENTER');
     void refresh();
-    const authSub = DeviceEventEmitter.addListener('japam-auth-updated', () => void refresh());
+    trace(rid, 'japam-context', 'useEffect_refresh_mount', 'EXIT');
+    const authSub = DeviceEventEmitter.addListener('japam-auth-updated', () => {
+      const amid = newRequestId();
+      trace(amid, 'japam-context', 'japam-auth-updated_handler', 'EVENT');
+      void refresh();
+    });
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       window.addEventListener('japam-auth-updated', refresh as EventListener);
     }
