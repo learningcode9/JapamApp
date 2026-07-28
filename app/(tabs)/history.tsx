@@ -10,7 +10,6 @@ import {
   mergeTombstones,
   normalizeAll,
   planHistoryDayAdjustment,
-  reconcileWithServer,
   toLocalDayKey,
   type HistoryRecord,
 } from '../../lib/historyStore';
@@ -898,27 +897,15 @@ export default function HistoryScreen() {
       if (removedByTomb > 0) {
         console.log('[TOMBSTONE_APPLIED] screen=history removed=%d', removedByTomb);
       }
-      const remoteCount = remoteSessions.length;
-      const localSynced = latestCleanedSessions.filter(
-        (r) => (r.userId || null) === currentUserId && r.syncStatus === 'synced'
-      ).length;
-      const localPending = latestCleanedSessions.filter(
-        (r) => (r.userId || null) === currentUserId && r.syncStatus === 'pending'
-      ).length;
-      console.log(
-        '[RECONCILE_PRE] screen=history remote_count=%d local_synced=%d local_pending=%d',
-        remoteCount, localSynced, localPending
-      );
-      const remoteIds = new Set(normalizeAll(filteredRemoteSessions).map((r) => r.completionId));
-      let mergedForStorage = tombFiltered;
-      if (!currentUserId || remoteCount >= 10000) {
-        console.log('[RECONCILE_SKIPPED] screen=history reason=%s count=%d',
-          !currentUserId ? 'no-user' : 'possible-truncation', remoteCount);
-      } else {
-        const before = tombFiltered.length;
-        mergedForStorage = reconcileWithServer(tombFiltered, remoteIds, currentUserId);
-        console.log('[RECONCILE_APPLIED] screen=history removed=%d', before - mergedForStorage.length);
-      }
+      // Non-destructive reconcile: persist the merge of local + remote (first-local-wins by
+      // completionId) with tombstones already honored. A remotely-synced completion whose id is
+      // transiently absent from a stale fetch must NOT be pruned here — that would erase today's
+      // just-uploaded Timer completion and corrupt Day Streak until a later, consistent fetch.
+      // Cross-device deletes flow exclusively through the explicit `deletedCompletions` tombstone
+      // set (honor'd above as tombFiltered), so no remote-id-based prune is safe on read paths.
+      // Mirrors Timer's loadStats (PR #53) and the mergeHistories "never drops a local record"
+      // invariant in lib/historyStore.ts.
+      const mergedForStorage = tombFiltered;
       sessions = dedupeSessions(mergedForStorage.filter((item) => (item.userId || null) === (currentUserId || null))).sort(
         (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
       );

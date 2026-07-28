@@ -1881,12 +1881,208 @@ describe('mergeHistories non-destructive on stale remote snapshot', () => {
     expect(before.malas).toBe(5);
     expect(before.totalCount).toBe(540);
 
-    // Tombstone comp-5-timer via applyTombstones
-    const afterDeleted = applyTombstones(synced, ['comp-5-timer']);
-    const after = todayStatsFor(
-      filterByJapam(afterDeleted, japamId, japamName), uid, toDayKey(todayIso(12)), toLocalDayKey
+// Tombstone comp-5-timer via applyTombstones
+  const afterDeleted = applyTombstones(synced, ['comp-5-timer']);
+  const after = todayStatsFor(
+    filterByJapam(afterDeleted, japamId, japamName), uid, toDayKey(todayIso(12)), toLocalDayKey
+  );
+  expect(after.malas).toBe(4);
+  expect(after.totalCount).toBe(432);
+});
+
+// ── Regression: History/Home non-destructive reconcile preserves Day Streak on stale remote ──
+// Models the read paths the PR #53 extension hardens:
+//   * History.loadHistory (app/(tabs)/history.tsx): mergeHistories(local, remote) → tombstone
+//     filter → persist (NO remote-id reconcileWithServer prune).
+//   * Home.loadStats (app/(tabs)/index.tsx) and Home.restoreHistoryFromSupabase: same.
+// The proven runtime sequence (PR #53 staging reproduction):
+//   1. Selected Japam has YESTERDAY's synced completion (streak would be 1 even with today empty).
+//   2. Today's Timer completion is appended locally (pending) → today active.
+//   3. Today's upload succeeds → today becomes 'synced' locally.
+//   4. The very next remote fetch is STALE: it omits today's id entirely.
+//      History/Home merge the stale remote AND persist the merge back to HISTORY_KEY.
+//      The OLD destructive reconcileWithServer dropped today's synced row (id ∉ remoteIds)
+//      and persisted the pruned list. A subsequent loadStats / refresh then read AsyncStorage,
+//      re-merged the stale remote, and computed streak 0.
+//   5. With the fix, the persisted merge keeps yesterday + today → streak stays 2 across a
+//      simulated browser refresh and a second stale fetch.
+//   6. An explicit tombstone for today (legitimate History delete) then reduces the streak from
+//      2 to 1 — proving deletes still flow through `deletedCompletions` without the unsafe prune.
+//   7. Pending records survive the merge-persist cycle.
+//   8. Another user's and another Japam's records survive untouched.
+describe('History/Home non-destructive reconcile preserves Day Streak on stale remote snapshot', () => {
+  const uid = 'user-abc';
+  const otherUid = 'user-other';
+  const today = '2026-07-28';
+  const yesterday = getPreviousDayKey(today);
+  const todayIso = (h: number) => `${today}T${String(h).padStart(2, '0')}:00:00.000Z`;
+  const yIso = (h: number) => `${yesterday}T${String(h).padStart(2, '0')}:00:00.000Z`;
+  const japamId = 'uuid-japam-1';
+  const japamName = 'My Japam';
+  const otherJapamId = 'uuid-japam-2';
+
+  // Streak is computed on the SAME full-history + userId + japamId inputs that Timer's loadStats
+  // and Home/History use (just without their AsyncStorage I/O wrappers).
+  const streakFor = (records: HistoryRecord[]) =>
+    dayStreakForJapam(records, uid, japamId, today, toDayKey, getPreviousDayKey);
+
+  it('retains yesterday + today across a stale-remote merge, persist, refresh, and another stale fetch', async () => {
+    // 1. Yesterday's synced completion for the selected Japam.
+    const yesterdaySynced = session(yIso(9), {
+      userId: uid, syncStatus: 'synced', completionId: 'y-1',
+      japamId, japamName, totalCount: 108,
+    }) as HistoryRecord;
+    // Background: another Japam + another user must be left alone by the merge/persist.
+    const otherJapamToday = session(todayIso(8), {
+      userId: uid, syncStatus: 'synced', completionId: 'other-japam-1',
+      japamId: otherJapamId, japamName: 'Other', totalCount: 108,
+    }) as HistoryRecord;
+    const otherUserToday = session(todayIso(8), {
+      userId: otherUid, syncStatus: 'synced', completionId: 'other-user-1',
+      japamId, japamName, totalCount: 108,
+    }) as HistoryRecord;
+
+    // 2. Today's Timer completion appended locally (pending) — streak is already 2 (y + today).
+    const todayPending = {
+      date: todayIso(12), malas: 1, totalCount: 108, duration: 600, manual: false,
+      userId: uid, completionId: 'today-timer',
+      syncStatus: 'pending' as const,
+      japamId, japamName,
+    } as HistoryRecord;
+
+    const localBefore = [yesterdaySynced, todayPending, otherJapamToday, otherUserToday] as HistoryRecord[];
+    expect(streakFor(localBefore)).toBe(2);
+
+    // 3. Upload succeeds — today becomes synced locally (markSynced-style).
+    const todaySynced = { ...todayPending, syncStatus: 'synced' as const };
+    const localAfterSync = [yesterdaySynced, todaySynced, otherJapamToday, otherUserToday] as HistoryRecord[];
+    expect(streakFor(localAfterSync)).toBe(2);
+
+    // 4. Stale remote: has yesterday + other-Japam/other-user rows BUT NOT today-timer.
+    const staleRemote = [yesterdaySynced, otherJapamToday, otherUserToday] as HistoryRecord[];
+
+    // History/Home merge + tombstone-filter + persist (NO reconcileWithServer prune).
+    const tomb: string[] = [];
+    const mergedFiltered = mergeHistories(localAfterSync, staleRemote).filter(
+      (r) => !tomb.includes(r.completionId)
     );
-    expect(after.malas).toBe(4);
-    expect(after.totalCount).toBe(432);
+    // Persist into the mocked AsyncStorage (the mock at the top of this file backs it).
+    await AsyncStorage.setItem('history', JSON.stringify(mergedFiltered));
+
+    // 5a. After-persist streak (what Timer reads on its useFocusEffect immediately afterward).
+    expect(streakFor(mergedFiltered)).toBe(2);
+    // The unsafe old path would have produced 1 here (today dropped, only yesterday remains).
+    const remoteIdsOld = new Set(normalizeAll(staleRemote).map((r) => r.completionId));
+    const destructed = mergedFiltered.filter((r) =>
+      !r.completionId || (r.userId || null) !== uid || r.syncStatus !== 'synced' || remoteIdsOld.has(r.completionId)
+    );
+    expect(dayStreakForJapam(destructed, uid, japamId, today, toDayKey, getPreviousDayKey)).toBe(1);
+
+    // 5b. Simulate a browser refresh: re-read HISTORY_KEY from AsyncStorage as the cold-start
+    //     loadStats would, then merge with ANOTHER still-stale remote fetch.
+    const reloadedRaw = await AsyncStorage.getItem('history');
+    const reloaded = reloadedRaw ? (JSON.parse(reloadedRaw) as HistoryRecord[]) : [];
+    const refreshedMerged = mergeHistories(reloaded, staleRemote).filter(
+      (r) => !tomb.includes(r.completionId)
+    );
+    await AsyncStorage.setItem('history', JSON.stringify(refreshedMerged));
+    expect(dayStreakForJapam(refreshedMerged, uid, japamId, today, toDayKey, getPreviousDayKey)).toBe(2);
+
+    // 5c. Persisted AsyncStorage still contains BOTH yesterday's and today's selected-Japam rows.
+    const persistedRaw = await AsyncStorage.getItem('history');
+    const persisted = persistedRaw ? (JSON.parse(persistedRaw) as HistoryRecord[]) : [];
+    const persistedIds = new Set(persisted.map((r) => r.completionId));
+    expect(persistedIds.has('y-1')).toBe(true);
+    expect(persistedIds.has('today-timer')).toBe(true);
   });
+
+  it('an explicit tombstone for today legitimately reduces Day Streak from 2 to 1', async () => {
+    const yesterdaySynced = session(yIso(9), {
+      userId: uid, syncStatus: 'synced', completionId: 'y-2',
+      japamId, japamName, totalCount: 108,
+    }) as HistoryRecord;
+    const todaySynced = {
+      date: todayIso(12), malas: 1, totalCount: 108, duration: 600, manual: false,
+      userId: uid, completionId: 'today-timer-2',
+      syncStatus: 'synced' as const,
+      japamId, japamName,
+    } as HistoryRecord;
+    const local = [yesterdaySynced, todaySynced] as HistoryRecord[];
+    expect(streakFor(local)).toBe(2);
+
+    // History's performDelete writes a tombstone first, then filters — exactly this.
+    const tomb = ['today-timer-2'];
+    const tombFiltered = mergeHistories(local, local).filter((r) => !tomb.includes(r.completionId));
+    await AsyncStorage.setItem('history', JSON.stringify(tombFiltered));
+
+    const persistedRaw = await AsyncStorage.getItem('history');
+    const persisted = persistedRaw ? (JSON.parse(persistedRaw) as HistoryRecord[]) : [];
+    expect(dayStreakForJapam(persisted, uid, japamId, today, toDayKey, getPreviousDayKey)).toBe(1);
+    expect(persisted.some((r) => r.completionId === 'today-timer-2')).toBe(false);
+    expect(persisted.some((r) => r.completionId === 'y-2')).toBe(true);
+  });
+
+  it('a still-pending today completion is preserved across the merge + persist (no status downgrade, no loss)', async () => {
+    const yesterdaySynced = session(yIso(9), {
+      userId: uid, syncStatus: 'synced', completionId: 'y-3',
+      japamId, japamName, totalCount: 108,
+    }) as HistoryRecord;
+    const todayPending = {
+      date: todayIso(13), malas: 1, totalCount: 108, duration: 600, manual: false,
+      userId: uid, completionId: 'today-pending-3',
+      syncStatus: 'pending' as const,
+      japamId, japamName,
+    } as HistoryRecord;
+    const local = [yesterdaySynced, todayPending] as HistoryRecord[];
+    // Stale remote omits the pending entry entirely (it has not been uploaded yet).
+    const staleRemote = [yesterdaySynced] as HistoryRecord[];
+
+    const merged = mergeHistories(local, staleRemote).filter((r) => r.completionId !== '');
+    await AsyncStorage.setItem('history', JSON.stringify(merged));
+
+    const persistedRaw = await AsyncStorage.getItem('history');
+    const persisted = persistedRaw ? (JSON.parse(persistedRaw) as HistoryRecord[]) : [];
+    const pending = persisted.find((r) => r.completionId === 'today-pending-3');
+    expect(pending).toBeDefined();
+    expect(pending?.syncStatus).toBe('pending');
+    // Pending today still counts as an active day → streak is 2.
+    expect(dayStreakForJapam(persisted, uid, japamId, today, toDayKey, getPreviousDayKey)).toBe(2);
+  });
+
+  it('does not affect another user\'s or another Japam\'s records during the merge-persist', async () => {
+    const mineToday = session(todayIso(8), {
+      userId: uid, syncStatus: 'synced', completionId: 'mine-4',
+      japamId, japamName, totalCount: 108,
+    }) as HistoryRecord;
+    const otherUserToday = session(todayIso(8), {
+      userId: otherUid, syncStatus: 'synced', completionId: 'other-user-4',
+      japamId, japamName, totalCount: 108,
+    }) as HistoryRecord;
+    const otherJapamToday = session(todayIso(8), {
+      userId: uid, syncStatus: 'synced', completionId: 'other-japam-4',
+      japamId: otherJapamId, japamName: 'Other', totalCount: 108,
+    }) as HistoryRecord;
+
+    const local = [mineToday, otherUserToday, otherJapamToday] as HistoryRecord[];
+    // Stale remote keeps only mineToday.
+    const staleRemote = [mineToday] as HistoryRecord[];
+
+    const merged = mergeHistories(local, staleRemote).filter((r) => r.completionId !== '');
+    await AsyncStorage.setItem('history', JSON.stringify(merged));
+
+    const persistedRaw = await AsyncStorage.getItem('history');
+    const persisted = persistedRaw ? (JSON.parse(persistedRaw) as HistoryRecord[]) : [];
+    const ids = new Set(persisted.map((r) => r.completionId));
+    expect(ids.has('mine-4')).toBe(true);
+    expect(ids.has('other-user-4')).toBe(true);
+    expect(ids.has('other-japam-4')).toBe(true);
+
+    // My selected Japam streak counts only mineToday for my user: 1 active day → streak 1.
+    expect(dayStreakForJapam(persisted, uid, japamId, today, toDayKey, getPreviousDayKey)).toBe(1);
+    // The other Japam's streak is independent.
+    expect(dayStreakForJapam(persisted, uid, otherJapamId, today, toDayKey, getPreviousDayKey)).toBe(1);
+    // The other user's records don't inflate my streak.
+    expect(dayStreakForJapam(persisted, otherUid, japamId, today, toDayKey, getPreviousDayKey)).toBe(1);
+  });
+});
 });
