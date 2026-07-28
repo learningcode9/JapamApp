@@ -2,11 +2,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import {
-  dayStreakForJapam,
   dedupeByCompletionId,
-  japamStatsFor,
+  japamScopedStatsFor,
   mergeHistories,
-  statsByJapam,
   toLocalDayKey,
 } from '../../lib/historyStore';
 import { ZEN_BACKGROUND } from '../../constants/assets';
@@ -286,24 +284,25 @@ export default function TimerScreen() {
 
     // Scoped to the currently selected Japam only -- Home/Timer must never show a combined total
     // across every Japam (product requirement: Home/Timer/Tap Japam always reflect the selected
-    // Japam, matching History/My Japams). null means legacy/unassigned history, same convention as
-    // statsByJapam/dayStreakForJapam everywhere else.
+    // Japam, matching History/My Japams). Routed through japamScopedStatsFor, which uses the SAME
+    // filterByJapam selector History uses (dedupe + strict japamId match + legacy null/name
+    // fallback) so Timer and History can never disagree on which records belong to the selected
+    // Japam -- including null-japamId legacy records that match the selected Japam's name.
     const japamId = currentJapam?.id ?? null;
-    const { todayTotalCount: safeTodayTotal } = japamStatsFor(
-      statsByJapam(history, userId, todayKey, toLocalDayKey),
-      japamId
-    );
-    const nextStreak = dayStreakForJapam(
+    const scopedStats = japamScopedStatsFor(
       history,
       userId,
       japamId,
+      currentJapam?.name ?? null,
       todayKey,
       toLocalDayKey,
       getPreviousDateKey
     );
+    const safeTodayTotal = scopedStats.todayTotalCount;
+    const nextStreak = scopedStats.dayStreak;
 
     setTodayCount(safeTodayTotal);
-    setMalasToday(Math.floor(safeTodayTotal / 108));
+    setMalasToday(scopedStats.todayMalas);
     setDayStreak(nextStreak);
   } finally {
     isRestoringRef.current = false;

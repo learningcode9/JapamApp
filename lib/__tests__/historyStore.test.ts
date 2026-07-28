@@ -24,6 +24,7 @@ import {
   japamStatsFor,
   dayStreakForJapam,
   filterByJapam,
+  japamScopedStatsFor,
   type HistoryRecord,
 } from '../historyStore';
 import { planLegacyHistoryBackfill } from '../legacyHistoryBackfill';
@@ -2085,4 +2086,214 @@ describe('History/Home non-destructive reconcile preserves Day Streak on stale r
     expect(dayStreakForJapam(persisted, otherUid, japamId, today, toDayKey, getPreviousDayKey)).toBe(1);
   });
 });
+});
+
+// ─────── Timer/History display-consistency regression (PR #53) ───────
+//
+// Timer now routes Today/Lifetime/Streak through japamScopedStatsFor, which uses the SAME
+// filterByJapam selector History uses (dedupe + strict japamId match + legacy null/name
+// fallback). These tests prove Timer and History agree, even when records were saved with
+// japamId=null while currentJapam was still hydrating -- the exact regression scenario where
+// Timer previously read 0 after currentJapamId hydrated from null to a real UUID while History
+// still showed 3/324/streak-2.
+
+describe('japamScopedStatsFor: Timer/History display consistency (PR #53 regression)', () => {
+  const UID = 'user-92b7';
+  const JAPAM_ID = '92b7dc78-f1ae-4803-9e4d-8997d400f1f4';
+  const JAPAM_NAME = 'My Japam';
+  const OTHER_JAPAM_ID = 'aaaaaaaa-0000-0000-0000-000000000000';
+  const OTHER_JAPAM_NAME = 'Other Japam';
+  const TODAY = '2026-07-28';
+  const YESTERDAY = getPreviousDayKey(TODAY);
+  const todayIso = (h: number) => `${TODAY}T${String(h).padStart(2, '0')}:00:00.000Z`;
+  const yIso = (h: number) => `${YESTERDAY}T${String(h).padStart(2, '0')}:00:00.000Z`;
+
+  const rec = (
+    iso: string,
+    over: Partial<HistoryRecord> = {},
+  ): HistoryRecord => ({
+    date: iso,
+    malas: 1,
+    totalCount: 108,
+    duration: 60,
+    manual: false,
+    userId: UID,
+    syncStatus: 'synced',
+    completionId: over.completionId ?? makeCompletionId(UID, iso),
+    japamId: over.japamId ?? null,
+    japamName: over.japamName ?? null,
+    ...over,
+  });
+
+  // The exact regression scenario: 3 null-japamId legacy records (saved while currentJapam was
+  // still null), with japamName carrying the future selected Japam's name. Today's total = 324,
+  // lifetime = 432, and a 2-day streak (yesterday + today). History shows them via
+  // filterByJapam's legacy fallback; Timer MUST show the same via japamScopedStatsFor.
+  const legacyScenario = (): HistoryRecord[] => [
+    rec(todayIso(8),  { japamId: null, japamName: JAPAM_NAME, totalCount: 108, completionId: 'leg-t1' }),
+    rec(todayIso(9),  { japamId: null, japamName: JAPAM_NAME, totalCount: 108, completionId: 'leg-t2' }),
+    rec(todayIso(10), { japamId: null, japamName: JAPAM_NAME, totalCount: 108, completionId: 'leg-t3' }),
+    rec(yIso(8),      { japamId: null, japamName: JAPAM_NAME, totalCount: 108, completionId: 'leg-y1' }),
+  ];
+
+  it('null-id legacy records with the selected Japam name appear in Timer AND History', () => {
+    const records = legacyScenario();
+    // History's selector (filterByJapam) keeps all 4 legacy records.
+    const historyScoped = filterByJapam(records, JAPAM_ID, JAPAM_NAME);
+    expect(historyScoped.map((r) => r.completionId).sort()).toEqual(
+      ['leg-t1', 'leg-t2', 'leg-t3', 'leg-y1'],
+    );
+    // Timer's selector (japamScopedStatsFor) computes the same set: 3 today, 4 lifetime, streak 2.
+    const timerStats = japamScopedStatsFor(
+      records, UID, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(timerStats.todayTotalCount).toBe(324);
+    expect(timerStats.lifetimeTotalCount).toBe(432);
+    expect(timerStats.dayStreak).toBe(2);
+  });
+
+  it('currentJapam hydration null -> real ID does NOT change 3/324/streak-2 to 0', () => {
+    const records = legacyScenario();
+    // BEFORE hydration: currentJapamId = null. Strict old behavior would have read these via the
+    // null bucket. japamScopedStatsFor with japamId=null must still match History's null-bucket
+    // behavior (filterByJapam with null matches only null records).
+    const beforeHydration = japamScopedStatsFor(
+      records, UID, null, null, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(beforeHydration.todayTotalCount).toBe(324);
+    expect(beforeHydration.dayStreak).toBe(2);
+    // AFTER hydration: currentJapamId = JAPAM_ID, japamName = JAPAM_NAME. The legacy null-fallback
+    // in filterByJapam must keep these records attributed to the now-hydrated Japam. This is the
+    // regression assertion: the numbers MUST NOT drop to 0.
+    const afterHydration = japamScopedStatsFor(
+      records, UID, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(afterHydration.todayTotalCount).toBe(324);
+    expect(afterHydration.lifetimeTotalCount).toBe(432);
+    expect(afterHydration.dayStreak).toBe(2);
+  });
+
+  it('records belonging to another real Japam remain excluded', () => {
+    const records = [
+      ...legacyScenario(),
+      rec(todayIso(11), { japamId: OTHER_JAPAM_ID, japamName: OTHER_JAPAM_NAME, totalCount: 108, completionId: 'other-t1' }),
+      rec(yIso(11),     { japamId: OTHER_JAPAM_ID, japamName: OTHER_JAPAM_NAME, totalCount: 108, completionId: 'other-y1' }),
+    ];
+    // History excludes the other Japam's records.
+    const historyScoped = filterByJapam(records, JAPAM_ID, JAPAM_NAME);
+    expect(historyScoped.find((r) => r.japamId === OTHER_JAPAM_ID)).toBeUndefined();
+    // Timer excludes them too: today stays 324 (not 432), lifetime 432 (not 648).
+    const timerStats = japamScopedStatsFor(
+      records, UID, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(timerStats.todayTotalCount).toBe(324);
+    expect(timerStats.lifetimeTotalCount).toBe(432);
+    expect(timerStats.dayStreak).toBe(2);
+  });
+
+  it('duplicate Japam names do NOT combine real-ID records across Japams', () => {
+    // Two real Japams share the name "My Japam" but have distinct UUIDs. The legacy null-fallback
+    // MUST only pull NULL-japamId records, never real-ID records from the sibling Japam.
+    const records = [
+      // Selected Japam A: one real-id record today.
+      rec(todayIso(8), { japamId: JAPAM_ID, japamName: JAPAM_NAME, totalCount: 108, completionId: 'a-t1' }),
+      // Sibling Japam B (same name "My Japam", different UUID): one real-id record today.
+      rec(todayIso(9), { japamId: OTHER_JAPAM_ID, japamName: JAPAM_NAME, totalCount: 108, completionId: 'b-t1' }),
+      // Legacy null-japamId record with name "My Japam" -- SHOULD be attributed to whichever
+      // Japam is selected (here A), because filterByJapam's null-fallback keys off the NAME.
+      rec(todayIso(10), { japamId: null, japamName: JAPAM_NAME, totalCount: 108, completionId: 'leg-t1' }),
+    ];
+    // History: filterByJapam for A keeps a-t1 + leg-t1, excludes b-t1.
+    const scopedA = filterByJapam(records, JAPAM_ID, JAPAM_NAME);
+    expect(scopedA.map((r) => r.completionId).sort()).toEqual(['a-t1', 'leg-t1']);
+    // Timer: same set. today = 216 (a-t1 + leg-t1), NOT 324 (which would require b-t1).
+    const statsA = japamScopedStatsFor(
+      records, UID, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(statsA.todayTotalCount).toBe(216);
+    expect(statsA.lifetimeTotalCount).toBe(216);
+    // And the reverse direction: filterByJapam for B keeps b-t1 + leg-t1, excludes a-t1.
+    const scopedB = filterByJapam(records, OTHER_JAPAM_ID, JAPAM_NAME);
+    expect(scopedB.map((r) => r.completionId).sort()).toEqual(['b-t1', 'leg-t1']);
+    const statsB = japamScopedStatsFor(
+      records, UID, OTHER_JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(statsB.todayTotalCount).toBe(216);
+  });
+
+  it('legacy null-japamId records with a DIFFERENT name stay excluded from the selected Japam', () => {
+    const records = [
+      rec(todayIso(8), { japamId: JAPAM_ID, japamName: JAPAM_NAME, totalCount: 108, completionId: 'a-t1' }),
+      // legacy record tagged with the OTHER japam's name -- should NOT fall back into A.
+      rec(todayIso(9), { japamId: null, japamName: OTHER_JAPAM_NAME, totalCount: 108, completionId: 'leg-other' }),
+    ];
+    const timerStats = japamScopedStatsFor(
+      records, UID, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(timerStats.todayTotalCount).toBe(108);
+    expect(timerStats.lifetimeTotalCount).toBe(108);
+  });
+
+  it('guest/user isolation remains intact (other users\' records never inflate my Timer stats)', () => {
+    const otherUid = 'user-other';
+    const records = [
+      // My legacy records.
+      rec(todayIso(8), { userId: UID, japamId: null, japamName: JAPAM_NAME, totalCount: 108, completionId: 'mine-t1' }),
+      rec(yIso(8),     { userId: UID, japamId: null, japamName: JAPAM_NAME, totalCount: 108, completionId: 'mine-y1' }),
+      // Another user's record with the SAME japamName -- filterByJapam's null-fallback would pull
+      // it in by name, but japamScopedStatsFor's userId gate MUST drop it.
+      rec(todayIso(9), { userId: otherUid, japamId: null, japamName: JAPAM_NAME, totalCount: 108, completionId: 'other-u-t1' }),
+    ];
+    const myStats = japamScopedStatsFor(
+      records, UID, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(myStats.todayTotalCount).toBe(108); // only mine-t1
+    expect(myStats.lifetimeTotalCount).toBe(216); // mine-t1 + mine-y1
+    expect(myStats.dayStreak).toBe(2);
+    // And the other user's stats exclude my records.
+    const theirStats = japamScopedStatsFor(
+      records, otherUid, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(theirStats.todayTotalCount).toBe(108); // only other-u-t1
+    expect(theirStats.lifetimeTotalCount).toBe(108);
+    expect(theirStats.dayStreak).toBe(1);
+  });
+
+  it('guest bucket (userId=null scope) excludes signed-in users\' records and vice versa', () => {
+    const signedInUid = 'user-signed-in';
+    const records = [
+      rec(todayIso(8), { userId: signedInUid, japamId: null, japamName: null, totalCount: 108, completionId: 'si-t1' }),
+      rec(todayIso(9), { userId: undefined,   japamId: null, japamName: null, totalCount: 108, completionId: 'guest-t1' }),
+    ];
+    // Guest scope (userId=null/undefined): only the guest record counts.
+    const guestStats = japamScopedStatsFor(
+      records, null, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(guestStats.todayTotalCount).toBe(108);
+    // Signed-in scope: only the signed-in record counts.
+    const signedInStats = japamScopedStatsFor(
+      records, signedInUid, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(signedInStats.todayTotalCount).toBe(108);
+  });
+
+  it('agrees with the existing strict selectors when there are NO legacy null records', () => {
+    // When every record has a real japamId, japamScopedStatsFor must return exactly what the strict
+    // statsByJapam/japamStatsFor/dayStreakForJapam trio returned -- i.e. no behavior change for
+    // already-properly-tagged post-Workspaces histories.
+    const records = [
+      rec(todayIso(8), { japamId: JAPAM_ID, japamName: JAPAM_NAME, totalCount: 108, completionId: 'a-t1' }),
+      rec(todayIso(9), { japamId: JAPAM_ID, japamName: JAPAM_NAME, totalCount: 108, completionId: 'a-t2' }),
+      rec(yIso(8),     { japamId: JAPAM_ID, japamName: JAPAM_NAME, totalCount: 108, completionId: 'a-y1' }),
+      rec(todayIso(10), { japamId: OTHER_JAPAM_ID, japamName: OTHER_JAPAM_NAME, totalCount: 108, completionId: 'b-t1' }),
+    ];
+    const strictStats = japamStatsFor(statsByJapam(records, UID, TODAY, toDayKey), JAPAM_ID);
+    const strictStreak = dayStreakForJapam(records, UID, JAPAM_ID, TODAY, toDayKey, getPreviousDayKey);
+    const scopedStats = japamScopedStatsFor(
+      records, UID, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(scopedStats.todayTotalCount).toBe(strictStats.todayTotalCount);
+    expect(scopedStats.lifetimeTotalCount).toBe(strictStats.lifetimeTotalCount);
+    expect(scopedStats.dayStreak).toBe(strictStreak);
+  });
 });

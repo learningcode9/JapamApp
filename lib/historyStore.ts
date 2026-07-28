@@ -620,6 +620,74 @@ export const dayStreakForJapam = (
 };
 
 /**
+ * One-stop selector for a screen scoped to "the currently selected Japam" that must agree with
+ * History (and Home/Tap) on which records belong to that Japam. Computes Today's count, Lifetime
+ * count, and consecutive-day streak in a single pass over a `filterByJapam`-scoped set — the SAME
+ * selector History already uses (`filterByJapam(records, japamId, japamName)`), so the two screens
+ * can never diverge on which records are "in" the selected Japam.
+ *
+ * Why this exists separately from statsByJapam/japamStatsFor/dayStreakForJapam (which remain
+ * strict `(r.japamId ?? null) === targetJapamId`): History's `filterByJapam` includes a legacy
+ * null-fallback — when a real UUID Japam is selected, null-japamId records whose `japamName`
+ * matches the selected Japam's name (or whose `japamName` is blank) are also attributed to it.
+ * Routing Timer through this same selector means records that pre-date Japam Workspaces (or were
+ * saved while `currentJapam` was still hydrating and arrived as null-japamId) still appear on the
+ * Timer for the selected Japam, exactly as they already do on History.
+ *
+ * `filterByJapam` does NOT scope by userId, so the same identity discipline as statsByJapam /
+ * dayStreakForJapam (`userId ? r.userId === userId : !r.userId`) is applied here on the already-
+ * Japam-scoped set. Callers may pass an already-userId-scoped list (Timer does) or the full merged
+ * history; both produce identical results.
+ */
+export type JapamScopedStats = {
+  todayMalas: number;
+  todayTotalCount: number;
+  lifetimeMalas: number;
+  lifetimeTotalCount: number;
+  dayStreak: number;
+};
+
+export const japamScopedStatsFor = (
+  records: RawHistoryRecord[],
+  userId: string | null | undefined,
+  japamId: string | null | undefined,
+  japamName: string | null | undefined,
+  todayKey: string,
+  toDayKey: (dateISO: string) => string,
+  getPreviousDayKey: (dayKey: string) => string
+): JapamScopedStats => {
+  // Same selector History uses: dedupe + strict japamId match + legacy null/name fallback.
+  const scoped = filterByJapam(records, japamId ?? null, japamName ?? null);
+
+  let todayTotalCount = 0;
+  let lifetimeTotalCount = 0;
+  const activeDays = new Set<string>();
+  for (const r of scoped) {
+    const matchesUser = userId ? r.userId === userId : !r.userId;
+    if (!matchesUser || r.totalCount <= 0) continue;
+    lifetimeTotalCount += r.totalCount;
+    const day = toDayKey(r.date);
+    if (day === todayKey) todayTotalCount += r.totalCount;
+    activeDays.add(day);
+  }
+
+  let cursor = activeDays.has(todayKey) ? todayKey : getPreviousDayKey(todayKey);
+  let dayStreak = 0;
+  while (activeDays.has(cursor)) {
+    dayStreak += 1;
+    cursor = getPreviousDayKey(cursor);
+  }
+
+  return {
+    todayMalas: Math.floor(todayTotalCount / 108),
+    todayTotalCount,
+    lifetimeMalas: Math.floor(lifetimeTotalCount / 108),
+    lifetimeTotalCount,
+    dayStreak,
+  };
+};
+
+/**
  * Filter history records to exactly one Japam — the single place any screen
  * scoped to "the current Japam" (History) should call, instead of hand-writing
  * records.filter(r => r.japamId === ...) itself.
