@@ -1779,3 +1779,114 @@ describe('reconcileWithServer non-destructive (empty remote does not erase local
     expect(result.map((r) => r.completionId).sort()).toEqual(['a', 'b']);
   });
 });
+
+// ── Regression: mergeHistories non-destructive on stale remote snapshot ──
+// Proven ordering from runtime reproduction:
+//   1. Selected-Japam today total = 432 (4 malas × 108).
+//   2. Timer completion appends a pending local entry → total = 540.
+//   3. The next remote fetch returns stale data omitting that new entry.
+//   4. The old destructive reconcile in loadStats deleted the local entry
+//      and wrote the pruned result back to HISTORY_KEY, making subsequent
+//      loadStats calls compute 432 again.
+//   5. With the fix, mergeHistories (first-local-wins, memory-only) keeps
+//      the entry; todayStatsFor still returns 540.
+//   6. An explicit tombstone or edit/delete must still be able to reduce
+//      the total back to 432.
+describe('mergeHistories non-destructive on stale remote snapshot', () => {
+  const uid = 'user-abc';
+  const today = '2026-07-28';
+  const todayIso = (h: number, m = 0) => `${today}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00.000Z`;
+  const japamId = 'uuid-japam-1';
+  const japamName = 'My Japam';
+
+  it('stale remote snapshot does not regress the selected-Japam total', () => {
+    // Initial: 4 today malas / 432 count for selected Japam
+    const base = [
+      session(todayIso(8), { userId: uid, syncStatus: 'synced', completionId: 'comp-1', japamId, japamName, totalCount: 108 }),
+      session(todayIso(9), { userId: uid, syncStatus: 'synced', completionId: 'comp-2', japamId, japamName, totalCount: 108 }),
+      session(todayIso(10), { userId: uid, syncStatus: 'synced', completionId: 'comp-3', japamId, japamName, totalCount: 108 }),
+      session(todayIso(11), { userId: uid, syncStatus: 'synced', completionId: 'comp-4', japamId, japamName, totalCount: 108 }),
+    ] as HistoryRecord[];
+
+    const before = todayStatsFor(
+      filterByJapam(base, japamId, japamName), uid, toDayKey(todayIso(11)), toLocalDayKey
+    );
+    expect(before.malas).toBe(4);
+    expect(before.totalCount).toBe(432);
+
+    // Step 2: Timer completion arrives → pending local entry, total = 540
+    const timerCompletion = {
+      date: todayIso(12), malas: 1, totalCount: 108, duration: 600, manual: false,
+      userId: uid, completionId: 'comp-5-timer',
+      syncStatus: 'pending' as const,
+      japamId, japamName,
+    } as HistoryRecord;
+    const localWithPending = [...base, timerCompletion] as HistoryRecord[];
+
+    const withPending = todayStatsFor(
+      filterByJapam(localWithPending, japamId, japamName), uid, toDayKey(todayIso(12)), toLocalDayKey
+    );
+    expect(withPending.malas).toBe(5);
+    expect(withPending.totalCount).toBe(540);
+
+    // Step 3: Sync upload succeeds — same completionId, now synced locally
+    const localWithSynced = [
+      ...base,
+      { ...timerCompletion, syncStatus: 'synced' as const },
+    ] as HistoryRecord[];
+
+    // Step 4: Stale remote snapshot omits comp-5-timer
+    const staleRemote: HistoryRecord[] = [...base] as HistoryRecord[];
+
+    // Step 5: mergeHistories (first-local-wins) keeps the synced local entry
+    const merged = mergeHistories(localWithSynced, staleRemote);
+    const scoped = filterByJapam(merged, japamId, japamName);
+    const after = todayStatsFor(scoped, uid, toDayKey(todayIso(12)), toLocalDayKey);
+    expect(after.malas).toBe(5);
+    expect(after.totalCount).toBe(540);
+
+    // Step 6: Demonstrate the removed destructive reconcile would have deleted it.
+    // The old rule removed locally-synced entries absent from the remote set.
+    const remoteIds = new Set(normalizeAll(staleRemote).map((r) => r.completionId));
+    const destructivelyFiltered = merged.filter((r) =>
+      !r.completionId || (r.userId || null) !== uid || r.syncStatus !== 'synced' || remoteIds.has(r.completionId)
+    );
+    const stale = todayStatsFor(
+      filterByJapam(destructivelyFiltered, japamId, japamName), uid, toDayKey(todayIso(12)), toLocalDayKey
+    );
+    expect(stale.malas).toBe(4);
+    expect(stale.totalCount).toBe(432);
+  });
+
+  it('legitimate tombstone delete via applyTombstones decreases total from 540 to 432', () => {
+    // After sync: 5 entries for today = 540 count
+    const synced = [
+      session(todayIso(8), { userId: uid, syncStatus: 'synced', completionId: 'comp-1', japamId, japamName, totalCount: 108 }),
+      session(todayIso(9), { userId: uid, syncStatus: 'synced', completionId: 'comp-2', japamId, japamName, totalCount: 108 }),
+      session(todayIso(10), { userId: uid, syncStatus: 'synced', completionId: 'comp-3', japamId, japamName, totalCount: 108 }),
+      session(todayIso(11), { userId: uid, syncStatus: 'synced', completionId: 'comp-4', japamId, japamName, totalCount: 108 }),
+      {
+        date: todayIso(12), malas: 1, totalCount: 108, duration: 600, manual: false,
+        userId: uid, completionId: 'comp-5-timer',
+        syncStatus: 'synced' as const,
+        japamId, japamName,
+      },
+    ] as HistoryRecord[];
+
+    // Before tombstone: 540
+    const allBefore = applyTombstones(synced, []);
+    const before = todayStatsFor(
+      filterByJapam(allBefore, japamId, japamName), uid, toDayKey(todayIso(12)), toLocalDayKey
+    );
+    expect(before.malas).toBe(5);
+    expect(before.totalCount).toBe(540);
+
+    // Tombstone comp-5-timer via applyTombstones
+    const afterDeleted = applyTombstones(synced, ['comp-5-timer']);
+    const after = todayStatsFor(
+      filterByJapam(afterDeleted, japamId, japamName), uid, toDayKey(todayIso(12)), toLocalDayKey
+    );
+    expect(after.malas).toBe(4);
+    expect(after.totalCount).toBe(432);
+  });
+});
