@@ -83,9 +83,10 @@ export const loadHistoryForJapam = async (
   userId: string | null | undefined,
   japamId: string | null,
   japamName?: string | null,
+  options: { includeBlankLegacy?: boolean } = {},
 ): Promise<HistoryRecord[]> => {
   const forUser = await loadHistoryForUser(userId);
-  return filterByJapam(forUser, japamId, japamName);
+  return filterByJapam(forUser, japamId, japamName, options);
 };
 
 /**

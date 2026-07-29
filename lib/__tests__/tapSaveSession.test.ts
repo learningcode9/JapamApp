@@ -18,6 +18,9 @@ jest.mock('../supabase', () => ({
     auth: {
       getSession: jest.fn().mockResolvedValue({ data: { session: null }, error: null }),
     },
+    from: jest.fn(() => ({
+      upsert: jest.fn().mockResolvedValue({ error: null }),
+    })),
   },
 }));
 
@@ -39,6 +42,8 @@ const JAPAM_ID = 'my-japam-uuid-456def';
 const JAPAM_NAME = 'My Japam';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
+const USER_JAPAMS_KEY = 'userJapams';
+const flushAsync = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 const today = () => {
   const d = new Date();
@@ -67,6 +72,17 @@ const makeRefs = (): TapSaveSessionRefs => ({
 });
 
 const identity = { userId: UID, japamId: JAPAM_ID, japamName: JAPAM_NAME };
+const seedSelectedJapam = async () => {
+  await AsyncStorage.setItem(`${USER_JAPAMS_KEY}:${UID}`, JSON.stringify([{
+    id: JAPAM_ID,
+    userId: UID,
+    name: JAPAM_NAME,
+    displayOrder: null,
+    createdAt: '2026-07-01T00:00:00.000Z',
+    updatedAt: '2026-07-01T00:00:00.000Z',
+    archivedAt: null,
+  }]));
+};
 
 describe('tapSaveSession — real runtime pipeline', () => {
   beforeEach(async () => {
@@ -179,9 +195,12 @@ describe('tapSaveSession — real runtime pipeline', () => {
     });
     process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
     process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'anon-key';
+    await seedSelectedJapam();
 
     const refs = makeRefs();
     const result = await tapSaveSession(0, 1, 108, 108, 'tap', refs, identity, 'Test User');
+    await flushAsync();
+    await flushAsync();
 
     expect(result).toBe(true);
     expect(global.fetch).toHaveBeenCalledWith(
@@ -198,6 +217,30 @@ describe('tapSaveSession — real runtime pipeline', () => {
       japam_name: JAPAM_NAME,
       malas: 1,
       count: 108,
+    });
+  });
+
+  it('keeps a tap completion pending and sends no FK-invalid upload when Japam sync is not confirmed', async () => {
+    (supabase.auth.getSession as jest.Mock).mockResolvedValue({
+      data: { session: { access_token: 'session-token' } },
+      error: null,
+    });
+    process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
+    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'anon-key';
+
+    const refs = makeRefs();
+    const result = await tapSaveSession(0, 1, 108, 108, 'tap', refs, identity, 'Test User');
+    await flushAsync();
+
+    expect(result).toBe(true);
+    expect(global.fetch).not.toHaveBeenCalled();
+    const saved = JSON.parse(await AsyncStorage.getItem('history') || '[]');
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({
+      userId: UID,
+      japamId: JAPAM_ID,
+      japamName: JAPAM_NAME,
+      syncStatus: 'pending',
     });
   });
 

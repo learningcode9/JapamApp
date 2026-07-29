@@ -16,6 +16,8 @@ import {
 import * as historyRepository from '../../lib/historyRepository';
 import { useCurrentJapam } from '../../contexts/current-japam-context';
 import CurrentJapamHeaderButton from '../../components/CurrentJapamHeaderButton';
+import { activeJapams } from '../../lib/japams';
+import { ensureJapamSyncedForHistory } from '../../lib/japamsRepository';
 import { repairLegacyStoredUserId, LEGACY_USER_ID_KEY } from '../../lib/anonymousAuth';
 import { supabase } from '../../lib/supabase';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -418,6 +420,10 @@ const saveToSupabase = async (
   // to the anon key.
   const accessToken = (await supabase.auth.getSession()).data.session?.access_token;
   if (!accessToken) return false;
+  if (japamId) {
+    const japamReady = await ensureJapamSyncedForHistory(userId, japamId);
+    if (!japamReady) return false;
+  }
 
   try {
     const body = buildSupabaseHistoryPayload({
@@ -539,6 +545,13 @@ const syncHistoryEditsToSupabase = async (
             completion_id: payload.completion_id,
           }
         : payload;
+      if (remoteId == null && payload.japam_id) {
+        const japamReady = await ensureJapamSyncedForHistory(userId, payload.japam_id);
+        if (!japamReady) {
+          console.log('[HISTORY_EDIT_SYNC_DEFERRED] completionId=%s reason=japam-sync-pending', record.completionId);
+          continue;
+        }
+      }
       console.log(
         '[HISTORY_EDIT_REQUEST] method=%s remoteId=%s completionId=%s url=%s body=%s',
         requestMethod,
@@ -684,7 +697,8 @@ const syncHistoryEditsToSupabase = async (
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { currentJapam, currentJapamId, isLoading: isJapamContextLoading } = useCurrentJapam();
+  const { currentJapam, currentJapamId, japams, isLoading: isJapamContextLoading } = useCurrentJapam();
+  const includeBlankLegacy = currentJapamId === activeJapams(japams)[0]?.id;
   const tabBarSpaceFromBottom = 74 + Math.max(12, insets.bottom + 8);
 
   const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
@@ -948,9 +962,14 @@ export default function HistoryScreen() {
       setDailyRows([]);
       return;
     }
-    const japamScopedSessions = await historyRepository.loadHistoryForJapam(currentUserId, currentJapamId, currentJapam?.name);
+    const japamScopedSessions = await historyRepository.loadHistoryForJapam(
+      currentUserId,
+      currentJapamId,
+      currentJapam?.name,
+      { includeBlankLegacy },
+    );
     setDailyRows(buildDailyRows(japamScopedSessions));
-  }, [currentJapamId]);
+  }, [currentJapamId, currentJapam?.name, includeBlankLegacy]);
 
   // Tombstone-based delete: remove the records locally, record a tombstone (so self-heal never
   // re-uploads them and other devices delete their copy on sync), and best-effort delete remote

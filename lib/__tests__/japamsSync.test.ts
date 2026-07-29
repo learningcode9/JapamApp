@@ -27,6 +27,7 @@ import {
   restoreJapam,
   loadJapams,
   reconcileAllJapams,
+  ensureJapamSyncedForHistory,
 } from '../japamsRepository';
 import { supabase } from '../supabase';
 import { type Japam } from '../japams';
@@ -167,6 +168,43 @@ describe('syncJapam (unit)', () => {
   it('never throws', async () => {
     mockUpsert.mockRejectedValue('unknown error');
     await expect(syncJapam(UID, makeJapam())).resolves.toBe(false);
+  });
+});
+
+describe('ensureJapamSyncedForHistory', () => {
+  it('confirms the selected local Japam is upserted before history upload proceeds', async () => {
+    const japam = makeJapam({ id: 'history-japam-1', name: 'Fresh Japam' });
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([japam]));
+    mockUpsert.mockResolvedValue({ error: null });
+
+    const result = await ensureJapamSyncedForHistory(UID, japam.id);
+
+    expect(result).toBe(true);
+    expect(mockUpsert).toHaveBeenCalledWith(
+      { id: japam.id, user_id: UID, name: 'Fresh Japam', archived_at: null },
+      { onConflict: 'id' },
+    );
+  });
+
+  it('blocks history upload when the selected Japam is not available locally', async () => {
+    mockUpsert.mockResolvedValue({ error: null });
+
+    const result = await ensureJapamSyncedForHistory(UID, 'missing-japam');
+
+    expect(result).toBe(false);
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it('keeps history pending on an initial Japam sync failure and allows a later retry', async () => {
+    const japam = makeJapam({ id: 'retry-japam', name: 'Retry Japam' });
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([japam]));
+    mockUpsert
+      .mockResolvedValueOnce({ error: { code: 'NETWORK', message: 'temporarily unavailable' } })
+      .mockResolvedValueOnce({ error: null });
+
+    await expect(ensureJapamSyncedForHistory(UID, japam.id)).resolves.toBe(false);
+    await expect(ensureJapamSyncedForHistory(UID, japam.id)).resolves.toBe(true);
+    expect(mockUpsert).toHaveBeenCalledTimes(2);
   });
 });
 

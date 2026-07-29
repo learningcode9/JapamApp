@@ -6,6 +6,7 @@ import {
   toLocalDayKey,
 } from '../../lib/historyStore';
 import { supabase } from '../../lib/supabase';
+import { ensureJapamSyncedForHistory } from '../../lib/japamsRepository';
 import { useCurrentJapam } from '../../contexts/current-japam-context';
 import CurrentJapamHeaderButton from '../../components/CurrentJapamHeaderButton';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -107,6 +108,13 @@ const syncManualEntryToSupabase = async ({
     if (!sessionToken) {
       console.log('[Manual] MANUAL_SYNC_FAILED reason=no-session (stays pending)');
       return;
+    }
+    if (japamId) {
+      const japamReady = await ensureJapamSyncedForHistory(userId, japamId);
+      if (!japamReady) {
+        console.log('[Manual] MANUAL_SYNC_DEFERRED reason=japam-sync-pending completionId=%s', completionId);
+        return;
+      }
     }
 
     // Built from the actual saved values (including japamId/japamName), not re-derived --

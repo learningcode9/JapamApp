@@ -649,10 +649,11 @@ export const japamScopedStatsFor = (
   japamName: string | null | undefined,
   todayKey: string,
   toDayKey: (dateISO: string) => string,
-  getPreviousDayKey: (dayKey: string) => string
+  getPreviousDayKey: (dayKey: string) => string,
+  options: { includeBlankLegacy?: boolean } = {},
 ): JapamScopedStats => {
   // Same selector History uses: dedupe + strict japamId match + legacy null/name fallback.
-  const scoped = filterByJapam(records, japamId ?? null, japamName ?? null);
+  const scoped = filterByJapam(records, japamId ?? null, japamName ?? null, options);
 
   let todayTotalCount = 0;
   let lifetimeTotalCount = 0;
@@ -688,25 +689,24 @@ export const japamScopedStatsFor = (
  * records.filter(r => r.japamId === ...) itself.
  *
  * - japamId: null matches only legacy/unassigned records (unchanged).
- * - japamId: a real UUID matches records with that UUID, PLUS legacy records
- *   whose japam_id is null but whose japam_name equals the selected Japam's
- *   current name (the "legacy fallback" — rows created before Japam
- *   workspaces existed, or rows whose japam_id was dropped by a NULL FK).
- *   Blank legacy rows are only shown under the default My Japam name, so unrelated
- *   named Japams do not inherit every pre-workspace/orphan record.
+ * - japamId: a real UUID matches records with that UUID, PLUS named legacy records
+ *   whose japam_id is null but whose japam_name equals the selected Japam's current
+ *   name. Blank legacy records are included only when the caller has already
+ *   resolved that this selected Japam is the intended canonical/default bucket.
  * - japamName: ignored when japamId is null (legacy filtering stays strict).
  */
 export const filterByJapam = (
   records: RawHistoryRecord[],
   japamId: string | null,
   japamName?: string | null,
+  options: { includeBlankLegacy?: boolean } = {},
 ): HistoryRecord[] =>
   dedupeByCompletionId(records).filter((r) => {
     const recordId = r.japamId ?? null;
     if (recordId === japamId) return true;
     if (japamId !== null && recordId === null) {
       if (japamName && r.japamName === japamName) return true;
-      if (!r.japamName && japamName === 'My Japam') return true;
+      if (!r.japamName && options.includeBlankLegacy) return true;
     }
     return false;
   });

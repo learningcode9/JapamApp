@@ -7,6 +7,7 @@ import {
   markSynced,
   toLocalDayKey,
 } from './historyStore';
+import { ensureJapamSyncedForHistory } from './japamsRepository';
 import { type TapIdentitySnapshot } from './tapJapamBehavior';
 
 export interface TapSaveSessionRefs {
@@ -156,6 +157,13 @@ export async function tapSaveSession(
             if (!sessionToken) {
               console.log('[SYNC_FAILED] source=%s completionId=%s reason=no-session', source, payload.completion_id);
               return;
+            }
+            if (payload.japam_id) {
+              const japamReady = await ensureJapamSyncedForHistory(userId, payload.japam_id);
+              if (!japamReady) {
+                console.log('[SYNC_DEFERRED] source=%s completionId=%s reason=japam-sync-pending', source, payload.completion_id);
+                return;
+              }
             }
             const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
               method: 'POST',

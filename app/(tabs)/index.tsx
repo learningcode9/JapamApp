@@ -25,6 +25,8 @@ import { isIOSDeviceWeb, isStandaloneOrInstalledWeb } from '../../lib/pwaInstall
 import { runSharedLogoutFlow } from '../../lib/sharedLogout';
 import { supabase } from '../../lib/supabase';
 import { fetchJapamHistoryRows } from '../../lib/supabaseRestHelper';
+import { activeJapams } from '../../lib/japams';
+import { ensureJapamSyncedForHistory } from '../../lib/japamsRepository';
 
 import {
   Alert,
@@ -192,9 +194,10 @@ const isAuthPending = async () => {
 };
 
 export default function JapamMain() {
-  const { currentJapam, isLoading: isJapamContextLoading } = useCurrentJapam();
+  const { currentJapam, japams, isLoading: isJapamContextLoading } = useCurrentJapam();
   const currentJapamId = currentJapam?.id ?? null;
   const currentJapamName = currentJapam?.name ?? null;
+  const includeBlankLegacy = currentJapamId === activeJapams(japams)[0]?.id;
   // The Japam this screen's own session belongs to, captured ONCE at the moment Start is pressed
   // (see handleStart below). Refs, not state, matching the same discipline as Timer's
   // activeJapamIdRef/activeJapamNameRef in contexts/timer-context.tsx: switching the app's current
@@ -825,7 +828,7 @@ export default function JapamMain() {
           const japamId = currentJapamId;
           const japamName = currentJapamName;
           const scopedHistory = japamId !== null
-            ? filterByJapam(reconciledHistory, japamId, japamName)
+            ? filterByJapam(reconciledHistory, japamId, japamName, { includeBlankLegacy })
             : reconciledHistory;
           const { totalCount: safeTotal } = todayStatsFor(
             scopedHistory,
@@ -852,7 +855,7 @@ export default function JapamMain() {
             const japamId = currentJapamId;
             const japamName = currentJapamName;
             const scopedHistory = japamId !== null
-              ? filterByJapam(localHistory, japamId, japamName)
+              ? filterByJapam(localHistory, japamId, japamName, { includeBlankLegacy })
               : localHistory;
             const { totalCount: localTotal } = todayStatsFor(
               scopedHistory,
@@ -886,7 +889,7 @@ export default function JapamMain() {
   } finally {
     isRestoringRef.current = false;
   }
-  }, [currentJapamId, currentJapamName, getLocalTodayTotalForUser, refreshDayStreak, restoreTotal]);
+  }, [currentJapamId, currentJapamName, getLocalTodayTotalForUser, refreshDayStreak, restoreTotal, includeBlankLegacy]);
 
   useEffect(() => {
     restoreTodayTotalRef.current = restoreTodayTotal;
@@ -941,7 +944,7 @@ export default function JapamMain() {
       const japamId = currentJapamId;
       const japamName = currentJapamName;
       const scopedHistory = japamId !== null
-        ? filterByJapam(history, japamId, japamName)
+        ? filterByJapam(history, japamId, japamName, { includeBlankLegacy })
         : history;
       const { malas: hMalas, totalCount: hTotal } = todayStatsFor(
         scopedHistory,
@@ -956,7 +959,7 @@ export default function JapamMain() {
       console.log('[StatsAudit] screen=main localHistoryCount=%d pendingCount=%d syncedCount=%d mainScreenMalasToday=%d historyMalasToday=%d',
         history.length, pending, synced, hMalas, hMalas);
     } catch {}
-  }, [currentJapamId, currentJapamName]);
+  }, [currentJapamId, currentJapamName, includeBlankLegacy]);
 
   useEffect(() => {
     const onHistoryUpdated = () => {
@@ -1834,6 +1837,13 @@ export default function JapamMain() {
           if (!sessionToken) {
             console.log('[SYNC_FAILED] source=legacy-main completionId=%s reason=no-session', payload.completion_id);
             return;
+          }
+          if (payload.japam_id) {
+            const japamReady = await ensureJapamSyncedForHistory(userId, payload.japam_id);
+            if (!japamReady) {
+              console.log('[SYNC_DEFERRED] source=legacy-main completionId=%s reason=japam-sync-pending', payload.completion_id);
+              return;
+            }
           }
           const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
             method: 'POST',

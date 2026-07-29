@@ -7,6 +7,7 @@ import {
   mergeHistories,
   toLocalDayKey,
 } from '../../lib/historyStore';
+import { activeJapams } from '../../lib/japams';
 import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -134,7 +135,7 @@ const showGoogleSignInRequiredAlert = () => {
 export default function TimerScreen() {
   const router = useRouter();
   const timer = useTimer();
-  const { currentJapam, isLoading: isJapamContextLoading } = useCurrentJapam();
+  const { currentJapam, japams, isLoading: isJapamContextLoading } = useCurrentJapam();
   const insets = useSafeAreaInsets();
   // Mirror the floating tab bar geometry from _layout.tsx exactly.
   // _layout.tsx uses screenWidth < 500 as its isMobile threshold (different from
@@ -289,6 +290,7 @@ export default function TimerScreen() {
     // fallback) so Timer and History can never disagree on which records belong to the selected
     // Japam -- including null-japamId legacy records that match the selected Japam's name.
     const japamId = currentJapam?.id ?? null;
+    const includeBlankLegacy = japamId === activeJapams(japams)[0]?.id;
     const scopedStats = japamScopedStatsFor(
       history,
       userId,
@@ -296,7 +298,8 @@ export default function TimerScreen() {
       currentJapam?.name ?? null,
       todayKey,
       toLocalDayKey,
-      getPreviousDateKey
+      getPreviousDateKey,
+      { includeBlankLegacy },
     );
     const safeTodayTotal = scopedStats.todayTotalCount;
     const nextStreak = scopedStats.dayStreak;
@@ -307,7 +310,7 @@ export default function TimerScreen() {
   } finally {
     isRestoringRef.current = false;
   }
-  }, [currentJapam]);
+  }, [currentJapam, japams]);
 
   useFocusEffect(
     useCallback(() => {

@@ -411,6 +411,28 @@ export const syncJapam = async (
   }
 };
 
+/**
+ * Before a signed-in History row is uploaded with a non-null japam_id, make sure the referenced
+ * Japam has reached Supabase. If this cannot be confirmed, callers leave the completion pending.
+ */
+export const ensureJapamSyncedForHistory = async (
+  userId: string,
+  japamId: string | null | undefined,
+): Promise<boolean> => {
+  if (!userId || !japamId) return false;
+  const japams = await loadJapamsFromStorage(userId);
+  const japam = japams.find((j) => j.id === japamId);
+  if (!japam) {
+    console.warn('[JAPAM_HISTORY_SYNC_BLOCKED]', {
+      japamId,
+      code: 'LOCAL_JAPAM_NOT_FOUND',
+      message: 'Cannot upload history until the selected Japam exists locally',
+    });
+    return false;
+  }
+  return syncJapam(userId, japam);
+};
+
 let reconciliationInFlight = false;
 
 export const reconcileAllJapams = async (
