@@ -1,6 +1,5 @@
 import { NativeModules } from 'react-native';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const Native = NativeModules.JapamTimerService as any;
 
 // Dedup guard: prevents re-sending startTimer for the same mala.
@@ -68,6 +67,7 @@ export const getNativeTimerState = async (): Promise<{
   completedLoops: number;
   totalLoops: number;
   userId: string;
+  completionTimes?: Record<string, number>;
 } | null> => {
   if (!Native) return null;
   try { return await Native.getState(); } catch { return null; }

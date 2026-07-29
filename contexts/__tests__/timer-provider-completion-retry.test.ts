@@ -13,7 +13,12 @@ jest.mock('react-native', () => ({
   Alert: { alert: jest.fn() },
   AppState: {
     currentState: 'background',
-    addEventListener: jest.fn(() => ({ remove: jest.fn() })),
+    addEventListener: jest.fn((event: string, cb: (payload?: any) => void) => {
+      const set = mockListeners.get(event) ?? new Set();
+      set.add(cb);
+      mockListeners.set(event, set);
+      return { remove: jest.fn(() => set.delete(cb)) };
+    }),
   },
   DeviceEventEmitter: {
     addListener: jest.fn((event: string, cb: (payload?: any) => void) => {
@@ -103,9 +108,18 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import React from 'react';
 const renderer = require('react-test-renderer');
 const { act } = renderer;
-import { DeviceEventEmitter } from 'react-native';
+import { AppState, DeviceEventEmitter } from 'react-native';
 import { TimerProvider, useTimer } from '../timer-context';
 import { getTimerState, updateTimerState } from '../../lib/timerState';
+import { makeLoopCompletionId } from '../../lib/historyStore';
+import {
+  TIMER_PENDING_COMPLETIONS_KEY,
+  type PendingTimerCompletion,
+} from '../../lib/timerPendingCompletions';
+import {
+  getNativeTimerState,
+  startForegroundService,
+} from '../../lib/timerForegroundService';
 /* eslint-enable import/first, @typescript-eslint/no-require-imports */
 
 const UID = 'user-123';
@@ -114,8 +128,8 @@ const JAPAM_A_NAME = 'Japam A';
 const JAPAM_B_ID = 'japam-b';
 const JAPAM_B_NAME = 'Japam B';
 const HISTORY_KEY = 'history';
-const PENDING_LOOP_KEY = 'timerPendingCompletionLoop';
 const SESSION_ID_KEY = 'timerSessionId';
+const SESSION_USER_ID_KEY = 'timerSessionUserId';
 const SESSION_JAPAM_ID_KEY = 'timerSessionJapamId';
 const SESSION_JAPAM_NAME_KEY = 'timerSessionJapamName';
 
@@ -125,6 +139,20 @@ const flush = async () => {
     await Promise.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
+};
+
+const waitForCondition = async (
+  condition: () => Promise<boolean>,
+  attempts = 200,
+) => {
+  let lastResult = false;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await flush();
+    lastResult = await condition();
+    if (lastResult) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect(lastResult).toBe(true);
 };
 
 let currentTimer: ReturnType<typeof useTimer> | null = null;
@@ -172,12 +200,122 @@ const seedAuthAndJapam = async () => {
   ]));
 };
 
+const readHistory = async () => JSON.parse(await AsyncStorage.getItem(HISTORY_KEY) || '[]');
+
+const readQueue = async (): Promise<PendingTimerCompletion[]> =>
+  JSON.parse(await AsyncStorage.getItem(TIMER_PENDING_COMPLETIONS_KEY) || '[]');
+
+const restoreAsyncStorageMockImplementations = () => {
+  const storage = () => (AsyncStorage as any).__INTERNAL_MOCK_STORAGE__;
+  (AsyncStorage.multiSet as jest.Mock).mockImplementation(async (pairs: [string, string][]) => {
+    pairs.forEach(([key, value]) => {
+      storage()[key] = value;
+    });
+    return null;
+  });
+  (AsyncStorage.setItem as jest.Mock).mockImplementation(async (key: string, value: string) => {
+    storage()[key] = value;
+    return null;
+  });
+  (AsyncStorage.multiGet as jest.Mock).mockImplementation(async (keys: string[]) =>
+    keys.map((key) => [key, storage()[key] || null]),
+  );
+  (AsyncStorage.getItem as jest.Mock).mockImplementation(async (key: string) => storage()[key] || null);
+  (AsyncStorage.multiRemove as jest.Mock).mockImplementation(async (keys: string[]) => {
+    keys.forEach((key) => {
+      delete storage()[key];
+    });
+    return null;
+  });
+  (AsyncStorage.removeItem as jest.Mock).mockImplementation(async (key: string) => {
+    delete storage()[key];
+    return null;
+  });
+  (AsyncStorage.clear as jest.Mock).mockImplementation(async () => {
+    (AsyncStorage as any).__INTERNAL_MOCK_STORAGE__ = {};
+    return null;
+  });
+};
+
+const seedPersistedSession = async ({
+  sessionId,
+  japamId = JAPAM_A_ID,
+  japamName = JAPAM_A_NAME,
+  currentJapamId = japamId,
+  durationSeconds = 180,
+  totalLoops = 3,
+  completedLoops = 0,
+  running = 'true',
+  startedAt = Date.now() - 1000,
+}: {
+  sessionId: string;
+  japamId?: string;
+  japamName?: string;
+  currentJapamId?: string;
+  durationSeconds?: number;
+  totalLoops?: number;
+  completedLoops?: number;
+  running?: 'true' | 'false';
+  startedAt?: number;
+}) => {
+  const durationMinutes = Math.max(1, Math.round(durationSeconds / 60));
+  await AsyncStorage.multiSet([
+    [`currentJapamId:${UID}`, currentJapamId],
+    [SESSION_ID_KEY, sessionId],
+    [`${SESSION_ID_KEY}:${UID}`, sessionId],
+    [`${SESSION_ID_KEY}:${UID}:${japamId}`, sessionId],
+    [SESSION_USER_ID_KEY, UID],
+    [`${SESSION_USER_ID_KEY}:${UID}`, UID],
+    [`${SESSION_USER_ID_KEY}:${UID}:${japamId}`, UID],
+    [SESSION_JAPAM_ID_KEY, japamId],
+    [`${SESSION_JAPAM_ID_KEY}:${UID}`, japamId],
+    [`${SESSION_JAPAM_ID_KEY}:${UID}:${japamId}`, japamId],
+    [SESSION_JAPAM_NAME_KEY, japamName],
+    [`${SESSION_JAPAM_NAME_KEY}:${UID}`, japamName],
+    [`${SESSION_JAPAM_NAME_KEY}:${UID}:${japamId}`, japamName],
+    ['timerCompletedLoops', String(completedLoops)],
+    [`timerCompletedLoops:${UID}`, String(completedLoops)],
+    [`timerCompletedLoops:${UID}:${japamId}`, String(completedLoops)],
+    ['timerRunning', running],
+    [`timerRunning:${UID}`, running],
+    [`timerRunning:${UID}:${japamId}`, running],
+    ['timerStartedAt', String(startedAt)],
+    [`timerStartedAt:${UID}`, String(startedAt)],
+    [`timerStartedAt:${UID}:${japamId}`, String(startedAt)],
+    ['timerTarget', String(durationSeconds)],
+    [`timerTarget:${UID}`, String(durationSeconds)],
+    [`timerTarget:${UID}:${japamId}`, String(durationSeconds)],
+    ['timerTab_duration', String(durationMinutes)],
+    [`timerTab_duration:${UID}`, String(durationMinutes)],
+    [`timerTab_duration:${UID}:${japamId}`, String(durationMinutes)],
+    ['timerTab_loops', String(totalLoops)],
+    [`timerTab_loops:${UID}`, String(totalLoops)],
+    [`timerTab_loops:${UID}:${japamId}`, String(totalLoops)],
+  ]);
+};
+
 describe('TimerProvider restored/native final-loop retry', () => {
   let mountedTree: any;
 
   beforeEach(async () => {
     jest.clearAllMocks();
     mockListeners.clear();
+    restoreAsyncStorageMockImplementations();
+    (AppState.addEventListener as jest.Mock).mockImplementation((event: string, cb: (payload?: any) => void) => {
+      const set = mockListeners.get(event) ?? new Set();
+      set.add(cb);
+      mockListeners.set(event, set);
+      return { remove: jest.fn(() => set.delete(cb)) };
+    });
+    (DeviceEventEmitter.addListener as jest.Mock).mockImplementation((event: string, cb: (payload?: any) => void) => {
+      const set = mockListeners.get(event) ?? new Set();
+      set.add(cb);
+      mockListeners.set(event, set);
+      return { remove: jest.fn(() => set.delete(cb)) };
+    });
+    (DeviceEventEmitter.emit as jest.Mock).mockImplementation((event: string, payload?: any) => {
+      mockListeners.get(event)?.forEach((cb) => cb(payload));
+    });
     currentTimer = null;
     mountedTree = null;
     updateTimerState({
@@ -204,47 +342,84 @@ describe('TimerProvider restored/native final-loop retry', () => {
         mountedTree.unmount();
       });
     }
+    jest.restoreAllMocks();
   });
 
-  it('persists session Japam identity and recovers a retryable native final loop after remount', async () => {
+  it('persists session identity before starting native and blocks native start on persistence failure', async () => {
+    let releasePersist!: () => void;
+    const multiSetSpy = jest.spyOn(AsyncStorage, 'multiSet').mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        releasePersist = () => resolve();
+      }),
+    );
     mountedTree = await renderTimerProvider();
-    expect(currentTimer).not.toBeNull();
 
+    let startPromise!: Promise<void>;
+    await act(async () => {
+      currentTimer!.setActiveJapamSelection(JAPAM_A_ID, JAPAM_A_NAME);
+      startPromise = Promise.resolve(currentTimer!.start());
+      await Promise.resolve();
+    });
+    expect(startForegroundService).not.toHaveBeenCalled();
+
+    releasePersist();
+    await act(async () => {
+      await startPromise;
+    });
+    expect(startForegroundService).toHaveBeenCalledTimes(1);
+    expect(await AsyncStorage.getItem(`${SESSION_JAPAM_ID_KEY}:${UID}:${JAPAM_A_ID}`)).toBe(JAPAM_A_ID);
+    expect(await AsyncStorage.getItem(`${SESSION_JAPAM_NAME_KEY}:${UID}:${JAPAM_A_ID}`)).toBe(JAPAM_A_NAME);
+    multiSetSpy.mockRestore();
+
+    await act(async () => {
+      currentTimer!.reset();
+      await Promise.resolve();
+    });
+    await flush();
+    const failedMultiSetSpy = jest.spyOn(AsyncStorage, 'multiSet').mockRejectedValueOnce(new Error('persist failed'));
     await act(async () => {
       currentTimer!.setActiveJapamSelection(JAPAM_A_ID, JAPAM_A_NAME);
       await currentTimer!.start();
     });
+    expect(startForegroundService).toHaveBeenCalledTimes(1);
+    expect(failedMultiSetSpy).toHaveBeenCalled();
+    expect(getTimerState().sessionId).toBe('');
+    failedMultiSetSpy.mockRestore();
+  });
+
+  it('queues multiple native loops and later saves each exactly once after restart', async () => {
+    const sessionId = 'timer-native-3-loops';
+    await seedPersistedSession({ sessionId, totalLoops: 3, durationSeconds: 180 });
+    mountedTree = await renderTimerProvider();
     await flush();
 
-    const sessionId = getTimerState().sessionId;
-    expect(sessionId).toBeTruthy();
-    expect(await AsyncStorage.getItem(`${SESSION_JAPAM_ID_KEY}:${UID}:${JAPAM_A_ID}`)).toBe(JAPAM_A_ID);
-    expect(await AsyncStorage.getItem(`${SESSION_JAPAM_NAME_KEY}:${UID}:${JAPAM_A_ID}`)).toBe(JAPAM_A_NAME);
-    await AsyncStorage.multiRemove([
-      SESSION_JAPAM_ID_KEY,
-      `${SESSION_JAPAM_ID_KEY}:${UID}`,
-      `${SESSION_JAPAM_ID_KEY}:${UID}:${JAPAM_A_ID}`,
-      SESSION_JAPAM_NAME_KEY,
-      `${SESSION_JAPAM_NAME_KEY}:${UID}`,
-      `${SESSION_JAPAM_NAME_KEY}:${UID}:${JAPAM_A_ID}`,
-    ]);
-
-    await act(async () => {
-      currentTimer!.setActiveJapamSelection(null, null);
-      DeviceEventEmitter.emit('japamTimerLoopComplete', {
-        sessionId,
-        completedLoops: 1,
-        isFinal: true,
-        userId: UID,
-      });
-      await Promise.resolve();
+    const setItemSpy = jest.spyOn(AsyncStorage, 'setItem').mockImplementation(async (key: string, value: string) => {
+      if (key === HISTORY_KEY) throw new Error('history unavailable');
+      (AsyncStorage as any).__INTERNAL_MOCK_STORAGE__[key] = value;
     });
-    await flush();
 
-    expect(await AsyncStorage.getItem(HISTORY_KEY)).toBeNull();
-    expect(getTimerState().lastSavedCompletedLoops).toBe(0);
-    expect(await AsyncStorage.getItem(`${SESSION_ID_KEY}:${UID}:${JAPAM_A_ID}`)).toBe(sessionId);
-    expect(await AsyncStorage.getItem(`${PENDING_LOOP_KEY}:${UID}:${JAPAM_A_ID}`)).toBe('1');
+    try {
+      await act(async () => {
+        currentTimer!.setActiveJapamSelection(null, null);
+        [1, 2, 3].forEach((loop) => {
+          DeviceEventEmitter.emit('japamTimerLoopComplete', {
+            sessionId,
+            completedLoops: loop,
+            isFinal: loop === 3,
+            userId: UID,
+            durationMs: 180000,
+            completedAt: Date.UTC(2026, 6, 29, 5, loop, 0),
+          });
+        });
+        await Promise.resolve();
+      });
+      await flush();
+
+      expect(await AsyncStorage.getItem(HISTORY_KEY)).toBeNull();
+    } finally {
+      setItemSpy.mockRestore();
+      restoreAsyncStorageMockImplementations();
+    }
 
     await act(async () => {
       mountedTree.unmount();
@@ -252,30 +427,181 @@ describe('TimerProvider restored/native final-loop retry', () => {
     mountedTree = null;
     currentTimer = null;
 
-    await AsyncStorage.multiSet([
-      [SESSION_JAPAM_ID_KEY, JAPAM_A_ID],
-      [`${SESSION_JAPAM_ID_KEY}:${UID}`, JAPAM_A_ID],
-      [`${SESSION_JAPAM_ID_KEY}:${UID}:${JAPAM_A_ID}`, JAPAM_A_ID],
-      [SESSION_JAPAM_NAME_KEY, JAPAM_A_NAME],
-      [`${SESSION_JAPAM_NAME_KEY}:${UID}`, JAPAM_A_NAME],
-      [`${SESSION_JAPAM_NAME_KEY}:${UID}:${JAPAM_A_ID}`, JAPAM_A_NAME],
-    ]);
     mountedTree = await renderTimerProvider();
-    await flush();
-    await flush();
+    await waitForCondition(async () => (await readHistory()).length === 3);
 
-    const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
-    const history = JSON.parse(rawHistory || '[]');
-    expect(history).toHaveLength(1);
-    expect(history[0]).toMatchObject({
+    const history = await readHistory();
+    expect(history).toHaveLength(3);
+    expect(history.map((item: any) => item.completionId).sort()).toEqual([
+      makeLoopCompletionId(UID, sessionId, 1),
+      makeLoopCompletionId(UID, sessionId, 2),
+      makeLoopCompletionId(UID, sessionId, 3),
+    ]);
+    expect(await readQueue()).toHaveLength(0);
+  });
+
+  it('keeps queued old-session completion through reset and new Timer start', async () => {
+    const oldSessionId = 'timer-old-session';
+    await AsyncStorage.setItem(TIMER_PENDING_COMPLETIONS_KEY, JSON.stringify([{
+      version: 1,
       userId: UID,
+      sessionId: oldSessionId,
+      loopNumber: 1,
+      totalLoops: 1,
       japamId: JAPAM_A_ID,
       japamName: JAPAM_A_NAME,
-      totalCount: 108,
-      completionId: `${UID}:${sessionId}:loop-1`,
+      durationSeconds: 180,
+      completedAt: '2026-07-29T06:59:00.000Z',
+      completionId: makeLoopCompletionId(UID, oldSessionId, 1),
+    }]));
+    mountedTree = await renderTimerProvider();
+    await act(async () => {
+      currentTimer!.reset();
+      currentTimer!.setActiveJapamSelection(JAPAM_B_ID, JAPAM_B_NAME);
+      await currentTimer!.start();
     });
-    expect(await AsyncStorage.getItem(`${PENDING_LOOP_KEY}:${UID}:${JAPAM_A_ID}`)).toBeNull();
-    expect(getTimerState().sessionId).toBe('');
+    await waitForCondition(async () => (await readQueue()).length === 0 && (await readHistory()).length === 1);
+
+    const newSessionId = getTimerState().sessionId;
+    expect(newSessionId).toBeTruthy();
+    expect(newSessionId).not.toBe(oldSessionId);
+    expect(await readQueue()).toHaveLength(0);
+    const history = await readHistory();
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({
+      completionId: makeLoopCompletionId(UID, oldSessionId, 1),
+      japamId: JAPAM_A_ID,
+      japamName: JAPAM_A_NAME,
+      date: '2026-07-29T06:59:00.000Z',
+    });
+    expect(getTimerState().sessionId).toBe(newSessionId);
+  });
+
+  it('preserves original completion day across midnight retry', async () => {
+    const sessionId = 'timer-cross-midnight';
+    await AsyncStorage.setItem(TIMER_PENDING_COMPLETIONS_KEY, JSON.stringify([{
+      version: 1,
+      userId: UID,
+      sessionId,
+      loopNumber: 1,
+      totalLoops: 1,
+      japamId: JAPAM_A_ID,
+      japamName: JAPAM_A_NAME,
+      durationSeconds: 180,
+      completedAt: '2026-07-29T06:59:59.000Z',
+      completionId: makeLoopCompletionId(UID, sessionId, 1),
+    }]));
+    jest.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-29T07:01:00.000Z'));
+
+    mountedTree = await renderTimerProvider();
+    await waitForCondition(async () => (await readHistory()).length === 1 && (await readQueue()).length === 0);
+
+    const history = await readHistory();
+    expect(history).toHaveLength(1);
+    expect(history[0].date).toBe('2026-07-29T06:59:59.000Z');
+    (Date.now as jest.Mock).mockRestore();
+  });
+
+  it('removes stale queue item when History already contains its completionId', async () => {
+    const sessionId = 'timer-crash-window';
+    const completionId = makeLoopCompletionId(UID, sessionId, 1);
+    const queued = {
+      version: 1,
+      userId: UID,
+      sessionId,
+      loopNumber: 1,
+      totalLoops: 1,
+      japamId: JAPAM_A_ID,
+      japamName: JAPAM_A_NAME,
+      durationSeconds: 180,
+      completedAt: '2026-07-29T08:00:00.000Z',
+      completionId,
+    };
+    await AsyncStorage.setItem(TIMER_PENDING_COMPLETIONS_KEY, JSON.stringify([queued]));
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([{
+      date: queued.completedAt,
+      malas: 1,
+      totalCount: 108,
+      duration: 180,
+      manual: false,
+      userId: UID,
+      completionId,
+      syncStatus: 'pending',
+      japamId: JAPAM_A_ID,
+      japamName: JAPAM_A_NAME,
+    }]));
+
+    mountedTree = await renderTimerProvider();
+    await waitForCondition(async () => (await readQueue()).length === 0);
+
+    expect(await readHistory()).toHaveLength(1);
+    expect(await readQueue()).toHaveLength(0);
+  });
+
+  it('keeps queued completion attributed to Japam A when UI current selection is Japam B', async () => {
+    const sessionId = 'timer-switch-queued';
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, JAPAM_B_ID);
+    await AsyncStorage.setItem(TIMER_PENDING_COMPLETIONS_KEY, JSON.stringify([{
+      version: 1,
+      userId: UID,
+      sessionId,
+      loopNumber: 1,
+      totalLoops: 1,
+      japamId: JAPAM_A_ID,
+      japamName: JAPAM_A_NAME,
+      durationSeconds: 180,
+      completedAt: '2026-07-29T09:00:00.000Z',
+      completionId: makeLoopCompletionId(UID, sessionId, 1),
+    }]));
+
+    mountedTree = await renderTimerProvider();
+    await waitForCondition(async () => (await readHistory()).length === 1 && (await readQueue()).length === 0);
+
+    const history = await readHistory();
+    expect(history).toHaveLength(1);
+    expect(history[0].japamId).toBe(JAPAM_A_ID);
+    expect(history[0].japamName).toBe(JAPAM_A_NAME);
+    expect(history[0].japamId).not.toBe(JAPAM_B_ID);
+  });
+
+  it('keeps native queued completion attributed to the persisted session Japam after a switch', async () => {
+    const sessionId = 'timer-switch-native-event';
+    await seedPersistedSession({
+      sessionId,
+      japamId: JAPAM_A_ID,
+      japamName: JAPAM_A_NAME,
+      currentJapamId: JAPAM_B_ID,
+      totalLoops: 1,
+      durationSeconds: 180,
+    });
+    mountedTree = await renderTimerProvider();
+    await act(async () => {
+      currentTimer!.setActiveJapamSelection(JAPAM_B_ID, JAPAM_B_NAME);
+      DeviceEventEmitter.emit('japamTimerLoopComplete', {
+        sessionId,
+        completedLoops: 1,
+        isFinal: true,
+        userId: UID,
+        durationMs: 180000,
+        completedAt: Date.parse('2026-07-29T09:30:00.000Z'),
+      });
+      await Promise.resolve();
+    });
+
+    await waitForCondition(async () => (await readHistory()).length === 1);
+
+    const history = await readHistory();
+    expect(history).toHaveLength(1);
+    expect(history[0].japamId).toBe(JAPAM_A_ID);
+    expect(history[0].japamName).toBe(JAPAM_A_NAME);
+    expect(history[0].japamId).not.toBe(JAPAM_B_ID);
+  });
+
+  it('dedupes native and JS duplicate reports for the same session loop', async () => {
+    const sessionId = 'timer-duplicate-event';
+    await seedPersistedSession({ sessionId, totalLoops: 1, durationSeconds: 180 });
+    mountedTree = await renderTimerProvider();
+    await flush();
 
     await act(async () => {
       DeviceEventEmitter.emit('japamTimerLoopComplete', {
@@ -283,63 +609,62 @@ describe('TimerProvider restored/native final-loop retry', () => {
         completedLoops: 1,
         isFinal: true,
         userId: UID,
+        durationMs: 180000,
+        completedAt: Date.parse('2026-07-29T10:00:00.000Z'),
       });
       await Promise.resolve();
     });
     await flush();
 
-    const afterRepeat = JSON.parse(await AsyncStorage.getItem(HISTORY_KEY) || '[]');
-    expect(afterRepeat).toHaveLength(1);
-    expect(await AsyncStorage.getItem(PENDING_LOOP_KEY)).toBeNull();
+    const historyAfterNative = await readHistory();
+    expect(historyAfterNative).toHaveLength(1);
+
+    await act(async () => {
+      DeviceEventEmitter.emit('japamTimerLoopComplete', {
+        sessionId,
+        completedLoops: 1,
+        isFinal: true,
+        userId: UID,
+        durationMs: 180000,
+        completedAt: Date.parse('2026-07-29T10:00:00.000Z'),
+      });
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(await readHistory()).toHaveLength(1);
   });
 
-  it('restores a completed session under its captured Japam even when current selection changed', async () => {
-    const sessionId = `${UID}:stored-session`;
-    await AsyncStorage.multiSet([
-      [`currentJapamId:${UID}`, JAPAM_B_ID],
-      [SESSION_ID_KEY, sessionId],
-      [`${SESSION_ID_KEY}:${UID}`, sessionId],
-      [`${SESSION_ID_KEY}:${UID}:${JAPAM_A_ID}`, sessionId],
-      [SESSION_JAPAM_ID_KEY, JAPAM_A_ID],
-      [`${SESSION_JAPAM_ID_KEY}:${UID}`, JAPAM_A_ID],
-      [`${SESSION_JAPAM_ID_KEY}:${UID}:${JAPAM_A_ID}`, JAPAM_A_ID],
-      [SESSION_JAPAM_NAME_KEY, JAPAM_A_NAME],
-      [`${SESSION_JAPAM_NAME_KEY}:${UID}`, JAPAM_A_NAME],
-      [`${SESSION_JAPAM_NAME_KEY}:${UID}:${JAPAM_A_ID}`, JAPAM_A_NAME],
-      [PENDING_LOOP_KEY, '1'],
-      [`${PENDING_LOOP_KEY}:${UID}`, '1'],
-      [`${PENDING_LOOP_KEY}:${UID}:${JAPAM_A_ID}`, '1'],
-      ['timerCompletedLoops', '1'],
-      [`timerCompletedLoops:${UID}`, '1'],
-      [`timerCompletedLoops:${UID}:${JAPAM_A_ID}`, '1'],
-      ['timerRunning', 'false'],
-      [`timerRunning:${UID}`, 'false'],
-      [`timerRunning:${UID}:${JAPAM_A_ID}`, 'false'],
-      ['timerTarget', '180'],
-      [`timerTarget:${UID}`, '180'],
-      [`timerTarget:${UID}:${JAPAM_A_ID}`, '180'],
-      ['timerTab_duration', '3'],
-      [`timerTab_duration:${UID}`, '3'],
-      [`timerTab_duration:${UID}:${JAPAM_A_ID}`, '3'],
-      ['timerTab_loops', '1'],
-      [`timerTab_loops:${UID}`, '1'],
-      [`timerTab_loops:${UID}:${JAPAM_A_ID}`, '1'],
-    ]);
+  it('uses native reconciliation completion timestamps when queueing missed loops', async () => {
+    const sessionId = 'timer-native-reconcile';
+    await seedPersistedSession({ sessionId, totalLoops: 2, durationSeconds: 180, completedLoops: 0 });
+    (getNativeTimerState as jest.Mock).mockResolvedValueOnce({
+      sessionId,
+      isRunning: false,
+      isPaused: false,
+      startedAt: Date.now() - 200000,
+      pausedElapsedMs: 0,
+      durationMs: 180000,
+      completedLoops: 2,
+      totalLoops: 2,
+      userId: UID,
+      completionTimes: {
+        '1': Date.parse('2026-07-29T11:00:00.000Z'),
+        '2': Date.parse('2026-07-29T11:03:00.000Z'),
+      },
+    });
 
     mountedTree = await renderTimerProvider();
-    await flush();
-    await flush();
-
-    const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
-    const history = JSON.parse(rawHistory || '[]');
-    expect(history).toHaveLength(1);
-    expect(history[0]).toMatchObject({
-      userId: UID,
-      japamId: JAPAM_A_ID,
-      japamName: JAPAM_A_NAME,
-      completionId: `${UID}:${sessionId}:loop-1`,
+    await act(async () => {
+      mockListeners.get('change')?.forEach((cb) => cb('active'));
+      await Promise.resolve();
     });
-    expect(history[0].japamId).not.toBe(JAPAM_B_ID);
-    expect(await AsyncStorage.getItem(`${PENDING_LOOP_KEY}:${UID}:${JAPAM_A_ID}`)).toBeNull();
+    await waitForCondition(async () => (await readHistory()).length === 2);
+
+    const history = await readHistory();
+    expect(history.map((item: any) => item.date).sort()).toEqual([
+      '2026-07-29T11:00:00.000Z',
+      '2026-07-29T11:03:00.000Z',
+    ]);
   });
 });
