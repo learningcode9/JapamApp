@@ -24,6 +24,7 @@ import {
   japamStatsFor,
   dayStreakForJapam,
   filterByJapam,
+  japamScopedStatsFor,
   type HistoryRecord,
 } from '../historyStore';
 import { planLegacyHistoryBackfill } from '../legacyHistoryBackfill';
@@ -1777,5 +1778,522 @@ describe('reconcileWithServer non-destructive (empty remote does not erase local
     // null remote (failed fetch) → callers skip reconcile entirely, but if they call it anyway
     const result = reconcileWithServer(normalizeAll(local), new Set(), uid);
     expect(result.map((r) => r.completionId).sort()).toEqual(['a', 'b']);
+  });
+});
+
+// ── Regression: mergeHistories non-destructive on stale remote snapshot ──
+// Proven ordering from runtime reproduction:
+//   1. Selected-Japam today total = 432 (4 malas × 108).
+//   2. Timer completion appends a pending local entry → total = 540.
+//   3. The next remote fetch returns stale data omitting that new entry.
+//   4. The old destructive reconcile in loadStats deleted the local entry
+//      and wrote the pruned result back to HISTORY_KEY, making subsequent
+//      loadStats calls compute 432 again.
+//   5. With the fix, mergeHistories (first-local-wins, memory-only) keeps
+//      the entry; todayStatsFor still returns 540.
+//   6. An explicit tombstone or edit/delete must still be able to reduce
+//      the total back to 432.
+describe('mergeHistories non-destructive on stale remote snapshot', () => {
+  const uid = 'user-abc';
+  const today = '2026-07-28';
+  const todayIso = (h: number, m = 0) => `${today}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00.000Z`;
+  const japamId = 'uuid-japam-1';
+  const japamName = 'My Japam';
+
+  it('stale remote snapshot does not regress the selected-Japam total', () => {
+    // Initial: 4 today malas / 432 count for selected Japam
+    const base = [
+      session(todayIso(8), { userId: uid, syncStatus: 'synced', completionId: 'comp-1', japamId, japamName, totalCount: 108 }),
+      session(todayIso(9), { userId: uid, syncStatus: 'synced', completionId: 'comp-2', japamId, japamName, totalCount: 108 }),
+      session(todayIso(10), { userId: uid, syncStatus: 'synced', completionId: 'comp-3', japamId, japamName, totalCount: 108 }),
+      session(todayIso(11), { userId: uid, syncStatus: 'synced', completionId: 'comp-4', japamId, japamName, totalCount: 108 }),
+    ] as HistoryRecord[];
+
+    const before = todayStatsFor(
+      filterByJapam(base, japamId, japamName), uid, toDayKey(todayIso(11)), toLocalDayKey
+    );
+    expect(before.malas).toBe(4);
+    expect(before.totalCount).toBe(432);
+
+    // Step 2: Timer completion arrives → pending local entry, total = 540
+    const timerCompletion = {
+      date: todayIso(12), malas: 1, totalCount: 108, duration: 600, manual: false,
+      userId: uid, completionId: 'comp-5-timer',
+      syncStatus: 'pending' as const,
+      japamId, japamName,
+    } as HistoryRecord;
+    const localWithPending = [...base, timerCompletion] as HistoryRecord[];
+
+    const withPending = todayStatsFor(
+      filterByJapam(localWithPending, japamId, japamName), uid, toDayKey(todayIso(12)), toLocalDayKey
+    );
+    expect(withPending.malas).toBe(5);
+    expect(withPending.totalCount).toBe(540);
+
+    // Step 3: Sync upload succeeds — same completionId, now synced locally
+    const localWithSynced = [
+      ...base,
+      { ...timerCompletion, syncStatus: 'synced' as const },
+    ] as HistoryRecord[];
+
+    // Step 4: Stale remote snapshot omits comp-5-timer
+    const staleRemote: HistoryRecord[] = [...base] as HistoryRecord[];
+
+    // Step 5: mergeHistories (first-local-wins) keeps the synced local entry
+    const merged = mergeHistories(localWithSynced, staleRemote);
+    const scoped = filterByJapam(merged, japamId, japamName);
+    const after = todayStatsFor(scoped, uid, toDayKey(todayIso(12)), toLocalDayKey);
+    expect(after.malas).toBe(5);
+    expect(after.totalCount).toBe(540);
+
+    // Step 6: Demonstrate the removed destructive reconcile would have deleted it.
+    // The old rule removed locally-synced entries absent from the remote set.
+    const remoteIds = new Set(normalizeAll(staleRemote).map((r) => r.completionId));
+    const destructivelyFiltered = merged.filter((r) =>
+      !r.completionId || (r.userId || null) !== uid || r.syncStatus !== 'synced' || remoteIds.has(r.completionId)
+    );
+    const stale = todayStatsFor(
+      filterByJapam(destructivelyFiltered, japamId, japamName), uid, toDayKey(todayIso(12)), toLocalDayKey
+    );
+    expect(stale.malas).toBe(4);
+    expect(stale.totalCount).toBe(432);
+  });
+
+  it('legitimate tombstone delete via applyTombstones decreases total from 540 to 432', () => {
+    // After sync: 5 entries for today = 540 count
+    const synced = [
+      session(todayIso(8), { userId: uid, syncStatus: 'synced', completionId: 'comp-1', japamId, japamName, totalCount: 108 }),
+      session(todayIso(9), { userId: uid, syncStatus: 'synced', completionId: 'comp-2', japamId, japamName, totalCount: 108 }),
+      session(todayIso(10), { userId: uid, syncStatus: 'synced', completionId: 'comp-3', japamId, japamName, totalCount: 108 }),
+      session(todayIso(11), { userId: uid, syncStatus: 'synced', completionId: 'comp-4', japamId, japamName, totalCount: 108 }),
+      {
+        date: todayIso(12), malas: 1, totalCount: 108, duration: 600, manual: false,
+        userId: uid, completionId: 'comp-5-timer',
+        syncStatus: 'synced' as const,
+        japamId, japamName,
+      },
+    ] as HistoryRecord[];
+
+    // Before tombstone: 540
+    const allBefore = applyTombstones(synced, []);
+    const before = todayStatsFor(
+      filterByJapam(allBefore, japamId, japamName), uid, toDayKey(todayIso(12)), toLocalDayKey
+    );
+    expect(before.malas).toBe(5);
+    expect(before.totalCount).toBe(540);
+
+// Tombstone comp-5-timer via applyTombstones
+  const afterDeleted = applyTombstones(synced, ['comp-5-timer']);
+  const after = todayStatsFor(
+    filterByJapam(afterDeleted, japamId, japamName), uid, toDayKey(todayIso(12)), toLocalDayKey
+  );
+  expect(after.malas).toBe(4);
+  expect(after.totalCount).toBe(432);
+});
+
+// ── Regression: History/Home non-destructive reconcile preserves Day Streak on stale remote ──
+// Models the read paths the PR #53 extension hardens:
+//   * History.loadHistory (app/(tabs)/history.tsx): mergeHistories(local, remote) → tombstone
+//     filter → persist (NO remote-id reconcileWithServer prune).
+//   * Home.loadStats (app/(tabs)/index.tsx) and Home.restoreHistoryFromSupabase: same.
+// The proven runtime sequence (PR #53 staging reproduction):
+//   1. Selected Japam has YESTERDAY's synced completion (streak would be 1 even with today empty).
+//   2. Today's Timer completion is appended locally (pending) → today active.
+//   3. Today's upload succeeds → today becomes 'synced' locally.
+//   4. The very next remote fetch is STALE: it omits today's id entirely.
+//      History/Home merge the stale remote AND persist the merge back to HISTORY_KEY.
+//      The OLD destructive reconcileWithServer dropped today's synced row (id ∉ remoteIds)
+//      and persisted the pruned list. A subsequent loadStats / refresh then read AsyncStorage,
+//      re-merged the stale remote, and computed streak 0.
+//   5. With the fix, the persisted merge keeps yesterday + today → streak stays 2 across a
+//      simulated browser refresh and a second stale fetch.
+//   6. An explicit tombstone for today (legitimate History delete) then reduces the streak from
+//      2 to 1 — proving deletes still flow through `deletedCompletions` without the unsafe prune.
+//   7. Pending records survive the merge-persist cycle.
+//   8. Another user's and another Japam's records survive untouched.
+describe('History/Home non-destructive reconcile preserves Day Streak on stale remote snapshot', () => {
+  const uid = 'user-abc';
+  const otherUid = 'user-other';
+  const today = '2026-07-28';
+  const yesterday = getPreviousDayKey(today);
+  const todayIso = (h: number) => `${today}T${String(h).padStart(2, '0')}:00:00.000Z`;
+  const yIso = (h: number) => `${yesterday}T${String(h).padStart(2, '0')}:00:00.000Z`;
+  const japamId = 'uuid-japam-1';
+  const japamName = 'My Japam';
+  const otherJapamId = 'uuid-japam-2';
+
+  // Streak is computed on the SAME full-history + userId + japamId inputs that Timer's loadStats
+  // and Home/History use (just without their AsyncStorage I/O wrappers).
+  const streakFor = (records: HistoryRecord[]) =>
+    dayStreakForJapam(records, uid, japamId, today, toDayKey, getPreviousDayKey);
+
+  it('retains yesterday + today across a stale-remote merge, persist, refresh, and another stale fetch', async () => {
+    // 1. Yesterday's synced completion for the selected Japam.
+    const yesterdaySynced = session(yIso(9), {
+      userId: uid, syncStatus: 'synced', completionId: 'y-1',
+      japamId, japamName, totalCount: 108,
+    }) as HistoryRecord;
+    // Background: another Japam + another user must be left alone by the merge/persist.
+    const otherJapamToday = session(todayIso(8), {
+      userId: uid, syncStatus: 'synced', completionId: 'other-japam-1',
+      japamId: otherJapamId, japamName: 'Other', totalCount: 108,
+    }) as HistoryRecord;
+    const otherUserToday = session(todayIso(8), {
+      userId: otherUid, syncStatus: 'synced', completionId: 'other-user-1',
+      japamId, japamName, totalCount: 108,
+    }) as HistoryRecord;
+
+    // 2. Today's Timer completion appended locally (pending) — streak is already 2 (y + today).
+    const todayPending = {
+      date: todayIso(12), malas: 1, totalCount: 108, duration: 600, manual: false,
+      userId: uid, completionId: 'today-timer',
+      syncStatus: 'pending' as const,
+      japamId, japamName,
+    } as HistoryRecord;
+
+    const localBefore = [yesterdaySynced, todayPending, otherJapamToday, otherUserToday] as HistoryRecord[];
+    expect(streakFor(localBefore)).toBe(2);
+
+    // 3. Upload succeeds — today becomes synced locally (markSynced-style).
+    const todaySynced = { ...todayPending, syncStatus: 'synced' as const };
+    const localAfterSync = [yesterdaySynced, todaySynced, otherJapamToday, otherUserToday] as HistoryRecord[];
+    expect(streakFor(localAfterSync)).toBe(2);
+
+    // 4. Stale remote: has yesterday + other-Japam/other-user rows BUT NOT today-timer.
+    const staleRemote = [yesterdaySynced, otherJapamToday, otherUserToday] as HistoryRecord[];
+
+    // History/Home merge + tombstone-filter + persist (NO reconcileWithServer prune).
+    const tomb: string[] = [];
+    const mergedFiltered = mergeHistories(localAfterSync, staleRemote).filter(
+      (r) => !tomb.includes(r.completionId)
+    );
+    // Persist into the mocked AsyncStorage (the mock at the top of this file backs it).
+    await AsyncStorage.setItem('history', JSON.stringify(mergedFiltered));
+
+    // 5a. After-persist streak (what Timer reads on its useFocusEffect immediately afterward).
+    expect(streakFor(mergedFiltered)).toBe(2);
+    // The unsafe old path would have produced 1 here (today dropped, only yesterday remains).
+    const remoteIdsOld = new Set(normalizeAll(staleRemote).map((r) => r.completionId));
+    const destructed = mergedFiltered.filter((r) =>
+      !r.completionId || (r.userId || null) !== uid || r.syncStatus !== 'synced' || remoteIdsOld.has(r.completionId)
+    );
+    expect(dayStreakForJapam(destructed, uid, japamId, today, toDayKey, getPreviousDayKey)).toBe(1);
+
+    // 5b. Simulate a browser refresh: re-read HISTORY_KEY from AsyncStorage as the cold-start
+    //     loadStats would, then merge with ANOTHER still-stale remote fetch.
+    const reloadedRaw = await AsyncStorage.getItem('history');
+    const reloaded = reloadedRaw ? (JSON.parse(reloadedRaw) as HistoryRecord[]) : [];
+    const refreshedMerged = mergeHistories(reloaded, staleRemote).filter(
+      (r) => !tomb.includes(r.completionId)
+    );
+    await AsyncStorage.setItem('history', JSON.stringify(refreshedMerged));
+    expect(dayStreakForJapam(refreshedMerged, uid, japamId, today, toDayKey, getPreviousDayKey)).toBe(2);
+
+    // 5c. Persisted AsyncStorage still contains BOTH yesterday's and today's selected-Japam rows.
+    const persistedRaw = await AsyncStorage.getItem('history');
+    const persisted = persistedRaw ? (JSON.parse(persistedRaw) as HistoryRecord[]) : [];
+    const persistedIds = new Set(persisted.map((r) => r.completionId));
+    expect(persistedIds.has('y-1')).toBe(true);
+    expect(persistedIds.has('today-timer')).toBe(true);
+  });
+
+  it('an explicit tombstone for today legitimately reduces Day Streak from 2 to 1', async () => {
+    const yesterdaySynced = session(yIso(9), {
+      userId: uid, syncStatus: 'synced', completionId: 'y-2',
+      japamId, japamName, totalCount: 108,
+    }) as HistoryRecord;
+    const todaySynced = {
+      date: todayIso(12), malas: 1, totalCount: 108, duration: 600, manual: false,
+      userId: uid, completionId: 'today-timer-2',
+      syncStatus: 'synced' as const,
+      japamId, japamName,
+    } as HistoryRecord;
+    const local = [yesterdaySynced, todaySynced] as HistoryRecord[];
+    expect(streakFor(local)).toBe(2);
+
+    // History's performDelete writes a tombstone first, then filters — exactly this.
+    const tomb = ['today-timer-2'];
+    const tombFiltered = mergeHistories(local, local).filter((r) => !tomb.includes(r.completionId));
+    await AsyncStorage.setItem('history', JSON.stringify(tombFiltered));
+
+    const persistedRaw = await AsyncStorage.getItem('history');
+    const persisted = persistedRaw ? (JSON.parse(persistedRaw) as HistoryRecord[]) : [];
+    expect(dayStreakForJapam(persisted, uid, japamId, today, toDayKey, getPreviousDayKey)).toBe(1);
+    expect(persisted.some((r) => r.completionId === 'today-timer-2')).toBe(false);
+    expect(persisted.some((r) => r.completionId === 'y-2')).toBe(true);
+  });
+
+  it('a still-pending today completion is preserved across the merge + persist (no status downgrade, no loss)', async () => {
+    const yesterdaySynced = session(yIso(9), {
+      userId: uid, syncStatus: 'synced', completionId: 'y-3',
+      japamId, japamName, totalCount: 108,
+    }) as HistoryRecord;
+    const todayPending = {
+      date: todayIso(13), malas: 1, totalCount: 108, duration: 600, manual: false,
+      userId: uid, completionId: 'today-pending-3',
+      syncStatus: 'pending' as const,
+      japamId, japamName,
+    } as HistoryRecord;
+    const local = [yesterdaySynced, todayPending] as HistoryRecord[];
+    // Stale remote omits the pending entry entirely (it has not been uploaded yet).
+    const staleRemote = [yesterdaySynced] as HistoryRecord[];
+
+    const merged = mergeHistories(local, staleRemote).filter((r) => r.completionId !== '');
+    await AsyncStorage.setItem('history', JSON.stringify(merged));
+
+    const persistedRaw = await AsyncStorage.getItem('history');
+    const persisted = persistedRaw ? (JSON.parse(persistedRaw) as HistoryRecord[]) : [];
+    const pending = persisted.find((r) => r.completionId === 'today-pending-3');
+    expect(pending).toBeDefined();
+    expect(pending?.syncStatus).toBe('pending');
+    // Pending today still counts as an active day → streak is 2.
+    expect(dayStreakForJapam(persisted, uid, japamId, today, toDayKey, getPreviousDayKey)).toBe(2);
+  });
+
+  it('does not affect another user\'s or another Japam\'s records during the merge-persist', async () => {
+    const mineToday = session(todayIso(8), {
+      userId: uid, syncStatus: 'synced', completionId: 'mine-4',
+      japamId, japamName, totalCount: 108,
+    }) as HistoryRecord;
+    const otherUserToday = session(todayIso(8), {
+      userId: otherUid, syncStatus: 'synced', completionId: 'other-user-4',
+      japamId, japamName, totalCount: 108,
+    }) as HistoryRecord;
+    const otherJapamToday = session(todayIso(8), {
+      userId: uid, syncStatus: 'synced', completionId: 'other-japam-4',
+      japamId: otherJapamId, japamName: 'Other', totalCount: 108,
+    }) as HistoryRecord;
+
+    const local = [mineToday, otherUserToday, otherJapamToday] as HistoryRecord[];
+    // Stale remote keeps only mineToday.
+    const staleRemote = [mineToday] as HistoryRecord[];
+
+    const merged = mergeHistories(local, staleRemote).filter((r) => r.completionId !== '');
+    await AsyncStorage.setItem('history', JSON.stringify(merged));
+
+    const persistedRaw = await AsyncStorage.getItem('history');
+    const persisted = persistedRaw ? (JSON.parse(persistedRaw) as HistoryRecord[]) : [];
+    const ids = new Set(persisted.map((r) => r.completionId));
+    expect(ids.has('mine-4')).toBe(true);
+    expect(ids.has('other-user-4')).toBe(true);
+    expect(ids.has('other-japam-4')).toBe(true);
+
+    // My selected Japam streak counts only mineToday for my user: 1 active day → streak 1.
+    expect(dayStreakForJapam(persisted, uid, japamId, today, toDayKey, getPreviousDayKey)).toBe(1);
+    // The other Japam's streak is independent.
+    expect(dayStreakForJapam(persisted, uid, otherJapamId, today, toDayKey, getPreviousDayKey)).toBe(1);
+    // The other user's records don't inflate my streak.
+    expect(dayStreakForJapam(persisted, otherUid, japamId, today, toDayKey, getPreviousDayKey)).toBe(1);
+  });
+});
+});
+
+// ─────── Timer/History display-consistency regression (PR #53) ───────
+//
+// Timer now routes Today/Lifetime/Streak through japamScopedStatsFor, which uses the SAME
+// filterByJapam selector History uses (dedupe + strict japamId match + legacy null/name
+// fallback). These tests prove Timer and History agree, even when records were saved with
+// japamId=null while currentJapam was still hydrating -- the exact regression scenario where
+// Timer previously read 0 after currentJapamId hydrated from null to a real UUID while History
+// still showed 3/324/streak-2.
+
+describe('japamScopedStatsFor: Timer/History display consistency (PR #53 regression)', () => {
+  const UID = 'user-92b7';
+  const JAPAM_ID = '92b7dc78-f1ae-4803-9e4d-8997d400f1f4';
+  const JAPAM_NAME = 'My Japam';
+  const OTHER_JAPAM_ID = 'aaaaaaaa-0000-0000-0000-000000000000';
+  const OTHER_JAPAM_NAME = 'Other Japam';
+  const TODAY = '2026-07-28';
+  const YESTERDAY = getPreviousDayKey(TODAY);
+  const todayIso = (h: number) => `${TODAY}T${String(h).padStart(2, '0')}:00:00.000Z`;
+  const yIso = (h: number) => `${YESTERDAY}T${String(h).padStart(2, '0')}:00:00.000Z`;
+
+  const rec = (
+    iso: string,
+    over: Partial<HistoryRecord> = {},
+  ): HistoryRecord => ({
+    date: iso,
+    malas: 1,
+    totalCount: 108,
+    duration: 60,
+    manual: false,
+    userId: UID,
+    syncStatus: 'synced',
+    completionId: over.completionId ?? makeCompletionId(UID, iso),
+    japamId: over.japamId ?? null,
+    japamName: over.japamName ?? null,
+    ...over,
+  });
+
+  // The exact regression scenario: 3 null-japamId legacy records (saved while currentJapam was
+  // still null), with japamName carrying the future selected Japam's name. Today's total = 324,
+  // lifetime = 432, and a 2-day streak (yesterday + today). History shows them via
+  // filterByJapam's legacy fallback; Timer MUST show the same via japamScopedStatsFor.
+  const legacyScenario = (): HistoryRecord[] => [
+    rec(todayIso(8),  { japamId: null, japamName: JAPAM_NAME, totalCount: 108, completionId: 'leg-t1' }),
+    rec(todayIso(9),  { japamId: null, japamName: JAPAM_NAME, totalCount: 108, completionId: 'leg-t2' }),
+    rec(todayIso(10), { japamId: null, japamName: JAPAM_NAME, totalCount: 108, completionId: 'leg-t3' }),
+    rec(yIso(8),      { japamId: null, japamName: JAPAM_NAME, totalCount: 108, completionId: 'leg-y1' }),
+  ];
+
+  it('null-id legacy records with the selected Japam name appear in Timer AND History', () => {
+    const records = legacyScenario();
+    // History's selector (filterByJapam) keeps all 4 legacy records.
+    const historyScoped = filterByJapam(records, JAPAM_ID, JAPAM_NAME);
+    expect(historyScoped.map((r) => r.completionId).sort()).toEqual(
+      ['leg-t1', 'leg-t2', 'leg-t3', 'leg-y1'],
+    );
+    // Timer's selector (japamScopedStatsFor) computes the same set: 3 today, 4 lifetime, streak 2.
+    const timerStats = japamScopedStatsFor(
+      records, UID, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(timerStats.todayTotalCount).toBe(324);
+    expect(timerStats.lifetimeTotalCount).toBe(432);
+    expect(timerStats.dayStreak).toBe(2);
+  });
+
+  it('currentJapam hydration null -> real ID does NOT change 3/324/streak-2 to 0', () => {
+    const records = legacyScenario();
+    // BEFORE hydration: currentJapamId = null. Strict old behavior would have read these via the
+    // null bucket. japamScopedStatsFor with japamId=null must still match History's null-bucket
+    // behavior (filterByJapam with null matches only null records).
+    const beforeHydration = japamScopedStatsFor(
+      records, UID, null, null, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(beforeHydration.todayTotalCount).toBe(324);
+    expect(beforeHydration.dayStreak).toBe(2);
+    // AFTER hydration: currentJapamId = JAPAM_ID, japamName = JAPAM_NAME. The legacy null-fallback
+    // in filterByJapam must keep these records attributed to the now-hydrated Japam. This is the
+    // regression assertion: the numbers MUST NOT drop to 0.
+    const afterHydration = japamScopedStatsFor(
+      records, UID, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(afterHydration.todayTotalCount).toBe(324);
+    expect(afterHydration.lifetimeTotalCount).toBe(432);
+    expect(afterHydration.dayStreak).toBe(2);
+  });
+
+  it('records belonging to another real Japam remain excluded', () => {
+    const records = [
+      ...legacyScenario(),
+      rec(todayIso(11), { japamId: OTHER_JAPAM_ID, japamName: OTHER_JAPAM_NAME, totalCount: 108, completionId: 'other-t1' }),
+      rec(yIso(11),     { japamId: OTHER_JAPAM_ID, japamName: OTHER_JAPAM_NAME, totalCount: 108, completionId: 'other-y1' }),
+    ];
+    // History excludes the other Japam's records.
+    const historyScoped = filterByJapam(records, JAPAM_ID, JAPAM_NAME);
+    expect(historyScoped.find((r) => r.japamId === OTHER_JAPAM_ID)).toBeUndefined();
+    // Timer excludes them too: today stays 324 (not 432), lifetime 432 (not 648).
+    const timerStats = japamScopedStatsFor(
+      records, UID, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(timerStats.todayTotalCount).toBe(324);
+    expect(timerStats.lifetimeTotalCount).toBe(432);
+    expect(timerStats.dayStreak).toBe(2);
+  });
+
+  it('duplicate Japam names do NOT combine real-ID records across Japams', () => {
+    // Two real Japams share the name "My Japam" but have distinct UUIDs. The legacy null-fallback
+    // MUST only pull NULL-japamId records, never real-ID records from the sibling Japam.
+    const records = [
+      // Selected Japam A: one real-id record today.
+      rec(todayIso(8), { japamId: JAPAM_ID, japamName: JAPAM_NAME, totalCount: 108, completionId: 'a-t1' }),
+      // Sibling Japam B (same name "My Japam", different UUID): one real-id record today.
+      rec(todayIso(9), { japamId: OTHER_JAPAM_ID, japamName: JAPAM_NAME, totalCount: 108, completionId: 'b-t1' }),
+      // Legacy null-japamId record with name "My Japam" -- SHOULD be attributed to whichever
+      // Japam is selected (here A), because filterByJapam's null-fallback keys off the NAME.
+      rec(todayIso(10), { japamId: null, japamName: JAPAM_NAME, totalCount: 108, completionId: 'leg-t1' }),
+    ];
+    // History: filterByJapam for A keeps a-t1 + leg-t1, excludes b-t1.
+    const scopedA = filterByJapam(records, JAPAM_ID, JAPAM_NAME);
+    expect(scopedA.map((r) => r.completionId).sort()).toEqual(['a-t1', 'leg-t1']);
+    // Timer: same set. today = 216 (a-t1 + leg-t1), NOT 324 (which would require b-t1).
+    const statsA = japamScopedStatsFor(
+      records, UID, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(statsA.todayTotalCount).toBe(216);
+    expect(statsA.lifetimeTotalCount).toBe(216);
+    // And the reverse direction: filterByJapam for B keeps b-t1 + leg-t1, excludes a-t1.
+    const scopedB = filterByJapam(records, OTHER_JAPAM_ID, JAPAM_NAME);
+    expect(scopedB.map((r) => r.completionId).sort()).toEqual(['b-t1', 'leg-t1']);
+    const statsB = japamScopedStatsFor(
+      records, UID, OTHER_JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(statsB.todayTotalCount).toBe(216);
+  });
+
+  it('legacy null-japamId records with a DIFFERENT name stay excluded from the selected Japam', () => {
+    const records = [
+      rec(todayIso(8), { japamId: JAPAM_ID, japamName: JAPAM_NAME, totalCount: 108, completionId: 'a-t1' }),
+      // legacy record tagged with the OTHER japam's name -- should NOT fall back into A.
+      rec(todayIso(9), { japamId: null, japamName: OTHER_JAPAM_NAME, totalCount: 108, completionId: 'leg-other' }),
+    ];
+    const timerStats = japamScopedStatsFor(
+      records, UID, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(timerStats.todayTotalCount).toBe(108);
+    expect(timerStats.lifetimeTotalCount).toBe(108);
+  });
+
+  it('guest/user isolation remains intact (other users\' records never inflate my Timer stats)', () => {
+    const otherUid = 'user-other';
+    const records = [
+      // My legacy records.
+      rec(todayIso(8), { userId: UID, japamId: null, japamName: JAPAM_NAME, totalCount: 108, completionId: 'mine-t1' }),
+      rec(yIso(8),     { userId: UID, japamId: null, japamName: JAPAM_NAME, totalCount: 108, completionId: 'mine-y1' }),
+      // Another user's record with the SAME japamName -- filterByJapam's null-fallback would pull
+      // it in by name, but japamScopedStatsFor's userId gate MUST drop it.
+      rec(todayIso(9), { userId: otherUid, japamId: null, japamName: JAPAM_NAME, totalCount: 108, completionId: 'other-u-t1' }),
+    ];
+    const myStats = japamScopedStatsFor(
+      records, UID, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(myStats.todayTotalCount).toBe(108); // only mine-t1
+    expect(myStats.lifetimeTotalCount).toBe(216); // mine-t1 + mine-y1
+    expect(myStats.dayStreak).toBe(2);
+    // And the other user's stats exclude my records.
+    const theirStats = japamScopedStatsFor(
+      records, otherUid, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(theirStats.todayTotalCount).toBe(108); // only other-u-t1
+    expect(theirStats.lifetimeTotalCount).toBe(108);
+    expect(theirStats.dayStreak).toBe(1);
+  });
+
+  it('guest bucket (userId=null scope) excludes signed-in users\' records and vice versa', () => {
+    const signedInUid = 'user-signed-in';
+    const records = [
+      rec(todayIso(8), { userId: signedInUid, japamId: null, japamName: null, totalCount: 108, completionId: 'si-t1' }),
+      rec(todayIso(9), { userId: undefined,   japamId: null, japamName: null, totalCount: 108, completionId: 'guest-t1' }),
+    ];
+    // Guest scope (userId=null/undefined): only the guest record counts.
+    const guestStats = japamScopedStatsFor(
+      records, null, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(guestStats.todayTotalCount).toBe(108);
+    // Signed-in scope: only the signed-in record counts.
+    const signedInStats = japamScopedStatsFor(
+      records, signedInUid, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(signedInStats.todayTotalCount).toBe(108);
+  });
+
+  it('agrees with the existing strict selectors when there are NO legacy null records', () => {
+    // When every record has a real japamId, japamScopedStatsFor must return exactly what the strict
+    // statsByJapam/japamStatsFor/dayStreakForJapam trio returned -- i.e. no behavior change for
+    // already-properly-tagged post-Workspaces histories.
+    const records = [
+      rec(todayIso(8), { japamId: JAPAM_ID, japamName: JAPAM_NAME, totalCount: 108, completionId: 'a-t1' }),
+      rec(todayIso(9), { japamId: JAPAM_ID, japamName: JAPAM_NAME, totalCount: 108, completionId: 'a-t2' }),
+      rec(yIso(8),     { japamId: JAPAM_ID, japamName: JAPAM_NAME, totalCount: 108, completionId: 'a-y1' }),
+      rec(todayIso(10), { japamId: OTHER_JAPAM_ID, japamName: OTHER_JAPAM_NAME, totalCount: 108, completionId: 'b-t1' }),
+    ];
+    const strictStats = japamStatsFor(statsByJapam(records, UID, TODAY, toDayKey), JAPAM_ID);
+    const strictStreak = dayStreakForJapam(records, UID, JAPAM_ID, TODAY, toDayKey, getPreviousDayKey);
+    const scopedStats = japamScopedStatsFor(
+      records, UID, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+    );
+    expect(scopedStats.todayTotalCount).toBe(strictStats.todayTotalCount);
+    expect(scopedStats.lifetimeTotalCount).toBe(strictStats.lifetimeTotalCount);
+    expect(scopedStats.dayStreak).toBe(strictStreak);
   });
 });

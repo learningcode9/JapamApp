@@ -6,8 +6,6 @@ import {
   filterByJapam,
   markSynced,
   mergeHistories,
-  normalizeAll,
-  reconcileWithServer,
   todayStatsFor,
   toLocalDayKey,
 } from '../../lib/historyStore';
@@ -801,26 +799,14 @@ export default function JapamMain() {
             const day = toLocalDayKey(s.date);
             return (day === 'unknown' || day <= todayKey) && !tombSet.has(s.completionId as string);
           });
-          const remoteCount = remoteSessions.length;
-          const localSynced = localHistory.filter(
-            (s) => s.userId === savedUserId && s.syncStatus === 'synced'
-          ).length;
-          const localPending = localHistory.filter(
-            (s) => s.userId === savedUserId && s.syncStatus === 'pending'
-          ).length;
-          console.log(
-            '[RECONCILE_PRE] screen=main remote_count=%d local_synced=%d local_pending=%d',
-            remoteCount, localSynced, localPending
-          );
-          const remoteIds = new Set(normalizeAll(remoteSessions).map((r) => r.completionId));
-          let reconciledHistory = mergedHistory;
-          if (remoteCount >= 10000) {
-            console.log('[RECONCILE_SKIPPED] screen=main reason=possible-truncation count=%d', remoteCount);
-          } else {
-            const before = mergedHistory.length;
-            reconciledHistory = reconcileWithServer(mergedHistory, remoteIds, savedUserId);
-            console.log('[RECONCILE_APPLIED] screen=main removed=%d', before - reconciledHistory.length);
-          }
+          // Non-destructive reconcile: mergedHistory is the first-local-wins union of local +
+          // remote (mergeHistories) with tombstones already honored in the filter above. Do NOT
+          // prune synced records merely because a stale fetch omits them — that would erase today's
+          // just-uploaded Timer completion and regress Day Streak until a later consistent fetch.
+          // Cross-device deletes flow exclusively through the explicit DELETED_COMPLETIONS_KEY
+          // tombstone set (already filtered above), so no remote-id-based prune is safe on read
+          // paths. Mirrors Timer's loadStats (PR #53) and History's loadHistory.
+          const reconciledHistory = mergedHistory;
 
           console.log('[RESTORE_REMOTE_COUNT] screen=main count=%d', remoteSessions.length);
           console.log(
@@ -1369,26 +1355,12 @@ export default function JapamMain() {
       // upgraded to 'synced'. This replaces the old behavior that discarded the current user's
       // local entries and could lose unsynced malas on sign-in.
       const mergedHistory = mergeHistories(localHistory, remoteHistory);
-      const remoteCount = remoteRows.length;
-      const localSynced = localHistory.filter(
-        (item) => item.userId === googleUserId && item.syncStatus === 'synced'
-      ).length;
-      const localPending = localHistory.filter(
-        (item) => item.userId === googleUserId && item.syncStatus === 'pending'
-      ).length;
-      console.log(
-        '[RECONCILE_PRE] screen=main-login remote_count=%d local_synced=%d local_pending=%d',
-        remoteCount, localSynced, localPending
-      );
-      const remoteIds = new Set(normalizeAll(remoteHistory).map((r) => r.completionId));
-      let reconciledHistory = mergedHistory;
-      if (remoteCount >= 10000) {
-        console.log('[RECONCILE_SKIPPED] screen=main-login reason=possible-truncation count=%d', remoteCount);
-      } else {
-        const before = mergedHistory.length;
-        reconciledHistory = reconcileWithServer(mergedHistory, remoteIds, googleUserId);
-        console.log('[RECONCILE_APPLIED] screen=main-login removed=%d', before - reconciledHistory.length);
-      }
+      // Non-destructive reconcile: persist mergeHistories' union directly, no remote-id-based
+      // prune. A synced local record transiently absent from a stale fetch must NOT be dropped
+      // on login — that would lose today's just-uploaded Timer completion before Day Streak
+      // ever stabilizes. Cross-device deletes flow through DELETED_COMPLETIONS_KEY tombstones.
+      // Mirrors Timer's loadStats (PR #53), History's loadHistory, and Home's own loadStats.
+      const reconciledHistory = mergedHistory;
       console.log('[RESTORE_REMOTE_COUNT] screen=main-login count=%d', remoteHistory.length);
       console.log(
         '[MERGE_LOCAL_COUNT_BEFORE] screen=main-login count=%d pending=%d',

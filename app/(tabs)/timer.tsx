@@ -2,12 +2,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import {
-  dayStreakForJapam,
   dedupeByCompletionId,
-  japamStatsFor,
+  japamScopedStatsFor,
   mergeHistories,
-  normalizeAll,
-  statsByJapam,
   toLocalDayKey,
 } from '../../lib/historyStore';
 import { ZEN_BACKGROUND } from '../../constants/assets';
@@ -238,8 +235,6 @@ export default function TimerScreen() {
     const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
     const localHistory = parseHistory(rawHistory);
     let mergedHistory = localHistory;
-    let rawSupabaseRows = 0;
-    let rawSupabaseCount = 0;
 
     // Option A: anonymous guest data syncs to Supabase immediately, same as a signed-in user —
     // no anonymous-specific suppression here.
@@ -253,7 +248,6 @@ export default function TimerScreen() {
           });
 
           if (remoteRows !== null) {
-            rawSupabaseRows = remoteRows.length;
             const remoteHistory: Session[] = remoteRows.map((row: any) => ({
               date: row.created_at,
               malas: Number(row.malas) || Math.floor((Number(row.count) || 0) / 108),
@@ -267,10 +261,6 @@ export default function TimerScreen() {
               japamId: row.japam_id ?? null,
               japamName: row.japam_name ?? null,
             }));
-            rawSupabaseCount = remoteHistory.reduce(
-              (sum, row) => sum + (Number(row.totalCount) || 0),
-              0
-            );
             mergedHistory = mergeHistories(localHistory, remoteHistory);
             const rawTombData = await AsyncStorage.getItem('deletedCompletions');
             if (rawTombData) {
@@ -281,35 +271,6 @@ export default function TimerScreen() {
                 );
               }
             }
-            const remoteCount = remoteRows.length;
-            const localSynced = localHistory.filter(
-              (r) => r.userId === userId && r.syncStatus === 'synced'
-            ).length;
-            const localPending = localHistory.filter(
-              (r) => r.userId === userId && r.syncStatus === 'pending'
-            ).length;
-            console.log(
-              '[RECONCILE_PRE] screen=timer remote_count=%d local_synced=%d local_pending=%d',
-              remoteCount, localSynced, localPending
-            );
-            const remoteIds = new Set(normalizeAll(remoteHistory).map((r) => r.completionId));
-            if (remoteCount >= 10000) {
-              console.log('[RECONCILE_SKIPPED] screen=timer reason=possible-truncation count=%d', remoteCount);
-            } else {
-              const before = mergedHistory.length;
-              mergedHistory = mergedHistory.filter((r) =>
-                !r.completionId || (r.userId || null) !== userId || r.syncStatus !== 'synced' || remoteIds.has(r.completionId)
-              );
-              console.log('[RECONCILE_APPLIED] screen=timer removed=%d', before - mergedHistory.length);
-            }
-            await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
-            console.log('[RESTORE_REMOTE_COUNT] screen=timer count=%d', remoteHistory.length);
-            console.log(
-              '[MERGE_LOCAL_COUNT_BEFORE] screen=timer count=%d pending=%d',
-              localHistory.length,
-              localHistory.filter((item) => item.userId === userId && item.syncStatus === 'pending').length
-            );
-            console.log('[MERGE_LOCAL_COUNT_AFTER] screen=timer count=%d', mergedHistory.length);
           }
         } catch {
           console.log('[SYNC_FAILED] source=timer-stats-restore reason=network');
@@ -323,35 +284,26 @@ export default function TimerScreen() {
 
     // Scoped to the currently selected Japam only -- Home/Timer must never show a combined total
     // across every Japam (product requirement: Home/Timer/Tap Japam always reflect the selected
-    // Japam, matching History/My Japams). null means legacy/unassigned history, same convention as
-    // statsByJapam/dayStreakForJapam everywhere else.
+    // Japam, matching History/My Japams). Routed through japamScopedStatsFor, which uses the SAME
+    // filterByJapam selector History uses (dedupe + strict japamId match + legacy null/name
+    // fallback) so Timer and History can never disagree on which records belong to the selected
+    // Japam -- including null-japamId legacy records that match the selected Japam's name.
     const japamId = currentJapam?.id ?? null;
-    const { todayTotalCount: safeTodayTotal } = japamStatsFor(
-      statsByJapam(history, userId, todayKey, toLocalDayKey),
-      japamId
-    );
-    const nextStreak = dayStreakForJapam(
+    const scopedStats = japamScopedStatsFor(
       history,
       userId,
       japamId,
+      currentJapam?.name ?? null,
       todayKey,
       toLocalDayKey,
       getPreviousDateKey
     );
+    const safeTodayTotal = scopedStats.todayTotalCount;
+    const nextStreak = scopedStats.dayStreak;
 
     setTodayCount(safeTodayTotal);
-    setMalasToday(Math.floor(safeTodayTotal / 108));
+    setMalasToday(scopedStats.todayMalas);
     setDayStreak(nextStreak);
-    console.log('[TimerStatsDate] deviceLocalTime=%s userLocalDate=%s japamId=%s rawSupabaseRows=%d rawSupabaseCount=%d appMalasToday=%d todayTotal=%d streak=%d',
-      new Date().toString(),
-      todayKey,
-      japamId || 'legacy',
-      rawSupabaseRows,
-      rawSupabaseCount,
-      Math.floor(safeTodayTotal / 108),
-      safeTodayTotal,
-      nextStreak
-    );
   } finally {
     isRestoringRef.current = false;
   }
