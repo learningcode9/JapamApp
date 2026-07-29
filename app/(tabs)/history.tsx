@@ -596,7 +596,7 @@ const syncHistoryEditsToSupabase = async (
       // no need for a separate verify GET (whose own failure previously caused a false "not
       // saved" alert even though the write had gone through).
       const writeText = await response.text().catch(() => '');
-      let writeRows: Array<{ completion_id?: string; malas?: number | string; count?: number | string }> = [];
+      let writeRows: { completion_id?: string; malas?: number | string; count?: number | string }[] = [];
       try {
         const parsed = writeText ? JSON.parse(writeText) : [];
         writeRows = Array.isArray(parsed) ? parsed : [];
@@ -647,12 +647,12 @@ const syncHistoryEditsToSupabase = async (
       const verifyText = await verifyResponse.text().catch(() => '');
       let verifyBody: unknown = [];
       try { verifyBody = verifyText ? JSON.parse(verifyText) : []; } catch { verifyBody = []; }
-      const verifyRows = Array.isArray(verifyBody) ? verifyBody as Array<{
+      const verifyRows = Array.isArray(verifyBody) ? verifyBody as {
         id?: number | string;
         completion_id?: string;
         malas?: number | string;
         count?: number | string;
-      }> : [];
+      }[] : [];
       if (verifyRows.length === 0) {
         console.log(
           '[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=verify-zero-rows remoteId=%s',
@@ -1189,20 +1189,28 @@ export default function HistoryScreen() {
   );
 
   useEffect(() => {
+    void loadHistory();
+  }, [loadHistory]);
+
+  useEffect(() => {
     const onHistoryUpdated = () => {
       void loadHistory();
     };
 
-    const subscription = DeviceEventEmitter.addListener('japam-history-updated', onHistoryUpdated);
+    const historySubscription = DeviceEventEmitter.addListener('japam-history-updated', onHistoryUpdated);
+    const authSubscription = DeviceEventEmitter.addListener('japam-auth-updated', onHistoryUpdated);
 
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       window.addEventListener('japam-history-updated', onHistoryUpdated as EventListener);
+      window.addEventListener('japam-auth-updated', onHistoryUpdated as EventListener);
     }
 
     return () => {
-      subscription.remove();
+      historySubscription.remove();
+      authSubscription.remove();
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.removeEventListener('japam-history-updated', onHistoryUpdated as EventListener);
+        window.removeEventListener('japam-auth-updated', onHistoryUpdated as EventListener);
       }
     };
   }, [loadHistory]);
