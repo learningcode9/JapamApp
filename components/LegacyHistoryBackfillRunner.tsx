@@ -14,32 +14,18 @@
  *      planLegacyHistoryBackfill) whether this identity has ANY null-japamId history at all. No
  *      Japam is created for this check -- planLegacyHistoryBackfill is pure and never persists
  *      anything, so a placeholder id/name here is safe and discarded.
- *   2. Only if step 1 found something: create ONE default Japam via the Context's existing
- *      createJapam (which also auto-selects it -- untouched, existing behavior).
+ *   2. Only if step 1 found something: resolve the canonical/default Japam via the shared
+ *      deterministic helper used by CurrentJapamProvider.
  *   3. Persist the real reassignment via historyRepository.applyLegacyHistoryBackfill, using the
- *      just-created Japam's real id/name.
+ *      resolved Japam's real id/name.
  *   4. Mark this identity's "already backfilled" flag complete.
  *   5. Show a single, dismissible, non-blocking notice.
  * If step 1 finds nothing to migrate, the flag is marked complete immediately and no Japam is
  * created at all -- a genuinely new user is untouched by this feature.
  *
- * No Supabase call anywhere in this flow (Japams have no Supabase sync yet at all -- see
- * lib/japamsRepository.ts's own doc comment). This means the one default Japam this creates is
- * LOCAL TO THIS DEVICE ONLY. A signed-in user with multiple devices, each running this backfill
- * independently before Japams sync exists, will end up with a DIFFERENT default Japam (different
- * client-generated id) per device, and could see the same underlying history rows tagged
- * inconsistently across devices once ordinary history sync uploads each device's reassignment.
- * This is a known, accepted limitation (per the approved proposal) until Japams themselves get
- * Supabase sync -- not something this commit attempts to solve.
- *
- * The suggested name for the created Japam is a best-effort read of user_profiles.japam_name (the
- * SAME read-only query already used elsewhere in this app -- see loadJapamNameFromSupabase in
- * app/(tabs)/index.tsx and app/(tabs)/tap-japam.tsx), falling back to a fixed generic default
- * (DEFAULT_JAPAM_NAME) for guests, a missing/blank profile name, or any fetch failure. This lookup
- * never blocks startup (it only runs after step 1 already confirmed there's something to migrate,
- * inside the same fire-and-forget effect) and never fails the backfill itself -- any error here is
- * caught locally and just falls through to the generic default, same as every other best-effort
- * step in this flow.
+ * The shared helper may consult remote state for signed-in users before deciding whether to
+ * create anything, but it still resolves to a single canonical Japam id for the same user across
+ * concurrent callers.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useRef } from 'react';
@@ -47,62 +33,19 @@ import { Alert } from 'react-native';
 import { useCurrentJapam } from '../contexts/current-japam-context';
 import * as historyRepository from '../lib/historyRepository';
 import { planLegacyHistoryBackfill } from '../lib/legacyHistoryBackfill';
-import { supabase } from '../lib/supabase';
+import * as japamsRepository from '../lib/japamsRepository';
 import {
   isLegacyHistoryBackfillComplete,
   markLegacyHistoryBackfillComplete,
 } from '../lib/legacyHistoryBackfillStorage';
 
 const USER_ID_KEY = 'userId';
-const DEFAULT_JAPAM_NAME = 'My Japam';
 // Never persisted -- only used to ask planLegacyHistoryBackfill "is there anything to reassign?"
 // without actually reassigning anything yet.
 const CHECK_ONLY_PLACEHOLDER = '__legacy_backfill_check_only__';
 
-/**
- * Best-effort suggested name for the default Japam: user_profiles.japam_name for a signed-in
- * user, if present and non-blank, else DEFAULT_JAPAM_NAME. Guests, missing env config, a
- * not-found/empty profile row, a blank name, or any network/parse error all fall through to the
- * same generic default -- this never throws.
- *
- * Uses the signed-in user's session JWT, not the anon key (mirrors the F15/F7 session-token
- * pattern from syncPendingHistory/saveToSupabase in lib/historyStore.ts and app/(tabs)/index.tsx).
- * No session: skip the lookup entirely and return DEFAULT_JAPAM_NAME — fail-closed, never falls
- * back to the anon key.
- */
-const fetchSuggestedJapamName = async (userId: string | null): Promise<string> => {
-  if (!userId) return DEFAULT_JAPAM_NAME;
-
-  try {
-    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-    if (!supabaseUrl || !supabaseAnonKey) return DEFAULT_JAPAM_NAME;
-
-    // Require a real session JWT. No session: skip, same fail-closed discipline as the F15/F7
-    // session-token guards (index.tsx's saveUserTotalToSupabase, timer-context.tsx's
-    // syncPendingHistory, etc.).
-    const { data: sessionData } = await supabase.auth.getSession();
-    const sessionToken = sessionData.session?.access_token;
-    if (!sessionToken) return DEFAULT_JAPAM_NAME;
-
-    const encodedUserId = encodeURIComponent(userId);
-    const response = await fetch(
-      `${supabaseUrl}/rest/v1/user_profiles?user_id=eq.${encodedUserId}&select=japam_name`,
-      { headers: { apikey: supabaseAnonKey, Authorization: `Bearer ${sessionToken}` } }
-    );
-    if (!response.ok) return DEFAULT_JAPAM_NAME;
-
-    const rows = await response.json();
-    const profileName = rows?.[0]?.japam_name;
-    const trimmed = typeof profileName === 'string' ? profileName.trim() : '';
-    return trimmed.length > 0 ? trimmed : DEFAULT_JAPAM_NAME;
-  } catch {
-    return DEFAULT_JAPAM_NAME;
-  }
-};
-
 export default function LegacyHistoryBackfillRunner() {
-  const { isLoading, createJapam } = useCurrentJapam();
+  const { isLoading } = useCurrentJapam();
   // Identity-aware run guard, not a single boolean: this component is mounted once for the app's
   // whole lifetime (inside CurrentJapamProvider, which itself never unmounts), so a single
   // hasRunRef would permanently skip a NEW identity's own check for the rest of the session after
@@ -120,14 +63,16 @@ export default function LegacyHistoryBackfillRunner() {
     let identityKeyBeingAttempted: string | null = null;
 
     (async () => {
-      const userId = await AsyncStorage.getItem(USER_ID_KEY);
-      const identityKey = userId || 'guest';
-      identityKeyBeingAttempted = identityKey;
+      const userId = (await AsyncStorage.getItem(USER_ID_KEY))?.trim() ?? '';
+      if (!userId) return;
+
+      identityKeyBeingAttempted = userId;
       // Synchronous check-then-mark with no await in between: safe against this effect firing
-      // again in quick succession for the SAME identity (e.g. isLoading flickering, or React
-      // re-invoking effects), while never blocking a DIFFERENT identity from being checked.
-      if (checkedIdentitiesRef.current.has(identityKey)) return;
-      checkedIdentitiesRef.current.add(identityKey);
+      // again in quick succession for the SAME authenticated identity (e.g. isLoading flickering,
+      // or React re-invoking effects), while never blocking a DIFFERENT authenticated user from
+      // being checked.
+      if (checkedIdentitiesRef.current.has(userId)) return;
+      checkedIdentitiesRef.current.add(userId);
 
       if (await isLegacyHistoryBackfillComplete(userId)) return;
 
@@ -144,14 +89,15 @@ export default function LegacyHistoryBackfillRunner() {
         return;
       }
 
-      // Step 2: create the one default Japam, named after the best available existing name.
-      // createJapam already auto-selects it -- existing, untouched Context behavior.
-      const suggestedName = await fetchSuggestedJapamName(userId);
-      const created = await createJapam(suggestedName);
-      if (!created) return; // Defensive only: createJapam only returns null for a blank name.
+      // Step 2: resolve the canonical/default Japam through the same deterministic helper the
+      // provider uses. This either adopts an existing active Japam or creates the one default
+      // record only when the user truly has none.
+      const ensured = await japamsRepository.ensureDefaultJapam(userId);
+      const selectedJapam = ensured.japams.find((j) => j.id === ensured.currentJapamId) ?? null;
+      if (!selectedJapam) return;
 
       // Step 3: persist the real reassignment using the just-created Japam's real id/name.
-      await historyRepository.applyLegacyHistoryBackfill(userId, created.id, created.name);
+      await historyRepository.applyLegacyHistoryBackfill(userId, selectedJapam.id, selectedJapam.name);
 
       // Step 4.
       await markLegacyHistoryBackfillComplete(userId);
@@ -159,7 +105,7 @@ export default function LegacyHistoryBackfillRunner() {
       // Step 5: one-time, dismissible, non-blocking notice.
       Alert.alert(
         'History organized',
-        `We've added your past Japam history to "${created.name}". You can rename it anytime from My Japams.`,
+        `We've added your past Japam history to "${selectedJapam.name}". You can rename it anytime from My Japams.`,
         [{ text: 'Got it' }]
       );
     })().catch(() => {
@@ -175,7 +121,7 @@ export default function LegacyHistoryBackfillRunner() {
         checkedIdentitiesRef.current.delete(identityKeyBeingAttempted);
       }
     });
-  }, [isLoading, createJapam]);
+  }, [isLoading]);
 
   return null;
 }

@@ -1,5 +1,5 @@
 type InflightEntry = {
-  promise: Promise<void>;
+  promise: Promise<unknown>;
   waiters: number;
 };
 
@@ -7,29 +7,33 @@ export function createDefaultJapamCreationCoordinator() {
   const inflight = new Map<string, InflightEntry>();
 
   return {
-    ensureCreation: async (
+    ensureCreation: async <T>(
       userId: string,
-      create: () => Promise<unknown>,
-    ): Promise<void> => {
+      create: () => Promise<T>,
+    ): Promise<T | undefined> => {
       const existing = inflight.get(userId);
       if (existing) {
         existing.waiters++;
         try {
-          await existing.promise;
+          return (await existing.promise) as T | undefined;
         } finally {
           existing.waiters--;
           if (existing.waiters <= 0) {
             inflight.delete(userId);
           }
         }
-        return;
       }
 
-      const promise = create().then(() => {}).catch(() => {});
+      let promise: Promise<T | undefined>;
+      try {
+        promise = Promise.resolve(create()).catch(() => undefined as T | undefined);
+      } catch {
+        promise = Promise.resolve(undefined as T | undefined);
+      }
       inflight.set(userId, { promise, waiters: 1 });
 
       try {
-        await promise;
+        return await promise;
       } finally {
         const entry = inflight.get(userId);
         if (entry) {

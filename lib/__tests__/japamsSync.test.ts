@@ -18,7 +18,16 @@ jest.mock('../supabase', () => ({
 }));
 
 /* eslint-disable import/first -- jest.mock() must precede imports; Jest hoists mock calls above import lines */
-import { syncJapam, createJapam, renameJapam, archiveJapam, restoreJapam, loadJapams, reconcileAllJapams } from '../japamsRepository';
+import {
+  syncJapam,
+  createJapam,
+  ensureDefaultJapam,
+  renameJapam,
+  archiveJapam,
+  restoreJapam,
+  loadJapams,
+  reconcileAllJapams,
+} from '../japamsRepository';
 import { supabase } from '../supabase';
 import { type Japam } from '../japams';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -42,14 +51,46 @@ const makeJapam = (overrides: Partial<Japam> = {}): Japam => ({
 });
 
 const mockUpsert = jest.fn();
+const mockSelect = jest.fn();
+const mockEq = jest.fn();
+const mockOrder = jest.fn();
 const mockFrom = supabase.from as jest.Mock;
 
 const flushMicrotasks = () => new Promise<void>((r) => setTimeout(r, 0));
 
+const makeRemoteJapam = (overrides: Partial<{
+  id: string;
+  user_id: string;
+  name: string;
+  display_order: number | null;
+  created_at: string;
+  updated_at: string | null;
+  archived_at: string | null;
+}> = {}) => ({
+  id: JAPAM_ID_A,
+  user_id: UID,
+  name: 'Gayatri',
+  display_order: null,
+  created_at: NOW,
+  updated_at: NOW,
+  archived_at: null,
+  ...overrides,
+});
+
+const mockRemoteJapams = (rows: ReturnType<typeof makeRemoteJapam>[], error: unknown = null) => {
+  mockOrder.mockResolvedValue({ data: rows, error });
+};
+
 beforeEach(async () => {
   await AsyncStorage.clear();
-  mockFrom.mockReturnValue({ upsert: mockUpsert });
+  mockSelect.mockReturnValue({ eq: mockEq });
+  mockEq.mockReturnValue({ order: mockOrder });
+  mockFrom.mockReturnValue({ upsert: mockUpsert, select: mockSelect });
   mockUpsert.mockReset();
+  mockSelect.mockClear();
+  mockEq.mockClear();
+  mockOrder.mockReset();
+  mockRemoteJapams([]);
   jest.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
@@ -151,6 +192,378 @@ describe('createJapam lifecycle sync', () => {
     const result = await createJapam(UID, 'KeepId');
     await flushMicrotasks();
     expect(mockUpsert.mock.calls[0][0].id).toBe(result!.created.id);
+  });
+});
+
+describe('ensureDefaultJapam', () => {
+  it('empty local storage + existing remote canonical adopts remote Japam and creates nothing', async () => {
+    const remote = makeRemoteJapam({
+      id: '11111111-1111-4111-8111-111111111111',
+      name: 'My Japam',
+      created_at: '2026-07-20T00:00:00.000Z',
+    });
+    mockRemoteJapams([remote]);
+
+    const result = await ensureDefaultJapam(UID);
+    await flushMicrotasks();
+
+    expect(result.japams).toHaveLength(1);
+    expect(result.japams[0].id).toBe(remote.id);
+    expect(result.currentJapamId).toBe(remote.id);
+    expect(result.created).toBeNull();
+    expect(mockUpsert).not.toHaveBeenCalled();
+    expect((await loadJapams(UID))[0].id).toBe(remote.id);
+  });
+
+  it('does not create a default when remote state is unknown', async () => {
+    mockRemoteJapams([], { code: '401', message: 'Unauthorized' });
+
+    const result = await ensureDefaultJapam(UID);
+
+    expect(result.japams).toEqual([]);
+    expect(result.currentJapamId).toBeNull();
+    expect(result.created).toBeNull();
+    expect(mockUpsert).not.toHaveBeenCalled();
+    expect(await loadJapams(UID)).toEqual([]);
+  });
+
+  it('a later refresh retries successfully after a remote failure', async () => {
+    const remote = makeRemoteJapam({
+      id: '12121212-1212-4121-8121-121212121212',
+      name: 'My Japam',
+      created_at: '2026-07-20T00:00:00.000Z',
+    });
+
+    mockRemoteJapams([], { code: '500', message: 'Temporary outage' });
+    const first = await ensureDefaultJapam(UID);
+    expect(first.currentJapamId).toBeNull();
+    expect(first.created).toBeNull();
+    expect(await loadJapams(UID)).toEqual([]);
+
+    mockRemoteJapams([remote]);
+    const second = await ensureDefaultJapam(UID);
+
+    expect(second.currentJapamId).toBe(remote.id);
+    expect(second.created).toBeNull();
+    expect(second.japams).toHaveLength(1);
+    expect(second.japams[0].id).toBe(remote.id);
+  });
+
+  it('two concurrent clients for the same new user converge on the same deterministic default id and one remote row', async () => {
+    mockRemoteJapams([]);
+    mockUpsert.mockResolvedValue({ error: null });
+
+    const [first, second] = await Promise.all([
+      ensureDefaultJapam(UID),
+      ensureDefaultJapam(UID),
+    ]);
+    await flushMicrotasks();
+
+    expect(first.currentJapamId).toBe(second.currentJapamId);
+    expect(first.currentJapamId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    const stored = await loadJapams(UID);
+    expect(stored.map((j) => j.id)).toEqual([first.currentJapamId]);
+    expect(mockUpsert).toHaveBeenCalledTimes(1);
+    expect(mockUpsert.mock.calls[0][0].id).toBe(first.currentJapamId);
+  });
+
+  it('different users receive different deterministic default ids', async () => {
+    mockRemoteJapams([]);
+    mockUpsert.mockResolvedValue({ error: null });
+
+    const first = await ensureDefaultJapam(UID);
+    const second = await ensureDefaultJapam(UID_OTHER);
+    await flushMicrotasks();
+
+    expect(first.currentJapamId).not.toBeNull();
+    expect(second.currentJapamId).not.toBeNull();
+    expect(first.currentJapamId).not.toBe(second.currentJapamId);
+  });
+
+  it('existing manual active Japam is adopted; no default is added, renamed, or removed', async () => {
+    const manual = makeJapam({
+      id: '22222222-2222-4222-8222-222222222222',
+      name: 'Govinda',
+      createdAt: '2026-07-19T00:00:00.000Z',
+    });
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([manual]));
+    mockRemoteJapams([]);
+
+    const result = await ensureDefaultJapam(UID);
+    await flushMicrotasks();
+
+    expect(result.japams).toEqual([manual]);
+    expect(result.currentJapamId).toBe(manual.id);
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it('valid persisted current selection remains selected', async () => {
+    const older = makeRemoteJapam({
+      id: '33333333-3333-4333-8333-333333333333',
+      name: 'Older',
+      created_at: '2026-07-18T00:00:00.000Z',
+    });
+    const selected = makeRemoteJapam({
+      id: '44444444-4444-4444-8444-444444444444',
+      name: 'Selected',
+      created_at: '2026-07-19T00:00:00.000Z',
+    });
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, selected.id);
+    mockRemoteJapams([older, selected]);
+
+    const result = await ensureDefaultJapam(UID);
+
+    expect(result.currentJapamId).toBe(selected.id);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(selected.id);
+  });
+
+  it('invalid persisted current selection repairs to the oldest active merged Japam deterministically', async () => {
+    const later = makeRemoteJapam({
+      id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      name: 'Later',
+      created_at: '2026-07-21T00:00:00.000Z',
+    });
+    const oldestById = makeRemoteJapam({
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      name: 'Oldest B',
+      created_at: '2026-07-20T00:00:00.000Z',
+    });
+    const sameTimeButHigherId = makeRemoteJapam({
+      id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      name: 'Oldest C',
+      created_at: '2026-07-20T00:00:00.000Z',
+    });
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, 'missing-id');
+    mockRemoteJapams([later, sameTimeButHigherId, oldestById]);
+
+    const result = await ensureDefaultJapam(UID);
+
+    expect(result.currentJapamId).toBe(oldestById.id);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(oldestById.id);
+  });
+
+  it('multiple existing duplicate active "My Japam" rows create no new row and return oldest selection', async () => {
+    const newest = makeRemoteJapam({
+      id: '99999999-9999-4999-8999-999999999999',
+      name: 'My Japam',
+      created_at: '2026-07-29T00:15:58.414Z',
+    });
+    const oldest = makeRemoteJapam({
+      id: '11111111-1111-4111-8111-111111111111',
+      name: 'My Japam',
+      created_at: '2026-07-21T00:04:34.432Z',
+    });
+    const middle = makeRemoteJapam({
+      id: '55555555-5555-4555-8555-555555555555',
+      name: 'My Japam',
+      created_at: '2026-07-25T06:22:37.193Z',
+    });
+    mockRemoteJapams([newest, middle, oldest]);
+
+    const result = await ensureDefaultJapam(UID);
+    await flushMicrotasks();
+
+    expect(result.japams.map((j) => j.id)).toEqual([oldest.id, middle.id, newest.id]);
+    expect(result.currentJapamId).toBe(oldest.id);
+    expect(result.created).toBeNull();
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it('remote/local merge preserves local-only and remote-only Japams without duplicate IDs', async () => {
+    const sharedLocal = makeJapam({
+      id: '55555555-5555-4555-8555-555555555555',
+      name: 'Local Name',
+      createdAt: '2026-07-20T00:00:00.000Z',
+    });
+    const localOnly = makeJapam({
+      id: '66666666-6666-4666-8666-666666666666',
+      name: 'Local Only',
+      createdAt: '2026-07-21T00:00:00.000Z',
+    });
+    const remoteOnly = makeRemoteJapam({
+      id: '77777777-7777-4777-8777-777777777777',
+      name: 'Remote Only',
+      created_at: '2026-07-22T00:00:00.000Z',
+    });
+    const sharedRemote = makeRemoteJapam({
+      id: sharedLocal.id,
+      name: 'Remote Name',
+      created_at: sharedLocal.createdAt,
+    });
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([sharedLocal, localOnly]));
+    mockRemoteJapams([remoteOnly, sharedRemote]);
+
+    const result = await ensureDefaultJapam(UID);
+
+    expect(result.japams.map((j) => j.id).sort()).toEqual([
+      localOnly.id,
+      remoteOnly.id,
+      sharedLocal.id,
+    ].sort());
+    expect(result.japams.find((j) => j.id === sharedLocal.id)?.name).toBe('Remote Name');
+    expect(result.japams.find((j) => j.id === remoteOnly.id)?.name).toBe('Remote Only');
+  });
+
+  it('remote archived row wins over stale local active data for the same id', async () => {
+    const sharedId = '88888888-8888-4888-8888-888888888888';
+    const localActive = makeJapam({
+      id: sharedId,
+      name: 'Stale Local',
+      createdAt: '2026-07-18T00:00:00.000Z',
+      updatedAt: '2026-07-29T00:00:00.000Z',
+      archivedAt: null,
+    });
+    const remoteArchived = makeRemoteJapam({
+      id: sharedId,
+      name: 'Remote Archived',
+      created_at: '2026-07-18T00:00:00.000Z',
+      updated_at: '2026-07-21T00:00:00.000Z',
+      archived_at: '2026-07-21T00:00:00.000Z',
+    });
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([localActive]));
+    mockRemoteJapams([remoteArchived]);
+
+    const result = await ensureDefaultJapam(UID);
+
+    expect(result.japams.find((j) => j.id === sharedId)?.archivedAt).toBe(remoteArchived.archived_at);
+    expect(result.japams.find((j) => j.id === sharedId)?.name).toBe('Remote Archived');
+    expect(result.created).not.toBeNull();
+    expect(mockUpsert).toHaveBeenCalledTimes(1);
+    expect(mockUpsert.mock.calls[0][0].id).toBe(result.created!.id);
+    expect(mockUpsert.mock.calls[0][0].id).not.toBe(sharedId);
+  });
+
+  it('prefers a newer remote row over an older local row for the same id', async () => {
+    const sharedId = '99999999-9999-4999-8999-999999999998';
+    const localOlder = makeJapam({
+      id: sharedId,
+      name: 'Old Local',
+      createdAt: '2026-07-18T00:00:00.000Z',
+      updatedAt: '2026-07-18T00:00:00.000Z',
+    });
+    const remoteNewer = makeRemoteJapam({
+      id: sharedId,
+      name: 'New Remote',
+      created_at: '2026-07-18T00:00:00.000Z',
+      updated_at: '2026-07-22T00:00:00.000Z',
+    });
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([localOlder]));
+    mockRemoteJapams([remoteNewer]);
+
+    const result = await ensureDefaultJapam(UID);
+
+    expect(result.japams).toHaveLength(1);
+    expect(result.japams[0].id).toBe(sharedId);
+    expect(result.japams[0].name).toBe('New Remote');
+    expect(result.created).toBeNull();
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it('allows a newer valid local row to win only when the remote row is not archived', async () => {
+    const sharedId = 'aaaa1111-aaaa-4111-8aaa-aaaaaaaaaaaa';
+    const localNewer = makeJapam({
+      id: sharedId,
+      name: 'New Local',
+      createdAt: '2026-07-18T00:00:00.000Z',
+      updatedAt: '2026-07-23T00:00:00.000Z',
+    });
+    const remoteOlder = makeRemoteJapam({
+      id: sharedId,
+      name: 'Old Remote',
+      created_at: '2026-07-18T00:00:00.000Z',
+      updated_at: '2026-07-20T00:00:00.000Z',
+    });
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([localNewer]));
+    mockRemoteJapams([remoteOlder]);
+
+    const result = await ensureDefaultJapam(UID);
+
+    expect(result.japams).toHaveLength(1);
+    expect(result.japams[0].id).toBe(sharedId);
+    expect(result.japams[0].name).toBe('New Local');
+    expect(result.created).toBeNull();
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the remote row when updatedAt is missing or invalid', async () => {
+    const sharedId = 'bbbb1111-bbbb-4111-8bbb-bbbbbbbbbbbb';
+    const staleLocal = makeJapam({
+      id: sharedId,
+      name: 'Local Draft',
+      createdAt: '2026-07-18T00:00:00.000Z',
+      updatedAt: '2026-07-23T00:00:00.000Z',
+    });
+    const remoteNoValidUpdatedAt = makeRemoteJapam({
+      id: sharedId,
+      name: 'Remote Canonical',
+      created_at: '2026-07-18T00:00:00.000Z',
+      updated_at: 'not-a-date',
+    });
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([staleLocal]));
+    mockRemoteJapams([remoteNoValidUpdatedAt]);
+
+    const result = await ensureDefaultJapam(UID);
+
+    expect(result.japams).toHaveLength(1);
+    expect(result.japams[0].id).toBe(sharedId);
+    expect(result.japams[0].name).toBe('Remote Canonical');
+    expect(result.created).toBeNull();
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it('is deterministic regardless of local and remote input ordering', async () => {
+    const localA = makeJapam({
+      id: 'cccc1111-cccc-4111-8ccc-cccccccccccc',
+      name: 'Local A',
+      createdAt: '2026-07-20T00:00:00.000Z',
+    });
+    const localB = makeJapam({
+      id: 'dddd1111-dddd-4111-8ddd-dddddddddddd',
+      name: 'Local B',
+      createdAt: '2026-07-21T00:00:00.000Z',
+    });
+    const remoteA = makeRemoteJapam({
+      id: 'eeee1111-eeee-4111-8eee-eeeeeeeeeeee',
+      name: 'Remote A',
+      created_at: '2026-07-18T00:00:00.000Z',
+    });
+    const remoteB = makeRemoteJapam({
+      id: 'ffff1111-ffff-4111-8fff-ffffffffffff',
+      name: 'Remote B',
+      created_at: '2026-07-22T00:00:00.000Z',
+    });
+
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([localA, localB]));
+    mockRemoteJapams([remoteB, remoteA]);
+    const first = await ensureDefaultJapam(UID);
+
+    await AsyncStorage.clear();
+    await AsyncStorage.setItem(`userJapams:${UID_OTHER}`, JSON.stringify([localB, localA]));
+    mockRemoteJapams([remoteA, remoteB]);
+    const second = await ensureDefaultJapam(UID_OTHER);
+
+    expect(first.japams.map((j) => j.id)).toEqual(second.japams.map((j) => j.id));
+  });
+
+  it('legacy null History remains byte-for-byte untouched', async () => {
+    const legacyHistory = JSON.stringify([
+      {
+        id: 'row-1',
+        userId: UID,
+        japamId: null,
+        japamName: null,
+        totalCount: 108,
+      },
+    ]);
+    await AsyncStorage.setItem('history', legacyHistory);
+    mockRemoteJapams([]);
+    mockUpsert.mockResolvedValue({ error: null });
+
+    await ensureDefaultJapam(UID);
+
+    expect(await AsyncStorage.getItem('history')).toBe(legacyHistory);
   });
 });
 
