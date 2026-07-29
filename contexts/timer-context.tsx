@@ -26,7 +26,7 @@ import {
   toLocalDayKey,
   type HistoryRecord,
 } from '../lib/historyStore';
-import { ensureJapamSyncedForHistory } from '../lib/japamsRepository';
+import { ensureJapamSyncedForHistory, loadJapams as loadStoredJapams } from '../lib/japamsRepository';
 import { getWebOmAudioUri } from '../lib/webOmAudio';
 import {
   shouldReleaseTimerCompletionClaim,
@@ -71,6 +71,9 @@ const TIMER_PAUSED_KEY = 'timerPaused';
 const TIMER_COMPLETED_LOOPS_KEY = 'timerCompletedLoops';
 const TIMER_STARTED_AT_KEY = 'timerStartedAt';
 const TIMER_SESSION_ID_KEY = 'timerSessionId';
+const TIMER_SESSION_JAPAM_ID_KEY = 'timerSessionJapamId';
+const TIMER_SESSION_JAPAM_NAME_KEY = 'timerSessionJapamName';
+const TIMER_PENDING_COMPLETION_LOOP_KEY = 'timerPendingCompletionLoop';
 const HISTORY_KEY = 'history';
 const DELETED_COMPLETIONS_KEY = 'deletedCompletions';
 const USER_ID_KEY = 'userId';
@@ -280,6 +283,29 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     activeJapamNameRef.current = japamName;
   }, []);
 
+  const resolveSessionJapamName = useCallback(async (
+    uid: string,
+    japamId: string | null,
+    persistedName: string | null,
+  ): Promise<string | null> => {
+    if (!japamId) return null;
+    if (persistedName) return persistedName;
+    const storedJapam = (await loadStoredJapams(uid)).find((j) => j.id === japamId);
+    return storedJapam?.name ?? null;
+  }, []);
+
+  const restoreActiveSessionJapamIdentity = useCallback(async (
+    uid: string,
+    sessionJapamId: string | null,
+    sessionJapamName: string | null,
+  ): Promise<boolean> => {
+    const resolvedName = await resolveSessionJapamName(uid, sessionJapamId, sessionJapamName);
+    if (!sessionJapamId || !resolvedName) return false;
+    activeJapamIdRef.current = sessionJapamId;
+    activeJapamNameRef.current = resolvedName;
+    return true;
+  }, [resolveSessionJapamName]);
+
   const getCurrentRemainingSeconds = useCallback(() => (
     Math.max(0, selectedDurationRef.current * 60 - secondsRef.current)
   ), []);
@@ -463,6 +489,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       [T_DURATION_KEY, String(selectedDurationRef.current)],
       [T_LOOPS_KEY, String(selectedLoopsRef.current)],
     ];
+    if (!timerSessionIdRef.current) {
+      pairs.push([TIMER_SESSION_JAPAM_ID_KEY, '']);
+      pairs.push([TIMER_SESSION_JAPAM_NAME_KEY, '']);
+    } else if (activeJapamIdRef.current && activeJapamNameRef.current) {
+      pairs.push([TIMER_SESSION_JAPAM_ID_KEY, activeJapamIdRef.current]);
+      pairs.push([TIMER_SESSION_JAPAM_NAME_KEY, activeJapamNameRef.current]);
+    }
     // [TIMER_DIAG] Every persistState call — this is the JS-side snapshot a later cold-start
     // restore will read back, so its freshness/correctness at write time matters.
     logDiagM('persist_state', {
@@ -508,6 +541,58 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           (await AsyncStorage.getItem(TIMER_COMPLETED_LOOPS_KEY))
         : await AsyncStorage.getItem(TIMER_COMPLETED_LOOPS_KEY);
       return clampCompletedLoops(Number(raw) || 0, selectedLoopsRef.current);
+    } catch {
+      return 0;
+    }
+  }, []);
+
+  const pendingCompletionKeys = useCallback((): string[] => {
+    const uid = userIdRef.current;
+    const japamId = activeJapamIdRef.current || currentJapamIdRef.current;
+    return buildSelectionPairs(TIMER_PENDING_COMPLETION_LOOP_KEY, '', uid, japamId).map(([key]) => key);
+  }, []);
+
+  const persistPendingTimerCompletion = useCallback(async (loop: number) => {
+    const value = String(clampCompletedLoops(loop, selectedLoopsRef.current));
+    try {
+      await AsyncStorage.multiSet(
+        buildSelectionPairs(
+          TIMER_PENDING_COMPLETION_LOOP_KEY,
+          value,
+          userIdRef.current,
+          activeJapamIdRef.current || currentJapamIdRef.current,
+        ),
+      );
+      await persistState(false);
+    } catch {}
+  }, [persistState]);
+
+  const clearPendingTimerCompletion = useCallback(async () => {
+    try {
+      await AsyncStorage.multiRemove(pendingCompletionKeys());
+    } catch {}
+  }, [pendingCompletionKeys]);
+
+  const readPendingTimerCompletion = useCallback(async () => {
+    try {
+      const uid = userIdRef.current;
+      const sessionJapamId = activeJapamIdRef.current;
+      const currentJapamId = currentJapamIdRef.current;
+      const readForJapam = async (japamId: string) =>
+        AsyncStorage.getItem(getJapamKey(TIMER_PENDING_COMPLETION_LOOP_KEY, uid, japamId));
+      const raw = uid
+        ? (sessionJapamId
+            ? (await readForJapam(sessionJapamId)) ??
+              (currentJapamId && currentJapamId !== sessionJapamId ? await readForJapam(currentJapamId) : null) ??
+              (await AsyncStorage.getItem(getUserKey(TIMER_PENDING_COMPLETION_LOOP_KEY, uid)))
+            : currentJapamId
+              ? (await readForJapam(currentJapamId)) ??
+                (await AsyncStorage.getItem(getUserKey(TIMER_PENDING_COMPLETION_LOOP_KEY, uid)))
+              : await AsyncStorage.getItem(getUserKey(TIMER_PENDING_COMPLETION_LOOP_KEY, uid))) ??
+          (await AsyncStorage.getItem(TIMER_PENDING_COMPLETION_LOOP_KEY))
+        : await AsyncStorage.getItem(TIMER_PENDING_COMPLETION_LOOP_KEY);
+      const loop = Number(raw) || 0;
+      return loop > 0 ? clampCompletedLoops(loop, selectedLoopsRef.current) : 0;
     } catch {
       return 0;
     }
@@ -1025,6 +1110,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const finalizeCompletedTimerSession = useCallback(async () => {
+    await clearPendingTimerCompletion();
+    timerSessionIdRef.current = '';
+    activeJapamIdRef.current = null;
+    activeJapamNameRef.current = null;
+    updateTimerState({ sessionId: '', isCompleting: false, startedAt: null });
+    if (Platform.OS === 'android') void stopForegroundService();
+    void persistState(false);
+    isCompletingRef.current = false;
+    console.log('[LoopComplete] All loops done in foreground');
+  }, [clearPendingTimerCompletion, persistState]);
+
   // Mirrors tap-japam.tsx/index.tsx's saveUserTotalToSupabase exactly (same request shape) — the
   // Timer flow previously only wrote japam_history, never japam_user_totals, so Groups Dashboard's
   // Lifetime Count (sourced from japam_user_totals) stayed at 0 for Timer-only users even though
@@ -1121,9 +1218,6 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       console.log('[StatsRefresh] Events re-emitted from foreground path');
       return 'duplicate-skip';
     }
-    lastSavedSessionRef.current = { key: sessionKey, savedAt: Date.now() };
-    updateTimerState({ lastSavedCompletedLoops: completedLoopsRef.current });
-
     const now = new Date();
     console.log('[TimerSessionDate] deviceLocalTime=%s generatedDateKey=%s sessionIso=%s',
       now.toString(),
@@ -1166,6 +1260,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       const history = raw ? JSON.parse(raw) : [];
       const updatedHistory = appendCompletion(history, completion);
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updatedHistory));
+      lastSavedSessionRef.current = { key: sessionKey, savedAt: Date.now() };
+      updateTimerState({ lastSavedCompletedLoops: completedLoopsRef.current });
       console.log(
         '[OFFLINE_SAVE_ACCEPTED] source=timer completionId=%s created_at=%s localDay=%s syncStatus=%s japamId=%s japamName=%s',
         updatedHistory[0]?.completionId,
@@ -1200,6 +1296,61 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     return 'saved';
   }, [readMalasTodaySnapshot, syncPendingHistory, syncLifetimeTotalToSupabase]);
 
+  const retryPendingTimerCompletionInFlightRef = useRef(false);
+  const retryPendingTimerCompletion = useCallback(async () => {
+    if (retryPendingTimerCompletionInFlightRef.current) return;
+    retryPendingTimerCompletionInFlightRef.current = true;
+    try {
+      const pendingLoop = await readPendingTimerCompletion();
+      if (!pendingLoop || !timerSessionIdRef.current) return;
+      if (timerCompletionSaveReadiness(userIdRef.current, activeJapamIdRef.current, activeJapamNameRef.current)) {
+        return;
+      }
+
+      completedLoopsRef.current = pendingLoop;
+      setCompletedLoops(pendingLoop);
+      updateTimerState({ completedLoops: pendingLoop });
+      const saveResult = await saveSession();
+      if (saveResult === 'retryable-skip') {
+        processedCompletionLoopsRef.current.delete(pendingLoop);
+        return;
+      }
+      await clearPendingTimerCompletion();
+      if (pendingLoop >= selectedLoopsRef.current) {
+        await finalizeCompletedTimerSession();
+      }
+    } finally {
+      retryPendingTimerCompletionInFlightRef.current = false;
+    }
+  }, [clearPendingTimerCompletion, finalizeCompletedTimerSession, readPendingTimerCompletion, saveSession]);
+
+  const hydratePersistedSessionJapamIdentity = useCallback(async () => {
+    if (activeJapamIdRef.current && activeJapamNameRef.current) {
+      void retryPendingTimerCompletion();
+      return;
+    }
+    const uid = userIdRef.current || await AsyncStorage.getItem(USER_ID_KEY) || '';
+    if (!uid) return;
+    const selectedJapamId = currentJapamIdRef.current || await AsyncStorage.getItem(`currentJapamId:${uid}`);
+    const get = async (key: string) => {
+      if (selectedJapamId) {
+        const japamVal = await AsyncStorage.getItem(getJapamKey(key, uid, selectedJapamId));
+        if (japamVal !== null) return japamVal;
+      }
+      const userVal = await AsyncStorage.getItem(getUserKey(key, uid));
+      if (userVal !== null) return userVal;
+      return AsyncStorage.getItem(key);
+    };
+    const [sessionId, sessionJapamId, sessionJapamName] = await Promise.all([
+      get(TIMER_SESSION_ID_KEY),
+      get(TIMER_SESSION_JAPAM_ID_KEY),
+      get(TIMER_SESSION_JAPAM_NAME_KEY),
+    ]);
+    if (!sessionId) return;
+    await restoreActiveSessionJapamIdentity(uid, sessionJapamId, sessionJapamName);
+    void retryPendingTimerCompletion();
+  }, [restoreActiveSessionJapamIdentity, retryPendingTimerCompletion]);
+
   // Flush any pending (offline-recorded) malas on launch and whenever the app returns to the
   // foreground — i.e. opportunistically when connectivity is likely back. No-op when offline.
   useEffect(() => {
@@ -1225,6 +1376,22 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       }
     };
   }, [syncPendingHistory]);
+
+  useEffect(() => {
+    void hydratePersistedSessionJapamIdentity();
+    const authSub = DeviceEventEmitter.addListener('japam-auth-updated', () => {
+      void hydratePersistedSessionJapamIdentity();
+    });
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.addEventListener('japam-auth-updated', hydratePersistedSessionJapamIdentity as EventListener);
+    }
+    return () => {
+      authSub.remove();
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.removeEventListener('japam-auth-updated', hydratePersistedSessionJapamIdentity as EventListener);
+      }
+    };
+  }, [hydratePersistedSessionJapamIdentity]);
 
   const refreshAuthState = useCallback(async () => {
     const uid = await AsyncStorage.getItem(USER_ID_KEY) || '';
@@ -1256,7 +1423,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     // When a user just signed in (uid transitions from empty to a real value), flush any pending
     // records immediately — covers Guest → Google migration records.
     if (uid && !prevUid) void syncPendingHistory();
-  }, [clearTimerInterval, hideNotification, releaseWakeLock, syncPendingHistory]);
+    if (uid) void hydratePersistedSessionJapamIdentity();
+  }, [clearTimerInterval, hideNotification, hydratePersistedSessionJapamIdentity, releaseWakeLock, syncPendingHistory]);
 
   const completeCycle = useCallback(async () => {
     if (isCompletingRef.current) {
@@ -1419,15 +1587,16 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     const saveResult = await saveSession();
     if (shouldReleaseTimerCompletionClaim(saveResult)) {
       processedCompletionLoopsRef.current.delete(newDone);
+      await persistPendingTimerCompletion(newDone);
+      void hydratePersistedSessionJapamIdentity();
+      updateTimerState({ isCompleting: false });
+      isCompletingRef.current = false;
+      return;
     }
 
     if (isFinal) {
-      timerSessionIdRef.current = '';
-      updateTimerState({ sessionId: '', isCompleting: false, startedAt: null });
-      if (Platform.OS === 'android') void stopForegroundService();
-      void persistState(false);
-      isCompletingRef.current = false;
-      console.log('[LoopComplete] All loops done in foreground');
+      await clearPendingTimerCompletion();
+      await finalizeCompletedTimerSession();
       return;
     }
 
@@ -1470,7 +1639,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     clearCompletionNotification,
     getCurrentRemainingSeconds,
     hideNotification,
+    clearPendingTimerCompletion,
+    finalizeCompletedTimerSession,
     persistState,
+    persistPendingTimerCompletion,
     releaseWakeLock,
     saveSession,
     persistCompletedLoops,
@@ -1479,6 +1651,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     showNotification,
     showBrowserCompletionNotification,
     startTimerInterval,
+    hydratePersistedSessionJapamIdentity,
   ]);
 
   useEffect(() => {
@@ -1558,12 +1731,25 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         const saveResult = await saveSession();
         if (shouldReleaseTimerCompletionClaim(saveResult)) {
           processedCompletionLoopsRef.current.delete(clamped);
+          await persistPendingTimerCompletion(clamped);
+          void hydratePersistedSessionJapamIdentity();
+        } else if (event.isFinal || clamped >= selectedLoopsRef.current) {
+          await clearPendingTimerCompletion();
+          await finalizeCompletedTimerSession();
         }
         console.log('[NativeTimer] japamTimerLoopComplete background save loop=%d isFinal=%s', loop, event.isFinal);
       }
     );
     return () => sub.remove();
-  }, [claimCompletionLoop, persistCompletedLoops, saveSession]);
+  }, [
+    claimCompletionLoop,
+    clearPendingTimerCompletion,
+    finalizeCompletedTimerSession,
+    persistCompletedLoops,
+    persistPendingTimerCompletion,
+    hydratePersistedSessionJapamIdentity,
+    saveSession,
+  ]);
 
   useEffect(() => {
     if (Platform.OS !== 'android') return;
@@ -1634,7 +1820,19 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           }
           return AsyncStorage.getItem(key);
         };
-        const [sec, target, dur, loops, paused, completed, running, startedAt, sessionId] = await Promise.all([
+        const [
+          sec,
+          target,
+          dur,
+          loops,
+          paused,
+          completed,
+          running,
+          startedAt,
+          sessionId,
+          sessionJapamId,
+          sessionJapamName,
+        ] = await Promise.all([
           get(TIMER_SECONDS_KEY),
           get(TIMER_TARGET_KEY),
           get(T_DURATION_KEY),
@@ -1644,6 +1842,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           get(TIMER_RUNNING_KEY),
           get(TIMER_STARTED_AT_KEY),
           get(TIMER_SESSION_ID_KEY),
+          get(TIMER_SESSION_JAPAM_ID_KEY),
+          get(TIMER_SESSION_JAPAM_NAME_KEY),
         ]);
         const savedSec = Number(sec) || 0;
         const savedTarget = Number(target) || 0;
@@ -1665,6 +1865,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           selectedDurationBefore: selectedDurationRef.current,
         });
         timerSessionIdRef.current = savedSessionId;
+        if (savedSessionId) {
+          await restoreActiveSessionJapamIdentity(uid, sessionJapamId, sessionJapamName);
+        }
         if (savedDur > 0) {
           setSelectedDurationDiag(savedDur, 'session-restore');
         } else if (savedTarget > 0) {
@@ -1713,9 +1916,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           selectedDurationAfter: selectedDurationRef.current,
           remainingSecondsAfter: Math.max(0, selectedDurationRef.current * 60 - secondsRef.current),
         });
+        void retryPendingTimerCompletion();
       } catch {}
     })();
-  }, []);
+  }, [restoreActiveSessionJapamIdentity, retryPendingTimerCompletion]);
 
   useEffect(() => {
     if (isRunning && seconds > 0 && seconds >= targetSeconds && !isCompletingRef.current) {
@@ -1738,7 +1942,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         }
         return AsyncStorage.getItem(key);
       };
-      const [sec, target, dur, loops, completed, running, startedAt, sessionId] = await Promise.all([
+      const [
+        sec,
+        target,
+        dur,
+        loops,
+        completed,
+        running,
+        startedAt,
+        sessionId,
+        sessionJapamId,
+        sessionJapamName,
+      ] = await Promise.all([
         get(TIMER_SECONDS_KEY),
         get(TIMER_TARGET_KEY),
         get(T_DURATION_KEY),
@@ -1747,6 +1962,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         get(TIMER_RUNNING_KEY),
         get(TIMER_STARTED_AT_KEY),
         get(TIMER_SESSION_ID_KEY),
+        get(TIMER_SESSION_JAPAM_ID_KEY),
+        get(TIMER_SESSION_JAPAM_NAME_KEY),
       ]);
 
       const savedRunning = running === 'true';
@@ -1768,6 +1985,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       });
       if (!savedRunning || restoredTarget <= 0) return false;
       const restoredSessionId = sessionId || createTimerSessionId();
+      await restoreActiveSessionJapamIdentity(uid, sessionJapamId, sessionJapamName);
 
       const restoredStartedAt = savedStartedAt > 0
         ? savedStartedAt
@@ -1806,6 +2024,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       startTimerInterval();
       void acquireWakeLock();
       void persistState(true);
+      void retryPendingTimerCompletion();
       console.log('[TimerBG] TIMER_RESTORE_RUNNING sessionId=%s startedAt=%d elapsed=%ds target=%ds completedLoops=%d/%d',
         restoredSessionId, restoredStartedAt, elapsed, restoredTarget, safeCompletedLoops, activeLoopLimit);
       logDiagM('restore_path_result', {
@@ -1819,7 +2038,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       console.log('[TimerBG] Restore running timer error:', error);
       return false;
     }
-  }, [acquireWakeLock, persistState, startTimerInterval]);
+  }, [acquireWakeLock, persistState, restoreActiveSessionJapamIdentity, retryPendingTimerCompletion, startTimerInterval]);
 
   useEffect(() => {
     if (!isRunning) return;
@@ -1860,6 +2079,14 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           const saveResult = await saveSession();
           if (shouldReleaseTimerCompletionClaim(saveResult)) {
             processedCompletionLoopsRef.current.delete(clamped);
+            await persistPendingTimerCompletion(clamped);
+            void hydratePersistedSessionJapamIdentity();
+            return;
+          }
+          if (clamped >= selectedLoopsRef.current) {
+            await clearPendingTimerCompletion();
+            await finalizeCompletedTimerSession();
+            return;
           }
         }
       }
@@ -1890,6 +2117,11 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       // during which native.isRunning still reads true — see
       // docs/BUGFIX_TIMER_RESTORE_STALE_SESSION.md for the full root-cause writeup).
       if (!moreToGo && !isCompletingRef.current) {
+        const pendingLoop = await readPendingTimerCompletion();
+        if (pendingLoop) {
+          void hydratePersistedSessionJapamIdentity();
+          return;
+        }
         const targetSec = selectedDurationRef.current * 60;
         setSeconds(targetSec);
         secondsRef.current = targetSec;
@@ -1906,7 +2138,19 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       console.log('[TimerBG] reconcileNativeLoops error:', e);
     }
-  }, [acquireWakeLock, claimCompletionLoop, persistCompletedLoops, persistState, saveSession, startTimerInterval]);
+  }, [
+    acquireWakeLock,
+    claimCompletionLoop,
+    clearPendingTimerCompletion,
+    finalizeCompletedTimerSession,
+    persistCompletedLoops,
+    persistPendingTimerCompletion,
+    persistState,
+    hydratePersistedSessionJapamIdentity,
+    readPendingTimerCompletion,
+    saveSession,
+    startTimerInterval,
+  ]);
 
   useEffect(() => {
     // [TIMER_DIAG] Listener registration — if this fires more than once without a matching
@@ -2183,13 +2427,16 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     processedCompletionLoopsRef.current.clear();
     timerStartedAtRef.current = null;
     timerSessionIdRef.current = '';
+    void clearPendingTimerCompletion();
+    activeJapamIdRef.current = null;
+    activeJapamNameRef.current = null;
     updateTimerState({ sessionId: '', startedAt: null, completedLoops: 0, isCompleting: false, lastSavedCompletedLoops: 0 });
     void hideNotification();
     clearCompletionNotification();
     if (Platform.OS === 'android') void stopForegroundService();
     void persistState(false);
     console.log('[TimerBG] Timer reset');
-  }, [clearCompletionNotification, clearTimerInterval, hideNotification, persistState, releaseWakeLock]);
+  }, [clearCompletionNotification, clearPendingTimerCompletion, clearTimerInterval, hideNotification, persistState, releaseWakeLock]);
 
   // Per-Japam timer state: saves the current timer state and loads the next Japam's state
   // when the user switches Japams. The will-switch handler fires BEFORE the Japam context
@@ -2239,6 +2486,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
               sessionId: timerSessionIdRef.current,
               duration: selectedDurationRef.current,
               loops: selectedLoopsRef.current,
+              sessionJapamId: activeJapamIdRef.current,
+              sessionJapamName: activeJapamNameRef.current,
             };
             await saveJapamTimerState(uid, fromJapamId, snapshot).catch(() => {});
           }
@@ -2268,12 +2517,26 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         const raw = japamId ? await readJapamTimerState(uid, japamId) : {
           seconds: null, target: null, duration: null, loops: null,
           paused: null, completedLoops: null, running: null,
-          startedAt: null, sessionId: null,
+          startedAt: null, sessionId: null, sessionJapamId: null,
+          sessionJapamName: null, pendingCompletionLoop: null,
         };
-        const [sec, target, dur, loops, paused, completed, running, startedAt, sessionId] = [
+        const [
+          sec,
+          target,
+          dur,
+          loops,
+          paused,
+          completed,
+          running,
+          startedAt,
+          sessionId,
+          sessionJapamId,
+          sessionJapamName,
+        ] = [
           raw.seconds, raw.target, raw.duration, raw.loops,
           raw.paused, raw.completedLoops, raw.running,
-          raw.startedAt, raw.sessionId,
+          raw.startedAt, raw.sessionId, raw.sessionJapamId,
+          raw.sessionJapamName,
         ];
         // Apply loaded state with the same cold-start restore decision logic.
         const savedSec = Number(sec) || 0;
@@ -2286,6 +2549,12 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         const savedStartedAt = Number(startedAt) || 0;
         const savedSessionId = sessionId || '';
         timerSessionIdRef.current = savedSessionId;
+        if (savedSessionId) {
+          await restoreActiveSessionJapamIdentity(uid, sessionJapamId, sessionJapamName);
+        } else {
+          activeJapamIdRef.current = null;
+          activeJapamNameRef.current = null;
+        }
         if (savedDur > 0) {
           setSelectedDurationDiag(savedDur, 'session-restore');
         } else if (savedTarget > 0) {
@@ -2329,6 +2598,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           timerSessionIdRef.current = '';
           updateTimerState({ sessionId: '' });
         }
+        void retryPendingTimerCompletion();
       }
     );
 
@@ -2336,7 +2606,16 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       willSwitchSub.remove();
       didSwitchSub.remove();
     };
-  }, [clearCompletionNotification, clearTimerInterval, hideNotification, releaseWakeLock, setSelectedDurationDiag, computeColdStartRestoreDecision]);
+  }, [
+    clearCompletionNotification,
+    clearTimerInterval,
+    hideNotification,
+    releaseWakeLock,
+    setSelectedDurationDiag,
+    computeColdStartRestoreDecision,
+    restoreActiveSessionJapamIdentity,
+    retryPendingTimerCompletion,
+  ]);
 
   const selectDuration = useCallback((mins: number) => {
     if (isRunningRef.current) return;
