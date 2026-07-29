@@ -25,6 +25,7 @@ import {
   restoreJapam as restoreJapamPure,
   type Japam,
 } from './japams';
+import { uuidV5 } from './deterministicUuid';
 import {
   loadJapams as loadJapamsFromStorage,
   saveJapams as saveJapamsToStorage,
@@ -32,7 +33,117 @@ import {
   saveCurrentJapamId as saveCurrentJapamIdToStorage,
 } from './japamsStorage';
 
+const DEFAULT_JAPAM_NAME = 'My Japam';
+const DEFAULT_JAPAM_UUID_NAMESPACE = '62f5824e-58fd-5d39-9f87-1f761082d8e3';
+
 const syncInFlight = new Map<string, boolean>();
+const defaultEnsureInFlight = new Map<string, Promise<{
+  japams: Japam[];
+  currentJapamId: string | null;
+  created: Japam | null;
+}>>();
+
+type RemoteJapamRow = {
+  id: string;
+  user_id: string;
+  name: string;
+  display_order?: number | null;
+  created_at: string;
+  updated_at?: string | null;
+  archived_at?: string | null;
+};
+
+const remoteRowToJapam = (row: RemoteJapamRow): Japam => ({
+  id: row.id,
+  userId: row.user_id,
+  name: row.name,
+  displayOrder: row.display_order ?? null,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at ?? row.created_at,
+  archivedAt: row.archived_at ?? null,
+});
+
+const createdAtMillis = (japam: Japam): number => {
+  const millis = Date.parse(japam.createdAt);
+  return Number.isFinite(millis) ? millis : Number.MAX_SAFE_INTEGER;
+};
+
+const updatedAtMillis = (japam: Japam): number | null => {
+  const millis = Date.parse(japam.updatedAt);
+  return Number.isFinite(millis) ? millis : null;
+};
+
+const sortByCreatedAtThenId = (a: Japam, b: Japam): number => {
+  const timeDiff = createdAtMillis(a) - createdAtMillis(b);
+  if (timeDiff !== 0) return timeDiff;
+  return a.id.localeCompare(b.id);
+};
+
+const activeByCanonicalOrder = (japams: Japam[]): Japam[] =>
+  japams.filter((j) => j.archivedAt === null).sort(sortByCreatedAtThenId);
+
+const mergeJapamsById = (local: Japam[], remote: Japam[]): Japam[] => {
+  const merged = new Map<string, Japam>();
+  for (const japam of remote) {
+    merged.set(japam.id, japam);
+  }
+  for (const japam of local) {
+    const remoteMatch = merged.get(japam.id);
+    if (!remoteMatch) {
+      merged.set(japam.id, japam);
+      continue;
+    }
+    merged.set(japam.id, resolveSameIdJapam(japam, remoteMatch));
+  }
+  return [...merged.values()].sort(sortByCreatedAtThenId);
+};
+
+function resolveSameIdJapam(local: Japam, remote: Japam): Japam {
+  // A remotely archived Japam must stay archived even if the local cache is stale.
+  if (remote.archivedAt !== null) return remote;
+
+  const localUpdatedAt = updatedAtMillis(local);
+  const remoteUpdatedAt = updatedAtMillis(remote);
+  if (localUpdatedAt !== null && remoteUpdatedAt !== null) {
+    if (localUpdatedAt > remoteUpdatedAt) return local;
+    if (remoteUpdatedAt > localUpdatedAt) return remote;
+  }
+
+  // If we cannot prove the local copy is newer, prefer the remote row during signed-in startup
+  // reconciliation so we do not silently overwrite authoritative remote state.
+  return remote;
+}
+
+const deterministicDefaultJapamId = (userId: string): string =>
+  uuidV5(`${userId}:default-japam`, DEFAULT_JAPAM_UUID_NAMESPACE);
+
+const fetchRemoteJapams = async (userId: string): Promise<Japam[] | null> => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { supabase } = require('./supabase');
+    const { data, error } = await supabase
+      .from('japams')
+      .select('id,user_id,name,display_order,created_at,updated_at,archived_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.warn('[JAPAM_REMOTE_LOAD_FAILED]', {
+        code: error.code,
+        message: error.message,
+      });
+      return null;
+    }
+
+    return ((data ?? []) as RemoteJapamRow[]).map(remoteRowToJapam);
+  } catch {
+    console.warn('[JAPAM_REMOTE_LOAD_FAILED]', {
+      code: 'NETWORK_ERROR',
+      message: 'Network error during Japam remote load',
+    });
+    return null;
+  }
+};
 
 const enqueueSync = (userId: string, japam: Japam): void => {
   if (!userId) return;
@@ -96,6 +207,68 @@ export const createJapam = async (
   await saveJapamsToStorage(userId, updated);
   if (userId) enqueueSync(userId, created);
   return { created, japams: updated };
+};
+
+const ensureDefaultJapamInternal = async (
+  userId: string,
+): Promise<{ japams: Japam[]; currentJapamId: string | null; created: Japam | null }> => {
+  const local = await loadJapamsFromStorage(userId);
+  const remote = await fetchRemoteJapams(userId);
+  const merged = remote === null ? local : mergeJapamsById(local, remote);
+  await saveJapamsToStorage(userId, merged);
+
+  const persistedCurrentId = await loadCurrentJapamIdFromStorage(userId);
+  const active = activeByCanonicalOrder(merged);
+  const persistedStillActive = persistedCurrentId
+    ? active.find((j) => j.id === persistedCurrentId)
+    : undefined;
+  if (persistedStillActive) {
+    return { japams: merged, currentJapamId: persistedStillActive.id, created: null };
+  }
+
+  if (active.length > 0) {
+    const currentJapamId = active[0].id;
+    await saveCurrentJapamIdToStorage(userId, currentJapamId);
+    return { japams: merged, currentJapamId, created: null };
+  }
+
+  // If remote could not be loaded, do not guess that the signed-in user has no remote Japams.
+  if (remote === null) {
+    if (persistedCurrentId !== null) {
+      await saveCurrentJapamIdToStorage(userId, null);
+    }
+    return { japams: merged, currentJapamId: null, created: null };
+  }
+
+  const now = new Date().toISOString();
+  const created = createJapamPure(userId, DEFAULT_JAPAM_NAME, {
+    id: deterministicDefaultJapamId(userId),
+    now,
+  });
+  if (created === null) return { japams: merged, currentJapamId: null, created: null };
+
+  const updated = [...merged, created].sort(sortByCreatedAtThenId);
+  await saveJapamsToStorage(userId, updated);
+  await saveCurrentJapamIdToStorage(userId, created.id);
+  enqueueSync(userId, created);
+  return { japams: updated, currentJapamId: created.id, created };
+};
+
+export const ensureDefaultJapam = async (
+  userId: string,
+): Promise<{ japams: Japam[]; currentJapamId: string | null; created: Japam | null }> => {
+  const existing = defaultEnsureInFlight.get(userId);
+  if (existing) return existing;
+
+  const promise = ensureDefaultJapamInternal(userId);
+  defaultEnsureInFlight.set(userId, promise);
+  try {
+    return await promise;
+  } finally {
+    if (defaultEnsureInFlight.get(userId) === promise) {
+      defaultEnsureInFlight.delete(userId);
+    }
+  }
 };
 
 /** Rename a Japam and persist it. No-op (returns the list unchanged) if japamId isn't found. */

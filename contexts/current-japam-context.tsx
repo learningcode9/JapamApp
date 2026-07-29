@@ -77,39 +77,37 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
     setIsLoading(true);
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
     userIdRef.current = userId;
-    let loadedJapams = await japamsRepository.loadJapams(userId);
-
-    // Auto-create a real "My Japam" record for users with zero active Japams.
-    // This ensures Timer, Tap Japam, History, and Stats always have a real Japam ID to use
-    // instead of falling through to null.
-    if (activeJapams(loadedJapams).length === 0 && userId) {
-      await coordinator.ensureCreation(userId, () =>
-        japamsRepository.createJapam(userId, 'My Japam'),
-      );
-      // Re-read from storage after creation settles. This is the ONLY way every caller gets the
-      // true persisted state — the promise's resolved value is unused precisely because it could
-      // be stale for late-arriving waiters.
-      loadedJapams = await japamsRepository.loadJapams(userId);
+    if (!userId) {
+      const loadedJapams = await japamsRepository.loadJapams(userId);
+      const persistedCurrentId = await japamsRepository.loadCurrentJapamId(userId);
+      setJapams(loadedJapams);
+      // Guest/local-only behavior stays unchanged: select from the local cache only.
+      const active = activeJapams(loadedJapams);
+      const persistedStillActive = persistedCurrentId
+        ? active.find((j) => j.id === persistedCurrentId)
+        : undefined;
+      const resolvedCurrentId = persistedStillActive?.id ?? active[0]?.id ?? null;
+      setCurrentJapamIdState(resolvedCurrentId);
+      if (resolvedCurrentId !== persistedCurrentId) {
+        await japamsRepository.saveCurrentJapamId(userId, resolvedCurrentId);
+      }
+      setIsLoading(false);
+      return;
     }
 
-    const persistedCurrentId = await japamsRepository.loadCurrentJapamId(userId);
-    setJapams(loadedJapams);
-    // Auto-reopen the last selected Japam, per the approved architecture -- but only if it still
-    // exists and is not archived. Otherwise fall back to the first active Japam, or null (empty
-    // state / no Japams yet) if there are none.
-    const active = activeJapams(loadedJapams);
-    const persistedStillActive = persistedCurrentId
-      ? active.find((j) => j.id === persistedCurrentId)
-      : undefined;
-    const resolvedCurrentId = persistedStillActive?.id ?? active[0]?.id ?? null;
-    setCurrentJapamIdState(resolvedCurrentId);
-    if (resolvedCurrentId !== persistedCurrentId) {
-      await japamsRepository.saveCurrentJapamId(userId, resolvedCurrentId);
+    // Signed-in startup always reconciles remote/local state through the repository helper and
+    // uses the returned merged list plus canonical selection directly.
+    const result = await coordinator.ensureCreation(userId, () =>
+      japamsRepository.ensureDefaultJapam(userId),
+    );
+    if (!result) {
+      setIsLoading(false);
+      return;
     }
+
+    setJapams(result.japams);
+    setCurrentJapamIdState(result.currentJapamId);
     setIsLoading(false);
-    if (userId) {
-      void japamsRepository.reconcileAllJapams(userId);
-    }
   }, [coordinator]);
 
   useEffect(() => {
