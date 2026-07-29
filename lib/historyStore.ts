@@ -442,14 +442,9 @@ export const reconcileWithServer = (
  * Build the Supabase row from the local record. The important bit is `created_at: record.date`:
  * offline completions must upload with their actual completion time, not the later sync time.
  *
- * Stop-loss (Issue 1): japam_history.japam_id has a live FK to public.japams, but nothing yet
- * writes rows to public.japams (Japam Sync is not implemented). Sending a real japamId here would
- * make every tagged completion fail this FK and get stuck 'pending' forever. Until Japam Sync
- * exists, we deliberately withhold japam_id from the remote payload (always null, which always
- * satisfies the FK) while still sending japam_name (plain nullable text column, no FK) so a
- * restored/cross-device copy at least has a human-readable label. Local japamId is untouched --
- * this only affects what gets sent to Supabase, not local storage, filtering, or stats. Revert this
- * one line once Japam Sync gives japam_id a real row to reference.
+ * Japam Sync now guarantees signed-in users have remote Japam rows before completion save/upload,
+ * so the selected japamId must be preserved in Supabase instead of falling back to name-only legacy
+ * attribution.
  */
 export const buildSupabaseHistoryPayload = (
   record: RawHistoryRecord,
@@ -467,7 +462,7 @@ export const buildSupabaseHistoryPayload = (
     count: normalized.totalCount,
     created_at: normalized.date,
     completion_id: normalized.completionId,
-    japam_id: null,
+    japam_id: normalized.japamId ?? null,
     japam_name: normalized.japamName ?? null,
   };
 };

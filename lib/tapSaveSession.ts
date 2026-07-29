@@ -51,6 +51,14 @@ export async function tapSaveSession(
   }
 
   const currentUserId = identity?.userId ?? await AsyncStorage.getItem(USER_ID_KEY);
+  const japamId = identity?.japamId ?? refs.activeJapamId.current;
+  const japamName = identity?.japamName ?? refs.activeJapamName.current;
+
+  if (currentUserId && (!japamId || !japamName)) {
+    if (source === 'tap') console.log('TAP_HISTORY_SAVE_SKIPPED reason=current-japam-unresolved');
+    return false;
+  }
+
   const sessionSignature = `${currentUserId || 'guest'}-${getLocalDateKey()}-${duration}-${sessionMalas}-${sessionTotal}-${accumulatedTotal}`;
 
   if (refs.lastSavedSession.current === sessionSignature) {
@@ -72,9 +80,6 @@ export async function tapSaveSession(
     const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
     const savedUserEmail = await AsyncStorage.getItem(USER_EMAIL_KEY);
     const historyUserName = savedUserName || userName || savedUserEmail || 'Unknown User';
-
-    const japamId = identity?.japamId ?? refs.activeJapamId.current;
-    const japamName = identity?.japamName ?? refs.activeJapamName.current;
 
     console.log('TAP_SAVE_IDENTITY RESOLVED userId=%s japamId=%s japamName=%s', userId, japamId, japamName);
 

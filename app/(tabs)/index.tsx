@@ -192,7 +192,7 @@ const isAuthPending = async () => {
 };
 
 export default function JapamMain() {
-  const { currentJapam } = useCurrentJapam();
+  const { currentJapam, isLoading: isJapamContextLoading } = useCurrentJapam();
   const currentJapamId = currentJapam?.id ?? null;
   const currentJapamName = currentJapam?.name ?? null;
   // The Japam this screen's own session belongs to, captured ONCE at the moment Start is pressed
@@ -1771,6 +1771,10 @@ export default function JapamMain() {
   ) => {
     if (isSavingSessionRef.current) return;
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    if (currentUserId && (!activeJapamIdRef.current || !activeJapamNameRef.current)) {
+      console.log('[SYNC_FAILED] source=legacy-main reason=current-japam-unresolved');
+      return;
+    }
     const sessionSignature = `${currentUserId || 'guest'}-${getLocalDateKey()}-${duration}-${sessionMalas}-${sessionTotal}-${accumulatedTotal}`;
     if (lastSavedSessionRef.current === sessionSignature) return;
 
@@ -1972,8 +1976,17 @@ export default function JapamMain() {
     return true;
   };
 
+  const requireCurrentJapamReady = () => {
+    if (isJapamContextLoading || !currentJapam?.id || !currentJapam?.name) {
+      Alert.alert('Please wait', 'Your current Japam is still loading. Please try again in a moment.');
+      return false;
+    }
+    return true;
+  };
+
   const handleTap = () => {
     if (!requireLogin()) return;
+    if (!requireCurrentJapamReady()) return;
   
     const now = Date.now();
     if (now - lastTapRef.current < 100) return;
@@ -1999,6 +2012,7 @@ export default function JapamMain() {
 
   const handleStart = () => {
     if (!requireLogin()) return;
+    if (!requireCurrentJapamReady()) return;
     const mins = Math.max(1, Math.floor(Number(minutesInput) || 1));
     const nextTargetSeconds = mins * 60;
     const targetChanged = nextTargetSeconds !== targetSeconds;
@@ -2681,7 +2695,7 @@ export default function JapamMain() {
               <View style={styles.modalTopMark}>
                 <View style={styles.modalTopDot} />
               </View>
-              <Text style={styles.modalTitle}>What's your name?</Text>
+              <Text style={styles.modalTitle}>{"What's your name?"}</Text>
               <Text style={styles.modalSubtitle}>
                 Enter your name to personalise your Japam records.
               </Text>

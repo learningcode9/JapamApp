@@ -983,13 +983,13 @@ describe('japamId: identity field on HistoryRecord', () => {
   });
 
   describe('buildSupabaseHistoryPayload', () => {
-    it('withholds japam_id (stop-loss: no FK-safe write path to public.japams yet) but preserves the trimmed japam_name snapshot', () => {
+    it('preserves japam_id and the trimmed japam_name snapshot for Supabase attribution', () => {
       const record = normalizeRecord(session(isoAt(0), {
         japamId: 'japam-abc-123',
         japamName: '  Gayatri  ',
       }));
       const payload = buildSupabaseHistoryPayload(record, UID, 'Sravani');
-      expect(payload.japam_id).toBeNull();
+      expect(payload.japam_id).toBe('japam-abc-123');
       expect(payload.japam_name).toBe('Gayatri');
     });
     it('sends null japam_id and japam_name when the record has neither, never crashing', () => {
@@ -1023,7 +1023,7 @@ describe('japamId: identity field on HistoryRecord', () => {
   });
 
   describe('round trip: appendCompletion -> buildSupabaseHistoryPayload preserves identity', () => {
-    it('withholds japam_id from the remote payload (stop-loss) while japam_name still carries through', () => {
+    it('carries japam_id and japam_name through to the remote payload', () => {
       const history = appendCompletion([], {
         date: isoAt(0),
         malas: 1,
@@ -1034,8 +1034,63 @@ describe('japamId: identity field on HistoryRecord', () => {
         japamName: 'Gayatri',
       });
       const payload = buildSupabaseHistoryPayload(history[0], UID, 'Sravani');
-      expect(payload.japam_id).toBeNull();
+      expect(payload.japam_id).toBe('japam-abc-123');
       expect(payload.japam_name).toBe('Gayatri');
+    });
+
+    it('preserves japam_id for a pending offline record when it is retried later', () => {
+      const history = appendCompletion([], {
+        date: isoAt(0),
+        malas: 1,
+        totalCount: 108,
+        duration: 0,
+        userId: UID,
+        japamId: 'offline-japam-id',
+        japamName: 'Offline Japam',
+      });
+      const pending = getPending(history);
+
+      expect(pending).toHaveLength(1);
+      expect(buildSupabaseHistoryPayload(pending[0], UID, 'Sravani')).toMatchObject({
+        japam_id: 'offline-japam-id',
+        japam_name: 'Offline Japam',
+      });
+    });
+
+    it('preserves Timer completion Japam attribution in the remote payload', () => {
+      const history = appendCompletion([], {
+        date: isoAt(0),
+        malas: 1,
+        totalCount: 108,
+        duration: 600,
+        manual: false,
+        userId: UID,
+        japamId: 'timer-japam-id',
+        japamName: 'Timer Japam',
+      });
+
+      expect(buildSupabaseHistoryPayload(history[0], UID, 'Sravani')).toMatchObject({
+        japam_id: 'timer-japam-id',
+        japam_name: 'Timer Japam',
+      });
+    });
+
+    it('preserves Manual completion Japam attribution in the remote payload', () => {
+      const history = appendCompletion([], {
+        date: isoAt(0),
+        malas: 2,
+        totalCount: 216,
+        duration: 0,
+        manual: true,
+        userId: UID,
+        japamId: 'manual-japam-id',
+        japamName: 'Manual Japam',
+      });
+
+      expect(buildSupabaseHistoryPayload(history[0], UID, 'Sravani')).toMatchObject({
+        japam_id: 'manual-japam-id',
+        japam_name: 'Manual Japam',
+      });
     });
   });
 });

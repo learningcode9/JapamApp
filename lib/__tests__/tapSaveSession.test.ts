@@ -11,6 +11,7 @@ import {
   toLocalDayKey,
 } from '../historyStore';
 import * as historyRepository from '../historyRepository';
+import { supabase } from '../supabase';
 
 jest.mock('../supabase', () => ({
   supabase: {
@@ -69,9 +70,12 @@ const identity = { userId: UID, japamId: JAPAM_ID, japamName: JAPAM_NAME };
 
 describe('tapSaveSession — real runtime pipeline', () => {
   beforeEach(async () => {
+    jest.clearAllMocks();
     await AsyncStorage.clear();
     await AsyncStorage.setItem(USER_ID_KEY, UID);
     await AsyncStorage.setItem(USER_NAME_KEY, 'Test User');
+    (supabase.auth.getSession as jest.Mock).mockResolvedValue({ data: { session: null }, error: null });
+    (global as any).fetch = jest.fn().mockResolvedValue({ ok: true });
     resetStages();
   });
 
@@ -149,6 +153,52 @@ describe('tapSaveSession — real runtime pipeline', () => {
     expect(saved[0].userId).toBe(UID);
     expect(saved[0].japamId).toBe(JAPAM_ID);
     expect(saved[0].source).toBe('tap');
+  });
+
+  it('does not save an authenticated tap completion while current Japam is unresolved', async () => {
+    const emitSpy = jest.spyOn(DeviceEventEmitter, 'emit');
+    const refs = makeRefs();
+    refs.activeJapamId.current = null;
+    refs.activeJapamName.current = null;
+
+    const result = await tapSaveSession(0, 1, 108, 108, 'tap', refs, {
+      userId: UID,
+      japamId: null,
+      japamName: null,
+    }, 'Test User');
+
+    expect(result).toBe(false);
+    expect(await AsyncStorage.getItem('history')).toBeNull();
+    expect(emitSpy).not.toHaveBeenCalledWith('japam-stats-updated');
+  });
+
+  it('uploads the selected Japam UUID/name for signed-in tap completions', async () => {
+    (supabase.auth.getSession as jest.Mock).mockResolvedValue({
+      data: { session: { access_token: 'session-token' } },
+      error: null,
+    });
+    process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
+    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'anon-key';
+
+    const refs = makeRefs();
+    const result = await tapSaveSession(0, 1, 108, 108, 'tap', refs, identity, 'Test User');
+
+    expect(result).toBe(true);
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://example.supabase.co/rest/v1/japam_history?on_conflict=completion_id',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.any(String),
+      })
+    );
+    const request = (global.fetch as jest.Mock).mock.calls[0][1];
+    expect(JSON.parse(request.body)).toMatchObject({
+      user_id: UID,
+      japam_id: JAPAM_ID,
+      japam_name: JAPAM_NAME,
+      malas: 1,
+      count: 108,
+    });
   });
 
   it('multiple malas produce distinct history records', async () => {

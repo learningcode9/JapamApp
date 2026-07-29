@@ -706,6 +706,11 @@ export default function HistoryScreen() {
   };
 
   const openAddModal = () => {
+    if (isJapamContextLoading || !currentJapamId || !currentJapam?.name) {
+      Alert.alert('Please wait', 'Your current Japam is still loading. Please try again in a moment.');
+      return;
+    }
+
     setAddDateMode('today');
     setAddDate(getLocalDateKey());
     setAddMalas(1);
@@ -730,6 +735,11 @@ export default function HistoryScreen() {
     await repairLegacyStoredUserId();
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
     // Guests (currentUserId === null) are allowed — records saved locally with syncStatus 'synced'
+
+    if (currentUserId && (isJapamContextLoading || !currentJapamId || !currentJapam?.name)) {
+      Alert.alert('Please wait', 'Your current Japam is still loading. Please try again in a moment.');
+      return;
+    }
 
     if (!addDate || !/^\d{4}-\d{2}-\d{2}$/.test(addDate)) {
       Alert.alert('Invalid date', 'Please enter a valid date in YYYY-MM-DD format.');

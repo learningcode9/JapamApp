@@ -1116,6 +1116,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           AsyncStorage.getItem('userEmail'),
         ])
       : [null, null];
+    if (uid && (!activeJapamIdRef.current || !activeJapamNameRef.current)) {
+      console.log('[Stats] STATS_SAVE_SKIPPED reason=current-japam-unresolved userId=%s', uid);
+      return;
+    }
     const completionUserName = storedUserName || storedUserEmail || (uid ? 'Unknown User' : undefined);
     // Deterministic per-(session,loop) id: a loop re-claimed after a process restart (JS-side
     // "already saved" guards are in-memory only and reset on restart — see

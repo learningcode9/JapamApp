@@ -134,7 +134,7 @@ const showGoogleSignInRequiredAlert = () => {
 export default function TimerScreen() {
   const router = useRouter();
   const timer = useTimer();
-  const { currentJapam } = useCurrentJapam();
+  const { currentJapam, isLoading: isJapamContextLoading } = useCurrentJapam();
   const insets = useSafeAreaInsets();
   // Mirror the floating tab bar geometry from _layout.tsx exactly.
   // _layout.tsx uses screenWidth < 500 as its isMobile threshold (different from
@@ -640,6 +640,10 @@ export default function TimerScreen() {
   const handleStart = () => {
     if (!timer.canStart) {
       openSignInModal();
+      return;
+    }
+    if (isJapamContextLoading || !currentJapam?.id || !currentJapam?.name) {
+      Alert.alert('Please wait', 'Your current Japam is still loading. Please try again in a moment.');
       return;
     }
     // Snapshot whichever Japam is current AT THIS EXACT MOMENT, once, before starting. Switching
