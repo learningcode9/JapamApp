@@ -1173,8 +1173,10 @@ describe('Home totals scoping (filterByJapam → todayStatsFor)', () => {
   const UID = 'user-123';
   const JAPAM_A_ID = 'uuid-gayatri';
   const JAPAM_B_ID = 'uuid-govinda';
+  const DEFAULT_JAPAM_ID = 'uuid-my-japam';
   const JAPAM_A_NAME = 'Gayatri';
   const JAPAM_B_NAME = 'Govinda';
+  const DEFAULT_JAPAM_NAME = 'My Japam';
   const todayKey = '2026-07-06';
   const toKey = (iso: string) => iso.slice(0, 10);
   const todayISO = `${todayKey}T12:00:00.000Z`;
@@ -1264,43 +1266,44 @@ describe('Home totals scoping (filterByJapam → todayStatsFor)', () => {
   });
 
   // ── Cumulative total preservation ──
-  it('existing 3 malas + new 1 mala => Home shows cumulative 4 malas', () => {
+  it('existing 3 orphan malas + new 1 mala => default My Japam shows cumulative 4 malas', () => {
     const records = [
       session(todayISO, { japamId: null, japamName: null, completionId: 'legacy-1' }),
       session(todayISO, { japamId: null, japamName: null, completionId: 'legacy-2' }),
       session(todayISO, { japamId: null, japamName: null, completionId: 'legacy-3' }),
-      session(todayISO, { japamId: JAPAM_A_ID, japamName: JAPAM_A_NAME, completionId: 'new-1' }),
+      session(todayISO, { japamId: DEFAULT_JAPAM_ID, japamName: DEFAULT_JAPAM_NAME, completionId: 'new-1' }),
     ];
-    expect(homePipeline(records, JAPAM_A_ID, JAPAM_A_NAME)).toBe(432); // 4 × 108
+    expect(homePipeline(records, DEFAULT_JAPAM_ID, DEFAULT_JAPAM_NAME)).toBe(432); // 4 × 108
   });
 
-  it('existing 2 malas + new 2 malas => Home shows cumulative 4 malas', () => {
+  it('existing 2 orphan malas + new 2 malas => default My Japam shows cumulative 4 malas', () => {
     const records = [
       session(todayISO, { japamId: null, japamName: null, completionId: 'old-1' }),
       session(todayISO, { japamId: null, japamName: null, completionId: 'old-2' }),
-      session(todayISO, { japamId: JAPAM_A_ID, japamName: JAPAM_A_NAME, completionId: 'new-1' }),
-      session(todayISO, { japamId: JAPAM_A_ID, japamName: JAPAM_A_NAME, completionId: 'new-2' }),
+      session(todayISO, { japamId: DEFAULT_JAPAM_ID, japamName: DEFAULT_JAPAM_NAME, completionId: 'new-1' }),
+      session(todayISO, { japamId: DEFAULT_JAPAM_ID, japamName: DEFAULT_JAPAM_NAME, completionId: 'new-2' }),
     ];
-    expect(homePipeline(records, JAPAM_A_ID, JAPAM_A_NAME)).toBe(432); // 4 × 108
+    expect(homePipeline(records, DEFAULT_JAPAM_ID, DEFAULT_JAPAM_NAME)).toBe(432); // 4 × 108
   });
 
-  it('different Japam totals remain isolated + orphans included in both', () => {
+  it('different non-default Japam totals remain isolated without orphan contamination', () => {
     const records = [
       session(todayISO, { japamId: null, japamName: null, completionId: 'orphan' }),
       session(todayISO, { japamId: JAPAM_A_ID, japamName: JAPAM_A_NAME, completionId: 'a-1' }),
       session(todayISO, { japamId: JAPAM_B_ID, japamName: JAPAM_B_NAME, completionId: 'b-1' }),
     ];
-    expect(homePipeline(records, JAPAM_A_ID, JAPAM_A_NAME)).toBe(216); // a-1 (108) + orphan (108)
-    expect(homePipeline(records, JAPAM_B_ID, JAPAM_B_NAME)).toBe(216); // b-1 (108) + orphan (108)
+    expect(homePipeline(records, JAPAM_A_ID, JAPAM_A_NAME)).toBe(108);
+    expect(homePipeline(records, JAPAM_B_ID, JAPAM_B_NAME)).toBe(108);
+    expect(homePipeline(records, DEFAULT_JAPAM_ID, DEFAULT_JAPAM_NAME)).toBe(108);
   });
 
   it('refresh preserves the same cumulative total (idempotent)', () => {
     const records = [
       session(todayISO, { japamId: null, japamName: null, completionId: 'orphan' }),
-      session(todayISO, { japamId: JAPAM_A_ID, japamName: JAPAM_A_NAME, completionId: 'a-1' }),
+      session(todayISO, { japamId: DEFAULT_JAPAM_ID, japamName: DEFAULT_JAPAM_NAME, completionId: 'a-1' }),
     ];
-    const total1 = homePipeline(records, JAPAM_A_ID, JAPAM_A_NAME);
-    const total2 = homePipeline(records, JAPAM_A_ID, JAPAM_A_NAME);
+    const total1 = homePipeline(records, DEFAULT_JAPAM_ID, DEFAULT_JAPAM_NAME);
+    const total2 = homePipeline(records, DEFAULT_JAPAM_ID, DEFAULT_JAPAM_NAME);
     expect(total1).toBe(216);
     expect(total2).toBe(216);
   });
@@ -1745,25 +1748,25 @@ describe('filterByJapam', () => {
     expect(result.map((r) => r.completionId)).toEqual(['real']);
   });
 
-  it('legacy row with no japamName is included under any named Japam (orphan fallback)', () => {
+  it('legacy row with no japamName is included under the default My Japam fallback', () => {
     const records = [
-      session(at(9), { japamId: 'uuid-gayatri', completionId: 'real' }),
+      session(at(9), { japamId: 'uuid-my-japam', japamName: 'My Japam', completionId: 'real' }),
       session(at(10), { japamId: null, japamName: null, completionId: 'no-name' }),
     ];
-    const result = filterByJapam(records, 'uuid-gayatri', 'Gayatri');
+    const result = filterByJapam(records, 'uuid-my-japam', 'My Japam');
     expect(result.map((r) => r.completionId).sort()).toEqual(['no-name', 'real']);
   });
 
-  it('orphan (null-name) legacy rows are visible under any Japam, not just one', () => {
+  it('orphan (null-name) legacy rows do not contaminate unrelated named Japams', () => {
     const records = [
       session(at(9), { japamId: null, japamName: null, completionId: 'orphan' }),
-      session(at(10), { japamId: 'uuid-gayatri', completionId: 'g-real' }),
-      session(at(11), { japamId: 'uuid-govinda', completionId: 'v-real' }),
+      session(at(10), { japamId: 'uuid-my-japam', japamName: 'My Japam', completionId: 'my-real' }),
+      session(at(11), { japamId: 'uuid-govinda', japamName: 'Govinda', completionId: 'v-real' }),
     ];
-    const gayatri = filterByJapam(records, 'uuid-gayatri');
-    const govinda = filterByJapam(records, 'uuid-govinda');
-    expect(gayatri.map((r) => r.completionId).sort()).toEqual(['g-real', 'orphan']);
-    expect(govinda.map((r) => r.completionId).sort()).toEqual(['orphan', 'v-real']);
+    const myJapam = filterByJapam(records, 'uuid-my-japam', 'My Japam');
+    const govinda = filterByJapam(records, 'uuid-govinda', 'Govinda');
+    expect(myJapam.map((r) => r.completionId).sort()).toEqual(['my-real', 'orphan']);
+    expect(govinda.map((r) => r.completionId).sort()).toEqual(['v-real']);
   });
 
   it('orphan rows are included under null japamId (all null-japamId rows match)', () => {
@@ -1776,15 +1779,18 @@ describe('filterByJapam', () => {
     expect(result.map((r) => r.completionId).sort()).toEqual(['named-legacy', 'orphan']);
   });
 
-  it('named legacy rows are isolated to their matching Japam, orphans go to all', () => {
+  it('named legacy rows are isolated to their matching Japam, while orphans stay on My Japam', () => {
     const records = [
       session(at(9), { japamId: null, japamName: null, completionId: 'orphan' }),
       session(at(10), { japamId: null, japamName: 'Gayatri', completionId: 'g-legacy' }),
       session(at(11), { japamId: null, japamName: 'Govinda', completionId: 'v-legacy' }),
       session(at(12), { japamId: 'uuid-gayatri', completionId: 'g-real' }),
+      session(at(13), { japamId: 'uuid-my-japam', japamName: 'My Japam', completionId: 'my-real' }),
     ];
     const gayatri = filterByJapam(records, 'uuid-gayatri', 'Gayatri');
-    expect(gayatri.map((r) => r.completionId).sort()).toEqual(['g-legacy', 'g-real', 'orphan']);
+    const myJapam = filterByJapam(records, 'uuid-my-japam', 'My Japam');
+    expect(gayatri.map((r) => r.completionId).sort()).toEqual(['g-legacy', 'g-real']);
+    expect(myJapam.map((r) => r.completionId).sort()).toEqual(['my-real', 'orphan']);
   });
 });
 

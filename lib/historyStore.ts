@@ -692,6 +692,8 @@ export const japamScopedStatsFor = (
  *   whose japam_id is null but whose japam_name equals the selected Japam's
  *   current name (the "legacy fallback" — rows created before Japam
  *   workspaces existed, or rows whose japam_id was dropped by a NULL FK).
+ *   Blank legacy rows are only shown under the default My Japam name, so unrelated
+ *   named Japams do not inherit every pre-workspace/orphan record.
  * - japamName: ignored when japamId is null (legacy filtering stays strict).
  */
 export const filterByJapam = (
@@ -704,7 +706,7 @@ export const filterByJapam = (
     if (recordId === japamId) return true;
     if (japamId !== null && recordId === null) {
       if (japamName && r.japamName === japamName) return true;
-      if (!r.japamName) return true;
+      if (!r.japamName && japamName === 'My Japam') return true;
     }
     return false;
   });
