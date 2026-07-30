@@ -715,6 +715,8 @@ export default function HistoryScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [historyScopeState, setHistoryScopeState] = useState<HistoryScopeState>('loading');
   const [isAuthHydrationPending, setIsAuthHydrationPending] = useState(false);
+  const dailyRowsRef = useRef<DailyRow[]>([]);
+  const historyScopeStateRef = useRef<HistoryScopeState>('loading');
   const latestAppliedScopeKeyRef = useRef<string | null>(null);
   const latestRequestRef = useRef({ generation: 0, scopeKey: 'initial' });
 
@@ -723,6 +725,14 @@ export default function HistoryScreen() {
     yesterday.setDate(yesterday.getDate() - 1);
     return getLocalDateKey(yesterday);
   };
+
+  useEffect(() => {
+    dailyRowsRef.current = dailyRows;
+  }, [dailyRows]);
+
+  useEffect(() => {
+    historyScopeStateRef.current = historyScopeState;
+  }, [historyScopeState]);
 
   const invalidateHistoryRequests = useCallback((nextState: HistoryScopeState = 'loading') => {
     const generation = latestRequestRef.current.generation + 1;
@@ -742,6 +752,13 @@ export default function HistoryScreen() {
   const buildScopedRows = useCallback((sessions: Session[], japamId: string, japamName: string) => {
     return buildDailyRows(filterByJapam(sessions, japamId, japamName, { includeBlankLegacy }));
   }, [includeBlankLegacy]);
+
+  const getDisplayedUserKey = useCallback(() => {
+    const appliedScopeKey = latestAppliedScopeKeyRef.current;
+    if (!appliedScopeKey) return null;
+    const separatorIndex = appliedScopeKey.indexOf(':');
+    return separatorIndex === -1 ? appliedScopeKey : appliedScopeKey.slice(0, separatorIndex);
+  }, []);
 
   const openAddModal = () => {
     if (isJapamContextLoading || !currentJapamId || !currentJapam?.name) {
@@ -896,12 +913,20 @@ export default function HistoryScreen() {
     const currentJapamName = currentJapam?.name ?? null;
     const todayKey = getLocalDateKey();
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    const displayedUserKey = getDisplayedUserKey();
+    const currentUserKey = currentUserId || 'guest';
+    const shouldPreserveVisibleRows =
+      historyScopeStateRef.current === 'ready'
+      && dailyRowsRef.current.length > 0
+      && displayedUserKey === currentUserKey;
 
     if (isAuthHydrationPending || isJapamContextLoading) {
-      const loadingScopeKey = `loading:${currentUserId || 'guest'}`;
+      const loadingScopeKey = `loading:${currentUserKey}`;
       latestRequestRef.current = { generation: requestGeneration, scopeKey: loadingScopeKey };
       if (!isCurrentRequest(requestGeneration, loadingScopeKey)) return;
-      setHistoryScopeState('loading');
+      if (!shouldPreserveVisibleRows) {
+        setHistoryScopeState('loading');
+      }
       return;
     }
 
@@ -915,7 +940,7 @@ export default function HistoryScreen() {
       return;
     }
 
-    const scopeKey = `${currentUserId || 'guest'}:${currentJapamId}`;
+    const scopeKey = `${currentUserKey}:${currentJapamId}`;
     latestRequestRef.current = { generation: requestGeneration, scopeKey };
     const scopeChanged = latestAppliedScopeKeyRef.current !== scopeKey;
     if (scopeChanged) {
@@ -1026,7 +1051,7 @@ export default function HistoryScreen() {
     setDailyRows(buildScopedRows(sessions, currentJapamId, currentJapamName));
     setHistoryScopeState('ready');
     latestAppliedScopeKeyRef.current = scopeKey;
-  }, [buildScopedRows, currentJapam?.id, currentJapam?.name, currentJapamId, isAuthHydrationPending, isCurrentRequest, isJapamContextLoading]);
+  }, [buildScopedRows, currentJapam?.id, currentJapam?.name, currentJapamId, getDisplayedUserKey, isAuthHydrationPending, isCurrentRequest, isJapamContextLoading]);
 
   // Tombstone-based delete: remove the records locally, record a tombstone (so self-heal never
   // re-uploads them and other devices delete their copy on sync), and best-effort delete remote
@@ -1260,9 +1285,21 @@ export default function HistoryScreen() {
     };
 
     const onAuthUpdated = () => {
-      setIsAuthHydrationPending(true);
-      invalidateHistoryRequests('loading');
-      void loadHistory();
+      void (async () => {
+        const nextUserId = await AsyncStorage.getItem(USER_ID_KEY);
+        const nextUserKey = nextUserId || 'guest';
+        const displayedUserKey = getDisplayedUserKey();
+        const isRealUserScopeChange = displayedUserKey !== null && displayedUserKey !== nextUserKey;
+
+        if (isRealUserScopeChange || !nextUserId) {
+          setIsAuthHydrationPending(true);
+          invalidateHistoryRequests('loading');
+          void loadHistory();
+          return;
+        }
+
+        void loadHistory();
+      })();
     };
 
     const historySubscription = DeviceEventEmitter.addListener('japam-history-updated', onHistoryUpdated);
@@ -1281,7 +1318,7 @@ export default function HistoryScreen() {
         window.removeEventListener('japam-auth-updated', onAuthUpdated as EventListener);
       }
     };
-  }, [invalidateHistoryRequests, loadHistory]);
+  }, [getDisplayedUserKey, invalidateHistoryRequests, loadHistory]);
 
   useEffect(() => {
     return () => {
