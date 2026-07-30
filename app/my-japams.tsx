@@ -27,6 +27,18 @@ const ZERO_STATS: JapamStats = { todayMalas: 0, todayTotalCount: 0, lifetimeMala
 type NameDialogMode = 'create' | 'rename';
 type StatsScopeState = 'loading' | 'ready';
 
+const renderStatValue = (value: string, isLoading: boolean) => {
+  return (
+    <View style={styles.statValueShell} testID="japam-stat-value-shell">
+      {isLoading ? (
+        <View style={styles.statValueSkeleton} testID="japam-stat-skeleton" />
+      ) : (
+        <Text style={styles.statValue}>{value}</Text>
+      )}
+    </View>
+  );
+};
+
 export default function MyJapamsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -286,13 +298,13 @@ export default function MyJapamsScreen() {
               </View>
 
               <View style={styles.statsRow}>
-                <View style={styles.statBox}>
+                <View style={styles.statBox} testID="japam-stat-box">
                   <Text style={styles.statLabel}>Today</Text>
-                  <Text style={styles.statValue}>{showStatsLoading ? 'Loading...' : `${stats.todayMalas} malas`}</Text>
+                  {renderStatValue(`${stats.todayMalas} malas`, showStatsLoading)}
                 </View>
-                <View style={styles.statBox}>
+                <View style={styles.statBox} testID="japam-stat-box">
                   <Text style={styles.statLabel}>Lifetime</Text>
-                  <Text style={styles.statValue}>{showStatsLoading ? 'Loading...' : `${stats.lifetimeMalas} malas`}</Text>
+                  {renderStatValue(`${stats.lifetimeMalas} malas`, showStatsLoading)}
                 </View>
               </View>
             </Pressable>
@@ -336,13 +348,13 @@ export default function MyJapamsScreen() {
                   </View>
 
                   <View style={styles.statsRow}>
-                    <View style={styles.statBox}>
+                    <View style={styles.statBox} testID="japam-stat-box">
                       <Text style={styles.statLabel}>Today</Text>
-                      <Text style={styles.statValue}>{showStatsLoading ? 'Loading...' : `${stats.todayMalas} malas`}</Text>
+                      {renderStatValue(`${stats.todayMalas} malas`, showStatsLoading)}
                     </View>
-                    <View style={styles.statBox}>
+                    <View style={styles.statBox} testID="japam-stat-box">
                       <Text style={styles.statLabel}>Lifetime</Text>
-                      <Text style={styles.statValue}>{showStatsLoading ? 'Loading...' : `${stats.lifetimeMalas} malas`}</Text>
+                      {renderStatValue(`${stats.lifetimeMalas} malas`, showStatsLoading)}
                     </View>
                   </View>
 
@@ -541,6 +553,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 10,
     alignItems: 'center',
+    minHeight: 64,
   },
   statLabel: {
     color: '#547071',
@@ -553,7 +566,20 @@ const styles = StyleSheet.create({
     color: '#12383c',
     fontSize: 18,
     fontWeight: '800',
+    textAlign: 'center',
+  },
+  statValueShell: {
+    minHeight: 24,
+    width: 96,
     marginTop: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  statValueSkeleton: {
+    width: 72,
+    height: 18,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15, 118, 110, 0.16)',
   },
   sectionHeading: {
     color: '#102f34',

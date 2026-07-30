@@ -155,6 +155,9 @@ const extractText = (value: any): string => {
 const allText = (tree: any) =>
   tree.root.findAll((node: any) => node.type === 'Text').map((node: any) => extractText(node));
 
+const countByTestId = (tree: any, testID: string) =>
+  tree.root.findAll((node: any) => node.type === 'View' && node.props?.testID === testID).length;
+
 beforeEach(async () => {
   mockListeners.clear();
   jest.clearAllMocks();
@@ -184,11 +187,14 @@ beforeEach(async () => {
 });
 
 describe('MyJapamsScreen hydration regression', () => {
-  it('hydrates lifetime totals after login and Japam restore without visiting History', async () => {
+  it('hydrates lifetime totals after login and Japam restore without rendering loading text or changing card stats structure', async () => {
     const tree = await renderScreen();
-    expect(allText(tree)).toContain('Loading...');
+    expect(allText(tree)).not.toContain('Loading...');
     expect(allText(tree)).not.toContain('2 malas');
     expect(mockLoadJapamStats).not.toHaveBeenCalled();
+    expect(countByTestId(tree, 'japam-stat-box')).toBe(2);
+    expect(countByTestId(tree, 'japam-stat-value-shell')).toBe(2);
+    expect(countByTestId(tree, 'japam-stat-skeleton')).toBe(2);
 
     await AsyncStorage.setItem('userId', UID);
     mockCurrentJapamState = {
@@ -202,6 +208,9 @@ describe('MyJapamsScreen hydration regression', () => {
     expect(texts).toContain('2 malas');
     expect(texts).not.toContain('0 malas');
     expect(texts).not.toContain('Loading...');
+    expect(countByTestId(tree, 'japam-stat-box')).toBe(2);
+    expect(countByTestId(tree, 'japam-stat-value-shell')).toBe(2);
+    expect(countByTestId(tree, 'japam-stat-skeleton')).toBe(0);
     expect(mockLoadJapamStats).toHaveBeenCalledTimes(1);
     expect(mockLoadJapamStats).toHaveBeenCalledWith(UID);
   });
