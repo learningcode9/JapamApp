@@ -118,6 +118,7 @@ import MyJapamsScreen from '../my-japams';
 
 const UID = 'user-a';
 const JAPAM_ID = 'japam-1';
+const JAPAM_ID_2 = 'japam-2';
 
 const flush = async () => {
   await act(async () => {
@@ -157,6 +158,25 @@ const allText = (tree: any) =>
 
 const countByTestId = (tree: any, testID: string) =>
   tree.root.findAll((node: any) => node.type === 'View' && node.props?.testID === testID).length;
+
+const createDeferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+};
+
+const getScreenState = (tree: any) => {
+  const statBoxCount = countByTestId(tree, 'japam-stat-box');
+  const skeletonCount = countByTestId(tree, 'japam-stat-skeleton');
+  const texts = allText(tree);
+  const hasVisibleValues = texts.some((text: string) => /\d+ malas$/.test(text));
+
+  if (statBoxCount > 0 && skeletonCount === statBoxCount) return 'loading';
+  if (hasVisibleValues) return 'ready';
+  return 'unknown';
+};
 
 beforeEach(async () => {
   mockListeners.clear();
@@ -213,5 +233,94 @@ describe('MyJapamsScreen hydration regression', () => {
     expect(countByTestId(tree, 'japam-stat-skeleton')).toBe(0);
     expect(mockLoadJapamStats).toHaveBeenCalledTimes(1);
     expect(mockLoadJapamStats).toHaveBeenCalledWith(UID);
+  });
+
+  it('shows loading at most once per user change and never returns to loading after ready during same-user Japam updates', async () => {
+    const secondLoadDeferred = createDeferred<Map<string, { todayMalas: number; todayTotalCount: number; lifetimeMalas: number; lifetimeTotalCount: number }>>();
+    mockLoadJapamStats
+      .mockImplementationOnce(async (userId: string | null) => {
+        if (userId !== UID) return new Map();
+        return new Map([
+          [JAPAM_ID, {
+            todayMalas: 1,
+            todayTotalCount: 108,
+            lifetimeMalas: 2,
+            lifetimeTotalCount: 216,
+          }],
+        ]);
+      })
+      .mockImplementationOnce(() => secondLoadDeferred.promise)
+      .mockImplementation(async (userId: string | null) => {
+        if (userId !== UID) return new Map();
+        return new Map([
+          [JAPAM_ID, {
+            todayMalas: 1,
+            todayTotalCount: 108,
+            lifetimeMalas: 2,
+            lifetimeTotalCount: 216,
+          }],
+        ]);
+      });
+
+    const tree = await renderScreen();
+    const states = [getScreenState(tree)];
+    expect(states).toEqual(['loading']);
+
+    await AsyncStorage.setItem('userId', UID);
+    mockCurrentJapamState = {
+      ...mockCurrentJapamState,
+      isLoading: false,
+    };
+    await updateTree(tree);
+    states.push(getScreenState(tree));
+
+    expect(states).toEqual(['loading', 'ready']);
+    expect(allText(tree)).toContain('2 malas');
+    expect(countByTestId(tree, 'japam-stat-skeleton')).toBe(0);
+
+    mockCurrentJapamState = {
+      ...mockCurrentJapamState,
+      isLoading: true,
+    };
+    await updateTree(tree);
+    states.push(getScreenState(tree));
+
+    expect(states).toEqual(['loading', 'ready', 'ready']);
+    expect(allText(tree)).toContain('2 malas');
+    expect(countByTestId(tree, 'japam-stat-skeleton')).toBe(0);
+
+    mockCurrentJapamState = {
+      ...mockCurrentJapamState,
+      isLoading: false,
+      japams: [
+        { id: JAPAM_ID, name: 'Morning Japam', archivedAt: null },
+        { id: JAPAM_ID_2, name: 'Evening Japam', archivedAt: null },
+      ],
+    };
+    await updateTree(tree);
+    states.push(getScreenState(tree));
+
+    expect(states).toEqual(['loading', 'ready', 'ready', 'ready']);
+    expect(allText(tree)).toContain('2 malas');
+    expect(countByTestId(tree, 'japam-stat-box')).toBe(4);
+    expect(countByTestId(tree, 'japam-stat-skeleton')).toBe(2);
+
+    await act(async () => {
+      secondLoadDeferred.resolve(new Map([
+        [JAPAM_ID, {
+          todayMalas: 1,
+          todayTotalCount: 108,
+          lifetimeMalas: 2,
+          lifetimeTotalCount: 216,
+        }],
+      ]));
+      await Promise.resolve();
+    });
+    await flush();
+
+    states.push(getScreenState(tree));
+    expect(states).toEqual(['loading', 'ready', 'ready', 'ready', 'ready']);
+    expect(allText(tree)).toContain('2 malas');
+    expect(countByTestId(tree, 'japam-stat-skeleton')).toBe(0);
   });
 });

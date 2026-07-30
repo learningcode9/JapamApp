@@ -56,6 +56,9 @@ export default function MyJapamsScreen() {
 
   const [statsMap, setStatsMap] = useState<Map<string | null, JapamStats>>(new Map());
   const [statsScopeState, setStatsScopeState] = useState<StatsScopeState>('loading');
+  const [statsUserKey, setStatsUserKey] = useState('guest');
+  const [resolvedStatsScopeKey, setResolvedStatsScopeKey] = useState<string | null>(null);
+  const [resolvedJapamIds, setResolvedJapamIds] = useState<Set<string>>(new Set());
   const statsScopeStateRef = useRef<StatsScopeState>('loading');
   const latestAppliedStatsScopeKeyRef = useRef<string | null>(null);
   const latestStatsRequestRef = useRef({ generation: 0, scopeKey: 'initial' });
@@ -71,22 +74,37 @@ export default function MyJapamsScreen() {
     );
   }, []);
 
+  const getUserKeyFromScopeKey = useCallback((scopeKey: string | null) => {
+    if (!scopeKey) return null;
+    const separatorIndex = scopeKey.indexOf(':');
+    return separatorIndex === -1 ? scopeKey : scopeKey.slice(0, separatorIndex);
+  }, []);
+
   const loadStats = useCallback(async ({ force = false }: { force?: boolean } = {}) => {
     const requestGeneration = latestStatsRequestRef.current.generation + 1;
     latestStatsRequestRef.current = { generation: requestGeneration, scopeKey: `pending:${requestGeneration}` };
 
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
     const userKey = userId || 'guest';
+    setStatsUserKey(userKey);
+    const currentJapamIds = japams.map((j) => j.id);
+    const currentJapamSignature = japams.map((j) => `${j.id}:${j.archivedAt || ''}`).join('|');
+    const appliedUserKey = getUserKeyFromScopeKey(latestAppliedStatsScopeKeyRef.current);
+    const hasReadyStatsForUser = appliedUserKey === userKey && statsScopeStateRef.current === 'ready';
 
     if (isLoading) {
       const loadingScopeKey = `loading:${userKey}`;
       latestStatsRequestRef.current = { generation: requestGeneration, scopeKey: loadingScopeKey };
       if (!isCurrentStatsRequest(requestGeneration, loadingScopeKey)) return;
-      setStatsScopeState('loading');
+      if (!hasReadyStatsForUser && statsScopeStateRef.current !== 'loading') {
+        setStatsScopeState('loading');
+        setResolvedStatsScopeKey(null);
+        setResolvedJapamIds(new Set());
+      }
       return;
     }
 
-    const statsScopeKey = `${userKey}:${japams.map((j) => `${j.id}:${j.archivedAt || ''}`).join('|')}`;
+    const statsScopeKey = `${userKey}:${currentJapamSignature}`;
     const scopeChanged = latestAppliedStatsScopeKeyRef.current !== statsScopeKey;
     const sameScopeAlreadyLoading = latestStatsRequestRef.current.scopeKey === statsScopeKey;
 
@@ -99,8 +117,10 @@ export default function MyJapamsScreen() {
     latestStatsRequestRef.current = { generation: requestGeneration, scopeKey: statsScopeKey };
     if (!isCurrentStatsRequest(requestGeneration, statsScopeKey)) return;
 
-    if (scopeChanged) {
+    if (scopeChanged && !hasReadyStatsForUser) {
       setStatsScopeState('loading');
+      setResolvedStatsScopeKey(null);
+      setResolvedJapamIds(new Set());
     }
 
     const stats = await loadJapamStats(userId);
@@ -109,7 +129,9 @@ export default function MyJapamsScreen() {
     setStatsMap(stats);
     setStatsScopeState('ready');
     latestAppliedStatsScopeKeyRef.current = statsScopeKey;
-  }, [isCurrentStatsRequest, isLoading, japams]);
+    setResolvedStatsScopeKey(statsScopeKey);
+    setResolvedJapamIds(new Set(currentJapamIds));
+  }, [getUserKeyFromScopeKey, isCurrentStatsRequest, isLoading, japams]);
 
   // Reloads stats every time this screen is focused -- matching the same useFocusEffect convention
   // already used by Timer/History elsewhere in this app. This screen never reads AsyncStorage,
@@ -231,7 +253,14 @@ export default function MyJapamsScreen() {
 
   const visibleJapams = activeJapams(japams);
   const archivedVisibleJapams = archivedJapams(japams);
+  const currentJapamSignature = japams.map((j) => `${j.id}:${j.archivedAt || ''}`).join('|');
+  const currentStatsScopeKey = `${statsUserKey}:${currentJapamSignature}`;
   const showStatsLoading = statsScopeState !== 'ready';
+  const shouldShowStatSkeleton = (japamId: string) => {
+    if (showStatsLoading) return true;
+    if (resolvedStatsScopeKey === currentStatsScopeKey) return false;
+    return !resolvedJapamIds.has(japamId);
+  };
 
   return (
     <LinearGradient colors={['#e7f5f5', '#c7e2e0', '#eef8f5']} style={styles.container}>
@@ -300,11 +329,11 @@ export default function MyJapamsScreen() {
               <View style={styles.statsRow}>
                 <View style={styles.statBox} testID="japam-stat-box">
                   <Text style={styles.statLabel}>Today</Text>
-                  {renderStatValue(`${stats.todayMalas} malas`, showStatsLoading)}
+                  {renderStatValue(`${stats.todayMalas} malas`, shouldShowStatSkeleton(japam.id))}
                 </View>
                 <View style={styles.statBox} testID="japam-stat-box">
                   <Text style={styles.statLabel}>Lifetime</Text>
-                  {renderStatValue(`${stats.lifetimeMalas} malas`, showStatsLoading)}
+                  {renderStatValue(`${stats.lifetimeMalas} malas`, shouldShowStatSkeleton(japam.id))}
                 </View>
               </View>
             </Pressable>
@@ -350,11 +379,11 @@ export default function MyJapamsScreen() {
                   <View style={styles.statsRow}>
                     <View style={styles.statBox} testID="japam-stat-box">
                       <Text style={styles.statLabel}>Today</Text>
-                      {renderStatValue(`${stats.todayMalas} malas`, showStatsLoading)}
+                      {renderStatValue(`${stats.todayMalas} malas`, shouldShowStatSkeleton(japam.id))}
                     </View>
                     <View style={styles.statBox} testID="japam-stat-box">
                       <Text style={styles.statLabel}>Lifetime</Text>
-                      {renderStatValue(`${stats.lifetimeMalas} malas`, showStatsLoading)}
+                      {renderStatValue(`${stats.lifetimeMalas} malas`, shouldShowStatSkeleton(japam.id))}
                     </View>
                   </View>
 
