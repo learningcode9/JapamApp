@@ -145,6 +145,36 @@ const fetchRemoteJapams = async (userId: string): Promise<Japam[] | null> => {
   }
 };
 
+const deleteRemoteJapam = async (userId: string, japamId: string): Promise<boolean> => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { supabase } = require('./supabase');
+    const { error } = await supabase
+      .from('japams')
+      .delete()
+      .eq('id', japamId)
+      .eq('user_id', userId);
+
+    if (error) {
+      console.warn('[JAPAM_REMOTE_DELETE_FAILED]', {
+        japamId,
+        code: error.code,
+        message: error.message,
+      });
+      return false;
+    }
+
+    return true;
+  } catch {
+    console.warn('[JAPAM_REMOTE_DELETE_FAILED]', {
+      japamId,
+      code: 'NETWORK_ERROR',
+      message: 'Network error during Japam delete',
+    });
+    return false;
+  }
+};
+
 const enqueueSync = (userId: string, japam: Japam): void => {
   if (!userId) return;
 
@@ -337,7 +367,13 @@ export const deleteJapam = async (
 ): Promise<Japam[]> => {
   const existing = await loadJapamsFromStorage(userId);
   const target = existing.find((j) => j.id === japamId);
-  if (!target) return existing;
+   if (!target || target.archivedAt === null) return existing;
+
+  if (userId) {
+    const deletedRemotely = await deleteRemoteJapam(userId, japamId);
+    if (!deletedRemotely) return existing;
+  }
+
   const updated = existing.filter((j) => j.id !== japamId);
   await saveJapamsToStorage(userId, updated);
   return updated;

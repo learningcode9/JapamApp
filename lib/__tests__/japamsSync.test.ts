@@ -25,6 +25,7 @@ import {
   renameJapam,
   archiveJapam,
   restoreJapam,
+  deleteJapam,
   loadJapams,
   reconcileAllJapams,
   ensureJapamSyncedForHistory,
@@ -55,6 +56,9 @@ const mockUpsert = jest.fn();
 const mockSelect = jest.fn();
 const mockEq = jest.fn();
 const mockOrder = jest.fn();
+const mockDelete = jest.fn();
+const mockDeleteEqId = jest.fn();
+const mockDeleteEqUserId = jest.fn();
 const mockFrom = supabase.from as jest.Mock;
 
 const flushMicrotasks = () => new Promise<void>((r) => setTimeout(r, 0));
@@ -82,16 +86,26 @@ const mockRemoteJapams = (rows: ReturnType<typeof makeRemoteJapam>[], error: unk
   mockOrder.mockResolvedValue({ data: rows, error });
 };
 
+const mockRemoteDelete = (error: unknown = null) => {
+  mockDeleteEqUserId.mockResolvedValue({ error });
+};
+
 beforeEach(async () => {
   await AsyncStorage.clear();
+  mockUpsert.mockReset();
+  mockSelect.mockReset();
+  mockEq.mockReset();
+  mockOrder.mockReset();
+  mockDelete.mockReset();
+  mockDeleteEqId.mockReset();
+  mockDeleteEqUserId.mockReset();
   mockSelect.mockReturnValue({ eq: mockEq });
   mockEq.mockReturnValue({ order: mockOrder });
-  mockFrom.mockReturnValue({ upsert: mockUpsert, select: mockSelect });
-  mockUpsert.mockReset();
-  mockSelect.mockClear();
-  mockEq.mockClear();
-  mockOrder.mockReset();
+  mockDelete.mockReturnValue({ eq: mockDeleteEqId });
+  mockDeleteEqId.mockReturnValue({ eq: mockDeleteEqUserId });
+  mockFrom.mockReturnValue({ upsert: mockUpsert, select: mockSelect, delete: mockDelete });
   mockRemoteJapams([]);
+  mockRemoteDelete();
   jest.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
@@ -642,6 +656,100 @@ describe('restoreJapam lifecycle sync', () => {
     await flushMicrotasks();
     expect(mockUpsert).toHaveBeenCalledTimes(1);
     expect(mockUpsert.mock.calls[0][0].archived_at).toBeNull();
+  });
+});
+
+describe('deleteJapam lifecycle sync', () => {
+  it('successfully removes an archived Japam, keeps other Japams/history unchanged, and prevents refresh resurrection', async () => {
+    const active = makeJapam({ id: 'active-japam', name: 'Active Japam' });
+    const archived = makeJapam({
+      id: 'archived-japam',
+      name: 'Archived Japam',
+      archivedAt: '2026-07-23T00:00:00.000Z',
+      updatedAt: '2026-07-23T00:00:00.000Z',
+    });
+    const historyRaw = JSON.stringify([{ completionId: 'keep-history', japamId: archived.id }]);
+    const tombstonesRaw = JSON.stringify(['keep-tombstone']);
+
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([active, archived]));
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, active.id);
+    await AsyncStorage.setItem('history', historyRaw);
+    await AsyncStorage.setItem('deletedCompletions', tombstonesRaw);
+    mockRemoteDelete(null);
+    mockRemoteJapams([
+      makeRemoteJapam({ id: active.id, name: active.name }),
+    ]);
+
+    const result = await deleteJapam(UID, archived.id);
+
+    expect(mockDelete).toHaveBeenCalledTimes(1);
+    expect(mockDeleteEqId).toHaveBeenCalledWith('id', archived.id);
+    expect(mockDeleteEqUserId).toHaveBeenCalledWith('user_id', UID);
+    expect(result.map((j) => j.id)).toEqual([active.id]);
+    expect((await loadJapams(UID)).map((j) => j.id)).toEqual([active.id]);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(active.id);
+    expect(await AsyncStorage.getItem('history')).toBe(historyRaw);
+    expect(await AsyncStorage.getItem('deletedCompletions')).toBe(tombstonesRaw);
+
+    const refreshed = await ensureDefaultJapam(UID);
+    expect(refreshed.japams.map((j) => j.id)).toEqual([active.id]);
+  });
+
+  it('keeps the archived Japam visible locally when remote delete fails', async () => {
+    const active = makeJapam({ id: 'active-japam', name: 'Active Japam' });
+    const archived = makeJapam({
+      id: 'archived-japam',
+      name: 'Archived Japam',
+      archivedAt: '2026-07-23T00:00:00.000Z',
+      updatedAt: '2026-07-23T00:00:00.000Z',
+    });
+    const historyRaw = JSON.stringify([{ completionId: 'keep-history', japamId: archived.id }]);
+    const tombstonesRaw = JSON.stringify(['keep-tombstone']);
+
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([active, archived]));
+    await AsyncStorage.setItem('history', historyRaw);
+    await AsyncStorage.setItem('deletedCompletions', tombstonesRaw);
+    mockRemoteDelete({ code: '42501', message: 'RLS violation' });
+    mockRemoteJapams([
+      makeRemoteJapam({ id: active.id, name: active.name }),
+      makeRemoteJapam({
+        id: archived.id,
+        name: archived.name,
+        archived_at: archived.archivedAt,
+        updated_at: archived.updatedAt,
+        created_at: archived.createdAt,
+      }),
+    ]);
+
+    const result = await deleteJapam(UID, archived.id);
+
+    expect(result.map((j) => j.id)).toEqual([active.id, archived.id]);
+    expect((await loadJapams(UID)).map((j) => j.id)).toEqual([active.id, archived.id]);
+    expect(await AsyncStorage.getItem('history')).toBe(historyRaw);
+    expect(await AsyncStorage.getItem('deletedCompletions')).toBe(tombstonesRaw);
+
+    const refreshed = await ensureDefaultJapam(UID);
+    expect(refreshed.japams.map((j) => j.id)).toEqual([active.id, archived.id]);
+    expect(console.warn).toHaveBeenCalledWith('[JAPAM_REMOTE_DELETE_FAILED]', {
+      japamId: archived.id,
+      code: '42501',
+      message: 'RLS violation',
+    });
+  });
+
+  it('leaves active Japams untouched when asked to permanently delete a non-archived Japam', async () => {
+    const active = makeJapam({ id: 'active-japam', name: 'Active Japam' });
+    const other = makeJapam({ id: 'other-japam', name: 'Other Japam' });
+    const historyRaw = JSON.stringify([{ completionId: 'keep-history', japamId: active.id }]);
+
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([active, other]));
+    await AsyncStorage.setItem('history', historyRaw);
+
+    const result = await deleteJapam(UID, active.id);
+
+    expect(mockDelete).not.toHaveBeenCalled();
+    expect(result.map((j) => j.id)).toEqual([active.id, other.id]);
+    expect(await AsyncStorage.getItem('history')).toBe(historyRaw);
   });
 });
 
