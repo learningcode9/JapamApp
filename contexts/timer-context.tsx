@@ -133,6 +133,8 @@ const getCurrentMalaLabel = (completedLoops: number, selectedLoops: number, runn
   return `Mala ${activeLoop} / ${safeSelectedLoops}`;
 };
 
+let syncInFlightPromise: Promise<void> | null = null;
+
 const clampCompletedLoops = (completed: number, target: number) => {
   const safeTarget = Math.max(1, target);
   return Math.min(Math.max(0, completed), safeTarget);
@@ -218,7 +220,6 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const notifIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const soundRef = useRef<Audio.Sound | null>(null);
   const isCompletingRef = useRef(false);
-  const syncInFlightRef = useRef(false);
   const processedCompletionLoopsRef = useRef<Set<number>>(new Set());
   const lastSavedSessionRef = useRef<{ key: string; savedAt: number } | null>(null);
   const suppressNextCompletionSoundRef = useRef(false);
@@ -966,17 +967,15 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
     const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
     if (!url || !key) return;
-    // Concurrency guard: only one sync runs at a time. Overlapping triggers (after completion +
-    // app-foreground/launch, especially on reconnect) would otherwise both read the same record as
-    // pending and POST it twice -> duplicate Supabase rows. Re-entrant calls are skipped.
-    if (syncInFlightRef.current) {
-      console.log('[Stats] STATS_SYNC_SKIPPED reason=in-flight');
-      return;
-    }
-    syncInFlightRef.current = true;
-    try {
-      let history: any[] = [];
+    // Concurrency guard: module-level shared promise ensures concurrent callers await the
+    // same in-flight sync rather than silently skipping. Covers the race where a direct sync
+    // call and a SIGNED_IN auth event fire concurrently (original sync -> signInWithIdToken
+    // -> SIGNED_IN event -> second sync must share one upload).
+    if (syncInFlightPromise) return syncInFlightPromise;
+    syncInFlightPromise = (async () => {
       try {
+        let history: any[] = [];
+        try {
         const raw = await AsyncStorage.getItem(HISTORY_KEY);
         history = raw ? JSON.parse(raw) : [];
       } catch {
@@ -1084,9 +1083,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
 
       // Attempt to recover a lost Supabase session before checking. On the failing device,
       // RKStorage showed a numeric Google userId (not a Supabase UUID) and no `sb-*-auth-token`
-      // key — meaning `signInWithIdToken` never returned a valid session during initial login,
-      // or the session was later removed. Silent Google sign-in obtains a fresh idToken and
-      // calls `signInWithIdToken` to establish a new session.
+      // key — the Supabase session was absent at inspection time. Silent Google sign-in obtains
+      // a fresh idToken and calls `signInWithIdToken` to establish a new session.
       await recoverSessionIfNeeded();
 
       // Require the authenticated session's access token so this upload is subject to the
@@ -1156,9 +1154,11 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         }
       } catch {}
     }
-    } finally {
-      syncInFlightRef.current = false;
-    }
+      } finally {
+        syncInFlightPromise = null;
+      }
+    })();
+    return syncInFlightPromise;
   }, []);
 
   const finalizeCompletedTimerSession = useCallback(async () => {

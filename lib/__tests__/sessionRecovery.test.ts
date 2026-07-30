@@ -35,9 +35,12 @@ jest.mock('react-native', () => ({
   },
 }));
 
+const mockMigrateScopedKeys = jest.fn();
+
 jest.mock('../anonymousAuth', () => ({
   getIsAnonymous: (...args: unknown[]) => mockGetIsAnonymous(...args),
   repairLegacyStoredUserId: (...args: unknown[]) => mockRepairLegacy(...args),
+  migrateScopedKeysAfterIdentityRepair: (...args: unknown[]) => mockMigrateScopedKeys(...args),
 }));
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -53,6 +56,7 @@ beforeEach(async () => {
   mockSessionState = { data: { session: null }, error: null };
   mockGetIsAnonymous.mockResolvedValue(false);
   mockRepairLegacy.mockResolvedValue('user-id-after-repair');
+  mockMigrateScopedKeys.mockResolvedValue(undefined);
   mockSignInSilently.mockRejectedValue(new Error('no cached credentials'));
   mockSignInWithIdToken.mockImplementation(async () => {
     mockSessionState = {
@@ -223,6 +227,36 @@ describe('recoverSessionIfNeeded', () => {
     expect(result2).toBe(true);
     expect(mockSignInSilently).toHaveBeenCalledTimes(1);
     expect(mockSignInWithIdToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls migrateScopedKeysAfterIdentityRepair after successful recovery', async () => {
+    await AsyncStorage.setItem(USER_ID_KEY, 'google-user-123');
+    mockSignInSilently.mockResolvedValue({
+      data: { idToken: 'fresh-id-token' },
+    });
+
+    await recoverSessionIfNeeded();
+
+    expect(mockMigrateScopedKeys).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call migrateScopedKeysAfterIdentityRepair when recovery fails', async () => {
+    await AsyncStorage.setItem(USER_ID_KEY, 'google-user-123');
+
+    await recoverSessionIfNeeded();
+
+    expect(mockMigrateScopedKeys).not.toHaveBeenCalled();
+  });
+
+  it('does not call migrateScopedKeysAfterIdentityRepair when session already exists', async () => {
+    mockSessionState = {
+      data: { session: { access_token: 'valid-token', user: { id: 'existing-uuid' } } },
+      error: null,
+    };
+
+    await recoverSessionIfNeeded();
+
+    expect(mockMigrateScopedKeys).not.toHaveBeenCalled();
   });
 
   it('allows a new recovery after previous one finishes', async () => {

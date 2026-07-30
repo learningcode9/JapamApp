@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { supabase } from './supabase';
-import { getIsAnonymous, repairLegacyStoredUserId } from './anonymousAuth';
+import { getIsAnonymous, repairLegacyStoredUserId, migrateScopedKeysAfterIdentityRepair } from './anonymousAuth';
 
 const USER_ID_KEY = 'userId';
 
@@ -11,21 +11,19 @@ let recoveryInFlight: Promise<boolean> | null = null;
 /**
  * Attempts to recover a lost Supabase auth session using silent Google sign-in.
  *
- * Evidence (from RKStorage on the failing device):
+ * Evidence (from RKStorage on the failing device at inspection time):
  *   1. `userId` exists: `113789561834940779353` (Google numeric subject ID)
  *   2. No `sb-*-auth-token` key exists — the Supabase session is absent
  *   3. `signInWithIdToken` IS called during Android Google sign-in
  *      (`app/(tabs)/index.tsx:1439`), but the code only captures
  *      `authData?.user?.id` (never `authData.session`).
- *   4. Because the stored `userId` is a numeric Google ID rather than a
- *      Supabase UUID, the `supabaseUuid ?? googleUserId` fallback
- *      (index.tsx:1454) resolved to `googleUserId` — meaning
- *      `signInWithIdToken` never returned a valid user+session during
- *      the initial Android sign-in for this user.
+ *   4. The stored `userId` is a numeric Google ID, not a Supabase UUID.
  *
- *   The session could have been absent since login (most likely, given
- *   the numeric userId) or created and later removed by GoTrue's
- *   auto-refresh failure path. Both scenarios are handled here:
+ *   Root cause: at inspection time the Supabase session was absent from
+ *   AsyncStorage. Whether it was never created (most likely — the numeric
+ *   userId suggests `signInWithIdToken` never returned a valid session
+ *   during initial login) or was later removed is not determinable from
+ *   the point-in-time RKStorage dump. Both scenarios are handled here:
  *   `signInSilently()` → fresh idToken → `signInWithIdToken()`.
  *
  * Safety properties:
@@ -36,6 +34,9 @@ let recoveryInFlight: Promise<boolean> | null = null;
  *   - Calls `repairLegacyStoredUserId()` after recovery to reconcile
  *     the stored `userId` with the Supabase session's `user.id`
  *     (upgrades legacy numeric IDs to UUIDs).
+ *   - Calls `migrateScopedKeysAfterIdentityRepair()` to rename all
+ *     AsyncStorage keys scoped by the old numeric userId to the new UUID,
+ *     preventing orphaned userJapams, timer state, and history lookups.
  *   - Returns false without side effects for web, anonymous, or
  *     missing-userId users.
  */
@@ -70,6 +71,8 @@ export function recoverSessionIfNeeded(): Promise<boolean> {
 
       const repaired = await repairLegacyStoredUserId();
       if (!repaired) return false;
+
+      await migrateScopedKeysAfterIdentityRepair();
 
       return true;
     } catch {

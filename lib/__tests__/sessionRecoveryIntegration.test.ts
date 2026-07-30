@@ -10,6 +10,7 @@ const mockSignInWithIdToken = jest.fn();
 const mockSignInSilently = jest.fn();
 const mockGetIsAnonymous = jest.fn();
 const mockRepairLegacy = jest.fn();
+const mockMigrateScopedKeys = jest.fn();
 
 jest.mock('../supabase', () => ({
   supabase: {
@@ -34,6 +35,7 @@ jest.mock('react-native', () => ({
 jest.mock('../anonymousAuth', () => ({
   getIsAnonymous: (...args: unknown[]) => mockGetIsAnonymous(...args),
   repairLegacyStoredUserId: (...args: unknown[]) => mockRepairLegacy(...args),
+  migrateScopedKeysAfterIdentityRepair: (...args: unknown[]) => mockMigrateScopedKeys(...args),
 }));
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -73,6 +75,7 @@ beforeEach(async () => {
   mockSessionState = { data: { session: null }, error: null };
   mockGetIsAnonymous.mockResolvedValue(false);
   mockRepairLegacy.mockResolvedValue(UID);
+  mockMigrateScopedKeys.mockResolvedValue(undefined);
   mockSignInSilently.mockRejectedValue(new Error('no cached credentials'));
   mockSignInWithIdToken.mockImplementation(async () => {
     mockSessionState = {
@@ -174,6 +177,23 @@ describe('recovery + sync integration', () => {
     expect(result).toBe(false);
     expect(mockSignInWithIdToken).toHaveBeenCalledTimes(1);
     expect(mockRepairLegacy).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls migrateScopedKeysAfterIdentityRepair after successful recovery', async () => {
+    await AsyncStorage.setItem(USER_ID_KEY, UID);
+    mockSignInSilently.mockResolvedValue({ data: { idToken: 'token' } });
+
+    await recoverSessionIfNeeded();
+
+    expect(mockMigrateScopedKeys).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call migrateScopedKeys when recovery fails', async () => {
+    await AsyncStorage.setItem(USER_ID_KEY, UID);
+
+    await recoverSessionIfNeeded();
+
+    expect(mockMigrateScopedKeys).not.toHaveBeenCalled();
   });
 
   it('uploads pending records only once when sync follows recovery', async () => {
