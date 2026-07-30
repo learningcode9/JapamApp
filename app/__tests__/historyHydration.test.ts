@@ -13,6 +13,7 @@ let mockCurrentJapamState: {
 };
 let mockSessionToken: string | null = null;
 let mockRemoteRows: Record<string, unknown>[] = [];
+let mockRemoteFetch = jest.fn(async () => ({ data: mockRemoteRows, error: null }));
 
 jest.mock('react-native', () => {
   const React = require('react');
@@ -143,7 +144,7 @@ jest.mock('../../lib/supabase', () => ({
       select: jest.fn(() => ({
         eq: jest.fn(() => ({
           order: jest.fn(() => ({
-            limit: jest.fn(async () => ({ data: mockRemoteRows, error: null })),
+            limit: jest.fn(() => mockRemoteFetch()),
           })),
         })),
       })),
@@ -157,6 +158,8 @@ const renderer = require('react-test-renderer');
 const { act } = renderer;
 import { DeviceEventEmitter } from 'react-native';
 import HistoryScreen from '../(tabs)/history';
+import { repairLegacyStoredUserId } from '../../lib/anonymousAuth';
+import { loadLifetimeStats } from '../../lib/historyRepository';
 
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
@@ -168,11 +171,65 @@ const JAPAM_NAME = 'PR55-RERUN-1785366136325';
 const OTHER_JAPAM_ID = 'japam-2';
 const OTHER_JAPAM_NAME = 'Other Japam';
 
+const mockRepairLegacyStoredUserId = repairLegacyStoredUserId as jest.MockedFunction<typeof repairLegacyStoredUserId>;
+
+const buildCurrentJapamState = (overrides?: Partial<typeof mockCurrentJapamState>) => ({
+  currentJapam: { id: JAPAM_ID, name: JAPAM_NAME },
+  currentJapamId: JAPAM_ID,
+  japams: [
+    { id: JAPAM_ID, name: JAPAM_NAME, archivedAt: null },
+    { id: OTHER_JAPAM_ID, name: OTHER_JAPAM_NAME, archivedAt: null },
+  ],
+  isLoading: false,
+  ...overrides,
+});
+
+const buildRemoteRows = () => [
+  {
+    id: 1,
+    created_at: '2026-07-29T10:00:00.000Z',
+    malas: 1,
+    count: 108,
+    user_name: 'Test User',
+    completion_id: 'completion-1',
+    japam_id: JAPAM_ID,
+    japam_name: JAPAM_NAME,
+  },
+  {
+    id: 2,
+    created_at: '2026-07-29T11:00:00.000Z',
+    malas: 1,
+    count: 108,
+    user_name: 'Test User',
+    completion_id: 'completion-2',
+    japam_id: JAPAM_ID,
+    japam_name: JAPAM_NAME,
+  },
+  {
+    id: 3,
+    created_at: '2026-07-29T12:00:00.000Z',
+    malas: 1,
+    count: 108,
+    user_name: 'Test User',
+    completion_id: 'completion-other',
+    japam_id: OTHER_JAPAM_ID,
+    japam_name: OTHER_JAPAM_NAME,
+  },
+];
+
 const extractText = (value: any): string => {
   if (value == null) return '';
   if (typeof value === 'string' || typeof value === 'number') return String(value);
   if (Array.isArray(value)) return value.map(extractText).join('');
   return extractText(value.props?.children);
+};
+
+const createDeferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 };
 
 const flush = async () => {
@@ -202,9 +259,24 @@ const expectSummary = (tree: any, malas: number, totalCount: number) => {
   expect(texts).toContain(`🔢 Total Count: ${totalCount}`);
 };
 
+const expectLoadingState = (tree: any) => {
+  const texts = allText(tree);
+  expect(texts).toContain('Loading history...');
+  expect(texts.some((text: string) => text.startsWith('📿 Total Malas:'))).toBe(false);
+  expect(texts).not.toContain('No Japam history yet');
+};
+
 const getRefreshControl = (tree: any) => {
   const scrollView = tree.root.find((node: any) => node.type === 'ScrollView');
   return scrollView.props.refreshControl;
+};
+
+const updateTree = async (tree: any) => {
+  await act(async () => {
+    tree.update(React.createElement(HistoryScreen));
+    await Promise.resolve();
+  });
+  await flush();
 };
 
 const seedHistory = async () => {
@@ -271,15 +343,9 @@ beforeEach(async () => {
   jest.spyOn(console, 'log').mockImplementation(() => {});
   mockSessionToken = null;
   mockRemoteRows = [];
-  mockCurrentJapamState = {
-    currentJapam: { id: JAPAM_ID, name: JAPAM_NAME },
-    currentJapamId: JAPAM_ID,
-    japams: [
-      { id: JAPAM_ID, name: JAPAM_NAME, archivedAt: null },
-      { id: OTHER_JAPAM_ID, name: OTHER_JAPAM_NAME, archivedAt: null },
-    ],
-    isLoading: false,
-  };
+  mockRemoteFetch = jest.fn(async () => ({ data: mockRemoteRows, error: null }));
+  mockRepairLegacyStoredUserId.mockImplementation(async () => null);
+  mockCurrentJapamState = buildCurrentJapamState();
   await AsyncStorage.clear();
   await seedHistory();
   await AsyncStorage.setItem(USER_ID_KEY, UID);
@@ -292,51 +358,16 @@ afterEach(() => {
 });
 
 describe('HistoryScreen auth/current-Japam hydration regression', () => {
-  it('reloads on logout and relogin, keeps totals at 2 malas / 216 after refresh, and does not duplicate completion IDs', async () => {
-    mockSessionToken = 'session-token';
-    mockRemoteRows = [
-      {
-        id: 1,
-        created_at: '2026-07-29T10:00:00.000Z',
-        malas: 1,
-        count: 108,
-        user_name: 'Test User',
-        completion_id: 'completion-1',
-        japam_id: JAPAM_ID,
-        japam_name: JAPAM_NAME,
-      },
-      {
-        id: 2,
-        created_at: '2026-07-29T11:00:00.000Z',
-        malas: 1,
-        count: 108,
-        user_name: 'Test User',
-        completion_id: 'completion-2',
-        japam_id: JAPAM_ID,
-        japam_name: JAPAM_NAME,
-      },
-      {
-        id: 3,
-        created_at: '2026-07-29T12:00:00.000Z',
-        malas: 1,
-        count: 108,
-        user_name: 'Test User',
-        completion_id: 'completion-other',
-        japam_id: OTHER_JAPAM_ID,
-        japam_name: OTHER_JAPAM_NAME,
-      },
-    ];
+  it('hydrates after auth and current-Japam restore, clears on logout, survives refresh, preserves dedupe, and matches selector totals', async () => {
+    mockCurrentJapamState = buildCurrentJapamState({
+      currentJapam: null,
+      currentJapamId: null,
+      isLoading: true,
+    });
+    await AsyncStorage.removeItem(USER_ID_KEY);
 
     const tree = await renderScreen();
-    expectSummary(tree, 2, 216);
-
-    await AsyncStorage.removeItem(USER_ID_KEY);
-    await act(async () => {
-      DeviceEventEmitter.emit('japam-auth-updated');
-      await Promise.resolve();
-    });
-    await flush();
-    expectSummary(tree, 0, 0);
+    expectLoadingState(tree);
 
     await AsyncStorage.setItem(USER_ID_KEY, UID);
     await act(async () => {
@@ -344,8 +375,61 @@ describe('HistoryScreen auth/current-Japam hydration regression', () => {
       await Promise.resolve();
     });
     await flush();
+    expectLoadingState(tree);
+
+    mockCurrentJapamState = buildCurrentJapamState();
+    await updateTree(tree);
     expectSummary(tree, 2, 216);
 
+    mockSessionToken = 'session-token';
+    mockRemoteRows = buildRemoteRows();
+    await act(async () => {
+      await getRefreshControl(tree).props.onRefresh();
+    });
+    await flush();
+    expectSummary(tree, 2, 216);
+
+    const selectorTotals = await loadLifetimeStats(UID, JAPAM_ID);
+    expect(selectorTotals).toEqual({ malas: 2, totalCount: 216 });
+
+    await AsyncStorage.removeItem(USER_ID_KEY);
+    await act(async () => {
+      DeviceEventEmitter.emit('japam-auth-updated');
+      await Promise.resolve();
+    });
+    await flush();
+    expectLoadingState(tree);
+
+    const persistedAfterLogout = JSON.parse((await AsyncStorage.getItem(HISTORY_KEY)) || '[]') as { completionId?: string }[];
+    expect(persistedAfterLogout.filter((row) => row.completionId === 'completion-1')).toHaveLength(1);
+    expect(persistedAfterLogout.filter((row) => row.completionId === 'completion-2')).toHaveLength(1);
+
+    mockCurrentJapamState = buildCurrentJapamState({
+      currentJapam: null,
+      currentJapamId: null,
+      isLoading: false,
+    });
+    await updateTree(tree);
+    expect(allText(tree)).toContain('No Japam selected. Create or select a Japam to see its history.');
+
+    await AsyncStorage.setItem(USER_ID_KEY, UID);
+    mockCurrentJapamState = buildCurrentJapamState({
+      currentJapam: null,
+      currentJapamId: null,
+      isLoading: true,
+    });
+    await act(async () => {
+      DeviceEventEmitter.emit('japam-auth-updated');
+      await Promise.resolve();
+    });
+    await flush();
+    expectLoadingState(tree);
+
+    mockCurrentJapamState = buildCurrentJapamState();
+    await updateTree(tree);
+    expectSummary(tree, 2, 216);
+
+    mockRemoteRows = [];
     await act(async () => {
       await getRefreshControl(tree).props.onRefresh();
     });
@@ -357,57 +441,50 @@ describe('HistoryScreen auth/current-Japam hydration regression', () => {
     expect(persisted.filter((row) => row.completionId === 'completion-2')).toHaveLength(1);
   });
 
-  it('reruns after currentJapamId hydrates after the initial empty pass and excludes another Japam', async () => {
-    mockCurrentJapamState = {
+  it('ignores a slow pre-login request after relogin restores the user and current Japam', async () => {
+    const staleGuestLoad = createDeferred<string | null>();
+    mockRepairLegacyStoredUserId.mockImplementation(() => staleGuestLoad.promise);
+
+    await AsyncStorage.removeItem(USER_ID_KEY);
+    const tree = await renderScreen();
+    mockRepairLegacyStoredUserId.mockImplementation(async () => null);
+
+    await AsyncStorage.setItem(USER_ID_KEY, UID);
+    mockCurrentJapamState = buildCurrentJapamState({
       currentJapam: null,
       currentJapamId: null,
-      japams: [
-        { id: JAPAM_ID, name: JAPAM_NAME, archivedAt: null },
-        { id: OTHER_JAPAM_ID, name: OTHER_JAPAM_NAME, archivedAt: null },
-      ],
       isLoading: true,
-    };
+    });
+    await act(async () => {
+      DeviceEventEmitter.emit('japam-auth-updated');
+      await Promise.resolve();
+    });
+    await flush();
+    expectLoadingState(tree);
 
-    const tree = await renderScreen();
-    expectSummary(tree, 0, 0);
-
-    mockCurrentJapamState = {
-      currentJapam: { id: JAPAM_ID, name: JAPAM_NAME },
-      currentJapamId: JAPAM_ID,
-      japams: [
-        { id: JAPAM_ID, name: JAPAM_NAME, archivedAt: null },
-        { id: OTHER_JAPAM_ID, name: OTHER_JAPAM_NAME, archivedAt: null },
-      ],
-      isLoading: false,
-    };
+    mockCurrentJapamState = buildCurrentJapamState();
+    await updateTree(tree);
+    expectSummary(tree, 2, 216);
 
     await act(async () => {
-      tree.update(React.createElement(HistoryScreen));
+      staleGuestLoad.resolve(null);
       await Promise.resolve();
     });
     await flush();
     expectSummary(tree, 2, 216);
   });
 
-  it('reruns when the selected Japam changes so History totals stay isolated per Japam', async () => {
+  it('prevents rapid Japam switching from leaking rows from the old Japam', async () => {
     const tree = await renderScreen();
     expectSummary(tree, 2, 216);
 
-    mockCurrentJapamState = {
+    mockCurrentJapamState = buildCurrentJapamState({
       currentJapam: { id: OTHER_JAPAM_ID, name: OTHER_JAPAM_NAME },
       currentJapamId: OTHER_JAPAM_ID,
-      japams: [
-        { id: JAPAM_ID, name: JAPAM_NAME, archivedAt: null },
-        { id: OTHER_JAPAM_ID, name: OTHER_JAPAM_NAME, archivedAt: null },
-      ],
-      isLoading: false,
-    };
-
-    await act(async () => {
-      tree.update(React.createElement(HistoryScreen));
-      await Promise.resolve();
     });
-    await flush();
+    await updateTree(tree);
     expectSummary(tree, 1, 108);
+    expectSummary(tree, 1, 108);
+    expect(allText(tree)).not.toContain('📿 Total Malas: 2');
   });
 });
