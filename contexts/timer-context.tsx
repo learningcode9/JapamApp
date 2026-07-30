@@ -962,15 +962,11 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   // user. On success mark them synced; on failure (offline) leave them pending to retry later.
   // Dedup is by completionId, so each record uploads at most once and never double-counts.
   const syncPendingHistory = useCallback(async () => {
-    const uid = userIdRef.current;
+    let uid = userIdRef.current;
     if (!uid) return;
     const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
     const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
     if (!url || !key) return;
-    // Concurrency guard: module-level shared promise ensures concurrent callers await the
-    // same in-flight sync rather than silently skipping. Covers the race where a direct sync
-    // call and a SIGNED_IN auth event fire concurrently (original sync -> signInWithIdToken
-    // -> SIGNED_IN event -> second sync must share one upload).
     if (syncInFlightPromise) return syncInFlightPromise;
     syncInFlightPromise = (async () => {
       try {
@@ -1087,6 +1083,15 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       // a fresh idToken and calls `signInWithIdToken` to establish a new session.
       await recoverSessionIfNeeded();
 
+      // After recovery the userId may have been upgraded (e.g. numeric Google ID → Supabase
+      // UUID). Re-read from AsyncStorage since userIdRef.current may be stale — the concurrent
+      // refreshAuthState listener ran before repairLegacyStoredUserId upgraded the value.
+      const storedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      if (storedUserId && storedUserId !== uid) {
+        uid = storedUserId;
+        userIdRef.current = storedUserId;
+      }
+
       // Require the authenticated session's access token so this upload is subject to the
       // authenticated RLS policy on japam_history (mirrors history.tsx's saveToSupabase and the
       // tombstone-push path above). Fail closed (leave 'pending' for retry) rather than falling
@@ -1115,9 +1120,6 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           toLocalDayKey(payload.created_at)
         );
         try {
-          // Idempotent upsert: on_conflict=completion_id + ignore-duplicates makes a re-uploaded
-          // completion a no-op at the DB (no duplicate row). A duplicate attempt still returns ok,
-          // so we treat it as success and mark the local record synced.
           const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
             method: 'POST',
             headers: {

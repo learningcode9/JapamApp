@@ -100,8 +100,9 @@ const mockGetSession = jest.fn<
   return { data: { session: null }, error: null };
 });
 
-const mockSupabaseFrom = jest.fn(() => ({
-  upsert: jest.fn(async () => ({ error: null })),
+const mockSupabaseFromUpsert = jest.fn(async (table: string, data: any, options: any) => ({ error: null }));
+const mockSupabaseFrom = jest.fn((table: string) => ({
+  upsert: (data: any, options: any) => mockSupabaseFromUpsert(table, data, options),
   select: jest.fn(() => ({
     eq: jest.fn(() => ({
       single: jest.fn(async () => ({ data: null, error: null })),
@@ -130,7 +131,7 @@ jest.mock('../../lib/supabase', () => ({
       getSession: () => mockGetSession(),
       signInWithIdToken: (opts: any) => (mockSignInWithIdToken as any)(opts),
     },
-    from: () => mockSupabaseFrom(),
+    from: (table: string) => mockSupabaseFrom(table),
   },
 }));
 
@@ -182,17 +183,27 @@ const flush = async () => {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let historyUploadCount = 0;
+let historyUploadBodies: Record<string, unknown>[] = [];
+let storageOps: { type: 'set' | 'remove' | 'multiSet' | 'multiRemove'; key: string; value?: string }[] = [];
+let componentRoot: { unmount: () => void } | null = null;
 
 const restoreAsyncStorageMockImplementations = () => {
   const storage = () => (AsyncStorage as any).__INTERNAL_MOCK_STORAGE__;
   (AsyncStorage.multiSet as jest.Mock).mockImplementation(
     async (pairs: [string, string][]) => {
-      pairs.forEach(([key, value]) => { storage()[key] = value; });
+      pairs.forEach(([key, value]) => {
+        storageOps.push({ type: 'multiSet', key, value });
+        storage()[key] = value;
+      });
       return null;
     },
   );
   (AsyncStorage.setItem as jest.Mock).mockImplementation(
-    async (key: string, value: string) => { storage()[key] = value; return null; },
+    async (key: string, value: string) => {
+      storageOps.push({ type: 'set', key, value });
+      storage()[key] = value;
+      return null;
+    },
   );
   (AsyncStorage.multiGet as jest.Mock).mockImplementation(async (keys: string[]) =>
     keys.map((key) => [key, storage()[key] || null]),
@@ -200,11 +211,16 @@ const restoreAsyncStorageMockImplementations = () => {
   (AsyncStorage.getItem as jest.Mock).mockImplementation(
     async (key: string) => storage()[key] || null,
   );
+  (AsyncStorage.getAllKeys as jest.Mock).mockImplementation(async () => Object.keys(storage()));
   (AsyncStorage.multiRemove as jest.Mock).mockImplementation(async (keys: string[]) => {
-    keys.forEach((key) => { delete storage()[key]; });
+    keys.forEach((key) => {
+      storageOps.push({ type: 'multiRemove', key });
+      delete storage()[key];
+    });
     return null;
   });
   (AsyncStorage.removeItem as jest.Mock).mockImplementation(async (key: string) => {
+    storageOps.push({ type: 'remove', key });
     delete storage()[key];
     return null;
   });
@@ -234,11 +250,14 @@ beforeEach(async () => {
   jest.clearAllMocks();
   restoreAsyncStorageMockImplementations();
   historyUploadCount = 0;
+  historyUploadBodies = [];
+  storageOps = [];
   sessionReady = false;
 
   global.fetch = jest.fn(async (url: string, options?: RequestInit) => {
     if (url.includes('japam_history') && options?.method === 'POST') {
       historyUploadCount++;
+      historyUploadBodies.push(JSON.parse(String(options?.body || '{}')));
       return { ok: true, json: async () => ({}), status: 201 } as unknown as Response;
     }
     if (url.includes('japams')) {
@@ -279,6 +298,11 @@ afterEach(() => {
   delete process.env.EXPO_PUBLIC_SUPABASE_URL;
   delete process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
   delete (global as any).fetch;
+  if (componentRoot) {
+    const r = require('react-test-renderer');
+    r.act(() => { componentRoot!.unmount(); });
+    componentRoot = null;
+  }
 });
 
 describe('sync orchestration with real recoverSessionIfNeeded', () => {
@@ -287,25 +311,15 @@ describe('sync orchestration with real recoverSessionIfNeeded', () => {
     await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([pending]));
 
     await act(async () => {
-      renderer.create(
+      componentRoot = renderer.create(
         React.createElement(TimerProvider, null, React.createElement(() => null)),
       );
       await Promise.resolve();
     });
     await flush();
 
-    // Mount effect sync exits early (empty userIdRef).
-    // Emit japam-auth-updated to trigger refreshAuthState:
-    //   1. Sets userIdRef.current from AsyncStorage
-    //   2. Calls syncPendingHistory (real sync starts here)
-    // Inside the real sync:
-    //   - recoverSessionIfNeeded (real module) calls signInSilently → signInWithIdToken
-    //   - Mock signInWithIdToken emits a SECOND japam-auth-updated while still in-flight
-    //   - Second event triggers syncPendingHistory which sees syncInFlightPromise → no duplicate
-    //   - Only ONE upload
     await act(async () => {
       DeviceEventEmitter.emit('japam-auth-updated');
-      // Wait for full async flow (recovery + sync + upload)
       await sleep(1000);
     });
     await flush();
@@ -319,5 +333,169 @@ describe('sync orchestration with real recoverSessionIfNeeded', () => {
 
     const history = JSON.parse((await AsyncStorage.getItem(HISTORY_KEY)) || '[]');
     expect(history[0].syncStatus).toBe('synced');
+  });
+
+  it('legacy numeric userId -> silent recovery upgrades to UUID, migrates scoped values, and uploads history + timer retry exactly once each', async () => {
+    const NUMERIC = '108347881408167165195';
+    const UUID_ID = '2793fca2-38fa-4c9e-9856-26c2b34d0acb';
+    const JAPAM_A = 'japam-a';
+    const JAPAM_A_NAME = 'Japam A';
+    const HISTORY_COMPLETION_ID = 'history-legacy-1';
+    const TIMER_COMPLETION_ID = 'timer-legacy-1';
+    const warned: unknown[][] = [];
+    let releaseRecovery!: () => void;
+    const recoveryGate = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+
+    jest.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+      warned.push(args);
+    });
+
+    await AsyncStorage.clear();
+    await AsyncStorage.setItem('userId', NUMERIC);
+    await AsyncStorage.setItem('userName', 'Test User');
+    await AsyncStorage.setItem('timerSessionUserId', NUMERIC);
+    await AsyncStorage.setItem(`currentJapamId:${NUMERIC}`, JAPAM_A);
+    await AsyncStorage.setItem(
+      `userJapams:${NUMERIC}`,
+      JSON.stringify([
+        {
+          id: JAPAM_A,
+          name: JAPAM_A_NAME,
+          userId: NUMERIC,
+          displayOrder: null,
+          createdAt: '2026-07-29T00:00:00.000Z',
+          updatedAt: '2026-07-29T00:00:00.000Z',
+          archivedAt: null,
+        },
+      ])
+    );
+    await AsyncStorage.setItem(
+      HISTORY_KEY,
+      JSON.stringify([
+        makePendingRecord({
+          userId: NUMERIC,
+          completionId: HISTORY_COMPLETION_ID,
+          japamId: JAPAM_A,
+          japamName: JAPAM_A_NAME,
+        }),
+      ])
+    );
+    await AsyncStorage.setItem(
+      'timerPendingCompletions:v1',
+      JSON.stringify([
+        {
+          version: 1,
+          userId: NUMERIC,
+          sessionId: 'timer-session-1',
+          loopNumber: 1,
+          totalLoops: 1,
+          japamId: JAPAM_A,
+          japamName: JAPAM_A_NAME,
+          durationSeconds: 600,
+          completedAt: '2026-07-30T00:00:00.000Z',
+          completionId: TIMER_COMPLETION_ID,
+        },
+      ])
+    );
+
+    mockGetSession.mockImplementation(async () => {
+      if (sessionReady) {
+        return {
+          data: { session: { access_token: 'orch-token', user: { id: UUID_ID } } },
+          error: null,
+        };
+      }
+      return { data: { session: null }, error: null };
+    });
+    mockSignInWithIdToken.mockImplementation(async () => {
+      DeviceEventEmitter.emit('japam-auth-updated');
+      sessionReady = true;
+      await recoveryGate;
+      return {
+        data: {
+          session: { access_token: 'orch-token', user: { id: UUID_ID } },
+        },
+        error: null,
+      };
+    });
+
+    await act(async () => {
+      componentRoot = renderer.create(
+        React.createElement(TimerProvider, null, React.createElement(() => null)),
+      );
+      await Promise.resolve();
+    });
+    await flush();
+
+    const waitForLocalTimerSave = async () => {
+      for (let i = 0; i < 60; i += 1) {
+        const currentHistory = JSON.parse((await AsyncStorage.getItem(HISTORY_KEY)) || '[]');
+        const timerRow = currentHistory.find((item: { completionId?: string }) => item.completionId === TIMER_COMPLETION_ID);
+        const queue = JSON.parse((await AsyncStorage.getItem('timerPendingCompletions:v1')) || '[]');
+        if (timerRow && queue.length === 0) return;
+        await sleep(50);
+      }
+      throw new Error('timed out waiting for timer completion to be saved locally');
+    };
+
+    const waitForUploadCount = async (expected: number) => {
+      for (let i = 0; i < 60; i += 1) {
+        if (historyUploadCount === expected) return;
+        await sleep(50);
+      }
+      throw new Error(`timed out waiting for ${expected} history uploads; saw ${historyUploadCount}`);
+    };
+
+    await waitForLocalTimerSave();
+    releaseRecovery();
+    await waitForUploadCount(2);
+    await flush();
+
+    const GoogleSigninMock = GoogleSignin as jest.Mocked<typeof GoogleSignin>;
+    const history = JSON.parse((await AsyncStorage.getItem(HISTORY_KEY)) || '[]');
+    const timerQueue = JSON.parse((await AsyncStorage.getItem('timerPendingCompletions:v1')) || '[]');
+    const japams = JSON.parse((await AsyncStorage.getItem(`userJapams:${UUID_ID}`)) || '[]');
+    const completionIds = history.map((item: { completionId: string }) => item.completionId);
+    const uploadCompletionIds = historyUploadBodies.map((item) => String(item.completion_id));
+    const historySaveIndex = storageOps.findIndex(
+      (op) =>
+        op.type === 'set' &&
+        op.key === HISTORY_KEY &&
+        JSON.parse(op.value || '[]').some(
+          (item: { completionId?: string; syncStatus?: string }) =>
+            item.completionId === TIMER_COMPLETION_ID && item.syncStatus === 'pending'
+        )
+    );
+    const queueRemovalIndex = storageOps.findIndex(
+      (op) => op.type === 'set' && op.key === 'timerPendingCompletions:v1' && op.value === '[]'
+    );
+
+    expect(GoogleSigninMock.signInSilently).toHaveBeenCalledTimes(1);
+    expect(mockSignInWithIdToken).toHaveBeenCalledTimes(1);
+    expect(historyUploadCount).toBe(2);
+    expect(new Set(uploadCompletionIds)).toEqual(new Set([HISTORY_COMPLETION_ID, TIMER_COMPLETION_ID]));
+    expect(uploadCompletionIds.filter((id) => id === HISTORY_COMPLETION_ID)).toHaveLength(1);
+    expect(uploadCompletionIds.filter((id) => id === TIMER_COMPLETION_ID)).toHaveLength(1);
+    expect(mockSupabaseFromUpsert).toHaveBeenCalledTimes(2);
+    expect(mockSupabaseFromUpsert.mock.calls.map((call) => call[0])).toEqual(['japams', 'japams']);
+    expect(mockSupabaseFromUpsert.mock.calls.map((call) => call[1].user_id)).toEqual([UUID_ID, UUID_ID]);
+    expect(history).toHaveLength(2);
+    expect(new Set(completionIds).size).toBe(2);
+    expect(new Set(history.map((item: { userId?: string }) => item.userId))).toEqual(new Set([UUID_ID]));
+    expect(history.every((item: { syncStatus?: string }) => item.syncStatus === 'synced')).toBe(true);
+    expect(await AsyncStorage.getItem('userId')).toBe(UUID_ID);
+    expect(await AsyncStorage.getItem('timerSessionUserId')).toBe(UUID_ID);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UUID_ID}`)).toBe(JAPAM_A);
+    expect(await AsyncStorage.getItem(`currentJapamId:${NUMERIC}`)).toBeNull();
+    expect(japams).toHaveLength(1);
+    expect(japams[0].userId).toBe(UUID_ID);
+    expect(await AsyncStorage.getItem(`userJapams:${NUMERIC}`)).toBeNull();
+    expect(timerQueue).toEqual([]);
+    expect(await AsyncStorage.getItem('timerPendingCompletions:v1')).toBe(JSON.stringify([]));
+    expect(historySaveIndex).toBeGreaterThanOrEqual(0);
+    expect(queueRemovalIndex).toBeGreaterThan(historySaveIndex);
+    expect(warned.some((args) => args.some((arg) => String(arg).includes('USER_ID_MISMATCH')))).toBe(false);
   });
 });

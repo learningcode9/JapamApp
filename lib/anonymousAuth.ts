@@ -205,7 +205,7 @@ export async function migrateScopedKeysAfterIdentityRepair(): Promise<void> {
     const HISTORY_KEY = 'history';
     const raw = await AsyncStorage.getItem(HISTORY_KEY);
     if (raw) {
-      const history: Array<Record<string, unknown>> = JSON.parse(raw);
+      const history: Record<string, unknown>[] = JSON.parse(raw);
       let changed = false;
       for (const rec of history) {
         if (rec.userId === oldId) {
@@ -219,6 +219,72 @@ export async function migrateScopedKeysAfterIdentityRepair(): Promise<void> {
     }
   } catch {
     // Non-fatal: pending records keep old userId; sync filter may miss them
+  }
+
+  // Step 3: update userId in timerPendingCompletions:v1 entries
+  try {
+    const PENDING_COMPLETIONS_KEY = 'timerPendingCompletions:v1';
+    const raw = await AsyncStorage.getItem(PENDING_COMPLETIONS_KEY);
+    if (raw) {
+      const entries: Record<string, unknown>[] = JSON.parse(raw);
+      let changed = false;
+      for (const entry of entries) {
+        if (entry.userId === oldId) {
+          entry.userId = newId;
+          changed = true;
+        }
+      }
+      if (changed) {
+        await AsyncStorage.setItem(PENDING_COMPLETIONS_KEY, JSON.stringify(entries));
+      }
+    }
+  } catch {
+    // Non-fatal: pending completions keep old userId; timer may re-enqueue
+  }
+
+  // Step 4: update timerSessionUserId values (bare key + scoped keys) that
+  // still contain the legacy userId after the key rename above.
+  try {
+    const SESSION_USER_ID_KEY = 'timerSessionUserId';
+    // Bare key
+    const bareVal = await AsyncStorage.getItem(SESSION_USER_ID_KEY);
+    if (bareVal === oldId) {
+      await AsyncStorage.setItem(SESSION_USER_ID_KEY, newId);
+    }
+    // Scoped keys: timerSessionUserId:{newId} and timerSessionUserId:{newId}:{japamId}
+    // After the rename above, these keys exist but their values may still be oldId.
+    const allKeysAfterRename = await AsyncStorage.getAllKeys();
+    for (const key of allKeysAfterRename) {
+      if (key.startsWith(`${SESSION_USER_ID_KEY}:${newId}`)) {
+        const val = await AsyncStorage.getItem(key);
+        if (val === oldId) {
+          await AsyncStorage.setItem(key, newId);
+        }
+      }
+    }
+  } catch {
+    // Non-fatal: stale timerSessionUserId values; next timer session overwrites
+  }
+
+  // Step 5: update userId field on japam records inside userJapams:{newId}
+  try {
+    const japamKey = `userJapams:${newId}`;
+    const japamRaw = await AsyncStorage.getItem(japamKey);
+    if (japamRaw) {
+      const japams: Record<string, unknown>[] = JSON.parse(japamRaw);
+      let changed = false;
+      for (const japam of japams) {
+        if (japam.userId === oldId) {
+          japam.userId = newId;
+          changed = true;
+        }
+      }
+      if (changed) {
+        await AsyncStorage.setItem(japamKey, JSON.stringify(japams));
+      }
+    }
+  } catch {
+    // Non-fatal: stale userId fields; syncJapam retries on its own
   }
 
   console.log(
