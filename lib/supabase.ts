@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
+import { DeviceEventEmitter, Platform } from 'react-native';
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
@@ -16,3 +17,12 @@ export const supabase = createClient(
     },
   }
 );
+
+supabase.auth.onAuthStateChange((event, session) => {
+  if (session && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION')) {
+    DeviceEventEmitter.emit('japam-auth-updated');
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('japam-auth-updated'));
+    }
+  }
+});

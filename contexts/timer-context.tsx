@@ -34,6 +34,7 @@ import {
   type HistoryRecord,
 } from '../lib/historyStore';
 import { ensureJapamSyncedForHistory, loadJapams as loadStoredJapams } from '../lib/japamsRepository';
+import { recoverSessionIfNeeded } from '../lib/sessionRecovery';
 import { getWebOmAudioUri } from '../lib/webOmAudio';
 import {
   shouldReleaseTimerCompletionClaim,
@@ -1080,6 +1081,14 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       const storedUserName = (await AsyncStorage.getItem('userName')) || '';
       const storedUserEmail = (await AsyncStorage.getItem('userEmail')) || '';
       const fallbackUserName = storedUserName || storedUserEmail || 'Unknown User';
+
+      // Attempt to recover a lost Supabase session before checking. On the failing device,
+      // RKStorage showed a numeric Google userId (not a Supabase UUID) and no `sb-*-auth-token`
+      // key — meaning `signInWithIdToken` never returned a valid session during initial login,
+      // or the session was later removed. Silent Google sign-in obtains a fresh idToken and
+      // calls `signInWithIdToken` to establish a new session.
+      await recoverSessionIfNeeded();
+
       // Require the authenticated session's access token so this upload is subject to the
       // authenticated RLS policy on japam_history (mirrors history.tsx's saveToSupabase and the
       // tombstone-push path above). Fail closed (leave 'pending' for retry) rather than falling
@@ -1434,6 +1443,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     void hydratePersistedSessionJapamIdentity();
     const authSub = DeviceEventEmitter.addListener('japam-auth-updated', () => {
       void hydratePersistedSessionJapamIdentity();
+      void syncPendingHistory();
     });
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       window.addEventListener('japam-auth-updated', hydratePersistedSessionJapamIdentity as EventListener);
@@ -1444,7 +1454,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         window.removeEventListener('japam-auth-updated', hydratePersistedSessionJapamIdentity as EventListener);
       }
     };
-  }, [hydratePersistedSessionJapamIdentity]);
+  }, [hydratePersistedSessionJapamIdentity, syncPendingHistory]);
 
   const refreshAuthState = useCallback(async () => {
     const uid = await AsyncStorage.getItem(USER_ID_KEY) || '';

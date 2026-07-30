@@ -104,6 +104,13 @@ jest.mock('../../lib/webOmAudio', () => ({
   getWebOmAudioUri: jest.fn(async () => 'om.mp3'),
 }));
 
+jest.mock('@react-native-google-signin/google-signin', () => ({
+  GoogleSignin: {
+    configure: jest.fn(),
+    signInSilently: jest.fn(async () => { throw new Error('not configured in test'); }),
+  },
+}));
+
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React from 'react';
 const renderer = require('react-test-renderer');
