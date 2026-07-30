@@ -53,6 +53,10 @@ type RemoteJapamRow = {
   archived_at?: string | null;
 };
 
+type RemoteDeletedJapamRow = {
+  id?: string;
+};
+
 const remoteRowToJapam = (row: RemoteJapamRow): Japam => ({
   id: row.id,
   userId: row.user_id,
@@ -149,17 +153,32 @@ const deleteRemoteJapam = async (userId: string, japamId: string): Promise<boole
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { supabase } = require('./supabase');
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('japams')
       .delete()
       .eq('id', japamId)
-      .eq('user_id', userId);
+      .eq('user_id', userId)
+      .select('id');
 
     if (error) {
       console.warn('[JAPAM_REMOTE_DELETE_FAILED]', {
         japamId,
         code: error.code,
         message: error.message,
+      });
+      return false;
+    }
+
+    const deletedRows = Array.isArray(data) ? data as RemoteDeletedJapamRow[] : [];
+    const deletedIds = deletedRows
+      .map((row) => row?.id)
+      .filter((id): id is string => typeof id === 'string');
+
+    if (deletedIds.length !== 1 || deletedIds[0] !== japamId) {
+      console.warn('[JAPAM_REMOTE_DELETE_FAILED]', {
+        japamId,
+        code: 'UNEXPECTED_RESPONSE',
+        message: 'Delete did not confirm exactly one matching Japam row',
       });
       return false;
     }
