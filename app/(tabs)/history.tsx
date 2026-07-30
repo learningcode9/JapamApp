@@ -72,6 +72,7 @@ const MALAS_CELL_FLEX = isNarrowPhone ? 0.85 : isTablet ? 1.05 : 1.0;
 const COUNT_CELL_FLEX = isNarrowPhone ? 0.95 : isTablet ? 1.15 : 1.05;
 const TOTAL_CELL_FLEX = isNarrowPhone ? 0.9 : isTablet ? 1.1 : 1.0;
 const DATE_MIN_WIDTH = isNarrowPhone ? 84 : isTablet ? 156 : 98;
+const HISTORY_LOADING_PLACEHOLDER_ROWS = 4;
 // Android-only fixed widths (dp). Date is sized just for "30 Jun 2026" (tight, not huge, per
 // request). Malas gets the single largest numeric-column allowance — deliberately more than
 // Count/Total — because it's the one that's repeatedly truncated in practice.
@@ -1336,6 +1337,8 @@ export default function HistoryScreen() {
     [dailyRows]
   );
 
+  const isHistoryLoading = historyScopeState === 'loading';
+
   const exportHistory = async () => {
     try {
       if (dailyRows.length === 0) {
@@ -1440,11 +1443,7 @@ export default function HistoryScreen() {
         <CurrentJapamHeaderButton variant="history" />
       </View>
 
-      {historyScopeState === 'loading' ? (
-        <View style={[styles.emptyRow, { alignItems: 'center' }]}>
-          <Text style={[styles.emptyText, { textAlign: 'center' }]}>Loading history...</Text>
-        </View>
-      ) : historyScopeState === 'empty' ? (
+      {historyScopeState === 'empty' ? (
         <View style={[styles.emptyRow, { alignItems: 'center' }]}>
           <Text style={[styles.emptyText, { textAlign: 'center' }]}>
             No Japam selected. Create or select a Japam to see its history.
@@ -1460,9 +1459,18 @@ export default function HistoryScreen() {
         </View>
       ) : (
       <>
-      <View style={styles.simpleSummary}>
-        <Text style={styles.summaryText}>📿 Total Malas: {totalMalas}</Text>
-        <Text style={styles.summaryText}>🔢 Total Count: {totalCount}</Text>
+        <View style={styles.simpleSummary}>
+        {isHistoryLoading ? (
+          <>
+            <View style={[styles.summarySkeletonLine, styles.summarySkeletonLineWide]} />
+            <View style={styles.summarySkeletonLine} />
+          </>
+        ) : (
+          <>
+            <Text style={styles.summaryText}>📿 Total Malas: {totalMalas}</Text>
+            <Text style={styles.summaryText}>🔢 Total Count: {totalCount}</Text>
+          </>
+        )}
       </View>
 
       <View style={styles.actionRow}>
@@ -1676,7 +1684,36 @@ export default function HistoryScreen() {
           </View>
         </View>
 
-        {dailyRows.length === 0 ? (
+        {isHistoryLoading ? (
+          <View style={styles.loadingTableBody}>
+            {Array.from({ length: HISTORY_LOADING_PLACEHOLDER_ROWS }).map((_, index) => (
+              <View
+                key={`history-loading-row-${index}`}
+                style={[styles.tableRow, index % 2 === 1 && styles.altTableRow]}
+              >
+                <View style={[styles.columnCell, styles.dateColumn]}>
+                  <View style={[styles.loadingBlock, styles.loadingDateBlock]} />
+                </View>
+                <View style={[styles.columnCell, styles.numColumn]}>
+                  <View style={[styles.loadingBlock, styles.loadingValueBlock]} />
+                </View>
+                <View style={[styles.columnCell, styles.countColumn]}>
+                  <View style={[styles.loadingBlock, styles.loadingCountBlock]} />
+                </View>
+                <View style={[styles.columnCell, styles.totalColumn]}>
+                  <View style={[styles.loadingBlock, styles.loadingValueBlock]} />
+                </View>
+                <View style={[styles.columnCell, styles.actionsColumn]}>
+                  <View style={styles.rowActions}>
+                    <View style={styles.loadingActionDot} />
+                    <View style={styles.loadingActionDot} />
+                  </View>
+                </View>
+              </View>
+            ))}
+            <Text style={styles.loadingCaption}>Loading history...</Text>
+          </View>
+        ) : dailyRows.length === 0 ? (
           <View style={styles.emptyRow}>
             <Text style={styles.emptyText}>No Japam history yet</Text>
           </View>
@@ -1759,7 +1796,7 @@ export default function HistoryScreen() {
         )}
       </View>
 
-      {dailyRows.length > 0 && (
+      {!isHistoryLoading && dailyRows.length > 0 && (
         <Text style={{ textAlign: 'center', color: '#5f7778', fontSize: 12, marginTop: 10 }}>
           {Platform.OS === 'web'
             ? 'Use the row actions to edit or delete a day.'
@@ -1849,6 +1886,8 @@ const styles = StyleSheet.create({
     gap: 6,
     marginBottom: 20,
     alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 54,
   },
 
   summaryText: {
@@ -1856,6 +1895,17 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
     textAlign: 'center',
+  },
+
+  summarySkeletonLine: {
+    width: isNarrowPhone ? 184 : 216,
+    height: 20,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15, 118, 110, 0.14)',
+  },
+
+  summarySkeletonLineWide: {
+    width: isNarrowPhone ? 212 : 252,
   },
 
   actionRow: {
@@ -2057,6 +2107,10 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
 
+  loadingTableBody: {
+    minHeight: HISTORY_LOADING_PLACEHOLDER_ROWS * 58 + 44,
+  },
+
   tableRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2150,6 +2204,41 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(107, 114, 128, 0.10)',
     borderWidth: 1,
     borderColor: 'rgba(107, 114, 128, 0.18)',
+  },
+
+  loadingBlock: {
+    height: 16,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15, 118, 110, 0.12)',
+  },
+
+  loadingDateBlock: {
+    width: '82%',
+  },
+
+  loadingValueBlock: {
+    width: '54%',
+    alignSelf: 'center',
+  },
+
+  loadingCountBlock: {
+    width: '68%',
+    alignSelf: 'center',
+  },
+
+  loadingActionDot: {
+    width: ROW_ACTION_BUTTON_SIZE - 10,
+    height: ROW_ACTION_BUTTON_SIZE - 10,
+    borderRadius: ROW_ACTION_BUTTON_SIZE,
+    backgroundColor: 'rgba(15, 118, 110, 0.12)',
+  },
+
+  loadingCaption: {
+    color: '#547071',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+    paddingBottom: 18,
   },
 
   emptyRow: {

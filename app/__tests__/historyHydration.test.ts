@@ -273,6 +273,14 @@ const expectStableRowsVisible = (tree: any, malas: number, totalCount: number) =
   expect(texts).not.toContain('No Japam history yet');
 };
 
+const getVisibleHistoryState = (tree: any) => {
+  const texts = allText(tree);
+  if (texts.includes('Loading history...')) return 'loading';
+  if (texts.includes('No Japam history yet')) return 'empty';
+  if (texts.some((text: string) => text.startsWith('📿 Total Malas:'))) return 'rows';
+  return 'unknown';
+};
+
 const getRefreshControl = (tree: any) => {
   const scrollView = tree.root.find((node: any) => node.type === 'ScrollView');
   return scrollView.props.refreshControl;
@@ -505,6 +513,36 @@ describe('HistoryScreen auth/current-Japam hydration regression', () => {
     await flush();
 
     expectStableRowsVisible(tree, 2, 216);
+  });
+
+  it('goes from loading to rows without rendering the empty history state in between', async () => {
+    mockSessionToken = 'session-token';
+    const remoteFetchDeferred = createDeferred<{ data: Record<string, unknown>[]; error: null }>();
+    mockRemoteFetch = jest.fn(() => remoteFetchDeferred.promise);
+    mockCurrentJapamState = buildCurrentJapamState({
+      currentJapam: null,
+      currentJapamId: null,
+      isLoading: true,
+    });
+
+    const tree = await renderScreen();
+    const states = [getVisibleHistoryState(tree)];
+    expect(states).toEqual(['loading']);
+
+    mockCurrentJapamState = buildCurrentJapamState();
+    await updateTree(tree);
+
+    states.push(getVisibleHistoryState(tree));
+    expectStableRowsVisible(tree, 2, 216);
+
+    await act(async () => {
+      remoteFetchDeferred.resolve({ data: buildRemoteRows(), error: null });
+      await Promise.resolve();
+    });
+    await flush();
+
+    states.push(getVisibleHistoryState(tree));
+    expect(states).toEqual(['loading', 'rows', 'rows']);
   });
 
   it('prevents rapid Japam switching from leaking rows from the old Japam', async () => {
