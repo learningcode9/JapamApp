@@ -983,13 +983,13 @@ describe('japamId: identity field on HistoryRecord', () => {
   });
 
   describe('buildSupabaseHistoryPayload', () => {
-    it('withholds japam_id (stop-loss: no FK-safe write path to public.japams yet) but preserves the trimmed japam_name snapshot', () => {
+    it('preserves japam_id and the trimmed japam_name snapshot for Supabase attribution', () => {
       const record = normalizeRecord(session(isoAt(0), {
         japamId: 'japam-abc-123',
         japamName: '  Gayatri  ',
       }));
       const payload = buildSupabaseHistoryPayload(record, UID, 'Sravani');
-      expect(payload.japam_id).toBeNull();
+      expect(payload.japam_id).toBe('japam-abc-123');
       expect(payload.japam_name).toBe('Gayatri');
     });
     it('sends null japam_id and japam_name when the record has neither, never crashing', () => {
@@ -1023,7 +1023,7 @@ describe('japamId: identity field on HistoryRecord', () => {
   });
 
   describe('round trip: appendCompletion -> buildSupabaseHistoryPayload preserves identity', () => {
-    it('withholds japam_id from the remote payload (stop-loss) while japam_name still carries through', () => {
+    it('carries japam_id and japam_name through to the remote payload', () => {
       const history = appendCompletion([], {
         date: isoAt(0),
         malas: 1,
@@ -1034,8 +1034,63 @@ describe('japamId: identity field on HistoryRecord', () => {
         japamName: 'Gayatri',
       });
       const payload = buildSupabaseHistoryPayload(history[0], UID, 'Sravani');
-      expect(payload.japam_id).toBeNull();
+      expect(payload.japam_id).toBe('japam-abc-123');
       expect(payload.japam_name).toBe('Gayatri');
+    });
+
+    it('preserves japam_id for a pending offline record when it is retried later', () => {
+      const history = appendCompletion([], {
+        date: isoAt(0),
+        malas: 1,
+        totalCount: 108,
+        duration: 0,
+        userId: UID,
+        japamId: 'offline-japam-id',
+        japamName: 'Offline Japam',
+      });
+      const pending = getPending(history);
+
+      expect(pending).toHaveLength(1);
+      expect(buildSupabaseHistoryPayload(pending[0], UID, 'Sravani')).toMatchObject({
+        japam_id: 'offline-japam-id',
+        japam_name: 'Offline Japam',
+      });
+    });
+
+    it('preserves Timer completion Japam attribution in the remote payload', () => {
+      const history = appendCompletion([], {
+        date: isoAt(0),
+        malas: 1,
+        totalCount: 108,
+        duration: 600,
+        manual: false,
+        userId: UID,
+        japamId: 'timer-japam-id',
+        japamName: 'Timer Japam',
+      });
+
+      expect(buildSupabaseHistoryPayload(history[0], UID, 'Sravani')).toMatchObject({
+        japam_id: 'timer-japam-id',
+        japam_name: 'Timer Japam',
+      });
+    });
+
+    it('preserves Manual completion Japam attribution in the remote payload', () => {
+      const history = appendCompletion([], {
+        date: isoAt(0),
+        malas: 2,
+        totalCount: 216,
+        duration: 0,
+        manual: true,
+        userId: UID,
+        japamId: 'manual-japam-id',
+        japamName: 'Manual Japam',
+      });
+
+      expect(buildSupabaseHistoryPayload(history[0], UID, 'Sravani')).toMatchObject({
+        japam_id: 'manual-japam-id',
+        japam_name: 'Manual Japam',
+      });
     });
   });
 });
@@ -1118,8 +1173,10 @@ describe('Home totals scoping (filterByJapam → todayStatsFor)', () => {
   const UID = 'user-123';
   const JAPAM_A_ID = 'uuid-gayatri';
   const JAPAM_B_ID = 'uuid-govinda';
+  const DEFAULT_JAPAM_ID = 'uuid-my-japam';
   const JAPAM_A_NAME = 'Gayatri';
   const JAPAM_B_NAME = 'Govinda';
+  const DEFAULT_JAPAM_NAME = 'My Japam';
   const todayKey = '2026-07-06';
   const toKey = (iso: string) => iso.slice(0, 10);
   const todayISO = `${todayKey}T12:00:00.000Z`;
@@ -1145,9 +1202,10 @@ describe('Home totals scoping (filterByJapam → todayStatsFor)', () => {
     records: HistoryRecord[],
     japamId: string | null,
     japamName: string | null,
+    options: { includeBlankLegacy?: boolean } = {},
   ) => {
     const scoped = japamId !== null
-      ? filterByJapam(records, japamId, japamName)
+      ? filterByJapam(records, japamId, japamName, options)
       : records;
     return todayStatsFor(scoped, UID, todayKey, toKey).totalCount;
   };
@@ -1209,43 +1267,44 @@ describe('Home totals scoping (filterByJapam → todayStatsFor)', () => {
   });
 
   // ── Cumulative total preservation ──
-  it('existing 3 malas + new 1 mala => Home shows cumulative 4 malas', () => {
+  it('existing 3 orphan malas + new 1 mala => default My Japam shows cumulative 4 malas', () => {
     const records = [
       session(todayISO, { japamId: null, japamName: null, completionId: 'legacy-1' }),
       session(todayISO, { japamId: null, japamName: null, completionId: 'legacy-2' }),
       session(todayISO, { japamId: null, japamName: null, completionId: 'legacy-3' }),
-      session(todayISO, { japamId: JAPAM_A_ID, japamName: JAPAM_A_NAME, completionId: 'new-1' }),
+      session(todayISO, { japamId: DEFAULT_JAPAM_ID, japamName: DEFAULT_JAPAM_NAME, completionId: 'new-1' }),
     ];
-    expect(homePipeline(records, JAPAM_A_ID, JAPAM_A_NAME)).toBe(432); // 4 × 108
+    expect(homePipeline(records, DEFAULT_JAPAM_ID, DEFAULT_JAPAM_NAME, { includeBlankLegacy: true })).toBe(432); // 4 × 108
   });
 
-  it('existing 2 malas + new 2 malas => Home shows cumulative 4 malas', () => {
+  it('existing 2 orphan malas + new 2 malas => default My Japam shows cumulative 4 malas', () => {
     const records = [
       session(todayISO, { japamId: null, japamName: null, completionId: 'old-1' }),
       session(todayISO, { japamId: null, japamName: null, completionId: 'old-2' }),
-      session(todayISO, { japamId: JAPAM_A_ID, japamName: JAPAM_A_NAME, completionId: 'new-1' }),
-      session(todayISO, { japamId: JAPAM_A_ID, japamName: JAPAM_A_NAME, completionId: 'new-2' }),
+      session(todayISO, { japamId: DEFAULT_JAPAM_ID, japamName: DEFAULT_JAPAM_NAME, completionId: 'new-1' }),
+      session(todayISO, { japamId: DEFAULT_JAPAM_ID, japamName: DEFAULT_JAPAM_NAME, completionId: 'new-2' }),
     ];
-    expect(homePipeline(records, JAPAM_A_ID, JAPAM_A_NAME)).toBe(432); // 4 × 108
+    expect(homePipeline(records, DEFAULT_JAPAM_ID, DEFAULT_JAPAM_NAME, { includeBlankLegacy: true })).toBe(432); // 4 × 108
   });
 
-  it('different Japam totals remain isolated + orphans included in both', () => {
+  it('different non-default Japam totals remain isolated without orphan contamination', () => {
     const records = [
       session(todayISO, { japamId: null, japamName: null, completionId: 'orphan' }),
       session(todayISO, { japamId: JAPAM_A_ID, japamName: JAPAM_A_NAME, completionId: 'a-1' }),
       session(todayISO, { japamId: JAPAM_B_ID, japamName: JAPAM_B_NAME, completionId: 'b-1' }),
     ];
-    expect(homePipeline(records, JAPAM_A_ID, JAPAM_A_NAME)).toBe(216); // a-1 (108) + orphan (108)
-    expect(homePipeline(records, JAPAM_B_ID, JAPAM_B_NAME)).toBe(216); // b-1 (108) + orphan (108)
+    expect(homePipeline(records, JAPAM_A_ID, JAPAM_A_NAME)).toBe(108);
+    expect(homePipeline(records, JAPAM_B_ID, JAPAM_B_NAME)).toBe(108);
+    expect(homePipeline(records, DEFAULT_JAPAM_ID, DEFAULT_JAPAM_NAME, { includeBlankLegacy: true })).toBe(108);
   });
 
   it('refresh preserves the same cumulative total (idempotent)', () => {
     const records = [
       session(todayISO, { japamId: null, japamName: null, completionId: 'orphan' }),
-      session(todayISO, { japamId: JAPAM_A_ID, japamName: JAPAM_A_NAME, completionId: 'a-1' }),
+      session(todayISO, { japamId: DEFAULT_JAPAM_ID, japamName: DEFAULT_JAPAM_NAME, completionId: 'a-1' }),
     ];
-    const total1 = homePipeline(records, JAPAM_A_ID, JAPAM_A_NAME);
-    const total2 = homePipeline(records, JAPAM_A_ID, JAPAM_A_NAME);
+    const total1 = homePipeline(records, DEFAULT_JAPAM_ID, DEFAULT_JAPAM_NAME, { includeBlankLegacy: true });
+    const total2 = homePipeline(records, DEFAULT_JAPAM_ID, DEFAULT_JAPAM_NAME, { includeBlankLegacy: true });
     expect(total1).toBe(216);
     expect(total2).toBe(216);
   });
@@ -1690,25 +1749,43 @@ describe('filterByJapam', () => {
     expect(result.map((r) => r.completionId)).toEqual(['real']);
   });
 
-  it('legacy row with no japamName is included under any named Japam (orphan fallback)', () => {
+  it('legacy row with no japamName is included only when caller opts into the canonical default bucket', () => {
     const records = [
-      session(at(9), { japamId: 'uuid-gayatri', completionId: 'real' }),
+      session(at(9), { japamId: 'uuid-my-japam', japamName: 'My Japam', completionId: 'real' }),
       session(at(10), { japamId: null, japamName: null, completionId: 'no-name' }),
     ];
-    const result = filterByJapam(records, 'uuid-gayatri', 'Gayatri');
+    const result = filterByJapam(records, 'uuid-my-japam', 'My Japam', { includeBlankLegacy: true });
     expect(result.map((r) => r.completionId).sort()).toEqual(['no-name', 'real']);
   });
 
-  it('orphan (null-name) legacy rows are visible under any Japam, not just one', () => {
+  it('legacy row with no japamName is not included by display name alone', () => {
+    const records = [
+      session(at(9), { japamId: 'uuid-my-japam', japamName: 'My Japam', completionId: 'real' }),
+      session(at(10), { japamId: null, japamName: null, completionId: 'no-name' }),
+    ];
+    const result = filterByJapam(records, 'uuid-my-japam', 'My Japam');
+    expect(result.map((r) => r.completionId)).toEqual(['real']);
+  });
+
+  it('renamed default Japam can still include blank legacy rows via explicit canonical signal', () => {
+    const records = [
+      session(at(9), { japamId: 'uuid-default', japamName: 'Renamed Practice', completionId: 'real' }),
+      session(at(10), { japamId: null, japamName: null, completionId: 'blank-legacy' }),
+    ];
+    const result = filterByJapam(records, 'uuid-default', 'Renamed Practice', { includeBlankLegacy: true });
+    expect(result.map((r) => r.completionId).sort()).toEqual(['blank-legacy', 'real']);
+  });
+
+  it('orphan (null-name) legacy rows do not contaminate unrelated named Japams', () => {
     const records = [
       session(at(9), { japamId: null, japamName: null, completionId: 'orphan' }),
-      session(at(10), { japamId: 'uuid-gayatri', completionId: 'g-real' }),
-      session(at(11), { japamId: 'uuid-govinda', completionId: 'v-real' }),
+      session(at(10), { japamId: 'uuid-my-japam', japamName: 'My Japam', completionId: 'my-real' }),
+      session(at(11), { japamId: 'uuid-govinda', japamName: 'Govinda', completionId: 'v-real' }),
     ];
-    const gayatri = filterByJapam(records, 'uuid-gayatri');
-    const govinda = filterByJapam(records, 'uuid-govinda');
-    expect(gayatri.map((r) => r.completionId).sort()).toEqual(['g-real', 'orphan']);
-    expect(govinda.map((r) => r.completionId).sort()).toEqual(['orphan', 'v-real']);
+    const myJapam = filterByJapam(records, 'uuid-my-japam', 'My Japam', { includeBlankLegacy: true });
+    const govinda = filterByJapam(records, 'uuid-govinda', 'Govinda');
+    expect(myJapam.map((r) => r.completionId).sort()).toEqual(['my-real', 'orphan']);
+    expect(govinda.map((r) => r.completionId).sort()).toEqual(['v-real']);
   });
 
   it('orphan rows are included under null japamId (all null-japamId rows match)', () => {
@@ -1721,15 +1798,30 @@ describe('filterByJapam', () => {
     expect(result.map((r) => r.completionId).sort()).toEqual(['named-legacy', 'orphan']);
   });
 
-  it('named legacy rows are isolated to their matching Japam, orphans go to all', () => {
+  it('named legacy rows are isolated to their matching Japam, while orphans stay on My Japam', () => {
     const records = [
       session(at(9), { japamId: null, japamName: null, completionId: 'orphan' }),
       session(at(10), { japamId: null, japamName: 'Gayatri', completionId: 'g-legacy' }),
       session(at(11), { japamId: null, japamName: 'Govinda', completionId: 'v-legacy' }),
       session(at(12), { japamId: 'uuid-gayatri', completionId: 'g-real' }),
+      session(at(13), { japamId: 'uuid-my-japam', japamName: 'My Japam', completionId: 'my-real' }),
     ];
     const gayatri = filterByJapam(records, 'uuid-gayatri', 'Gayatri');
-    expect(gayatri.map((r) => r.completionId).sort()).toEqual(['g-legacy', 'g-real', 'orphan']);
+    const myJapam = filterByJapam(records, 'uuid-my-japam', 'My Japam', { includeBlankLegacy: true });
+    expect(gayatri.map((r) => r.completionId).sort()).toEqual(['g-legacy', 'g-real']);
+    expect(myJapam.map((r) => r.completionId).sort()).toEqual(['my-real', 'orphan']);
+  });
+
+  it('another Japam named My Japam does not inherit blank legacy rows without the canonical signal', () => {
+    const records = [
+      session(at(9), { japamId: 'uuid-default', japamName: 'Renamed Practice', completionId: 'default-real' }),
+      session(at(10), { japamId: 'uuid-duplicate-name', japamName: 'My Japam', completionId: 'duplicate-real' }),
+      session(at(11), { japamId: null, japamName: null, completionId: 'blank-legacy' }),
+    ];
+    const renamedDefault = filterByJapam(records, 'uuid-default', 'Renamed Practice', { includeBlankLegacy: true });
+    const duplicateName = filterByJapam(records, 'uuid-duplicate-name', 'My Japam');
+    expect(renamedDefault.map((r) => r.completionId).sort()).toEqual(['blank-legacy', 'default-real']);
+    expect(duplicateName.map((r) => r.completionId)).toEqual(['duplicate-real']);
   });
 });
 
@@ -2267,12 +2359,12 @@ describe('japamScopedStatsFor: Timer/History display consistency (PR #53 regress
     ];
     // Guest scope (userId=null/undefined): only the guest record counts.
     const guestStats = japamScopedStatsFor(
-      records, null, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+      records, null, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey, { includeBlankLegacy: true },
     );
     expect(guestStats.todayTotalCount).toBe(108);
     // Signed-in scope: only the signed-in record counts.
     const signedInStats = japamScopedStatsFor(
-      records, signedInUid, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey,
+      records, signedInUid, JAPAM_ID, JAPAM_NAME, TODAY, toDayKey, getPreviousDayKey, { includeBlankLegacy: true },
     );
     expect(signedInStats.todayTotalCount).toBe(108);
   });

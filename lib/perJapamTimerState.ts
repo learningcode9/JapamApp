@@ -9,6 +9,9 @@ export const TIMER_PAUSED_KEY = 'timerPaused';
 export const TIMER_COMPLETED_LOOPS_KEY = 'timerCompletedLoops';
 export const TIMER_STARTED_AT_KEY = 'timerStartedAt';
 export const TIMER_SESSION_ID_KEY = 'timerSessionId';
+export const TIMER_SESSION_USER_ID_KEY = 'timerSessionUserId';
+export const TIMER_SESSION_JAPAM_ID_KEY = 'timerSessionJapamId';
+export const TIMER_SESSION_JAPAM_NAME_KEY = 'timerSessionJapamName';
 
 export function getJapamKey(key: string, uid: string, japamId: string): string {
   return `${key}:${uid}:${japamId}`;
@@ -42,6 +45,9 @@ export const PER_JAPAM_KEYS = [
   TIMER_RUNNING_KEY,
   TIMER_STARTED_AT_KEY,
   TIMER_SESSION_ID_KEY,
+  TIMER_SESSION_USER_ID_KEY,
+  TIMER_SESSION_JAPAM_ID_KEY,
+  TIMER_SESSION_JAPAM_NAME_KEY,
 ] as const;
 
 export interface TimerStateSnapshot {
@@ -54,6 +60,9 @@ export interface TimerStateSnapshot {
   sessionId: string;
   duration: number;
   loops: number;
+  sessionUserId?: string | null;
+  sessionJapamId?: string | null;
+  sessionJapamName?: string | null;
 }
 
 export function buildTimerPairs(snapshot: TimerStateSnapshot): [string, string][] {
@@ -65,6 +74,9 @@ export function buildTimerPairs(snapshot: TimerStateSnapshot): [string, string][
     [TIMER_COMPLETED_LOOPS_KEY, String(snapshot.completedLoops)],
     [TIMER_STARTED_AT_KEY, snapshot.startedAt === '' ? '' : String(snapshot.startedAt)],
     [TIMER_SESSION_ID_KEY, snapshot.sessionId],
+    [TIMER_SESSION_USER_ID_KEY, snapshot.sessionUserId ?? ''],
+    [TIMER_SESSION_JAPAM_ID_KEY, snapshot.sessionJapamId ?? ''],
+    [TIMER_SESSION_JAPAM_NAME_KEY, snapshot.sessionJapamName ?? ''],
     [T_DURATION_KEY, String(snapshot.duration)],
     [T_LOOPS_KEY, String(snapshot.loops)],
   ];
@@ -91,6 +103,9 @@ export interface RawJapamTimerState {
   running: string | null;
   startedAt: string | null;
   sessionId: string | null;
+  sessionUserId: string | null;
+  sessionJapamId: string | null;
+  sessionJapamName: string | null;
 }
 
 export async function readJapamTimerState(
@@ -109,5 +124,8 @@ export async function readJapamTimerState(
     running: entries[6]?.[1] ?? null,
     startedAt: entries[7]?.[1] ?? null,
     sessionId: entries[8]?.[1] ?? null,
+    sessionUserId: entries[9]?.[1] ?? null,
+    sessionJapamId: entries[10]?.[1] ?? null,
+    sessionJapamName: entries[11]?.[1] ?? null,
   };
 }

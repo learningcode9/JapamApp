@@ -69,6 +69,7 @@ class JapamTimerService : Service() {
     private val isCompleting = AtomicBoolean(false)
     private var lastSaveTime: Long = 0L
     private var startHeadsUpPosted: Boolean = false
+    private val completionTimes = mutableMapOf<Int, Long>()
 
     // Checks every second whether the timer has expired
     private val tickRunnable = object : Runnable {
@@ -146,6 +147,7 @@ class JapamTimerService : Service() {
             sessionId = if (nextSessionId.isNotBlank()) nextSessionId else "native-$startedAt"
             if (oldSessionId != sessionId) {
                 startHeadsUpPosted = false
+                completionTimes.clear()
             }
             isPaused = false
             pausedElapsedMs = 0L
@@ -395,7 +397,9 @@ class JapamTimerService : Service() {
         }
 
         val newCompleted = (completedLoops + 1).coerceAtMost(totalLoops)
+        val completedAt = System.currentTimeMillis()
         completedLoops = newCompleted
+        completionTimes[newCompleted] = completedAt
         val isFinal = newCompleted >= totalLoops
         Log.d(
             "NativeTimer",
@@ -415,6 +419,7 @@ class JapamTimerService : Service() {
             putExtra("isFinal", isFinal)
             putExtra("userId", userId)
             putExtra("durationMs", durationMs)
+            putExtra("completedAt", completedAt)
         })
 
         handler.post {
@@ -517,6 +522,12 @@ class JapamTimerService : Service() {
             putBoolean("soundEnabled", soundEnabled)
             putBoolean("vibrationEnabled", vibrationEnabled)
             putString("userId", userId)
+            putString(
+                "completionTimes",
+                completionTimes.entries
+                    .sortedBy { it.key }
+                    .joinToString(",") { "${it.key}:${it.value}" }
+            )
             apply()
         }
     }

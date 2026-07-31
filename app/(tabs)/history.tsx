@@ -4,6 +4,7 @@ import {
   appendCompletion,
   buildSupabaseHistoryPayload,
   dedupeByCompletionId,
+  filterByJapam,
   makeCompletionId,
   markSynced,
   mergeHistories,
@@ -13,9 +14,10 @@ import {
   toLocalDayKey,
   type HistoryRecord,
 } from '../../lib/historyStore';
-import * as historyRepository from '../../lib/historyRepository';
 import { useCurrentJapam } from '../../contexts/current-japam-context';
 import CurrentJapamHeaderButton from '../../components/CurrentJapamHeaderButton';
+import { activeJapams } from '../../lib/japams';
+import { ensureJapamSyncedForHistory } from '../../lib/japamsRepository';
 import { repairLegacyStoredUserId, LEGACY_USER_ID_KEY } from '../../lib/anonymousAuth';
 import { supabase } from '../../lib/supabase';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -23,7 +25,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Sharing from 'expo-sharing';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Alert,
     DeviceEventEmitter,
@@ -70,6 +72,7 @@ const MALAS_CELL_FLEX = isNarrowPhone ? 0.85 : isTablet ? 1.05 : 1.0;
 const COUNT_CELL_FLEX = isNarrowPhone ? 0.95 : isTablet ? 1.15 : 1.05;
 const TOTAL_CELL_FLEX = isNarrowPhone ? 0.9 : isTablet ? 1.1 : 1.0;
 const DATE_MIN_WIDTH = isNarrowPhone ? 84 : isTablet ? 156 : 98;
+const HISTORY_LOADING_PLACEHOLDER_ROWS = 4;
 // Android-only fixed widths (dp). Date is sized just for "30 Jun 2026" (tight, not huge, per
 // request). Malas gets the single largest numeric-column allowance — deliberately more than
 // Count/Total — because it's the one that's repeatedly truncated in practice.
@@ -138,6 +141,7 @@ type ManualSyncInput = {
 
 type AddDateMode = 'today' | 'yesterday' | 'custom';
 type AddEntryMode = 'malas' | 'count';
+type HistoryScopeState = 'loading' | 'ready' | 'empty';
 
 const MALAS_TO_COUNT = 108;
 
@@ -418,6 +422,10 @@ const saveToSupabase = async (
   // to the anon key.
   const accessToken = (await supabase.auth.getSession()).data.session?.access_token;
   if (!accessToken) return false;
+  if (japamId) {
+    const japamReady = await ensureJapamSyncedForHistory(userId, japamId);
+    if (!japamReady) return false;
+  }
 
   try {
     const body = buildSupabaseHistoryPayload({
@@ -539,6 +547,13 @@ const syncHistoryEditsToSupabase = async (
             completion_id: payload.completion_id,
           }
         : payload;
+      if (remoteId == null && payload.japam_id) {
+        const japamReady = await ensureJapamSyncedForHistory(userId, payload.japam_id);
+        if (!japamReady) {
+          console.log('[HISTORY_EDIT_SYNC_DEFERRED] completionId=%s reason=japam-sync-pending', record.completionId);
+          continue;
+        }
+      }
       console.log(
         '[HISTORY_EDIT_REQUEST] method=%s remoteId=%s completionId=%s url=%s body=%s',
         requestMethod,
@@ -583,7 +598,7 @@ const syncHistoryEditsToSupabase = async (
       // no need for a separate verify GET (whose own failure previously caused a false "not
       // saved" alert even though the write had gone through).
       const writeText = await response.text().catch(() => '');
-      let writeRows: Array<{ completion_id?: string; malas?: number | string; count?: number | string }> = [];
+      let writeRows: { completion_id?: string; malas?: number | string; count?: number | string }[] = [];
       try {
         const parsed = writeText ? JSON.parse(writeText) : [];
         writeRows = Array.isArray(parsed) ? parsed : [];
@@ -634,12 +649,12 @@ const syncHistoryEditsToSupabase = async (
       const verifyText = await verifyResponse.text().catch(() => '');
       let verifyBody: unknown = [];
       try { verifyBody = verifyText ? JSON.parse(verifyText) : []; } catch { verifyBody = []; }
-      const verifyRows = Array.isArray(verifyBody) ? verifyBody as Array<{
+      const verifyRows = Array.isArray(verifyBody) ? verifyBody as {
         id?: number | string;
         completion_id?: string;
         malas?: number | string;
         count?: number | string;
-      }> : [];
+      }[] : [];
       if (verifyRows.length === 0) {
         console.log(
           '[HISTORY_EDIT_SYNC_FAILED] completionId=%s reason=verify-zero-rows remoteId=%s',
@@ -684,7 +699,8 @@ const syncHistoryEditsToSupabase = async (
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { currentJapam, currentJapamId, isLoading: isJapamContextLoading } = useCurrentJapam();
+  const { currentJapam, currentJapamId, japams, isLoading: isJapamContextLoading } = useCurrentJapam();
+  const includeBlankLegacy = currentJapamId === activeJapams(japams)[0]?.id;
   const tabBarSpaceFromBottom = 74 + Math.max(12, insets.bottom + 8);
 
   const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
@@ -698,6 +714,12 @@ export default function HistoryScreen() {
   const [editMalas, setEditMalas] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [historyScopeState, setHistoryScopeState] = useState<HistoryScopeState>('loading');
+  const [isAuthHydrationPending, setIsAuthHydrationPending] = useState(false);
+  const dailyRowsRef = useRef<DailyRow[]>([]);
+  const historyScopeStateRef = useRef<HistoryScopeState>('loading');
+  const latestAppliedScopeKeyRef = useRef<string | null>(null);
+  const latestRequestRef = useRef({ generation: 0, scopeKey: 'initial' });
 
   const getYesterdayDateKey = () => {
     const yesterday = new Date();
@@ -705,7 +727,46 @@ export default function HistoryScreen() {
     return getLocalDateKey(yesterday);
   };
 
+  useEffect(() => {
+    dailyRowsRef.current = dailyRows;
+  }, [dailyRows]);
+
+  useEffect(() => {
+    historyScopeStateRef.current = historyScopeState;
+  }, [historyScopeState]);
+
+  const invalidateHistoryRequests = useCallback((nextState: HistoryScopeState = 'loading') => {
+    const generation = latestRequestRef.current.generation + 1;
+    latestRequestRef.current = { generation, scopeKey: `invalid:${generation}` };
+    latestAppliedScopeKeyRef.current = null;
+    setDailyRows([]);
+    setHistoryScopeState(nextState);
+  }, []);
+
+  const isCurrentRequest = useCallback((generation: number, scopeKey: string) => {
+    return (
+      latestRequestRef.current.generation === generation
+      && latestRequestRef.current.scopeKey === scopeKey
+    );
+  }, []);
+
+  const buildScopedRows = useCallback((sessions: Session[], japamId: string, japamName: string) => {
+    return buildDailyRows(filterByJapam(sessions, japamId, japamName, { includeBlankLegacy }));
+  }, [includeBlankLegacy]);
+
+  const getDisplayedUserKey = useCallback(() => {
+    const appliedScopeKey = latestAppliedScopeKeyRef.current;
+    if (!appliedScopeKey) return null;
+    const separatorIndex = appliedScopeKey.indexOf(':');
+    return separatorIndex === -1 ? appliedScopeKey : appliedScopeKey.slice(0, separatorIndex);
+  }, []);
+
   const openAddModal = () => {
+    if (isJapamContextLoading || !currentJapamId || !currentJapam?.name) {
+      Alert.alert('Please wait', 'Your current Japam is still loading. Please try again in a moment.');
+      return;
+    }
+
     setAddDateMode('today');
     setAddDate(getLocalDateKey());
     setAddMalas(1);
@@ -730,6 +791,11 @@ export default function HistoryScreen() {
     await repairLegacyStoredUserId();
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
     // Guests (currentUserId === null) are allowed — records saved locally with syncStatus 'synced'
+
+    if (currentUserId && (isJapamContextLoading || !currentJapamId || !currentJapam?.name)) {
+      Alert.alert('Please wait', 'Your current Japam is still loading. Please try again in a moment.');
+      return;
+    }
 
     if (!addDate || !/^\d{4}-\d{2}-\d{2}$/.test(addDate)) {
       Alert.alert('Invalid date', 'Please enter a valid date in YYYY-MM-DD format.');
@@ -837,11 +903,53 @@ export default function HistoryScreen() {
       setIsSaving(false);
     }
   };
+
   const loadHistory = useCallback(async () => {
     console.log('[LOCAL_FIX_BUILD_MARKER] history-table-v3 edit-confirm-v1');
+    const requestGeneration = latestRequestRef.current.generation + 1;
+    latestRequestRef.current = { generation: requestGeneration, scopeKey: `pending:${requestGeneration}` };
     await repairLegacyStoredUserId();
+
+    const currentJapamIdentityId = currentJapam?.id ?? null;
+    const currentJapamName = currentJapam?.name ?? null;
     const todayKey = getLocalDateKey();
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    const displayedUserKey = getDisplayedUserKey();
+    const currentUserKey = currentUserId || 'guest';
+    const shouldPreserveVisibleRows =
+      historyScopeStateRef.current === 'ready'
+      && dailyRowsRef.current.length > 0
+      && displayedUserKey === currentUserKey;
+
+    if (isAuthHydrationPending || isJapamContextLoading) {
+      const loadingScopeKey = `loading:${currentUserKey}`;
+      latestRequestRef.current = { generation: requestGeneration, scopeKey: loadingScopeKey };
+      if (!isCurrentRequest(requestGeneration, loadingScopeKey)) return;
+      if (!shouldPreserveVisibleRows) {
+        setHistoryScopeState('loading');
+      }
+      return;
+    }
+
+    if (!currentJapamId || currentJapamIdentityId !== currentJapamId || !currentJapamName) {
+      const emptyScopeKey = `empty:${currentUserId || 'guest'}`;
+      latestRequestRef.current = { generation: requestGeneration, scopeKey: emptyScopeKey };
+      if (!isCurrentRequest(requestGeneration, emptyScopeKey)) return;
+      latestAppliedScopeKeyRef.current = null;
+      setDailyRows([]);
+      setHistoryScopeState('empty');
+      return;
+    }
+
+    const scopeKey = `${currentUserKey}:${currentJapamId}`;
+    latestRequestRef.current = { generation: requestGeneration, scopeKey };
+    const scopeChanged = latestAppliedScopeKeyRef.current !== scopeKey;
+    if (scopeChanged) {
+      if (!isCurrentRequest(requestGeneration, scopeKey)) return;
+      setDailyRows([]);
+      setHistoryScopeState('loading');
+    }
+
     const raw = await AsyncStorage.getItem('history');
     const allSessions = parseHistory(raw);
 
@@ -872,10 +980,18 @@ export default function HistoryScreen() {
       (item.userId || null) === (currentUserId || null) && !isTombstoned(item);
 
     let sessions = dedupeSessions(cleanedSessions.filter(matchesUser));
+
+    if (!isCurrentRequest(requestGeneration, scopeKey)) return;
+    setDailyRows(buildScopedRows(sessions, currentJapamId, currentJapamName));
+    setHistoryScopeState('ready');
+    latestAppliedScopeKeyRef.current = scopeKey;
+
     // TEMPORARY BRIDGE: dual-fetch by legacy numeric id too — see fetchRemoteSessions's header
     // comment and db/migrate_numeric_user_ids_to_uuid.sql for the removal trigger.
     const legacyUserId = await AsyncStorage.getItem(LEGACY_USER_ID_KEY);
+    if (!isCurrentRequest(requestGeneration, scopeKey)) return;
     const remoteSessions = currentUserId ? await fetchRemoteSessions(currentUserId, legacyUserId) : null;
+    if (!isCurrentRequest(requestGeneration, scopeKey)) return;
 
     if (remoteSessions !== null) {
       const filteredRemoteSessions = remoteSessions.filter((item) => {
@@ -909,7 +1025,9 @@ export default function HistoryScreen() {
       sessions = dedupeSessions(mergedForStorage.filter((item) => (item.userId || null) === (currentUserId || null))).sort(
         (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
       );
+      if (!isCurrentRequest(requestGeneration, scopeKey)) return;
       await AsyncStorage.setItem('history', JSON.stringify(mergedForStorage));
+      if (!isCurrentRequest(requestGeneration, scopeKey)) return;
       console.log('[RESTORE_REMOTE_COUNT] screen=history count=%d', filteredRemoteSessions.length);
       console.log(
         '[MERGE_LOCAL_COUNT_BEFORE] screen=history count=%d pending=%d',
@@ -923,24 +1041,18 @@ export default function HistoryScreen() {
       );
 
       // Notify Home screen to re-sync stats from the updated local history
+      if (!isCurrentRequest(requestGeneration, scopeKey)) return;
       DeviceEventEmitter.emit('japam-stats-updated');
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.dispatchEvent(new Event('japam-stats-updated'));
       }
     }
 
-    // History does not decide which selector to call or how records get scoped -- it asks
-    // HistoryRepository for this Japam's records (already deduped/filtered) and hands the result
-    // straight to buildDailyRows. No current Japam selected/none exist yet -> show nothing (the
-    // render below shows a distinct help state for this) rather than calling the repository with
-    // no Japam to scope to.
-    if (!currentJapamId) {
-      setDailyRows([]);
-      return;
-    }
-    const japamScopedSessions = await historyRepository.loadHistoryForJapam(currentUserId, currentJapamId, currentJapam?.name);
-    setDailyRows(buildDailyRows(japamScopedSessions));
-  }, [currentJapamId]);
+    if (!isCurrentRequest(requestGeneration, scopeKey)) return;
+    setDailyRows(buildScopedRows(sessions, currentJapamId, currentJapamName));
+    setHistoryScopeState('ready');
+    latestAppliedScopeKeyRef.current = scopeKey;
+  }, [buildScopedRows, currentJapam?.id, currentJapam?.name, currentJapamId, getDisplayedUserKey, isAuthHydrationPending, isCurrentRequest, isJapamContextLoading]);
 
   // Tombstone-based delete: remove the records locally, record a tombstone (so self-heal never
   // re-uploads them and other devices delete their copy on sync), and best-effort delete remote
@@ -977,8 +1089,7 @@ export default function HistoryScreen() {
     console.log('[DELETE_LOCAL_REMOVED] removed=%d remaining=%d', local.length - filtered.length, filtered.length);
 
     // 3) Notify Main/History to recompute counts. This screen's own 'japam-history-updated'
-    // listener calls loadHistory() in response, which re-fetches through
-    // historyRepository.loadHistoryForJapam and is correctly scoped to the current Japam --
+    // listener calls loadHistory() in response, which re-filters from the current screen scope --
     // deliberately not duplicated here as an inline optimistic update (that used to filter by
     // userId only, momentarily showing every Japam's rows mixed together after a delete).
     DeviceEventEmitter.emit('japam-stats-updated');
@@ -1160,23 +1271,61 @@ export default function HistoryScreen() {
   );
 
   useEffect(() => {
+    if (!isJapamContextLoading) {
+      setIsAuthHydrationPending(false);
+    }
+  }, [currentJapam?.id, currentJapam?.name, currentJapamId, isJapamContextLoading]);
+
+  useEffect(() => {
+    void loadHistory();
+  }, [loadHistory]);
+
+  useEffect(() => {
     const onHistoryUpdated = () => {
       void loadHistory();
     };
 
-    const subscription = DeviceEventEmitter.addListener('japam-history-updated', onHistoryUpdated);
+    const onAuthUpdated = () => {
+      void (async () => {
+        const nextUserId = await AsyncStorage.getItem(USER_ID_KEY);
+        const nextUserKey = nextUserId || 'guest';
+        const displayedUserKey = getDisplayedUserKey();
+        const isRealUserScopeChange = displayedUserKey !== null && displayedUserKey !== nextUserKey;
+
+        if (isRealUserScopeChange || !nextUserId) {
+          setIsAuthHydrationPending(true);
+          invalidateHistoryRequests('loading');
+          void loadHistory();
+          return;
+        }
+
+        void loadHistory();
+      })();
+    };
+
+    const historySubscription = DeviceEventEmitter.addListener('japam-history-updated', onHistoryUpdated);
+    const authSubscription = DeviceEventEmitter.addListener('japam-auth-updated', onAuthUpdated);
 
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       window.addEventListener('japam-history-updated', onHistoryUpdated as EventListener);
+      window.addEventListener('japam-auth-updated', onAuthUpdated as EventListener);
     }
 
     return () => {
-      subscription.remove();
+      historySubscription.remove();
+      authSubscription.remove();
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.removeEventListener('japam-history-updated', onHistoryUpdated as EventListener);
+        window.removeEventListener('japam-auth-updated', onAuthUpdated as EventListener);
       }
     };
-  }, [loadHistory]);
+  }, [getDisplayedUserKey, invalidateHistoryRequests, loadHistory]);
+
+  useEffect(() => {
+    return () => {
+      invalidateHistoryRequests('loading');
+    };
+  }, [invalidateHistoryRequests]);
 
   const totalMalas = useMemo(
     () => dailyRows.reduce((sum, row) => sum + row.malas, 0),
@@ -1187,6 +1336,8 @@ export default function HistoryScreen() {
     () => dailyRows.reduce((sum, row) => sum + row.totalCount, 0),
     [dailyRows]
   );
+
+  const isHistoryLoading = historyScopeState === 'loading';
 
   const exportHistory = async () => {
     try {
@@ -1292,7 +1443,7 @@ export default function HistoryScreen() {
         <CurrentJapamHeaderButton variant="history" />
       </View>
 
-      {!currentJapamId && !isJapamContextLoading ? (
+      {historyScopeState === 'empty' ? (
         <View style={[styles.emptyRow, { alignItems: 'center' }]}>
           <Text style={[styles.emptyText, { textAlign: 'center' }]}>
             No Japam selected. Create or select a Japam to see its history.
@@ -1308,9 +1459,18 @@ export default function HistoryScreen() {
         </View>
       ) : (
       <>
-      <View style={styles.simpleSummary}>
-        <Text style={styles.summaryText}>📿 Total Malas: {totalMalas}</Text>
-        <Text style={styles.summaryText}>🔢 Total Count: {totalCount}</Text>
+        <View style={styles.simpleSummary}>
+        {isHistoryLoading ? (
+          <>
+            <View style={[styles.summarySkeletonLine, styles.summarySkeletonLineWide]} />
+            <View style={styles.summarySkeletonLine} />
+          </>
+        ) : (
+          <>
+            <Text style={styles.summaryText}>📿 Total Malas: {totalMalas}</Text>
+            <Text style={styles.summaryText}>🔢 Total Count: {totalCount}</Text>
+          </>
+        )}
       </View>
 
       <View style={styles.actionRow}>
@@ -1524,7 +1684,36 @@ export default function HistoryScreen() {
           </View>
         </View>
 
-        {dailyRows.length === 0 ? (
+        {isHistoryLoading ? (
+          <View style={styles.loadingTableBody}>
+            {Array.from({ length: HISTORY_LOADING_PLACEHOLDER_ROWS }).map((_, index) => (
+              <View
+                key={`history-loading-row-${index}`}
+                style={[styles.tableRow, index % 2 === 1 && styles.altTableRow]}
+              >
+                <View style={[styles.columnCell, styles.dateColumn]}>
+                  <View style={[styles.loadingBlock, styles.loadingDateBlock]} />
+                </View>
+                <View style={[styles.columnCell, styles.numColumn]}>
+                  <View style={[styles.loadingBlock, styles.loadingValueBlock]} />
+                </View>
+                <View style={[styles.columnCell, styles.countColumn]}>
+                  <View style={[styles.loadingBlock, styles.loadingCountBlock]} />
+                </View>
+                <View style={[styles.columnCell, styles.totalColumn]}>
+                  <View style={[styles.loadingBlock, styles.loadingValueBlock]} />
+                </View>
+                <View style={[styles.columnCell, styles.actionsColumn]}>
+                  <View style={styles.rowActions}>
+                    <View style={styles.loadingActionDot} />
+                    <View style={styles.loadingActionDot} />
+                  </View>
+                </View>
+              </View>
+            ))}
+            <Text style={styles.loadingCaption}>Loading history...</Text>
+          </View>
+        ) : dailyRows.length === 0 ? (
           <View style={styles.emptyRow}>
             <Text style={styles.emptyText}>No Japam history yet</Text>
           </View>
@@ -1607,7 +1796,7 @@ export default function HistoryScreen() {
         )}
       </View>
 
-      {dailyRows.length > 0 && (
+      {!isHistoryLoading && dailyRows.length > 0 && (
         <Text style={{ textAlign: 'center', color: '#5f7778', fontSize: 12, marginTop: 10 }}>
           {Platform.OS === 'web'
             ? 'Use the row actions to edit or delete a day.'
@@ -1697,6 +1886,8 @@ const styles = StyleSheet.create({
     gap: 6,
     marginBottom: 20,
     alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 54,
   },
 
   summaryText: {
@@ -1704,6 +1895,17 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
     textAlign: 'center',
+  },
+
+  summarySkeletonLine: {
+    width: isNarrowPhone ? 184 : 216,
+    height: 20,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15, 118, 110, 0.14)',
+  },
+
+  summarySkeletonLineWide: {
+    width: isNarrowPhone ? 212 : 252,
   },
 
   actionRow: {
@@ -1905,6 +2107,10 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
 
+  loadingTableBody: {
+    minHeight: HISTORY_LOADING_PLACEHOLDER_ROWS * 58 + 44,
+  },
+
   tableRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1998,6 +2204,41 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(107, 114, 128, 0.10)',
     borderWidth: 1,
     borderColor: 'rgba(107, 114, 128, 0.18)',
+  },
+
+  loadingBlock: {
+    height: 16,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15, 118, 110, 0.12)',
+  },
+
+  loadingDateBlock: {
+    width: '82%',
+  },
+
+  loadingValueBlock: {
+    width: '54%',
+    alignSelf: 'center',
+  },
+
+  loadingCountBlock: {
+    width: '68%',
+    alignSelf: 'center',
+  },
+
+  loadingActionDot: {
+    width: ROW_ACTION_BUTTON_SIZE - 10,
+    height: ROW_ACTION_BUTTON_SIZE - 10,
+    borderRadius: ROW_ACTION_BUTTON_SIZE,
+    backgroundColor: 'rgba(15, 118, 110, 0.12)',
+  },
+
+  loadingCaption: {
+    color: '#547071',
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+    paddingBottom: 18,
   },
 
   emptyRow: {

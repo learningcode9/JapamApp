@@ -145,6 +145,49 @@ const fetchRemoteJapams = async (userId: string): Promise<Japam[] | null> => {
   }
 };
 
+const deleteRemoteJapam = async (japamId: string): Promise<boolean> => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { supabase } = require('./supabase');
+    const { data, error } = await supabase.rpc('delete_owned_japam', {
+      p_japam_id: japamId,
+    });
+
+    if (error) {
+      console.warn('[JAPAM_REMOTE_DELETE_FAILED]', {
+        japamId,
+        code: error.code,
+        message: error.message,
+      });
+      return false;
+    }
+
+    const returnedIds = Array.isArray(data)
+      ? data
+          .map((row) => (row && typeof row === 'object' ? (row as { deleted_japam_id?: unknown }).deleted_japam_id : null))
+          .filter((id): id is string => typeof id === 'string')
+      : [];
+
+    if (returnedIds.length !== 1 || returnedIds[0] !== japamId) {
+      console.warn('[JAPAM_REMOTE_DELETE_FAILED]', {
+        japamId,
+        code: 'UNEXPECTED_RESPONSE',
+        message: 'Delete did not return exactly one matching Japam ID',
+      });
+      return false;
+    }
+
+    return true;
+  } catch {
+    console.warn('[JAPAM_REMOTE_DELETE_FAILED]', {
+      japamId,
+      code: 'NETWORK_ERROR',
+      message: 'Network error during Japam delete',
+    });
+    return false;
+  }
+};
+
 const enqueueSync = (userId: string, japam: Japam): void => {
   if (!userId) return;
 
@@ -337,7 +380,13 @@ export const deleteJapam = async (
 ): Promise<Japam[]> => {
   const existing = await loadJapamsFromStorage(userId);
   const target = existing.find((j) => j.id === japamId);
-  if (!target) return existing;
+  if (!target || target.archivedAt === null) return existing;
+
+  if (userId) {
+    const deletedRemotely = await deleteRemoteJapam(japamId);
+    if (!deletedRemotely) return existing;
+  }
+
   const updated = existing.filter((j) => j.id !== japamId);
   await saveJapamsToStorage(userId, updated);
   return updated;
@@ -409,6 +458,28 @@ export const syncJapam = async (
     });
     return false;
   }
+};
+
+/**
+ * Before a signed-in History row is uploaded with a non-null japam_id, make sure the referenced
+ * Japam has reached Supabase. If this cannot be confirmed, callers leave the completion pending.
+ */
+export const ensureJapamSyncedForHistory = async (
+  userId: string,
+  japamId: string | null | undefined,
+): Promise<boolean> => {
+  if (!userId || !japamId) return false;
+  const japams = await loadJapamsFromStorage(userId);
+  const japam = japams.find((j) => j.id === japamId);
+  if (!japam) {
+    console.warn('[JAPAM_HISTORY_SYNC_BLOCKED]', {
+      japamId,
+      code: 'LOCAL_JAPAM_NOT_FOUND',
+      message: 'Cannot upload history until the selected Japam exists locally',
+    });
+    return false;
+  }
+  return syncJapam(userId, japam);
 };
 
 let reconciliationInFlight = false;

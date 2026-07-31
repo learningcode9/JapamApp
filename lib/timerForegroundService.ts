@@ -23,5 +23,6 @@ export const getNativeTimerState = async (): Promise<{
   completedLoops: number;
   totalLoops: number;
   userId: string;
+  completionTimes?: Record<string, number>;
 } | null> => null;
 export const isForegroundServiceRunning = async (): Promise<boolean> => false;

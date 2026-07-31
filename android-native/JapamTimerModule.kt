@@ -28,6 +28,7 @@ class JapamTimerModule(private val reactContext: ReactApplicationContext) :
                 putBoolean("isFinal", intent.getBooleanExtra("isFinal", false))
                 putString("userId", intent.getStringExtra("userId") ?: "")
                 putDouble("durationMs", intent.getLongExtra("durationMs", 0L).toDouble())
+                putDouble("completedAt", intent.getLongExtra("completedAt", 0L).toDouble())
             }
             sendEvent("japamTimerLoopComplete", params)
         }
@@ -141,6 +142,18 @@ class JapamTimerModule(private val reactContext: ReactApplicationContext) :
     fun getState(promise: Promise) {
         try {
             val prefs = reactContext.getSharedPreferences(JapamTimerService.PREFS, Context.MODE_PRIVATE)
+            val completionTimes = Arguments.createMap()
+            (prefs.getString("completionTimes", "") ?: "")
+                .split(",")
+                .mapNotNull { entry ->
+                    val parts = entry.split(":")
+                    if (parts.size != 2) null else parts[0].toIntOrNull()?.let { loop ->
+                        parts[1].toLongOrNull()?.let { completedAt -> loop to completedAt }
+                    }
+                }
+                .forEach { (loop, completedAt) ->
+                    completionTimes.putDouble(loop.toString(), completedAt.toDouble())
+                }
             val result: WritableMap = Arguments.createMap().apply {
                 putString("sessionId", prefs.getString("sessionId", "") ?: "")
                 putBoolean("isRunning", JapamTimerService.isRunning && prefs.getBoolean("isRunning", false))
@@ -151,6 +164,7 @@ class JapamTimerModule(private val reactContext: ReactApplicationContext) :
                 putInt("completedLoops", prefs.getInt("completedLoops", 0))
                 putInt("totalLoops", prefs.getInt("totalLoops", 1))
                 putString("userId", prefs.getString("userId", "") ?: "")
+                putMap("completionTimes", completionTimes)
             }
             promise.resolve(result)
         } catch (e: Exception) {

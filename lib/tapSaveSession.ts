@@ -7,6 +7,7 @@ import {
   markSynced,
   toLocalDayKey,
 } from './historyStore';
+import { ensureJapamSyncedForHistory } from './japamsRepository';
 import { type TapIdentitySnapshot } from './tapJapamBehavior';
 
 export interface TapSaveSessionRefs {
@@ -51,6 +52,14 @@ export async function tapSaveSession(
   }
 
   const currentUserId = identity?.userId ?? await AsyncStorage.getItem(USER_ID_KEY);
+  const japamId = identity?.japamId ?? refs.activeJapamId.current;
+  const japamName = identity?.japamName ?? refs.activeJapamName.current;
+
+  if (currentUserId && (!japamId || !japamName)) {
+    if (source === 'tap') console.log('TAP_HISTORY_SAVE_SKIPPED reason=current-japam-unresolved');
+    return false;
+  }
+
   const sessionSignature = `${currentUserId || 'guest'}-${getLocalDateKey()}-${duration}-${sessionMalas}-${sessionTotal}-${accumulatedTotal}`;
 
   if (refs.lastSavedSession.current === sessionSignature) {
@@ -72,9 +81,6 @@ export async function tapSaveSession(
     const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
     const savedUserEmail = await AsyncStorage.getItem(USER_EMAIL_KEY);
     const historyUserName = savedUserName || userName || savedUserEmail || 'Unknown User';
-
-    const japamId = identity?.japamId ?? refs.activeJapamId.current;
-    const japamName = identity?.japamName ?? refs.activeJapamName.current;
 
     console.log('TAP_SAVE_IDENTITY RESOLVED userId=%s japamId=%s japamName=%s', userId, japamId, japamName);
 
@@ -151,6 +157,13 @@ export async function tapSaveSession(
             if (!sessionToken) {
               console.log('[SYNC_FAILED] source=%s completionId=%s reason=no-session', source, payload.completion_id);
               return;
+            }
+            if (payload.japam_id) {
+              const japamReady = await ensureJapamSyncedForHistory(userId, payload.japam_id);
+              if (!japamReady) {
+                console.log('[SYNC_DEFERRED] source=%s completionId=%s reason=japam-sync-pending', source, payload.completion_id);
+                return;
+              }
             }
             const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
               method: 'POST',

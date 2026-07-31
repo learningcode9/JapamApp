@@ -25,6 +25,8 @@ import { isIOSDeviceWeb, isStandaloneOrInstalledWeb } from '../../lib/pwaInstall
 import { runSharedLogoutFlow } from '../../lib/sharedLogout';
 import { supabase } from '../../lib/supabase';
 import { fetchJapamHistoryRows } from '../../lib/supabaseRestHelper';
+import { activeJapams } from '../../lib/japams';
+import { ensureJapamSyncedForHistory } from '../../lib/japamsRepository';
 
 import {
   Alert,
@@ -192,9 +194,10 @@ const isAuthPending = async () => {
 };
 
 export default function JapamMain() {
-  const { currentJapam } = useCurrentJapam();
+  const { currentJapam, japams, isLoading: isJapamContextLoading } = useCurrentJapam();
   const currentJapamId = currentJapam?.id ?? null;
   const currentJapamName = currentJapam?.name ?? null;
+  const includeBlankLegacy = currentJapamId === activeJapams(japams)[0]?.id;
   // The Japam this screen's own session belongs to, captured ONCE at the moment Start is pressed
   // (see handleStart below). Refs, not state, matching the same discipline as Timer's
   // activeJapamIdRef/activeJapamNameRef in contexts/timer-context.tsx: switching the app's current
@@ -825,7 +828,7 @@ export default function JapamMain() {
           const japamId = currentJapamId;
           const japamName = currentJapamName;
           const scopedHistory = japamId !== null
-            ? filterByJapam(reconciledHistory, japamId, japamName)
+            ? filterByJapam(reconciledHistory, japamId, japamName, { includeBlankLegacy })
             : reconciledHistory;
           const { totalCount: safeTotal } = todayStatsFor(
             scopedHistory,
@@ -852,7 +855,7 @@ export default function JapamMain() {
             const japamId = currentJapamId;
             const japamName = currentJapamName;
             const scopedHistory = japamId !== null
-              ? filterByJapam(localHistory, japamId, japamName)
+              ? filterByJapam(localHistory, japamId, japamName, { includeBlankLegacy })
               : localHistory;
             const { totalCount: localTotal } = todayStatsFor(
               scopedHistory,
@@ -886,7 +889,7 @@ export default function JapamMain() {
   } finally {
     isRestoringRef.current = false;
   }
-  }, [currentJapamId, currentJapamName, getLocalTodayTotalForUser, refreshDayStreak, restoreTotal]);
+  }, [currentJapamId, currentJapamName, getLocalTodayTotalForUser, refreshDayStreak, restoreTotal, includeBlankLegacy]);
 
   useEffect(() => {
     restoreTodayTotalRef.current = restoreTodayTotal;
@@ -941,7 +944,7 @@ export default function JapamMain() {
       const japamId = currentJapamId;
       const japamName = currentJapamName;
       const scopedHistory = japamId !== null
-        ? filterByJapam(history, japamId, japamName)
+        ? filterByJapam(history, japamId, japamName, { includeBlankLegacy })
         : history;
       const { malas: hMalas, totalCount: hTotal } = todayStatsFor(
         scopedHistory,
@@ -956,7 +959,7 @@ export default function JapamMain() {
       console.log('[StatsAudit] screen=main localHistoryCount=%d pendingCount=%d syncedCount=%d mainScreenMalasToday=%d historyMalasToday=%d',
         history.length, pending, synced, hMalas, hMalas);
     } catch {}
-  }, [currentJapamId, currentJapamName]);
+  }, [currentJapamId, currentJapamName, includeBlankLegacy]);
 
   useEffect(() => {
     const onHistoryUpdated = () => {
@@ -1771,6 +1774,10 @@ export default function JapamMain() {
   ) => {
     if (isSavingSessionRef.current) return;
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    if (currentUserId && (!activeJapamIdRef.current || !activeJapamNameRef.current)) {
+      console.log('[SYNC_FAILED] source=legacy-main reason=current-japam-unresolved');
+      return;
+    }
     const sessionSignature = `${currentUserId || 'guest'}-${getLocalDateKey()}-${duration}-${sessionMalas}-${sessionTotal}-${accumulatedTotal}`;
     if (lastSavedSessionRef.current === sessionSignature) return;
 
@@ -1830,6 +1837,13 @@ export default function JapamMain() {
           if (!sessionToken) {
             console.log('[SYNC_FAILED] source=legacy-main completionId=%s reason=no-session', payload.completion_id);
             return;
+          }
+          if (payload.japam_id) {
+            const japamReady = await ensureJapamSyncedForHistory(userId, payload.japam_id);
+            if (!japamReady) {
+              console.log('[SYNC_DEFERRED] source=legacy-main completionId=%s reason=japam-sync-pending', payload.completion_id);
+              return;
+            }
           }
           const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
             method: 'POST',
@@ -1972,8 +1986,17 @@ export default function JapamMain() {
     return true;
   };
 
+  const requireCurrentJapamReady = () => {
+    if (isJapamContextLoading || !currentJapam?.id || !currentJapam?.name) {
+      Alert.alert('Please wait', 'Your current Japam is still loading. Please try again in a moment.');
+      return false;
+    }
+    return true;
+  };
+
   const handleTap = () => {
     if (!requireLogin()) return;
+    if (!requireCurrentJapamReady()) return;
   
     const now = Date.now();
     if (now - lastTapRef.current < 100) return;
@@ -1999,6 +2022,7 @@ export default function JapamMain() {
 
   const handleStart = () => {
     if (!requireLogin()) return;
+    if (!requireCurrentJapamReady()) return;
     const mins = Math.max(1, Math.floor(Number(minutesInput) || 1));
     const nextTargetSeconds = mins * 60;
     const targetChanged = nextTargetSeconds !== targetSeconds;
@@ -2681,7 +2705,7 @@ export default function JapamMain() {
               <View style={styles.modalTopMark}>
                 <View style={styles.modalTopDot} />
               </View>
-              <Text style={styles.modalTitle}>What's your name?</Text>
+              <Text style={styles.modalTitle}>{"What's your name?"}</Text>
               <Text style={styles.modalSubtitle}>
                 Enter your name to personalise your Japam records.
               </Text>
