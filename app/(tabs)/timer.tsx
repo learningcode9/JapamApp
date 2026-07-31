@@ -301,6 +301,9 @@ export default function TimerScreen() {
       toLocalDayKey,
       getPreviousDateKey,
       { includeBlankLegacy },
+      // Pass the live Japam list so legacy-name attribution is ambiguity-safe and identical to
+      // My Japams' statsByJapamWithAttribution (shared rule).
+      japams,
     );
     const safeTodayTotal = scopedStats.todayTotalCount;
     const nextStreak = scopedStats.dayStreak;

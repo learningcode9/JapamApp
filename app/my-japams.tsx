@@ -24,6 +24,23 @@ const USER_ID_KEY = 'userId';
 
 const ZERO_STATS: JapamStats = { todayMalas: 0, todayTotalCount: 0, lifetimeMalas: 0, lifetimeTotalCount: 0 };
 
+/**
+ * Stable identity of the current Japam set for stats scoping. Any change to WHAT could affect a
+ * Japam's attributed totals must change this string, so a cached statsMap computed under an old
+ * signature is never shown as if it were current:
+ *
+ * - each Japam's id, CURRENT NAME (a rename changes which legacy null-japamId records match it via
+ *   japamName) and archivedAt (archive/restore);
+ * - the FIRST ACTIVE Japam's id (the canonical default bucket for blank-legacy records), so
+ *   reordering/archiving which Japam is first invalidates the attribution;
+ * - the full ordered list, so delete/reorder changes invalidate too.
+ */
+const computeJapamSignature = (japams: Japam[]): string => {
+  const firstActiveId = activeJapams(japams)[0]?.id ?? '';
+  const japamParts = japams.map((j) => `${j.id}:${j.name}:${j.archivedAt || ''}`).join('|');
+  return `${firstActiveId}|${japamParts}`;
+};
+
 type NameDialogMode = 'create' | 'rename';
 type StatsScopeState = 'loading' | 'ready';
 
@@ -88,7 +105,7 @@ export default function MyJapamsScreen() {
     const userKey = userId || 'guest';
     setStatsUserKey(userKey);
     const currentJapamIds = japams.map((j) => j.id);
-    const currentJapamSignature = japams.map((j) => `${j.id}:${j.archivedAt || ''}`).join('|');
+    const currentJapamSignature = computeJapamSignature(japams);
     const appliedUserKey = getUserKeyFromScopeKey(latestAppliedStatsScopeKeyRef.current);
     const hasReadyStatsForUser = appliedUserKey === userKey && statsScopeStateRef.current === 'ready';
 
@@ -123,7 +140,7 @@ export default function MyJapamsScreen() {
       setResolvedJapamIds(new Set());
     }
 
-    const stats = await loadJapamStats(userId);
+    const stats = await loadJapamStats(userId, japams);
     if (!isCurrentStatsRequest(requestGeneration, statsScopeKey)) return;
 
     setStatsMap(stats);
@@ -253,7 +270,7 @@ export default function MyJapamsScreen() {
 
   const visibleJapams = activeJapams(japams);
   const archivedVisibleJapams = archivedJapams(japams);
-  const currentJapamSignature = japams.map((j) => `${j.id}:${j.archivedAt || ''}`).join('|');
+  const currentJapamSignature = computeJapamSignature(japams);
   const currentStatsScopeKey = `${statsUserKey}:${currentJapamSignature}`;
   const showStatsLoading = statsScopeState !== 'ready';
   const shouldShowStatSkeleton = (japamId: string) => {

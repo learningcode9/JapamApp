@@ -829,7 +829,7 @@ export default function JapamMain() {
           const japamId = currentJapamId;
           const japamName = currentJapamName;
           const scopedHistory = japamId !== null
-            ? filterByJapam(reconciledHistory, japamId, japamName, { includeBlankLegacy })
+            ? filterByJapam(reconciledHistory, japamId, japamName, { includeBlankLegacy }, japams)
             : reconciledHistory;
           const { totalCount: safeTotal } = todayStatsFor(
             scopedHistory,
@@ -856,7 +856,7 @@ export default function JapamMain() {
             const japamId = currentJapamId;
             const japamName = currentJapamName;
             const scopedHistory = japamId !== null
-              ? filterByJapam(localHistory, japamId, japamName, { includeBlankLegacy })
+              ? filterByJapam(localHistory, japamId, japamName, { includeBlankLegacy }, japams)
               : localHistory;
             const { totalCount: localTotal } = todayStatsFor(
               scopedHistory,
@@ -945,7 +945,7 @@ export default function JapamMain() {
       const japamId = currentJapamId;
       const japamName = currentJapamName;
       const scopedHistory = japamId !== null
-        ? filterByJapam(history, japamId, japamName, { includeBlankLegacy })
+        ? filterByJapam(history, japamId, japamName, { includeBlankLegacy }, japams)
         : history;
       const { malas: hMalas, totalCount: hTotal } = todayStatsFor(
         scopedHistory,
@@ -960,7 +960,7 @@ export default function JapamMain() {
       console.log('[StatsAudit] screen=main localHistoryCount=%d pendingCount=%d syncedCount=%d mainScreenMalasToday=%d historyMalasToday=%d',
         history.length, pending, synced, hMalas, hMalas);
     } catch {}
-  }, [currentJapamId, currentJapamName, includeBlankLegacy]);
+  }, [currentJapamId, currentJapamName, includeBlankLegacy, japams]);
 
   useEffect(() => {
     const onHistoryUpdated = () => {

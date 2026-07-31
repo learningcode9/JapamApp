@@ -25,14 +25,17 @@ import { DeviceEventEmitter, Platform } from 'react-native';
 import {
   normalizeAll,
   statsByJapam,
+  statsByJapamWithAttribution,
   japamStatsFor as japamStatsForSelector,
   filterByJapam,
   toLocalDayKey,
   type HistoryRecord,
+  type JapamAttributionInput,
   type RawHistoryRecord,
   type JapamStats,
 } from './historyStore';
 import { planLegacyHistoryBackfill, type LegacyHistoryBackfillPlan } from './legacyHistoryBackfill';
+import { activeJapams, type Japam } from './japams';
 
 export type { JapamStats };
 /** Re-exported so screens have one single import path for both loading and reading stats — they
@@ -78,27 +81,50 @@ export const loadHistoryForUser = async (
  * japamName is an optional fallback: when japamId is a real UUID, filterByJapam also includes
  * legacy records whose japam_id is null but whose japam_name matches — rows created before Japam
  * workspaces existed, or rows whose japam_id was dropped by a NULL FK.
+ *
+ * The optional `japams` list is passed through to filterByJapam so that legacy-name attribution is
+ * ambiguity-safe and identical to My Japams' statsByJapamWithAttribution (shared rule): a legacy
+ * name shared by more than one Japam is claimed by none of them.
  */
 export const loadHistoryForJapam = async (
   userId: string | null | undefined,
   japamId: string | null,
   japamName?: string | null,
   options: { includeBlankLegacy?: boolean } = {},
+  japams?: Japam[] | null,
 ): Promise<HistoryRecord[]> => {
   const forUser = await loadHistoryForUser(userId);
-  return filterByJapam(forUser, japamId, japamName, options);
+  const inputs: JapamAttributionInput[] | null = japams && japams.length > 0
+    ? japams.map((j) => ({ id: j.id, name: j.name }))
+    : null;
+  return filterByJapam(forUser, japamId, japamName, options, inputs);
 };
 
 /**
  * Every Japam's today + lifetime stats at once, for this user (or guest) — the "My Japams" list's
  * one-stop read. Returns the same Map shape lib/historyStore.ts's statsByJapam already produces;
  * look up one Japam's stats out of it with japamStatsFor (re-exported above).
+ *
+ * When the caller also supplies the current Japam list, stats are computed through
+ * statsByJapamWithAttribution so pre-Workspaces legacy records are attributed to a Japam exactly
+ * the way History/Timer attribute them (matching japam_id; unambiguous japam_name match; blank
+ * legacy to the first ACTIVE Japam — `activeJapams(japams)[0]`, the canonical default bucket, NOT
+ * merely `japams[0]`). Every record is assigned to exactly one Japam and the null bucket holds only
+ * records no Japam claims, so a Japam's lifetime total on My Japams agrees with History's per-Japam
+ * total. Callers without a Japam list (loadTodayStats/loadLifetimeStats below) fall back to the
+ * strict japamId-only statsByJapam — unchanged behavior.
  */
 export const loadJapamStats = async (
   userId: string | null | undefined,
+  japams?: Japam[] | null,
 ): Promise<Map<string | null, JapamStats>> => {
   const history = await loadHistoryForUser(userId);
   const todayKey = getLocalDateKey();
+  if (japams && japams.length > 0) {
+    const inputs: JapamAttributionInput[] = japams.map((j) => ({ id: j.id, name: j.name }));
+    const firstActiveJapamId = activeJapams(japams)[0]?.id ?? null;
+    return statsByJapamWithAttribution(history, userId, inputs, firstActiveJapamId, todayKey, toLocalDayKey);
+  }
   return statsByJapam(history, userId, todayKey, toLocalDayKey);
 };
 

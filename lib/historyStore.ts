@@ -573,6 +573,106 @@ export const statsByJapam = (
   return map;
 };
 
+/** Minimum identity a caller must supply for each Japam when computing attributed stats — only
+ * the id (strict match) and name (legacy null-scoped match) participate in attribution, so screens
+ * that already hold their Japam list (My Japams, History, Timer) can pass it directly without
+ * pulling in the full Japam type and keeping this module dependency-free. */
+export type JapamAttributionInput = {
+  id: string;
+  name: string;
+};
+
+/** Name-resolution index over the Japam list, shared by every attribution entry point so one rule
+ * (and one rule only) decides which Japam claims a record. nameCount tracks how many Japams share
+ * each name — a legacy name that matches MORE than one Japam is ambiguous and must be claimed by
+ * none of them (it stays unclaimed) rather than double-attributed. */
+type JapamNameIndex = {
+  japamById: Map<string, JapamAttributionInput>;
+  nameCount: Map<string, number>;
+  firstByName: Map<string, JapamAttributionInput>;
+};
+
+const buildJapamNameIndex = (japams: JapamAttributionInput[]): JapamNameIndex => {
+  const japamById = new Map<string, JapamAttributionInput>();
+  const nameCount = new Map<string, number>();
+  const firstByName = new Map<string, JapamAttributionInput>();
+  for (const japam of japams) {
+    const name = japam.name.trim();
+    if (!name) continue;
+    japamById.set(japam.id, japam);
+    nameCount.set(name, (nameCount.get(name) ?? 0) + 1);
+    if (!firstByName.has(name)) firstByName.set(name, japam);
+  }
+  return { japamById, nameCount, firstByName };
+};
+
+/**
+ * Today's and lifetime stats for every Japam at once, with LEGACY RECORD ATTRIBUTION — the
+ * My Japams counterpart to statsByJapam (which stays strict `(r.japamId ?? null)` and is still
+ * correct for screens like History that build per-Japam buckets themselves).
+ *
+ * statsByJapam's null bucket is invisible to My Japams (a card exists per Japam, never per null),
+ * so a pre-Workspaces record with japam_id null and only a japam_name would inflate nobody's
+ * lifetime total and silently disagree with History's "this Japam" view. This selector replicates
+ * the EXACT same attribution History/Timer use via filterByJapam / japamScopedStatsFor, in a
+ * single GROUP-BY pass:
+ *
+ * - japamId present and still in the supplied Japam list  → that Japam (strict).
+ * - japamId present but no longer matching any Japam     → null (unclaimed; nothing to guess).
+ * - japamId null, japamName set, EXACTLY ONE Japam in the list carries that name
+ *   → that Japam. Ambiguous names (0 or 2+ Japams) fall to null rather than being guessed —
+ *   the same rule filterByJapam/japamScopedStatsFor use (via the SHARED JapamNameIndex), so no
+ *   Japam is ever double-attributed a legacy record and all screens agree.
+ * - japamId null, japamName blank, a firstActiveJapamId is supplied → that Japam (the canonical
+ *   default bucket, matching History/Timer's includeBlankLegacy for the first active Japam).
+ * - everything else → null (unclaimed legacy, excluded from every card).
+ *
+ * Every record is assigned to exactly ONE key (single assignment), so no total is ever
+ * double-counted and the null bucket holds only records no Japam canonically claims. Like
+ * statsByJapam, it dedupes by completionId and applies the same userId identity discipline, so a
+ * pending completion that later syncs cannot inflate a Japam's total, and tombstone-deleted
+ * completions contribute nothing (they are removed from the input by the caller's sync flow).
+ */
+export const statsByJapamWithAttribution = (
+  records: RawHistoryRecord[],
+  userId: string | null | undefined,
+  japams: JapamAttributionInput[],
+  firstActiveJapamId: string | null,
+  todayKey: string,
+  toDayKey: (dateISO: string) => string
+): Map<string | null, JapamStats> => {
+  const { japamById, nameCount, firstByName } = buildJapamNameIndex(japams);
+
+  const map = new Map<string | null, JapamStats>();
+  for (const r of dedupeByCompletionId(records)) {
+    const matchesUser = userId ? r.userId === userId : !r.userId;
+    if (!matchesUser || r.totalCount <= 0) continue;
+
+    let key: string | null;
+    const recordId = r.japamId ?? null;
+    if (recordId !== null) {
+      key = japamById.has(recordId) ? recordId : null;
+    } else {
+      const name = (r.japamName ?? '').trim();
+      if (name) {
+        key = nameCount.get(name) === 1 ? (firstByName.get(name)?.id ?? null) : null;
+      } else {
+        key = firstActiveJapamId ?? null;
+      }
+    }
+
+    const existing = map.get(key) ?? { ...ZERO_JAPAM_STATS };
+    existing.lifetimeTotalCount += r.totalCount;
+    existing.lifetimeMalas = Math.floor(existing.lifetimeTotalCount / 108);
+    if (toDayKey(r.date) === todayKey) {
+      existing.todayTotalCount += r.totalCount;
+      existing.todayMalas = Math.floor(existing.todayTotalCount / 108);
+    }
+    map.set(key, existing);
+  }
+  return map;
+};
+
 /** Convenience accessor for one Japam's stats out of statsByJapam's result — all-zero (never
  * throws) if that Japam has no completions yet. */
 export const japamStatsFor = (
@@ -629,6 +729,10 @@ export const dayStreakForJapam = (
  * saved while `currentJapam` was still hydrating and arrived as null-japamId) still appear on the
  * Timer for the selected Japam, exactly as they already do on History.
  *
+ * `japams` is passed through to `filterByJapam` to make the legacy-name match ambiguity-safe and
+ * identical to My Japams' `statsByJapamWithAttribution` (same shared JapamNameIndex rule): a
+ * legacy name shared by more than one Japam is claimed by none of them.
+ *
  * `filterByJapam` does NOT scope by userId, so the same identity discipline as statsByJapam /
  * dayStreakForJapam (`userId ? r.userId === userId : !r.userId`) is applied here on the already-
  * Japam-scoped set. Callers may pass an already-userId-scoped list (Timer does) or the full merged
@@ -651,9 +755,10 @@ export const japamScopedStatsFor = (
   toDayKey: (dateISO: string) => string,
   getPreviousDayKey: (dayKey: string) => string,
   options: { includeBlankLegacy?: boolean } = {},
+  japams?: JapamAttributionInput[] | null,
 ): JapamScopedStats => {
   // Same selector History uses: dedupe + strict japamId match + legacy null/name fallback.
-  const scoped = filterByJapam(records, japamId ?? null, japamName ?? null, options);
+  const scoped = filterByJapam(records, japamId ?? null, japamName ?? null, options, japams);
 
   let todayTotalCount = 0;
   let lifetimeTotalCount = 0;
@@ -685,7 +790,7 @@ export const japamScopedStatsFor = (
 
 /**
  * Filter history records to exactly one Japam — the single place any screen
- * scoped to "the current Japam" (History) should call, instead of hand-writing
+ * scoped to "the current Japam" (History, Home) should call, instead of hand-writing
  * records.filter(r => r.japamId === ...) itself.
  *
  * - japamId: null matches only legacy/unassigned records (unchanged).
@@ -694,19 +799,36 @@ export const japamScopedStatsFor = (
  *   name. Blank legacy records are included only when the caller has already
  *   resolved that this selected Japam is the intended canonical/default bucket.
  * - japamName: ignored when japamId is null (legacy filtering stays strict).
+ *
+ * The optional `japams` list (the Japam set a screen actually holds) makes the legacy-name
+ * match AMBIGUITY-SAFE: a null-japamId record whose japam_name matches MORE THAN ONE Japam is
+ * claimed by none of them (it stays in the unclaimed/null view), so History and Home can never
+ * count the same legacy record for two different Japams, or disagree with My Japams'
+ * statsByJapamWithAttribution (which routes through the SAME JapamNameIndex rule). Without the
+ * japams list (callers that cannot resolve uniqueness — e.g. one-off test reads), the legacy
+ * exact-name match is retained for backward compatibility.
  */
 export const filterByJapam = (
   records: RawHistoryRecord[],
   japamId: string | null,
   japamName?: string | null,
   options: { includeBlankLegacy?: boolean } = {},
-): HistoryRecord[] =>
-  dedupeByCompletionId(records).filter((r) => {
+  japams?: JapamAttributionInput[] | null,
+): HistoryRecord[] => {
+  const index = japams && japams.length > 0 ? buildJapamNameIndex(japams) : null;
+  return dedupeByCompletionId(records).filter((r) => {
     const recordId = r.japamId ?? null;
     if (recordId === japamId) return true;
     if (japamId !== null && recordId === null) {
-      if (japamName && r.japamName === japamName) return true;
-      if (!r.japamName && options.includeBlankLegacy) return true;
+      const name = (r.japamName ?? '').trim();
+      if (name) {
+        if (index) {
+          return index.nameCount.get(name) === 1 && index.firstByName.get(name)?.id === japamId;
+        }
+        return Boolean(japamName && r.japamName === japamName);
+      }
+      if (options.includeBlankLegacy) return true;
     }
     return false;
   });
+};
