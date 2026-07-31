@@ -642,6 +642,36 @@ describe('TimerProvider restored/native final-loop retry', () => {
     expect(await readHistory()).toHaveLength(1);
   });
 
+  it('persists a terminal snapshot after a background final completion so reopening does not Resume stale time', async () => {
+    const sessionId = 'timer-background-final';
+    await seedPersistedSession({ sessionId, totalLoops: 1, durationSeconds: 180 });
+    mountedTree = await renderTimerProvider();
+    await flush();
+
+    await act(async () => {
+      DeviceEventEmitter.emit('japamTimerLoopComplete', {
+        sessionId,
+        completedLoops: 1,
+        isFinal: true,
+        userId: UID,
+        durationMs: 180000,
+        completedAt: Date.parse('2026-07-29T10:30:00.000Z'),
+      });
+      await Promise.resolve();
+    });
+
+    await waitForCondition(async () => (await readHistory()).length === 1);
+
+    expect(currentTimer!.isPaused).toBe(false);
+    expect(currentTimer!.isRunning).toBe(false);
+    expect(currentTimer!.seconds).toBe(180);
+    expect(await AsyncStorage.getItem('timerRunning')).toBe('false');
+    expect(await AsyncStorage.getItem('timerPaused')).toBe('false');
+    expect(await AsyncStorage.getItem('timerSeconds')).toBe('180');
+    expect(await AsyncStorage.getItem('timerStartedAt')).toBeNull();
+    expect(getTimerState().sessionId).toBe('');
+  });
+
   it('uses native reconciliation completion timestamps when queueing missed loops', async () => {
     const sessionId = 'timer-native-reconcile';
     await seedPersistedSession({ sessionId, totalLoops: 2, durationSeconds: 180, completedLoops: 0 });

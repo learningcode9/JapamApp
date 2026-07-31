@@ -1164,9 +1164,14 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const finalizeCompletedTimerSession = useCallback(async () => {
+    const targetSec = selectedDurationRef.current * 60;
     timerSessionIdRef.current = '';
     activeJapamIdRef.current = null;
     activeJapamNameRef.current = null;
+    setSeconds(targetSec);
+    secondsRef.current = targetSec;
+    setIsRunning(false);
+    isRunningRef.current = false;
     updateTimerState({ sessionId: '', isCompleting: false, startedAt: null });
     if (Platform.OS === 'android') void stopForegroundService();
     void persistState(false);
