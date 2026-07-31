@@ -1,3 +1,8 @@
+const mockSupabase = {
+  from: jest.fn(),
+  rpc: jest.fn(),
+};
+
 jest.mock('@react-native-async-storage/async-storage', () => {
   const store: Record<string, string> = {};
   return {
@@ -12,9 +17,7 @@ jest.mock('@react-native-async-storage/async-storage', () => {
 });
 
 jest.mock('../supabase', () => ({
-  supabase: {
-    from: jest.fn(),
-  },
+  supabase: mockSupabase,
 }));
 
 /* eslint-disable import/first -- jest.mock() must precede imports; Jest hoists mock calls above import lines */
@@ -30,7 +33,6 @@ import {
   reconcileAllJapams,
   ensureJapamSyncedForHistory,
 } from '../japamsRepository';
-import { supabase } from '../supabase';
 import { type Japam } from '../japams';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 /* eslint-enable import/first */
@@ -56,10 +58,8 @@ const mockUpsert = jest.fn();
 const mockSelect = jest.fn();
 const mockEq = jest.fn();
 const mockOrder = jest.fn();
-const mockDelete = jest.fn();
-const mockDeleteEqId = jest.fn();
-const mockDeleteEqUserId = jest.fn();
-const mockFrom = supabase.from as jest.Mock;
+const mockFrom = mockSupabase.from as jest.Mock;
+const mockRpc = mockSupabase.rpc as jest.Mock;
 
 const flushMicrotasks = () => new Promise<void>((r) => setTimeout(r, 0));
 
@@ -87,26 +87,22 @@ const mockRemoteJapams = (rows: ReturnType<typeof makeRemoteJapam>[], error: unk
 };
 
 const mockRemoteDelete = (
-  count: number = 1,
+  rows: { deleted_japam_id: string }[] = [{ deleted_japam_id: JAPAM_ID_A }],
   error: unknown = null,
 ) => {
-  mockDeleteEqUserId.mockResolvedValue({ count, error });
+  mockRpc.mockResolvedValue({ data: rows, error });
 };
 
 beforeEach(async () => {
   await AsyncStorage.clear();
   mockUpsert.mockReset();
+  mockRpc.mockReset();
   mockSelect.mockReset();
   mockEq.mockReset();
   mockOrder.mockReset();
-  mockDelete.mockReset();
-  mockDeleteEqId.mockReset();
-  mockDeleteEqUserId.mockReset();
   mockSelect.mockReturnValue({ eq: mockEq });
   mockEq.mockReturnValue({ order: mockOrder });
-  mockDelete.mockReturnValue({ eq: mockDeleteEqId });
-  mockDeleteEqId.mockReturnValue({ eq: mockDeleteEqUserId });
-  mockFrom.mockReturnValue({ upsert: mockUpsert, select: mockSelect, delete: mockDelete });
+  mockFrom.mockReturnValue({ upsert: mockUpsert, select: mockSelect });
   mockRemoteJapams([]);
   mockRemoteDelete();
   jest.spyOn(console, 'warn').mockImplementation(() => {});
@@ -678,17 +674,14 @@ describe('deleteJapam lifecycle sync', () => {
     await AsyncStorage.setItem(`currentJapamId:${UID}`, active.id);
     await AsyncStorage.setItem('history', historyRaw);
     await AsyncStorage.setItem('deletedCompletions', tombstonesRaw);
-    mockRemoteDelete(1, null);
+    mockRemoteDelete([{ deleted_japam_id: archived.id }], null);
     mockRemoteJapams([
       makeRemoteJapam({ id: active.id, name: active.name }),
     ]);
 
     const result = await deleteJapam(UID, archived.id);
 
-    expect(mockDelete).toHaveBeenCalledWith({ count: 'exact' });
-    expect(mockDelete).toHaveBeenCalledTimes(1);
-    expect(mockDeleteEqId).toHaveBeenCalledWith('id', archived.id);
-    expect(mockDeleteEqUserId).toHaveBeenCalledWith('user_id', UID);
+    expect(mockRpc).toHaveBeenCalledWith('delete_owned_japam', { p_japam_id: archived.id });
     expect(result.map((j) => j.id)).toEqual([active.id]);
     expect((await loadJapams(UID)).map((j) => j.id)).toEqual([active.id]);
     expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(active.id);
@@ -713,7 +706,7 @@ describe('deleteJapam lifecycle sync', () => {
     await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([active, archived]));
     await AsyncStorage.setItem('history', historyRaw);
     await AsyncStorage.setItem('deletedCompletions', tombstonesRaw);
-    mockRemoteDelete(0, null);
+    mockRemoteDelete([], null);
     mockRemoteJapams([
       makeRemoteJapam({ id: active.id, name: active.name }),
       makeRemoteJapam({
@@ -737,7 +730,7 @@ describe('deleteJapam lifecycle sync', () => {
     expect(console.warn).toHaveBeenCalledWith('[JAPAM_REMOTE_DELETE_FAILED]', {
       japamId: archived.id,
       code: 'UNEXPECTED_RESPONSE',
-      message: 'Delete did not confirm exactly one matching Japam row',
+      message: 'Delete did not return exactly one matching Japam ID',
     });
   });
 
@@ -755,7 +748,10 @@ describe('deleteJapam lifecycle sync', () => {
     await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([active, archived]));
     await AsyncStorage.setItem('history', historyRaw);
     await AsyncStorage.setItem('deletedCompletions', tombstonesRaw);
-    mockRemoteDelete(2, null);
+    mockRemoteDelete([
+      { deleted_japam_id: archived.id },
+      { deleted_japam_id: archived.id },
+    ], null);
 
     const result = await deleteJapam(UID, archived.id);
 
@@ -766,7 +762,7 @@ describe('deleteJapam lifecycle sync', () => {
     expect(console.warn).toHaveBeenCalledWith('[JAPAM_REMOTE_DELETE_FAILED]', {
       japamId: archived.id,
       code: 'UNEXPECTED_RESPONSE',
-      message: 'Delete did not confirm exactly one matching Japam row',
+      message: 'Delete did not return exactly one matching Japam ID',
     });
   });
 
@@ -784,7 +780,7 @@ describe('deleteJapam lifecycle sync', () => {
     await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([active, archived]));
     await AsyncStorage.setItem('history', historyRaw);
     await AsyncStorage.setItem('deletedCompletions', tombstonesRaw);
-    mockRemoteDelete(0, { code: '42501', message: 'RLS violation' });
+    mockRemoteDelete([], { code: '42501', message: 'RLS violation' });
 
     const result = await deleteJapam(UID, archived.id);
 
@@ -809,7 +805,7 @@ describe('deleteJapam lifecycle sync', () => {
 
     const result = await deleteJapam(UID, active.id);
 
-    expect(mockDelete).not.toHaveBeenCalled();
+    expect(mockRpc).not.toHaveBeenCalled();
     expect(result.map((j) => j.id)).toEqual([active.id, other.id]);
     expect(await AsyncStorage.getItem('history')).toBe(historyRaw);
   });

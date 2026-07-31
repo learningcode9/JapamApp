@@ -145,15 +145,13 @@ const fetchRemoteJapams = async (userId: string): Promise<Japam[] | null> => {
   }
 };
 
-const deleteRemoteJapam = async (userId: string, japamId: string): Promise<boolean> => {
+const deleteRemoteJapam = async (japamId: string): Promise<boolean> => {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { supabase } = require('./supabase');
-    const { count, error } = await supabase
-      .from('japams')
-      .delete({ count: 'exact' })
-      .eq('id', japamId)
-      .eq('user_id', userId);
+    const { data, error } = await supabase.rpc('delete_owned_japam', {
+      p_japam_id: japamId,
+    });
 
     if (error) {
       console.warn('[JAPAM_REMOTE_DELETE_FAILED]', {
@@ -164,11 +162,17 @@ const deleteRemoteJapam = async (userId: string, japamId: string): Promise<boole
       return false;
     }
 
-    if (count !== 1) {
+    const returnedIds = Array.isArray(data)
+      ? data
+          .map((row) => (row && typeof row === 'object' ? (row as { deleted_japam_id?: unknown }).deleted_japam_id : null))
+          .filter((id): id is string => typeof id === 'string')
+      : [];
+
+    if (returnedIds.length !== 1 || returnedIds[0] !== japamId) {
       console.warn('[JAPAM_REMOTE_DELETE_FAILED]', {
         japamId,
         code: 'UNEXPECTED_RESPONSE',
-        message: 'Delete did not confirm exactly one matching Japam row',
+        message: 'Delete did not return exactly one matching Japam ID',
       });
       return false;
     }
@@ -379,7 +383,7 @@ export const deleteJapam = async (
   if (!target || target.archivedAt === null) return existing;
 
   if (userId) {
-    const deletedRemotely = await deleteRemoteJapam(userId, japamId);
+    const deletedRemotely = await deleteRemoteJapam(japamId);
     if (!deletedRemotely) return existing;
   }
 
