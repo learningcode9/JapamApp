@@ -1,7 +1,13 @@
 /**
  * Groups / Family Japam — thin data-access layer over the live Supabase RPCs
- * (create_group, find_group_by_invite_code, get_my_groups, get_group_dashboard) plus the
- * direct group_members insert used by the Join flow. No UI here.
+ * (create_group, join_group_by_invite_code, get_my_groups, get_my_unassigned_groups,
+ * attach_group_membership_to_japam, get_group_dashboard) plus the admin/read RPCs. No UI here.
+ *
+ * Workspace isolation (Issue 3): every group is tied to the member's OWN selected Japam
+ * (workspace) via group_members.japam_id. Create, join, list, attach, and dashboard calls all
+ * take the caller's current japamId so the server scopes everything to that workspace. A Japam
+ * UUID from one member is never used to read another member's History — the server aggregates
+ * each member by their own membership mapping.
  *
  * user_id is always a plain opaque string (Google numeric ID today — see
  * GUEST_TO_ANON_AUTH_MIGRATION.md for why this isn't guaranteed to stay that way forever).
@@ -49,8 +55,20 @@ export interface GroupDashboardRow {
   lastUpdated: string | null;
 }
 
-export async function getMyGroups(userId: string): Promise<MyGroup[]> {
-  const { data, error } = await supabase.rpc('get_my_groups', { p_user_id: userId });
+export async function getMyGroups(userId: string, japamId: string): Promise<MyGroup[]> {
+  const { data, error } = await supabase.rpc('get_my_groups', { p_user_id: userId, p_japam_id: japamId });
+  if (error) throw error;
+  return ((data ?? []) as any[]).map((row) => ({
+    groupId: row.group_id,
+    name: row.name,
+    role: row.role,
+    isActive: row.is_active,
+    joinedAt: row.joined_at,
+  }));
+}
+
+export async function getMyUnassignedGroups(): Promise<MyGroup[]> {
+  const { data, error } = await supabase.rpc('get_my_unassigned_groups', {});
   if (error) throw error;
   return ((data ?? []) as any[]).map((row) => ({
     groupId: row.group_id,
@@ -64,12 +82,14 @@ export async function getMyGroups(userId: string): Promise<MyGroup[]> {
 export async function createGroup(
   name: string,
   userId: string,
-  userName: string
+  userName: string,
+  japamId: string
 ): Promise<CreateGroupResult> {
   const { data, error } = await supabase.rpc('create_group', {
     p_name: name,
     p_created_by: userId,
     p_user_name: userName,
+    p_japam_id: japamId,
   });
   if (error) throw error;
   const row = Array.isArray(data) ? data[0] : data;
@@ -79,43 +99,53 @@ export async function createGroup(
 export async function joinGroupByInviteCode(
   inviteCode: string,
   userId: string,
-  userName: string
+  userName: string,
+  japamId: string
 ): Promise<JoinGroupOutcome> {
-  const { data: found, error: findError } = await supabase.rpc('find_group_by_invite_code', {
+  const { data, error } = await supabase.rpc('join_group_by_invite_code', {
     p_invite_code: inviteCode,
+    p_user_name: userName,
+    p_japam_id: japamId,
   });
-  if (findError) return { kind: 'error', message: findError.message };
+  if (error) return { kind: 'error', message: error.message };
 
-  const group = Array.isArray(found) && found.length > 0 ? (found[0] as any) : null;
-  if (!group) return { kind: 'notFound' };
-  if (!group.is_active) return { kind: 'inactive' };
+  const row = Array.isArray(data) && data.length > 0 ? (data[0] as any) : null;
+  if (!row) return { kind: 'notFound' };
+  if (!row.is_active) return { kind: 'inactive' };
 
-  const { error: insertError } = await supabase
-    .from('group_members')
-    .insert({ group_id: group.id, user_id: userId, user_name: userName, role: 'member' });
+  // already_member is true when the (group_id, user_id) row already existed (unique constraint
+  // preserved) — treat as a successful join, matching the historical 23505 handling.
+  return { kind: 'joined', groupId: row.id, groupName: row.name };
+}
 
-  if (insertError) {
-    // 23505 = unique_violation on (group_id, user_id) -> already a member; treat as success.
-    if ((insertError as any).code === '23505') {
-      return { kind: 'joined', groupId: group.id, groupName: group.name };
-    }
-    return { kind: 'error', message: insertError.message };
+export async function attachGroupMembershipToJapam(
+  groupId: string,
+  japamId: string
+): Promise<{ kind: 'success' } | { kind: 'alreadyAttached' } | { kind: 'error'; message: string }> {
+  const { error } = await supabase.rpc('attach_group_membership_to_japam', {
+    p_group_id: groupId,
+    p_japam_id: japamId,
+  });
+  if (!error) return { kind: 'success' };
+  if (String(error.message).toLowerCase().includes('already attached')) {
+    return { kind: 'alreadyAttached' };
   }
-
-  return { kind: 'joined', groupId: group.id, groupName: group.name };
+  return { kind: 'error', message: error.message };
 }
 
 export async function getGroupDashboard(
   groupId: string,
   currentUserId: string,
   todayStartIso: string,
-  todayEndIso: string
+  todayEndIso: string,
+  japamId: string
 ): Promise<GroupDashboardRow[]> {
   const { data, error } = await supabase.rpc('get_group_dashboard', {
     p_group_id: groupId,
     p_current_user_id: currentUserId,
     p_today_start: todayStartIso,
     p_today_end: todayEndIso,
+    p_japam_id: japamId,
   });
   if (error) throw error;
   return ((data ?? []) as any[]).map((row) => ({

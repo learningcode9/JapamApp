@@ -27,6 +27,7 @@ import {
   renameGroup,
   type GroupDashboardRow,
 } from '../../lib/groupsRepository';
+import { useCurrentJapam } from '../../contexts/current-japam-context';
 
 // While the dashboard is focused, re-fetch this often so other members' completions show up
 // without anyone needing to leave and re-enter the screen. Kept well above the Supabase round
@@ -86,6 +87,7 @@ export default function GroupsDashboardScreen() {
     : Math.max(22, insets.bottom + 14));
 
   const router = useRouter();
+  const { currentJapamId } = useCurrentJapam();
   const params = useLocalSearchParams<{ groupId?: string; groupName?: string }>();
   const groupId = params.groupId || '';
   const groupName = params.groupName || 'Group';
@@ -122,6 +124,38 @@ export default function GroupsDashboardScreen() {
   // in flight at a time, exactly like the same pattern already used by syncPendingHistory.
   const loadInFlightRef = useRef(false);
 
+  // Stale-response guard for the dashboard's own workspace scope — only the response for the
+  // CURRENTLY selected Japam may render. currentJapamIdRef tracks the LATEST render's selected
+  // Japam (not a closure copy), so a slow Workspace-A request that resolves after the user
+  // switched away — even one whose load started before the switch — is rejected and can never
+  // paint Workspace-A rows into Workspace-B state.
+  const requestJapamRef = useRef<string | null>(null);
+  const currentJapamIdRef = useRef<string | null>(currentJapamId);
+  // The Japam this dashboard is currently scoped to (set once a load has successfully rendered
+  // that workspace's roster). While it is null (nothing loaded yet) no navigation happens.
+  const loadedForJapamRef = useRef<string | null>(null);
+  useEffect(() => {
+    currentJapamIdRef.current = currentJapamId;
+  }, [currentJapamId]);
+
+  // The dashboard shows this group through the VIEWER's membership, which is tied to the Japam
+  // they created/joined the group under (get_group_dashboard scopes by the caller's own
+  // membership japam_id). If they switch their selected Japam elsewhere, this group no longer
+  // belongs to the active workspace — bounce back to the list so it reloads for the new workspace
+  // instead of showing a stale/incorrect dashboard. The comparison covers both a loaded roster
+  // and an in-flight request, and is run from both the effect below and the end of every load, so
+  // a switch at any moment (including mid-flight) navigates away rather than leaving a spinner.
+  const leaveIfWorkspaceMismatch = useCallback(() => {
+    const scopedFor = loadedForJapamRef.current ?? requestJapamRef.current;
+    if (scopedFor !== null && currentJapamIdRef.current !== scopedFor) {
+      router.replace('/groups');
+    }
+  }, [router]);
+
+  useEffect(() => {
+    leaveIfWorkspaceMismatch();
+  }, [currentJapamId, leaveIfWorkspaceMismatch]);
+
   useEffect(() => {
     setDisplayGroupName(groupName);
     setRenameInput(groupName);
@@ -139,26 +173,31 @@ export default function GroupsDashboardScreen() {
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
       setUserId(savedUserId);
 
-      if (!savedUserId || !groupId) {
+      if (!savedUserId || !groupId || !currentJapamId) {
         if (!silent) setLoading(false);
         return;
       }
 
       if (!silent) setLoading(true);
       setError('');
+      requestJapamRef.current = currentJapamId;
       try {
         const { start, end } = getLocalTodayBoundsIso();
-        const result = await getGroupDashboard(groupId, savedUserId, start, end);
+        const result = await getGroupDashboard(groupId, savedUserId, start, end, currentJapamId);
+        if (requestJapamRef.current !== currentJapamIdRef.current) return;
         setRows(result);
+        loadedForJapamRef.current = currentJapamId;
       } catch (err: any) {
+        if (requestJapamRef.current !== currentJapamIdRef.current) return;
         if (!silent) setError(err?.message || 'Could not load this group.');
       } finally {
-        if (!silent) setLoading(false);
+        if (!silent && requestJapamRef.current === currentJapamIdRef.current) setLoading(false);
+        leaveIfWorkspaceMismatch();
       }
     } finally {
       loadInFlightRef.current = false;
     }
-  }, [groupId]);
+  }, [groupId, currentJapamId, leaveIfWorkspaceMismatch]);
 
   useFocusEffect(
     useCallback(() => {
