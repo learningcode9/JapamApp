@@ -1,10 +1,9 @@
 import { computeColdStartRestoreDecision } from '../timerColdStartRestore';
 
 describe('computeColdStartRestoreDecision', () => {
-  it('restores as paused (not running) when the app was killed mid-session', () => {
-    // A 10-minute session, killed 3 minutes in (savedSec=180), reopened much later —
-    // must show paused at exactly 180s, never auto-resume/auto-complete regardless of
-    // how long the app was actually dead.
+  it('restores a force-closed running session as paused', () => {
+    // A 10-minute session, force-closed while running. Reopen must show Resume at the last
+    // persisted elapsed time, not Start.
     const result = computeColdStartRestoreDecision({
       savedRunning: true,
       savedPaused: false,
@@ -17,14 +16,11 @@ describe('computeColdStartRestoreDecision', () => {
     expect(result.restoredSeconds).toBe(180);
   });
 
-  it('freezes at the last persisted snapshot, not a wall-clock recomputation', () => {
-    // Regression guard for the exact bug this fix addresses: the decision must be a pure
-    // function of savedSec alone — there is no "time since kill" input at all, so it is
-    // structurally impossible for this function to credit/debit elapsed time based on how
-    // long the process was actually dead.
+  it('keeps the last persisted snapshot available for a paused session', () => {
+    // Manual pause before kill remains restorable.
     const result = computeColdStartRestoreDecision({
-      savedRunning: true,
-      savedPaused: false,
+      savedRunning: false,
+      savedPaused: true,
       savedSec: 45,
       savedTarget: 600,
       savedCompletedLoops: 0,

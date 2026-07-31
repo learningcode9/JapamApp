@@ -2021,6 +2021,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           setIsRunning(false);
           isRunningRef.current = false;
           timerStartedAtRef.current = null;
+          await persistState(false);
           updateTimerState({ sessionId: savedSessionId });
           console.log('[TimerBG] TIMER_RESTORE_PAUSED source=hydrate elapsed=%ds target=%ds completedLoops=%d/%d wasFlaggedRunning=%s',
             restoredSeconds, restoredTarget, safeCompletedLoops, activeLoopLimit, savedRunning);

@@ -250,6 +250,8 @@ const seedPersistedSession = async ({
   japamName = JAPAM_A_NAME,
   currentJapamId = japamId,
   durationSeconds = 180,
+  seconds,
+  paused,
   totalLoops = 3,
   completedLoops = 0,
   running = 'true',
@@ -260,6 +262,8 @@ const seedPersistedSession = async ({
   japamName?: string;
   currentJapamId?: string;
   durationSeconds?: number;
+  seconds?: number;
+  paused?: string;
   totalLoops?: number;
   completedLoops?: number;
   running?: 'true' | 'false';
@@ -286,6 +290,12 @@ const seedPersistedSession = async ({
     ['timerRunning', running],
     [`timerRunning:${UID}`, running],
     [`timerRunning:${UID}:${japamId}`, running],
+    ['timerSeconds', String(seconds ?? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)))],
+    [`timerSeconds:${UID}`, String(seconds ?? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)))],
+    [`timerSeconds:${UID}:${japamId}`, String(seconds ?? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)))],
+    ['timerPaused', paused ?? String(running === 'false' && (seconds ?? 0) > 0)],
+    [`timerPaused:${UID}`, paused ?? String(running === 'false' && (seconds ?? 0) > 0)],
+    [`timerPaused:${UID}:${japamId}`, paused ?? String(running === 'false' && (seconds ?? 0) > 0)],
     ['timerStartedAt', String(startedAt)],
     [`timerStartedAt:${UID}`, String(startedAt)],
     [`timerStartedAt:${UID}:${japamId}`, String(startedAt)],
@@ -670,6 +680,76 @@ describe('TimerProvider restored/native final-loop retry', () => {
     expect(await AsyncStorage.getItem('timerSeconds')).toBe('180');
     expect(await AsyncStorage.getItem('timerStartedAt')).toBeNull();
     expect(getTimerState().sessionId).toBe('');
+  });
+
+  it('opens a force-closed running timer as paused Resume with the saved remaining time', async () => {
+    const sessionId = 'timer-force-close-running';
+    await seedPersistedSession({
+      sessionId,
+      totalLoops: 1,
+      durationSeconds: 180,
+      running: 'true',
+      seconds: 45,
+      paused: 'false',
+      startedAt: Date.now() - 45_000,
+    });
+
+    mountedTree = await renderTimerProvider();
+    await flush();
+
+    expect(currentTimer!.isPaused).toBe(true);
+    expect(currentTimer!.isRunning).toBe(false);
+    expect(currentTimer!.seconds).toBe(45);
+    expect(getTimerState().sessionId).toBe(sessionId);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(JAPAM_A_ID);
+    expect(await AsyncStorage.getItem(`timerSessionJapamId:${UID}`)).toBe(JAPAM_A_ID);
+    expect(await AsyncStorage.getItem(`timerSessionJapamName:${UID}`)).toBe(JAPAM_A_NAME);
+    expect(await AsyncStorage.getItem(`timerCompletedLoops:${UID}:${JAPAM_A_ID}`)).toBe('0');
+    expect(await AsyncStorage.getItem(`timerTab_loops:${UID}:${JAPAM_A_ID}`)).toBe('1');
+    expect(await AsyncStorage.getItem(`timerSeconds:${UID}:${JAPAM_A_ID}`)).toBe('45');
+    expect(await AsyncStorage.getItem(`timerRunning:${UID}:${JAPAM_A_ID}`)).toBe('false');
+    expect(await AsyncStorage.getItem(`timerPaused:${UID}:${JAPAM_A_ID}`)).toBe('true');
+  });
+
+  it('restores the same paused snapshot after a second remount', async () => {
+    const sessionId = 'timer-force-close-remount';
+    await seedPersistedSession({
+      sessionId,
+      totalLoops: 2,
+      durationSeconds: 180,
+      running: 'true',
+      seconds: 45,
+      paused: 'false',
+      startedAt: Date.now() - 45_000,
+    });
+
+    mountedTree = await renderTimerProvider();
+    await flush();
+
+    expect(currentTimer!.isPaused).toBe(true);
+    expect(currentTimer!.isRunning).toBe(false);
+    expect(currentTimer!.seconds).toBe(45);
+    expect(await AsyncStorage.getItem('timerRunning')).toBe('false');
+    expect(await AsyncStorage.getItem('timerPaused')).toBe('true');
+
+    await act(async () => {
+      mountedTree.unmount();
+    });
+    mountedTree = null;
+    currentTimer = null;
+
+    mountedTree = await renderTimerProvider();
+    await flush();
+
+    expect(currentTimer!.isPaused).toBe(true);
+    expect(currentTimer!.isRunning).toBe(false);
+    expect(currentTimer!.seconds).toBe(45);
+    expect(getTimerState().sessionId).toBe(sessionId);
+    expect(await AsyncStorage.getItem('timerRunning')).toBe('false');
+    expect(await AsyncStorage.getItem('timerPaused')).toBe('true');
+    expect(await AsyncStorage.getItem('timerSeconds')).toBe('45');
+    expect(await AsyncStorage.getItem(`timerSessionJapamId:${UID}`)).toBe(JAPAM_A_ID);
+    expect(await AsyncStorage.getItem(`timerSessionJapamName:${UID}`)).toBe(JAPAM_A_NAME);
   });
 
   it('uses native reconciliation completion timestamps when queueing missed loops', async () => {
