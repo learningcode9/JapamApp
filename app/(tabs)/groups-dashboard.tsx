@@ -27,6 +27,7 @@ import {
   renameGroup,
   type GroupDashboardRow,
 } from '../../lib/groupsRepository';
+import { createLoadGuard } from '../../lib/dashboardLoadGuard';
 
 // While the dashboard is focused, re-fetch this often so other members' completions show up
 // without anyone needing to leave and re-enter the screen. Kept well above the Supabase round
@@ -117,26 +118,37 @@ export default function GroupsDashboardScreen() {
   const [leaveError, setLeaveError] = useState('');
   const [leaving, setLeaving] = useState(false);
 
-  // Overlap guard — the 12s interval, the two event listeners, and the initial focus-triggered
-  // load can all fire close together; this ensures only one get_group_dashboard request is ever
-  // in flight at a time, exactly like the same pattern already used by syncPendingHistory.
-  const loadInFlightRef = useRef(false);
+  const guardRef = useRef(createLoadGuard());
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    const guard = guardRef.current;
+    return () => {
+      mountedRef.current = false;
+      guard.unmount();
+    };
+  }, []);
 
   useEffect(() => {
     setDisplayGroupName(groupName);
     setRenameInput(groupName);
   }, [groupName]);
 
-  // Background refreshes (interval ticks, event-driven re-fetches) update the table data silently
-  // — only the very first load for this screen shows the full-screen spinner. Without this, the
-  // table would flash back to a loading state every ~12s or after every completion, which is far
-  // more disruptive than the staleness this feature is meant to fix.
   const load = useCallback(async (options?: { silent?: boolean }) => {
-    if (loadInFlightRef.current) return;
-    loadInFlightRef.current = true;
+    const { proceed, requestId } = guardRef.current.shouldLoad();
+    if (!proceed) return;
+
     const silent = options?.silent ?? false;
+    let markResult: ReturnType<typeof guardRef.current.markComplete> | undefined;
+    const complete = () => {
+      if (markResult) return markResult;
+      markResult = guardRef.current.markComplete(requestId);
+      return markResult;
+    };
+
     try {
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      if (!mountedRef.current) return;
       setUserId(savedUserId);
 
       if (!savedUserId || !groupId) {
@@ -149,14 +161,19 @@ export default function GroupsDashboardScreen() {
       try {
         const { start, end } = getLocalTodayBoundsIso();
         const result = await getGroupDashboard(groupId, savedUserId, start, end);
+        const { isValid, needsReload } = complete();
+        if (!isValid || !mountedRef.current) return;
         setRows(result);
+        if (needsReload) void load({ silent: true });
       } catch (err: any) {
+        complete();
+        if (!mountedRef.current) return;
         if (!silent) setError(err?.message || 'Could not load this group.');
       } finally {
         if (!silent) setLoading(false);
       }
     } finally {
-      loadInFlightRef.current = false;
+      complete();
     }
   }, [groupId]);
 

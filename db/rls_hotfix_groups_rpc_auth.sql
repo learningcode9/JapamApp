@@ -226,6 +226,11 @@ begin
       sum(h.count) as total_count,
       max(h.created_at) as last_completed_at
     from public.japam_history h
+    where not exists (
+      select 1
+      from public.deleted_completions dc
+      where dc.completion_id = h.completion_id
+    )
     group by h.user_id
   ) lifetime on lifetime.user_id = gm.user_id
   left join (
@@ -236,6 +241,11 @@ begin
     from public.japam_history h
     where h.created_at >= p_today_start
       and h.created_at < p_today_end
+      and not exists (
+        select 1
+        from public.deleted_completions dc
+        where dc.completion_id = h.completion_id
+      )
     group by h.user_id
   ) today on today.user_id = gm.user_id
   where gm.group_id = p_group_id;
