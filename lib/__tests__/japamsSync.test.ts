@@ -59,7 +59,6 @@ const mockOrder = jest.fn();
 const mockDelete = jest.fn();
 const mockDeleteEqId = jest.fn();
 const mockDeleteEqUserId = jest.fn();
-const mockDeleteSelect = jest.fn();
 const mockFrom = supabase.from as jest.Mock;
 
 const flushMicrotasks = () => new Promise<void>((r) => setTimeout(r, 0));
@@ -88,10 +87,10 @@ const mockRemoteJapams = (rows: ReturnType<typeof makeRemoteJapam>[], error: unk
 };
 
 const mockRemoteDelete = (
-  data: { id?: string }[] = [{ id: JAPAM_ID_A }],
+  count: number = 1,
   error: unknown = null,
 ) => {
-  mockDeleteSelect.mockResolvedValue({ data, error });
+  mockDeleteEqUserId.mockResolvedValue({ count, error });
 };
 
 beforeEach(async () => {
@@ -103,12 +102,10 @@ beforeEach(async () => {
   mockDelete.mockReset();
   mockDeleteEqId.mockReset();
   mockDeleteEqUserId.mockReset();
-  mockDeleteSelect.mockReset();
   mockSelect.mockReturnValue({ eq: mockEq });
   mockEq.mockReturnValue({ order: mockOrder });
   mockDelete.mockReturnValue({ eq: mockDeleteEqId });
   mockDeleteEqId.mockReturnValue({ eq: mockDeleteEqUserId });
-  mockDeleteEqUserId.mockReturnValue({ select: mockDeleteSelect });
   mockFrom.mockReturnValue({ upsert: mockUpsert, select: mockSelect, delete: mockDelete });
   mockRemoteJapams([]);
   mockRemoteDelete();
@@ -681,17 +678,17 @@ describe('deleteJapam lifecycle sync', () => {
     await AsyncStorage.setItem(`currentJapamId:${UID}`, active.id);
     await AsyncStorage.setItem('history', historyRaw);
     await AsyncStorage.setItem('deletedCompletions', tombstonesRaw);
-    mockRemoteDelete([{ id: archived.id }], null);
+    mockRemoteDelete(1, null);
     mockRemoteJapams([
       makeRemoteJapam({ id: active.id, name: active.name }),
     ]);
 
     const result = await deleteJapam(UID, archived.id);
 
+    expect(mockDelete).toHaveBeenCalledWith({ count: 'exact' });
     expect(mockDelete).toHaveBeenCalledTimes(1);
     expect(mockDeleteEqId).toHaveBeenCalledWith('id', archived.id);
     expect(mockDeleteEqUserId).toHaveBeenCalledWith('user_id', UID);
-    expect(mockDeleteSelect).toHaveBeenCalledWith('id');
     expect(result.map((j) => j.id)).toEqual([active.id]);
     expect((await loadJapams(UID)).map((j) => j.id)).toEqual([active.id]);
     expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(active.id);
@@ -716,7 +713,7 @@ describe('deleteJapam lifecycle sync', () => {
     await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([active, archived]));
     await AsyncStorage.setItem('history', historyRaw);
     await AsyncStorage.setItem('deletedCompletions', tombstonesRaw);
-    mockRemoteDelete([], null);
+    mockRemoteDelete(0, null);
     mockRemoteJapams([
       makeRemoteJapam({ id: active.id, name: active.name }),
       makeRemoteJapam({
@@ -744,7 +741,7 @@ describe('deleteJapam lifecycle sync', () => {
     });
   });
 
-  it('keeps the archived Japam visible locally when remote delete returns the wrong row data', async () => {
+  it('keeps the archived Japam visible locally when remote delete reports an unexpected count', async () => {
     const active = makeJapam({ id: 'active-japam', name: 'Active Japam' });
     const archived = makeJapam({
       id: 'archived-japam',
@@ -758,7 +755,7 @@ describe('deleteJapam lifecycle sync', () => {
     await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([active, archived]));
     await AsyncStorage.setItem('history', historyRaw);
     await AsyncStorage.setItem('deletedCompletions', tombstonesRaw);
-    mockRemoteDelete([{ id: 'unexpected-japam' }], null);
+    mockRemoteDelete(2, null);
 
     const result = await deleteJapam(UID, archived.id);
 
@@ -787,7 +784,7 @@ describe('deleteJapam lifecycle sync', () => {
     await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([active, archived]));
     await AsyncStorage.setItem('history', historyRaw);
     await AsyncStorage.setItem('deletedCompletions', tombstonesRaw);
-    mockRemoteDelete([], { code: '42501', message: 'RLS violation' });
+    mockRemoteDelete(0, { code: '42501', message: 'RLS violation' });
 
     const result = await deleteJapam(UID, archived.id);
 

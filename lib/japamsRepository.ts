@@ -53,10 +53,6 @@ type RemoteJapamRow = {
   archived_at?: string | null;
 };
 
-type RemoteDeletedJapamRow = {
-  id?: string;
-};
-
 const remoteRowToJapam = (row: RemoteJapamRow): Japam => ({
   id: row.id,
   userId: row.user_id,
@@ -153,12 +149,11 @@ const deleteRemoteJapam = async (userId: string, japamId: string): Promise<boole
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { supabase } = require('./supabase');
-    const { data, error } = await supabase
+    const { count, error } = await supabase
       .from('japams')
-      .delete()
+      .delete({ count: 'exact' })
       .eq('id', japamId)
-      .eq('user_id', userId)
-      .select('id');
+      .eq('user_id', userId);
 
     if (error) {
       console.warn('[JAPAM_REMOTE_DELETE_FAILED]', {
@@ -169,12 +164,7 @@ const deleteRemoteJapam = async (userId: string, japamId: string): Promise<boole
       return false;
     }
 
-    const deletedRows = Array.isArray(data) ? data as RemoteDeletedJapamRow[] : [];
-    const deletedIds = deletedRows
-      .map((row) => row?.id)
-      .filter((id): id is string => typeof id === 'string');
-
-    if (deletedIds.length !== 1 || deletedIds[0] !== japamId) {
+    if (count !== 1) {
       console.warn('[JAPAM_REMOTE_DELETE_FAILED]', {
         japamId,
         code: 'UNEXPECTED_RESPONSE',
@@ -386,7 +376,7 @@ export const deleteJapam = async (
 ): Promise<Japam[]> => {
   const existing = await loadJapamsFromStorage(userId);
   const target = existing.find((j) => j.id === japamId);
-   if (!target || target.archivedAt === null) return existing;
+  if (!target || target.archivedAt === null) return existing;
 
   if (userId) {
     const deletedRemotely = await deleteRemoteJapam(userId, japamId);
