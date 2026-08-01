@@ -57,48 +57,82 @@ export default function GroupsScreen() {
   // the list, so a slow Workspace-A response can never overwrite Workspace-B state after a
   // switch (the server also scopes, but the client must never render cross-workspace data).
   const requestJapamRef = useRef<string | null>(null);
+  const loadPromiseRef = useRef<Promise<void> | null>(null);
+  const loadInFlightKeyRef = useRef<string | null>(null);
+  const lastLoadedKeyRef = useRef<string | null>(null);
+  const isWorkspaceLoading = japamLoading || loading;
 
-  const loadGroups = useCallback(async () => {
+  const loadGroups = useCallback(async (options?: { force?: boolean }) => {
+    const force = options?.force ?? false;
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
     const savedUserName = (await AsyncStorage.getItem(USER_NAME_KEY)) || '';
-    setUserId(savedUserId);
-    setUserName(savedUserName);
+    const loadKey = `${savedUserId ?? 'guest'}:${currentJapamId ?? 'none'}`;
 
-    if (!savedUserId || !currentJapamId) {
-      setGroups([]);
-      setUnassignedGroups([]);
-      // Clear the in-flight marker too, so a slow response from a previously selected workspace
-      // can never repopulate the list after the user deselects/leaves the workspace.
-      requestJapamRef.current = null;
-      setLoading(false);
+    if (loadPromiseRef.current && loadInFlightKeyRef.current === loadKey) {
+      return loadPromiseRef.current;
+    }
+
+    if (!force && lastLoadedKeyRef.current === loadKey) {
+      setUserId(savedUserId);
+      setUserName(savedUserName);
       return;
     }
 
-    setLoading(true);
-    setListError('');
-    setAttachError('');
-    requestJapamRef.current = currentJapamId;
-    try {
-      const [result, unassigned] = await Promise.all([
-        getMyGroups(savedUserId, currentJapamId),
-        getMyUnassignedGroups(),
-      ]);
-      if (requestJapamRef.current !== currentJapamId) return;
-      setGroups(result);
-      setUnassignedGroups(unassigned);
-    } catch (error: any) {
-      if (requestJapamRef.current !== currentJapamId) return;
-      setListError(error?.message || 'Could not load your groups.');
-    } finally {
-      if (requestJapamRef.current === currentJapamId) {
+    const promise = (async () => {
+      setUserId(savedUserId);
+      setUserName(savedUserName);
+
+      if (!savedUserId || !currentJapamId) {
+        setGroups([]);
+        setUnassignedGroups([]);
+        // Clear the in-flight marker too, so a slow response from a previously selected workspace
+        // can never repopulate the list after the user deselects/leaves the workspace.
+        requestJapamRef.current = null;
+        lastLoadedKeyRef.current = loadKey;
         setLoading(false);
+        return;
       }
-    }
+
+      setLoading(true);
+      setListError('');
+      setAttachError('');
+      requestJapamRef.current = currentJapamId;
+      try {
+        const [result, unassigned] = await Promise.all([
+          getMyGroups(savedUserId, currentJapamId),
+          getMyUnassignedGroups(),
+        ]);
+        if (requestJapamRef.current !== currentJapamId) return;
+        setGroups(result);
+        setUnassignedGroups(unassigned);
+        lastLoadedKeyRef.current = loadKey;
+      } catch (error: any) {
+        if (requestJapamRef.current !== currentJapamId) return;
+        setListError(error?.message || 'Could not load your groups.');
+      } finally {
+        if (requestJapamRef.current === currentJapamId) {
+          setLoading(false);
+        }
+      }
+    })();
+
+    loadPromiseRef.current = promise;
+    loadInFlightKeyRef.current = loadKey;
+    promise.finally(() => {
+      if (loadPromiseRef.current === promise) {
+        loadPromiseRef.current = null;
+        loadInFlightKeyRef.current = null;
+      }
+    });
+    return promise;
   }, [currentJapamId]);
 
   useFocusEffect(
     useCallback(() => {
-      void loadGroups();
+      void loadGroups({ force: true });
+      return () => {
+        lastLoadedKeyRef.current = null;
+      };
     }, [loadGroups])
   );
 
@@ -117,7 +151,7 @@ export default function GroupsScreen() {
       setAttachError(outcome.message || 'Could not attach this group to the selected Japam.');
       return;
     }
-    await loadGroups();
+    await loadGroups({ force: true });
   };
 
   const handleCreateSubmit = async () => {
@@ -135,7 +169,7 @@ export default function GroupsScreen() {
     try {
       const result = await createGroup(name, userId, userName, currentJapamId);
       setCreateName('');
-      await loadGroups();
+      await loadGroups({ force: true });
       // Show the success view (invite code + Share) instead of navigating immediately — the
       // user decides when to leave, after optionally sharing the code.
       setCreatedGroup(result);
@@ -201,7 +235,7 @@ export default function GroupsScreen() {
       }
       setShowJoinModal(false);
       setJoinCode('');
-      await loadGroups();
+      await loadGroups({ force: true });
       openGroupDashboard(outcome.groupId, outcome.groupName);
     } finally {
       setJoining(false);
@@ -226,37 +260,35 @@ export default function GroupsScreen() {
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <Text style={styles.header}>Family Japam Groups</Text>
 
-        {japamLoading ? (
-          <ActivityIndicator color={TEAL} style={styles.loadingSpinner} />
-        ) : (
-          <>
-            <View style={styles.workspaceBanner}>
-              <Ionicons name="layers-outline" size={16} color={TEAL} />
-              <Text style={styles.workspaceBannerText}>
-                {currentJapam ? `Showing groups for: ${currentJapam.name}` : 'Select a Japam to manage your groups'}
-              </Text>
-            </View>
+        <View style={styles.workspaceBanner}>
+          <Ionicons name="layers-outline" size={16} color={TEAL} />
+          <Text style={styles.workspaceBannerText}>
+            {japamLoading
+              ? 'Loading your selected Japam...'
+              : currentJapam
+                ? `Showing groups for: ${currentJapam.name}`
+                : 'Select a Japam to manage your groups'}
+          </Text>
+        </View>
 
-            <View style={styles.actionsRow}>
-              <Pressable
-                style={[styles.primaryButton, !currentJapamId && styles.disabledButton]}
-                disabled={!currentJapamId}
-                onPress={() => setShowCreateModal(true)}
-              >
-                <Text style={styles.primaryButtonText}>Create Group</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.secondaryButton, !currentJapamId && styles.disabledButton]}
-                disabled={!currentJapamId}
-                onPress={() => setShowJoinModal(true)}
-              >
-                <Text style={styles.secondaryButtonText}>Join Group</Text>
-              </Pressable>
-            </View>
-          </>
-        )}
+        <View style={styles.actionsRow}>
+          <Pressable
+            style={[styles.primaryButton, (!currentJapamId || isWorkspaceLoading) && styles.disabledButton]}
+            disabled={!currentJapamId || isWorkspaceLoading}
+            onPress={() => setShowCreateModal(true)}
+          >
+            <Text style={styles.primaryButtonText}>Create Group</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.secondaryButton, (!currentJapamId || isWorkspaceLoading) && styles.disabledButton]}
+            disabled={!currentJapamId || isWorkspaceLoading}
+            onPress={() => setShowJoinModal(true)}
+          >
+            <Text style={styles.secondaryButtonText}>Join Group</Text>
+          </Pressable>
+        </View>
 
-        {loading ? (
+        {isWorkspaceLoading ? (
           <ActivityIndicator color={TEAL} style={styles.loadingSpinner} />
         ) : listError ? (
           <Text style={styles.errorText}>{listError}</Text>

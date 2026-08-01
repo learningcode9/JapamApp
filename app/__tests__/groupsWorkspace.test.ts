@@ -259,6 +259,62 @@ describe('Groups workspace list', () => {
     expect(mockGetMyGroups).not.toHaveBeenCalled();
     expect(mockGetMyUnassignedGroups).not.toHaveBeenCalled();
   });
+
+  it('does not refetch when the selected Japam stays unchanged', async () => {
+    const tree = await renderScreen();
+
+    expect(mockGetMyGroups).toHaveBeenCalledTimes(1);
+    expect(mockGetMyUnassignedGroups).toHaveBeenCalledTimes(1);
+
+    await updateTree(tree);
+
+    expect(mockGetMyGroups).toHaveBeenCalledTimes(1);
+    expect(mockGetMyUnassignedGroups).toHaveBeenCalledTimes(1);
+  });
+
+  it('deduplicates a simultaneous same-key reload while the first request is in flight', async () => {
+    const pending = createDeferred<typeof mockGetMyGroups extends (...a: any[]) => Promise<infer R> ? R : never>();
+    mockGetMyGroups.mockImplementationOnce(() => pending.promise);
+
+    const tree = await renderScreen();
+    expect(mockGetMyGroups).toHaveBeenCalledTimes(1);
+
+    await updateTree(tree);
+    expect(mockGetMyGroups).toHaveBeenCalledTimes(1);
+
+    pending.resolve([groupRow(GROUP_A, 'Group A')]);
+    await flush();
+    expect(mockGetMyGroups).toHaveBeenCalledTimes(1);
+  });
+
+  it('performs one intentional refresh when the screen is remounted after blur', async () => {
+    const tree = await renderScreen();
+    expect(mockGetMyGroups).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      tree.unmount();
+      await Promise.resolve();
+    });
+    const nextTree = await renderScreen();
+    expect(mockGetMyGroups).toHaveBeenCalledTimes(2);
+    expect(allText(nextTree).join(' ')).toContain('Family Japam Groups');
+  });
+
+  it('keeps the workspace shell visible while the Japam context is loading', async () => {
+    mockCurrentJapamState = {
+      ...mockCurrentJapamState,
+      isLoading: true,
+    };
+
+    const tree = await renderScreen();
+    const texts = allText(tree).join(' ');
+
+    expect(texts).toContain('Family Japam Groups');
+    expect(texts).toContain('Loading your selected Japam...');
+    expect(texts).toContain('Create Group');
+    expect(texts).toContain('Join Group');
+    expect(tree.root.findAll((node: any) => node.type === 'ActivityIndicator').length).toBeGreaterThan(0);
+  });
 });
 
 describe('workspace switch reload + stale-response guard', () => {
