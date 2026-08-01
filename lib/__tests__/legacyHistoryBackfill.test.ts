@@ -61,6 +61,38 @@ describe('planLegacyHistoryBackfill', () => {
     expect(stillTagged).toMatchObject({ japamId: 'govinda', japamName: 'Govinda' });
   });
 
+  it('only reassigns the completion ids History attributed to the default Japam', () => {
+    const defaultLegacy = session('2026-01-01T09:00:00.000Z', {
+      japamId: null,
+      japamName: null,
+      completionId: 'default-legacy',
+    });
+    const otherNamedLegacy = session('2026-01-02T09:00:00.000Z', {
+      japamId: null,
+      japamName: 'Govinda',
+      completionId: 'other-legacy',
+    });
+    const otherTagged = session('2026-01-03T09:00:00.000Z', {
+      japamId: 'govinda',
+      japamName: 'Govinda',
+      completionId: 'other-tagged',
+    });
+
+    const plan = planLegacyHistoryBackfill(
+      [defaultLegacy, otherNamedLegacy, otherTagged],
+      JAPAM_ID,
+      JAPAM_NAME,
+      { onlyCompletionIds: new Set(['default-legacy']) },
+    );
+
+    expect(plan.reassignedRecords.map((record) => record.completionId)).toEqual(['default-legacy']);
+    expect(plan.updatedRecords).toEqual([
+      expect.objectContaining({ completionId: 'default-legacy', japamId: JAPAM_ID }),
+      expect.objectContaining({ completionId: 'other-legacy', japamId: null, japamName: 'Govinda' }),
+      expect.objectContaining({ completionId: 'other-tagged', japamId: 'govinda', japamName: 'Govinda' }),
+    ]);
+  });
+
   it('guest (no userId): reassigns japamId/japamName but leaves syncStatus untouched', () => {
     const guestRecord = session('2026-01-01T09:00:00.000Z', {
       userId: null,

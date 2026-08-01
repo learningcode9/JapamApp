@@ -78,7 +78,7 @@ beforeEach(async () => {
     },
   ]);
   mockMarkComplete.mockResolvedValue(undefined);
-  mockApplyLegacyHistoryBackfill.mockResolvedValue(undefined);
+  mockApplyLegacyHistoryBackfill.mockResolvedValue({ needsBackfill: true });
 });
 
 const renderRunner = async () => {
@@ -113,7 +113,14 @@ describe('LegacyHistoryBackfillRunner default Japam routing', () => {
 
     expect(mockEnsureDefaultJapam).toHaveBeenCalledTimes(1);
     expect(mockCreateJapam).not.toHaveBeenCalled();
-    expect(mockApplyLegacyHistoryBackfill).toHaveBeenCalledWith('user-123', 'canonical-1', 'My Japam');
+    expect(mockApplyLegacyHistoryBackfill).toHaveBeenCalledWith(
+      'user-123',
+      'canonical-1',
+      'My Japam',
+      expect.objectContaining({
+        onlyCompletionIds: new Set(['legacy-1']),
+      })
+    );
     expect(mockMarkComplete).toHaveBeenCalledWith('user-123');
   });
 
@@ -137,7 +144,14 @@ describe('LegacyHistoryBackfillRunner default Japam routing', () => {
     await renderRunner();
 
     expect(mockCreateJapam).not.toHaveBeenCalled();
-    expect(mockApplyLegacyHistoryBackfill).toHaveBeenCalledWith('user-123', 'manual-1', 'Govinda');
+    expect(mockApplyLegacyHistoryBackfill).toHaveBeenCalledWith(
+      'user-123',
+      'manual-1',
+      'Govinda',
+      expect.objectContaining({
+        onlyCompletionIds: new Set(['legacy-1']),
+      })
+    );
   });
 
   it.each([null, ''])('signed-out/auth-not-ready state is a no-op for userId %p', async (userId) => {
@@ -195,7 +209,14 @@ describe('LegacyHistoryBackfillRunner default Japam routing', () => {
 
     expect(mockEnsureDefaultJapam).toHaveBeenCalledTimes(1);
     expect(mockLoadHistoryForUser).toHaveBeenCalledWith('user-123');
-    expect(mockApplyLegacyHistoryBackfill).toHaveBeenCalledWith('user-123', 'canonical-1', 'My Japam');
+    expect(mockApplyLegacyHistoryBackfill).toHaveBeenCalledWith(
+      'user-123',
+      'canonical-1',
+      'My Japam',
+      expect.objectContaining({
+        onlyCompletionIds: new Set(['legacy-1']),
+      })
+    );
     expect(mockMarkComplete).toHaveBeenCalledWith('user-123');
   });
 });
