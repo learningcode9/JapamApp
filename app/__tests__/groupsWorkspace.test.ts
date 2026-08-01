@@ -300,7 +300,9 @@ describe('Groups workspace list', () => {
     expect(allText(nextTree).join(' ')).toContain('Family Japam Groups');
   });
 
-  it('keeps the workspace shell visible while the Japam context is loading', async () => {
+  it('keeps the workspace shell visible during the initial load with no rows yet', async () => {
+    const pending = createDeferred<ReturnType<typeof groupRow>[]>();
+    mockGetMyGroups.mockReturnValueOnce(pending.promise);
     mockCurrentJapamState = {
       ...mockCurrentJapamState,
       isLoading: true,
@@ -310,10 +312,33 @@ describe('Groups workspace list', () => {
     const texts = allText(tree).join(' ');
 
     expect(texts).toContain('Family Japam Groups');
-    expect(texts).toContain('Loading your selected Japam...');
+    expect(texts).toContain('Showing groups for: Gayatri');
     expect(texts).toContain('Create Group');
     expect(texts).toContain('Join Group');
     expect(tree.root.findAll((node: any) => node.type === 'ActivityIndicator').length).toBeGreaterThan(0);
+
+    pending.resolve([groupRow(GROUP_A, 'Group A')]);
+    await flush();
+  });
+
+  it('keeps loaded rows, banner, and actions mounted during a background provider refresh', async () => {
+    mockGetMyGroups.mockResolvedValue([groupRow(GROUP_A, 'Group A')]);
+    const tree = await renderScreen();
+    expect(allText(tree).join(' ')).toContain('Group A');
+
+    mockCurrentJapamState = {
+      ...mockCurrentJapamState,
+      isLoading: true,
+    };
+    await updateTree(tree);
+
+    const texts = allText(tree).join(' ');
+    expect(texts).toContain('Group A');
+    expect(texts).toContain('Showing groups for: Gayatri');
+    expect(texts).toContain('Create Group');
+    expect(texts).toContain('Join Group');
+    expect(tree.root.findAll((node: any) => node.type === 'ActivityIndicator')).toHaveLength(0);
+    expect(mockGetMyGroups).toHaveBeenCalledTimes(1);
   });
 });
 

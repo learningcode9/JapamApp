@@ -27,6 +27,7 @@ import { supabase } from '../../lib/supabase';
 import { fetchJapamHistoryRows } from '../../lib/supabaseRestHelper';
 import { activeJapams } from '../../lib/japams';
 import { ensureJapamSyncedForHistory } from '../../lib/japamsRepository';
+import { claimAuthResponse, emitJapamAuthUpdated } from '../../lib/authEvents';
 
 import {
   Alert,
@@ -1471,7 +1472,7 @@ export default function JapamMain() {
       await restoreTodayTotal();
       await restoreHistoryFromSupabase(userId);
       await restoreTimerForUser(userId);
-      DeviceEventEmitter.emit('japam-auth-updated');
+      emitJapamAuthUpdated();
     } catch (error) {
       console.log('Native Google sign-in error:', error);
       setShowUserModal(true);
@@ -1510,10 +1511,12 @@ export default function JapamMain() {
     };
   }, [handleNativeGoogleSignIn, promptAsync, request]);
 
+  const handledWebAuthResponseRef = useRef<NonNullable<typeof response> | null>(null);
+
   useEffect(() => {
     const handleGoogleLogin = async () => {
       if (Platform.OS !== 'web') return; // native platforms use handleNativeGoogleSignIn
-      if (!response) return;
+      if (!claimAuthResponse(handledWebAuthResponseRef, response)) return;
 
       console.log('[AUTH_CALLBACK] source=index-web response.type=%s', response.type);
       if (response.type !== 'success') {
@@ -1636,10 +1639,7 @@ export default function JapamMain() {
         await restoreTodayTotal();
         await restoreHistoryFromSupabase(userId);
         await restoreTimerForUser(userId);
-        DeviceEventEmitter.emit('japam-auth-updated');
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new Event('japam-auth-updated'));
-        }
+        emitJapamAuthUpdated();
       } catch (error) {
         console.log('Google login error:', error);
         setShowUserModal(true);

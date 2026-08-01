@@ -60,7 +60,11 @@ export default function GroupsScreen() {
   const loadPromiseRef = useRef<Promise<void> | null>(null);
   const loadInFlightKeyRef = useRef<string | null>(null);
   const lastLoadedKeyRef = useRef<string | null>(null);
-  const isWorkspaceLoading = japamLoading || loading;
+  const settledLoadKeyRef = useRef<string | null>(null);
+  const currentLoadKey = `${userId ?? 'guest'}:${currentJapamId ?? 'none'}`;
+  const initialLoading = settledLoadKeyRef.current !== currentLoadKey;
+  const backgroundRefreshing = !initialLoading && (loading || japamLoading);
+  const isInteractionLoading = initialLoading || backgroundRefreshing;
 
   const loadGroups = useCallback(async (options?: { force?: boolean }) => {
     const force = options?.force ?? false;
@@ -89,6 +93,7 @@ export default function GroupsScreen() {
         // can never repopulate the list after the user deselects/leaves the workspace.
         requestJapamRef.current = null;
         lastLoadedKeyRef.current = loadKey;
+        settledLoadKeyRef.current = loadKey;
         setLoading(false);
         return;
       }
@@ -111,6 +116,7 @@ export default function GroupsScreen() {
         setListError(error?.message || 'Could not load your groups.');
       } finally {
         if (requestJapamRef.current === currentJapamId) {
+          settledLoadKeyRef.current = loadKey;
           setLoading(false);
         }
       }
@@ -130,9 +136,6 @@ export default function GroupsScreen() {
   useFocusEffect(
     useCallback(() => {
       void loadGroups({ force: true });
-      return () => {
-        lastLoadedKeyRef.current = null;
-      };
     }, [loadGroups])
   );
 
@@ -263,32 +266,32 @@ export default function GroupsScreen() {
         <View style={styles.workspaceBanner}>
           <Ionicons name="layers-outline" size={16} color={TEAL} />
           <Text style={styles.workspaceBannerText}>
-            {japamLoading
-              ? 'Loading your selected Japam...'
-              : currentJapam
-                ? `Showing groups for: ${currentJapam.name}`
+            {currentJapam
+              ? `Showing groups for: ${currentJapam.name}`
+              : japamLoading
+                ? 'Loading your selected Japam...'
                 : 'Select a Japam to manage your groups'}
           </Text>
         </View>
 
         <View style={styles.actionsRow}>
           <Pressable
-            style={[styles.primaryButton, (!currentJapamId || isWorkspaceLoading) && styles.disabledButton]}
-            disabled={!currentJapamId || isWorkspaceLoading}
+            style={[styles.primaryButton, (!currentJapamId || isInteractionLoading) && styles.disabledButton]}
+            disabled={!currentJapamId || isInteractionLoading}
             onPress={() => setShowCreateModal(true)}
           >
             <Text style={styles.primaryButtonText}>Create Group</Text>
           </Pressable>
           <Pressable
-            style={[styles.secondaryButton, (!currentJapamId || isWorkspaceLoading) && styles.disabledButton]}
-            disabled={!currentJapamId || isWorkspaceLoading}
+            style={[styles.secondaryButton, (!currentJapamId || isInteractionLoading) && styles.disabledButton]}
+            disabled={!currentJapamId || isInteractionLoading}
             onPress={() => setShowJoinModal(true)}
           >
             <Text style={styles.secondaryButtonText}>Join Group</Text>
           </Pressable>
         </View>
 
-        {isWorkspaceLoading ? (
+        {initialLoading ? (
           <ActivityIndicator color={TEAL} style={styles.loadingSpinner} />
         ) : listError ? (
           <Text style={styles.errorText}>{listError}</Text>

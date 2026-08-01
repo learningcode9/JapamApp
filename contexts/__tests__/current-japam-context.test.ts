@@ -37,7 +37,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import React from 'react';
 const renderer = require('react-test-renderer');
 const { act } = renderer;
-import { DeviceEventEmitter } from 'react-native';
+import { DeviceEventEmitter, Platform } from 'react-native';
 import { CurrentJapamProvider, useCurrentJapam } from '../current-japam-context';
 /* eslint-enable import/first, @typescript-eslint/no-require-imports */
 
@@ -100,6 +100,7 @@ const renderProvider = async (userId: string | null) => {
 
 beforeEach(async () => {
   jest.clearAllMocks();
+  (Platform as { OS: string }).OS = 'android';
   await AsyncStorage.clear();
   mockLoadJapams.mockReset();
   mockLoadCurrentJapamId.mockReset();
@@ -113,6 +114,95 @@ afterEach(() => {
 });
 
 describe('CurrentJapamProvider refresh', () => {
+  it('handles one logical web auth event through only the canonical window listener', async () => {
+    const originalWindow = global.window;
+    let webAuthHandler: (() => void) | undefined;
+    const addEventListener = jest.fn((event: string, handler: () => void) => {
+      if (event === 'japam-auth-updated') webAuthHandler = handler;
+    });
+    const removeEventListener = jest.fn();
+    (Platform as { OS: string }).OS = 'web';
+    global.window = { addEventListener, removeEventListener } as unknown as Window & typeof globalThis;
+    mockEnsureDefaultJapam.mockResolvedValue({
+      japams: [
+        {
+          id: 'web-current',
+          userId: 'user-123',
+          name: 'My Japam',
+          displayOrder: null,
+          createdAt: '2026-07-20T00:00:00.000Z',
+          updatedAt: '2026-07-20T00:00:00.000Z',
+          archivedAt: null,
+        },
+      ],
+      currentJapamId: 'web-current',
+      created: null,
+    });
+
+    try {
+      await renderProvider('user-123');
+      expect(DeviceEventEmitter.addListener).not.toHaveBeenCalledWith(
+        'japam-auth-updated',
+        expect.any(Function),
+      );
+      expect(addEventListener).toHaveBeenCalledTimes(1);
+      expect(mockEnsureDefaultJapam).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        webAuthHandler?.();
+        await Promise.resolve();
+      });
+      await flush();
+
+      expect(mockEnsureDefaultJapam).toHaveBeenCalledTimes(2);
+    } finally {
+      global.window = originalWindow;
+      (Platform as { OS: string }).OS = 'android';
+    }
+  });
+
+  it('preserves sequential A to B to A account reconciliation', async () => {
+    const resultFor = (userId: string) => ({
+      japams: [
+        {
+          id: `japam-${userId}`,
+          userId,
+          name: `Japam ${userId}`,
+          displayOrder: null,
+          createdAt: '2026-07-20T00:00:00.000Z',
+          updatedAt: '2026-07-20T00:00:00.000Z',
+          archivedAt: null,
+        },
+      ],
+      currentJapamId: `japam-${userId}`,
+      created: null,
+    });
+    mockEnsureDefaultJapam.mockImplementation(async (userId: string) => resultFor(userId));
+
+    const { snapshots } = await renderProvider('A');
+    const authListener = (DeviceEventEmitter.addListener as jest.Mock).mock.calls[0]?.[1] as
+      | (() => void)
+      | undefined;
+
+    await AsyncStorage.setItem('userId', 'B');
+    await act(async () => {
+      authListener?.();
+      await Promise.resolve();
+    });
+    await flush();
+    expect(snapshots.at(-1)?.currentJapamId).toBe('japam-B');
+
+    await AsyncStorage.setItem('userId', 'A');
+    await act(async () => {
+      authListener?.();
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(mockEnsureDefaultJapam.mock.calls.map(([userId]) => userId)).toEqual(['A', 'B', 'A']);
+    expect(snapshots.at(-1)?.currentJapamId).toBe('japam-A');
+  });
+
   it('signed-in refresh adopts a remote canonical Japam and does not create a default', async () => {
     mockEnsureDefaultJapam.mockResolvedValue({
       japams: [
