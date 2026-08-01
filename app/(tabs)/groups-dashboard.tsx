@@ -4,6 +4,7 @@ import * as Clipboard from 'expo-clipboard';
 import { useIsFocused } from '@react-navigation/native';
 import { useFocusEffect, useLocalSearchParams, usePathname, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type { Session } from '@supabase/supabase-js';
 import {
   ActivityIndicator,
   DeviceEventEmitter,
@@ -29,6 +30,7 @@ import {
   type GroupDashboardRow,
 } from '../../lib/groupsRepository';
 import { useCurrentJapam } from '../../contexts/current-japam-context';
+import { supabase } from '../../lib/supabase';
 
 // While the dashboard is focused, re-fetch this often so other members' completions show up
 // without anyone needing to leave and re-enter the screen. Kept well above the Supabase round
@@ -97,6 +99,9 @@ export default function GroupsDashboardScreen() {
   const [displayGroupName, setDisplayGroupName] = useState(groupName);
 
   const [userId, setUserId] = useState<string | null>(null);
+  // undefined means Supabase has not finished restoring the persisted session yet. A stored
+  // userId alone is not enough to authorize the RPC: the request must carry a real access token.
+  const [authSession, setAuthSession] = useState<Session | null | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<GroupDashboardRow[]>([]);
   const [error, setError] = useState('');
@@ -127,6 +132,8 @@ export default function GroupsDashboardScreen() {
   // load can all fire close together; this ensures only one get_group_dashboard request is ever
   // in flight at a time, exactly like the same pattern already used by syncPendingHistory.
   const loadInFlightRef = useRef(false);
+  const authSessionRef = useRef<Session | null | undefined>(undefined);
+  const requestAuthUserRef = useRef<string | null>(null);
 
   // Stale-response guard for the dashboard's own workspace scope — only the response for the
   // CURRENTLY selected Japam may render. currentJapamIdRef tracks the LATEST render's selected
@@ -146,6 +153,47 @@ export default function GroupsDashboardScreen() {
   useEffect(() => {
     currentJapamIdRef.current = currentJapamId;
   }, [currentJapamId]);
+
+  const clearDashboardForLogout = useCallback(() => {
+    authSessionRef.current = null;
+    requestAuthUserRef.current = null;
+    loadInFlightRef.current = false;
+    setAuthSession(null);
+    setUserId(null);
+    setRows([]);
+    setError('');
+    setInviteCode(null);
+    setLoading(false);
+    loadedForJapamRef.current = null;
+    requestJapamRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const applySession = (session: Session | null) => {
+      if (!mounted) return;
+      if (!session?.access_token) {
+        clearDashboardForLogout();
+        return;
+      }
+      authSessionRef.current = session;
+      setAuthSession(session);
+    };
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      applySession(session);
+    });
+
+    void supabase.auth.getSession().then(({ data }) => {
+      applySession(data.session ?? null);
+    });
+
+    return () => {
+      mounted = false;
+      authListener.subscription.unsubscribe();
+    };
+  }, [clearDashboardForLogout]);
 
   // The dashboard shows this group through the VIEWER's membership, which is tied to the Japam
   // they created/joined the group under (get_group_dashboard scopes by the caller's own
@@ -181,6 +229,21 @@ export default function GroupsDashboardScreen() {
     loadInFlightRef.current = true;
     const silent = options?.silent ?? false;
     try {
+      const session = authSessionRef.current;
+      if (session === undefined) return;
+      if (!session?.access_token || !session.user?.id) {
+        return;
+      }
+
+      const { data: currentSessionData } = await supabase.auth.getSession();
+      const currentSession = currentSessionData.session;
+      if (!currentSession?.access_token || !currentSession.user?.id) {
+        clearDashboardForLogout();
+        return;
+      }
+
+      authSessionRef.current = currentSession;
+      requestAuthUserRef.current = currentSession.user.id;
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
       setUserId(savedUserId);
 
@@ -195,20 +258,30 @@ export default function GroupsDashboardScreen() {
       try {
         const { start, end } = getLocalTodayBoundsIso();
         const result = await getGroupDashboard(groupId, savedUserId, start, end, currentJapamId);
-        if (requestJapamRef.current !== currentJapamIdRef.current) return;
+        if (
+          requestAuthUserRef.current !== authSessionRef.current?.user?.id ||
+          requestJapamRef.current !== currentJapamIdRef.current
+        ) return;
         setRows(result);
         loadedForJapamRef.current = currentJapamId;
       } catch (err: any) {
-        if (requestJapamRef.current !== currentJapamIdRef.current) return;
+        if (
+          requestAuthUserRef.current !== authSessionRef.current?.user?.id ||
+          requestJapamRef.current !== currentJapamIdRef.current
+        ) return;
         if (!silent) setError(err?.message || 'Could not load this group.');
       } finally {
-        if (!silent && requestJapamRef.current === currentJapamIdRef.current) setLoading(false);
+        if (
+          !silent &&
+          requestAuthUserRef.current === authSessionRef.current?.user?.id &&
+          requestJapamRef.current === currentJapamIdRef.current
+        ) setLoading(false);
         leaveIfWorkspaceMismatch();
       }
     } finally {
       loadInFlightRef.current = false;
     }
-  }, [groupId, currentJapamId, leaveIfWorkspaceMismatch]);
+  }, [authSession, currentJapamId, groupId, leaveIfWorkspaceMismatch]);
 
   useFocusEffect(
     useCallback(() => {

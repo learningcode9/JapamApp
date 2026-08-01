@@ -102,6 +102,19 @@ const mockRenameGroup = jest.fn();
 const mockRemoveGroupMember = jest.fn();
 const mockDeleteGroup = jest.fn();
 const mockLeaveGroup = jest.fn();
+const mockGetSession = jest.fn();
+
+jest.mock('../../lib/supabase', () => ({
+  supabase: {
+    auth: {
+      getSession: (...args: unknown[]) => mockGetSession(...args),
+      onAuthStateChange: (_event: string, callback: (event: string, session: unknown) => void) => {
+        void callback;
+        return { data: { subscription: { unsubscribe: jest.fn() } } };
+      },
+    },
+  },
+}));
 
 jest.mock('../../lib/groupsRepository', () => ({
   getGroupDashboard: (...args: unknown[]) => mockGetGroupDashboard(...args),
@@ -220,6 +233,9 @@ beforeEach(async () => {
   jest.spyOn(global, 'clearInterval').mockImplementation(() => undefined);
   await AsyncStorage.clear();
   await AsyncStorage.setItem('userId', UID);
+  mockGetSession.mockResolvedValue({
+    data: { session: { access_token: 'fresh-session-token', user: { id: UID } } },
+  });
   mockCurrentJapamState = { currentJapamId: WORKSPACE_A };
   mockGetGroupDashboard.mockResolvedValue([row(`${UID}-b`, 'Person B')]);
   mockGetGroupInviteCode.mockResolvedValue('ABCDEFG');
@@ -323,4 +339,37 @@ describe('Groups dashboard workspace scope', () => {
     await flush();
     expect(allText(tree).join(' ')).not.toContain('Person A');
   });
+});
+
+describe('Groups dashboard auth hydration', () => {
+  it('skips the RPC while auth is unresolved and retries after a fresh session hydrates', async () => {
+    const pendingSession = createDeferred<any>();
+    mockGetSession.mockReturnValueOnce(pendingSession.promise);
+
+    await renderScreen();
+    expect(mockGetGroupDashboard).not.toHaveBeenCalled();
+
+    pendingSession.resolve({
+      data: { session: { access_token: 'fresh-login-token', user: { id: UID } } },
+    });
+    await flush();
+
+    expect(mockGetGroupDashboard).toHaveBeenCalledWith(
+      'group-1',
+      UID,
+      expect.any(String),
+      expect.any(String),
+      WORKSPACE_A
+    );
+  });
+
+  it('does not call the RPC without a session and clears the dashboard identity', async () => {
+    mockGetSession.mockResolvedValueOnce({ data: { session: null } });
+
+    const tree = await renderScreen();
+
+    expect(mockGetGroupDashboard).not.toHaveBeenCalled();
+    expect(allText(tree).join(' ')).toContain('Sign in required');
+  });
+
 });
