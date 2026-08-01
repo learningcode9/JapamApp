@@ -121,10 +121,10 @@ const UID = 'user-a';
 const WORKSPACE_A = '550e8400-e29b-41d4-a716-446655440001';
 const WORKSPACE_B = '550e8400-e29b-41d4-a716-446655440002';
 
-const row = (userId: string, userName: string) => ({
+const row = (userId: string, userName: string, role: 'admin' | 'member' = 'member') => ({
   userId,
   userName,
-  role: 'member' as const,
+  role,
   joinedAt: '2026-01-01T00:00:00Z',
   todayMalas: 3,
   todayCount: 2,
@@ -169,6 +169,32 @@ const extractText = (value: any): string => {
 const allText = (tree: any) =>
   tree.root.findAll((node: any) => node.type === 'Text').map((node: any) => extractText(node));
 
+const press = async (tree: any, label: string) => {
+  const button = tree.root.findAll(
+    (node: any) => node.type === 'Pressable' && node.findAll(
+      (child: any) => child.type === 'Text' && extractText(child) === label
+    ).length > 0
+  )[0];
+  expect(button).toBeDefined();
+  await act(async () => {
+    button.props.onPress();
+    await Promise.resolve();
+  });
+  await flush();
+};
+
+const pressByAccessibilityLabel = async (tree: any, label: string) => {
+  const button = tree.root.findAll(
+    (node: any) => node.type === 'Pressable' && node.props.accessibilityLabel === label
+  )[0];
+  expect(button).toBeDefined();
+  await act(async () => {
+    button.props.onPress();
+    await Promise.resolve();
+  });
+  await flush();
+};
+
 const createDeferred = <T,>() => {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((res) => {
@@ -188,6 +214,44 @@ beforeEach(async () => {
   mockCurrentJapamState = { currentJapamId: WORKSPACE_A };
   mockGetGroupDashboard.mockResolvedValue([row(`${UID}-b`, 'Person B')]);
   mockGetGroupInviteCode.mockResolvedValue('ABCDEFG');
+  mockDeleteGroup.mockResolvedValue({ kind: 'success' });
+  mockLeaveGroup.mockResolvedValue({ kind: 'success' });
+});
+
+describe('Groups dashboard leave and delete actions', () => {
+  it('lets the last admin delete the group and returns to Groups without using Leave', async () => {
+    mockGetGroupDashboard.mockResolvedValue([row(UID, 'Admin', 'admin')]);
+    const tree = await renderScreen();
+
+    await pressByAccessibilityLabel(tree, 'Open group admin menu');
+    await press(tree, 'Delete Group');
+
+    expect(allText(tree)).toContain('Delete group?');
+    expect(allText(tree)).not.toContain('Leave group?');
+    expect(allText(tree).join(' ')).toContain('Personal Japam history will stay safe.');
+
+    await press(tree, 'Delete');
+
+    expect(mockDeleteGroup).toHaveBeenCalledWith('group-1', UID);
+    expect(mockLeaveGroup).not.toHaveBeenCalled();
+    expect(mockReplace).toHaveBeenCalledWith('/groups');
+  });
+
+  it('opens Leave confirmation and invokes only the leave action', async () => {
+    mockGetGroupDashboard.mockResolvedValue([row(UID, 'Member')]);
+    const tree = await renderScreen();
+
+    await press(tree, 'Leave Group');
+
+    expect(allText(tree)).toContain('Leave group?');
+    expect(allText(tree)).not.toContain('Delete group?');
+
+    await press(tree, 'Leave');
+
+    expect(mockLeaveGroup).toHaveBeenCalledWith('group-1', UID);
+    expect(mockDeleteGroup).not.toHaveBeenCalled();
+    expect(mockReplace).toHaveBeenCalledWith('/groups');
+  });
 });
 
 describe('Groups dashboard workspace scope', () => {

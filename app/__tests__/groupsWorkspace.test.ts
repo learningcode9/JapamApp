@@ -297,7 +297,7 @@ describe('Groups workspace list', () => {
     });
     const nextTree = await renderScreen();
     expect(mockGetMyGroups).toHaveBeenCalledTimes(2);
-    expect(allText(nextTree).join(' ')).toContain('Family Japam Groups');
+    expect(allText(nextTree).join(' ')).toContain('Groups');
   });
 
   it('keeps the workspace shell visible during the initial load with no rows yet', async () => {
@@ -311,7 +311,7 @@ describe('Groups workspace list', () => {
     const tree = await renderScreen();
     const texts = allText(tree).join(' ');
 
-    expect(texts).toContain('Family Japam Groups');
+    expect(texts).toContain('Groups');
     expect(texts).toContain('Showing groups for: Gayatri');
     expect(texts).toContain('Create Group');
     expect(texts).toContain('Join Group');

@@ -96,6 +96,15 @@ describe('db/rls_hotfix_groups_rpc_auth.sql structural contract', () => {
     }
   );
 
+  it('delete_group deletes only the group record and never personal Japam history', () => {
+    const startIdx = active.search(/CREATE OR REPLACE FUNCTION public\.delete_group\(/);
+    const endIdx = active.indexOf('$function$;', startIdx);
+    const body = active.slice(startIdx, endIdx);
+
+    expect(body).toMatch(/delete from public\.groups\s+g/i);
+    expect(body).not.toMatch(/delete from public\.(history|japam|sessions|user)/i);
+  });
+
   it.each(HELPER_FUNCTIONS)('helper function %s is defined', (helperName) => {
     const pattern = new RegExp(`CREATE OR REPLACE FUNCTION public\\.${helperName}\\(`);
     expect(active).toMatch(pattern);

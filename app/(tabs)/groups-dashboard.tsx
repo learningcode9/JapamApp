@@ -111,11 +111,12 @@ export default function GroupsDashboardScreen() {
   const [removeError, setRemoveError] = useState('');
   const [removing, setRemoving] = useState(false);
 
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  // Delete and Leave are mutually exclusive actions. Keeping them in one state prevents a stale
+  // Leave modal from remaining mounted when an admin chooses Delete from the menu.
+  const [groupExitModal, setGroupExitModal] = useState<'delete' | 'leave' | null>(null);
   const [deleteError, setDeleteError] = useState('');
   const [deleting, setDeleting] = useState(false);
 
-  const [showLeaveModal, setShowLeaveModal] = useState(false);
   const [leaveError, setLeaveError] = useState('');
   const [leaving, setLeaving] = useState(false);
 
@@ -335,7 +336,12 @@ export default function GroupsDashboardScreen() {
   const openDeleteModal = () => {
     setDeleteError('');
     setShowAdminMenu(false);
-    setShowDeleteModal(true);
+    setGroupExitModal('delete');
+  };
+
+  const openLeaveModal = () => {
+    setLeaveError('');
+    setGroupExitModal('leave');
   };
 
   const handleDeleteGroup = async () => {
@@ -348,7 +354,7 @@ export default function GroupsDashboardScreen() {
       setDeleteError(outcome.message || 'Could not delete this group.');
       return;
     }
-    setShowDeleteModal(false);
+    setGroupExitModal(null);
     router.replace('/groups');
   };
 
@@ -366,7 +372,7 @@ export default function GroupsDashboardScreen() {
       }
       return;
     }
-    setShowLeaveModal(false);
+    setGroupExitModal(null);
     router.replace('/groups');
   };
 
@@ -499,10 +505,7 @@ export default function GroupsDashboardScreen() {
             </View>
             <Pressable
               style={styles.leaveGroupButton}
-              onPress={() => {
-                setLeaveError('');
-                setShowLeaveModal(true);
-              }}
+              onPress={openLeaveModal}
             >
               <Ionicons name="exit-outline" size={20} color="#b42318" />
               <Text style={styles.leaveGroupText}>Leave Group</Text>
@@ -594,7 +597,7 @@ export default function GroupsDashboardScreen() {
         </View>
       </Modal>
 
-      <Modal visible={showDeleteModal} transparent animationType="fade" onRequestClose={() => setShowDeleteModal(false)}>
+      <Modal visible={groupExitModal === 'delete'} transparent animationType="fade" onRequestClose={() => setGroupExitModal(null)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Delete group?</Text>
@@ -603,7 +606,7 @@ export default function GroupsDashboardScreen() {
             </Text>
             {deleteError ? <Text style={styles.modalError}>{deleteError}</Text> : null}
             <View style={styles.modalActions}>
-              <Pressable style={styles.modalSecondaryButton} onPress={() => setShowDeleteModal(false)} disabled={deleting}>
+              <Pressable style={styles.modalSecondaryButton} onPress={() => setGroupExitModal(null)} disabled={deleting}>
                 <Text style={styles.modalSecondaryText}>Cancel</Text>
               </Pressable>
               <Pressable style={styles.dangerButton} onPress={handleDeleteGroup} disabled={deleting}>
@@ -614,7 +617,7 @@ export default function GroupsDashboardScreen() {
         </View>
       </Modal>
 
-      <Modal visible={showLeaveModal} transparent animationType="fade" onRequestClose={() => setShowLeaveModal(false)}>
+      <Modal visible={groupExitModal === 'leave'} transparent animationType="fade" onRequestClose={() => setGroupExitModal(null)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Leave group?</Text>
@@ -623,7 +626,7 @@ export default function GroupsDashboardScreen() {
             </Text>
             {leaveError ? <Text style={styles.modalError}>{leaveError}</Text> : null}
             <View style={styles.modalActions}>
-              <Pressable style={styles.modalSecondaryButton} onPress={() => setShowLeaveModal(false)} disabled={leaving}>
+              <Pressable style={styles.modalSecondaryButton} onPress={() => setGroupExitModal(null)} disabled={leaving}>
                 <Text style={styles.modalSecondaryText}>Cancel</Text>
               </Pressable>
               <Pressable style={styles.dangerButton} onPress={handleLeaveGroup} disabled={leaving}>

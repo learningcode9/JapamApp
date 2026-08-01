@@ -261,7 +261,7 @@ export default function GroupsScreen() {
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.header}>Family Japam Groups</Text>
+        <Text style={styles.header}>Groups</Text>
 
         <View style={styles.workspaceBanner}>
           <Ionicons name="layers-outline" size={16} color={TEAL} />
