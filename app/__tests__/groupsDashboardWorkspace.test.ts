@@ -17,6 +17,8 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 
 const mockListeners = new Map<string, Set<(...args: unknown[]) => void>>();
 const mockReplace = jest.fn();
+let mockIsFocused = true;
+let mockPathname = '/groups-dashboard';
 
 jest.mock('react-native', () => {
   const React = require('react');
@@ -68,6 +70,7 @@ jest.mock('expo-router', () => {
   return {
     useRouter: () => ({ back: jest.fn(), replace: mockReplace }),
     useLocalSearchParams: () => ({ groupId: 'group-1', groupName: 'Family' }),
+    usePathname: () => mockPathname,
     useFocusEffect: (callback: () => void | (() => void)) => {
       React.useEffect(() => {
         const cleanup = callback();
@@ -76,6 +79,10 @@ jest.mock('expo-router', () => {
     },
   };
 });
+
+jest.mock('@react-navigation/native', () => ({
+  useIsFocused: () => mockIsFocused,
+}));
 
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
@@ -206,6 +213,8 @@ const createDeferred = <T,>() => {
 beforeEach(async () => {
   mockListeners.clear();
   jest.clearAllMocks();
+  mockIsFocused = true;
+  mockPathname = '/groups-dashboard';
   // The dashboard's 12s polling interval would otherwise keep the Node event loop alive.
   jest.spyOn(global, 'setInterval').mockImplementation(() => 1 as any);
   jest.spyOn(global, 'clearInterval').mockImplementation(() => undefined);
@@ -282,6 +291,19 @@ describe('Groups dashboard workspace scope', () => {
     await updateTree(tree);
 
     expect(mockReplace).toHaveBeenCalledWith('/groups');
+  });
+
+  it('does not replace History when the dashboard is unfocused during a workspace switch', async () => {
+    const tree = await renderScreen();
+    expect(mockReplace).not.toHaveBeenCalled();
+
+    // The dashboard remains mounted in the tab navigator, but History is now the focused route.
+    mockIsFocused = false;
+    mockPathname = '/history';
+    mockCurrentJapamState = { currentJapamId: WORKSPACE_B };
+    await updateTree(tree);
+
+    expect(mockReplace).not.toHaveBeenCalled();
   });
 
   it('never paints a slow prior-workspace response into the new workspace', async () => {

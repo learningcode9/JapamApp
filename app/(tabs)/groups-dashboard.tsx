@@ -1,7 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useIsFocused } from '@react-navigation/native';
+import { useFocusEffect, useLocalSearchParams, usePathname, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -87,6 +88,8 @@ export default function GroupsDashboardScreen() {
     : Math.max(22, insets.bottom + 14));
 
   const router = useRouter();
+  const isFocused = useIsFocused();
+  const pathname = usePathname();
   const { currentJapamId } = useCurrentJapam();
   const params = useLocalSearchParams<{ groupId?: string; groupName?: string }>();
   const groupId = params.groupId || '';
@@ -132,6 +135,11 @@ export default function GroupsDashboardScreen() {
   // paint Workspace-A rows into Workspace-B state.
   const requestJapamRef = useRef<string | null>(null);
   const currentJapamIdRef = useRef<string | null>(currentJapamId);
+  // Async dashboard loads can finish after this screen blurs to another tab. Keep the latest
+  // focus/path state in a ref so their mismatch callback can never replace the route that is now
+  // active (especially /history) with /groups.
+  const dashboardRouteStateRef = useRef({ isFocused, pathname });
+  dashboardRouteStateRef.current = { isFocused, pathname };
   // The Japam this dashboard is currently scoped to (set once a load has successfully rendered
   // that workspace's roster). While it is null (nothing loaded yet) no navigation happens.
   const loadedForJapamRef = useRef<string | null>(null);
@@ -147,6 +155,8 @@ export default function GroupsDashboardScreen() {
   // and an in-flight request, and is run from both the effect below and the end of every load, so
   // a switch at any moment (including mid-flight) navigates away rather than leaving a spinner.
   const leaveIfWorkspaceMismatch = useCallback(() => {
+    const { isFocused: routeIsFocused, pathname: activePathname } = dashboardRouteStateRef.current;
+    if (!routeIsFocused || activePathname !== '/groups-dashboard') return;
     const scopedFor = loadedForJapamRef.current ?? requestJapamRef.current;
     if (scopedFor !== null && currentJapamIdRef.current !== scopedFor) {
       router.replace('/groups');
@@ -155,7 +165,7 @@ export default function GroupsDashboardScreen() {
 
   useEffect(() => {
     leaveIfWorkspaceMismatch();
-  }, [currentJapamId, leaveIfWorkspaceMismatch]);
+  }, [currentJapamId, isFocused, pathname, leaveIfWorkspaceMismatch]);
 
   useEffect(() => {
     setDisplayGroupName(groupName);
