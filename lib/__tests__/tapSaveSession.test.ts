@@ -20,6 +20,13 @@ jest.mock('../supabase', () => ({
     },
     from: jest.fn(() => ({
       upsert: jest.fn().mockResolvedValue({ error: null }),
+      select: jest.fn(() => ({
+        eq: jest.fn(() => ({
+          order: jest.fn().mockResolvedValue({ data: [], error: null }),
+          single: jest.fn().mockResolvedValue({ data: null, error: null }),
+          maybeSingle: jest.fn().mockResolvedValue({ data: null, error: null }),
+        })),
+      })),
     })),
   },
 }));

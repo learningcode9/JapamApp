@@ -260,6 +260,16 @@ describe('ensureJapamSyncedForHistory', () => {
     expect(mockUpsert).not.toHaveBeenCalled();
   });
 
+  it('fails closed when remote tombstone fetch is unavailable', async () => {
+    const japam = makeJapam({ id: 'tombstone-fetch-failure', name: 'Tombstone Failure' });
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([japam]));
+    mockRemoteDeletedJapams([], { code: '500', message: 'outage' });
+
+    await expect(syncJapam(UID, japam)).resolves.toBe(false);
+    await expect(ensureJapamSyncedForHistory(UID, japam.id)).resolves.toBe(false);
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
   it('keeps history pending on an initial Japam sync failure and allows a later retry', async () => {
     const japam = makeJapam({ id: 'retry-japam', name: 'Retry Japam' });
     await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([japam]));
@@ -340,6 +350,28 @@ describe('ensureDefaultJapam', () => {
     expect(await loadJapams(UID)).toEqual([]);
   });
 
+  it('does not create a default while deleted_japams fetch is unavailable, then still refuses a tombstoned default on retry', async () => {
+    const tombstonedDefaultId = uuidV5(`${UID}:default-japam`, DEFAULT_JAPAM_UUID_NAMESPACE);
+
+    mockRemoteJapams([]);
+    mockRemoteDeletedJapams([], { code: '500', message: 'Temporary outage' });
+    const first = await ensureDefaultJapam(UID);
+
+    expect(first.japams).toEqual([]);
+    expect(first.currentJapamId).toBeNull();
+    expect(first.created).toBeNull();
+    expect(mockUpsert).not.toHaveBeenCalled();
+
+    mockRemoteJapams([]);
+    mockRemoteDeletedJapams([{ japam_id: tombstonedDefaultId }]);
+    const second = await ensureDefaultJapam(UID);
+
+    expect(second.japams).toEqual([]);
+    expect(second.currentJapamId).toBeNull();
+    expect(second.created).toBeNull();
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
   it('repairs a persisted tombstoned current Japam to the sole active remote Japam', async () => {
     const archivedCurrent = makeRemoteJapam({
       id: '11111111-1111-4111-8111-111111111111',
@@ -379,6 +411,19 @@ describe('ensureDefaultJapam', () => {
     expect(result.created).toBeNull();
     expect(mockUpsert).not.toHaveBeenCalled();
     expect(await loadJapams(UID)).toEqual([]);
+  });
+
+  it('genuine new user still gets exactly one default when tombstones are known', async () => {
+    mockRemoteJapams([]);
+    mockRemoteDeletedJapams([]);
+
+    const result = await ensureDefaultJapam(UID);
+    await flushMicrotasks();
+
+    expect(result.created).not.toBeNull();
+    expect(result.japams).toHaveLength(1);
+    expect(result.currentJapamId).toBe(result.created!.id);
+    expect(mockUpsert).toHaveBeenCalledTimes(1);
   });
 
   it('a later refresh retries successfully after a remote failure', async () => {

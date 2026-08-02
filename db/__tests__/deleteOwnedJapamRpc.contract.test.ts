@@ -18,9 +18,11 @@ describe('db/delete_owned_japam_rpc.sql contract', () => {
     expect(sql).toMatch(/security definer/i);
     expect(sql).toMatch(/set search_path = public/i);
     expect(sql).toMatch(/auth\.uid\(\)::text/);
+    expect(sql).toMatch(/auth\.jwt\(\)->'user_metadata'->>'sub'/i);
+    expect(sql).toMatch(/where id = p_japam_id\s+and \(user_id = v_uid or user_id = v_legacy_uid\)/i);
     expect(sql).toMatch(/insert into public\.deleted_japams/i);
     expect(sql).toMatch(/on conflict \(japam_id\) do nothing/i);
-    expect(sql).toMatch(/select id into v_deleted_id/i);
+    expect(sql).toMatch(/select id, user_id into v_deleted_id, v_deleted_owner_id/i);
     expect(sql).toMatch(/get diagnostics v_row_count = row_count/i);
     expect(sql).toMatch(/raise exception 'delete_owned_japam failed to delete exactly one owned Japam'/i);
   });

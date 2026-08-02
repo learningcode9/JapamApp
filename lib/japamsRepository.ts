@@ -188,6 +188,18 @@ const loadMergedDeletedJapams = async (userId: string | null | undefined): Promi
   return new Set(merged);
 };
 
+const loadAuthoritativeDeletedJapams = async (userId: string | null | undefined): Promise<Set<string> | null> => {
+  if (!userId) return new Set();
+  const local = await loadDeletedJapamsFromStorage(userId);
+  const remote = await fetchRemoteDeletedJapams(userId);
+  if (remote === null) return null;
+  const merged = mergeTombstones(local, remote);
+  if (merged.length !== local.length) {
+    await saveDeletedJapamsToStorage(userId, merged);
+  }
+  return new Set(merged);
+};
+
 const deleteRemoteJapam = async (japamId: string): Promise<boolean> => {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -273,7 +285,7 @@ const syncLoop = async (userId: string, japamId: string): Promise<void> => {
 
 export const loadJapams = (userId: string | null | undefined): Promise<Japam[]> =>
   Promise.all([loadJapamsFromStorage(userId), loadMergedDeletedJapams(userId)]).then(([japams, tombstones]) =>
-    applyJapamTombstones(japams, tombstones),
+    applyJapamTombstones(japams, tombstones ?? new Set()),
   );
 
 export const saveJapams = (userId: string | null | undefined, japams: Japam[]): Promise<void> =>
@@ -302,7 +314,10 @@ const ensureDefaultJapamInternal = async (
 ): Promise<{ japams: Japam[]; currentJapamId: string | null; created: Japam | null }> => {
   const local = await loadJapamsFromStorage(userId);
   const remote = await fetchRemoteJapams(userId);
-  const tombstones = await loadMergedDeletedJapams(userId);
+  const tombstones = await loadAuthoritativeDeletedJapams(userId);
+  if (tombstones === null) {
+    return { japams: local, currentJapamId: null, created: null };
+  }
   const merged = applyJapamTombstones(remote === null ? local : mergeJapamsById(local, remote), tombstones);
   await saveJapamsToStorage(userId, merged);
 
@@ -485,6 +500,9 @@ export const syncJapam = async (
   }
 
   const remoteTombstones = await fetchRemoteDeletedJapams(userId);
+  if (remoteTombstones === null) {
+    return false;
+  }
   if (remoteTombstones?.includes(japam.id)) {
     const merged = mergeTombstones(localTombstones, remoteTombstones);
     await saveDeletedJapamsToStorage(userId, merged);
@@ -543,7 +561,8 @@ export const ensureJapamSyncedForHistory = async (
   japamId: string | null | undefined,
 ): Promise<boolean> => {
   if (!userId || !japamId) return false;
-  const tombstones = await loadMergedDeletedJapams(userId);
+  const tombstones = await loadAuthoritativeDeletedJapams(userId);
+  if (tombstones === null) return false;
   if (tombstones.has(japamId)) return false;
   const japams = await loadJapamsFromStorage(userId);
   const japam = japams.find((j) => j.id === japamId);
