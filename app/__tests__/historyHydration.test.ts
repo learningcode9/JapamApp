@@ -286,6 +286,12 @@ const getRefreshControl = (tree: any) => {
   return scrollView.props.refreshControl;
 };
 
+const countEditButtons = (tree: any) =>
+  tree.root
+    .findAll((node: any) => node.type === 'Pressable' && typeof node.props?.accessibilityLabel === 'string')
+    .filter((node: any) => String(node.props.accessibilityLabel).startsWith('Edit '))
+    .length;
+
 const updateTree = async (tree: any) => {
   await act(async () => {
     tree.update(React.createElement(HistoryScreen));
@@ -555,7 +561,44 @@ describe('HistoryScreen auth/current-Japam hydration regression', () => {
     });
     await updateTree(tree);
     expectSummary(tree, 1, 108);
-    expectSummary(tree, 1, 108);
     expect(allText(tree)).not.toContain('📿 Total Malas: 2');
+    expect(allText(tree)).not.toContain('Loading history...');
+  });
+
+  it('renders only the current user rows and never the guest or other-user rows', async () => {
+    const persisted = JSON.parse((await AsyncStorage.getItem(HISTORY_KEY)) || '[]') as Record<string, unknown>[];
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([
+      ...persisted,
+      {
+        date: '2026-07-28T10:00:00.000Z',
+        malas: 4,
+        totalCount: 432,
+        duration: 0,
+        manual: false,
+        userId: null,
+        userName: 'Guest',
+        completionId: 'guest-1',
+        syncStatus: 'synced',
+        japamId: JAPAM_ID,
+        japamName: JAPAM_NAME,
+      },
+      {
+        date: '2026-07-27T10:00:00.000Z',
+        malas: 5,
+        totalCount: 540,
+        duration: 0,
+        manual: false,
+        userId: 'other-user',
+        userName: 'Other User',
+        completionId: 'other-1',
+        syncStatus: 'synced',
+        japamId: JAPAM_ID,
+        japamName: JAPAM_NAME,
+      },
+    ]));
+
+    const tree = await renderScreen();
+    expectSummary(tree, 2, 216);
+    expect(countEditButtons(tree)).toBe(1);
   });
 });

@@ -29,6 +29,10 @@ import {
   japamStatsFor as japamStatsForSelector,
   filterByJapam,
   toLocalDayKey,
+  applyTombstones,
+  dedupeByCompletionId,
+  mergeHistories,
+  mergeTombstones,
   type HistoryRecord,
   type JapamAttributionInput,
   type RawHistoryRecord,
@@ -48,6 +52,31 @@ export type { JapamStats };
 export const japamStatsFor = japamStatsForSelector;
 
 const HISTORY_KEY = 'history';
+const DELETED_COMPLETIONS_KEY = 'deletedCompletions';
+
+type RemoteHydrationSnapshot = {
+  history: HistoryRecord[];
+  tombstones: string[];
+};
+
+export type HydratedHistoryResult = {
+  records: HistoryRecord[];
+  hydrationSucceeded: boolean;
+  localRecordCount: number;
+  hadLocalTombstones: boolean;
+  scopedLocalTombstoneApplied: boolean;
+  localStateAuthoritativelyChanged: boolean;
+};
+
+const hydratedHistoryInFlight = new Map<string, Promise<RemoteHydrationSnapshot | null>>();
+const hydratedRemoteSnapshotCache = new Map<string, RemoteHydrationSnapshot>();
+const hydratedScopedLocalBaselineCache = new Map<string, string>();
+
+export const __resetHistoryHydrationState = () => {
+  hydratedHistoryInFlight.clear();
+  hydratedRemoteSnapshotCache.clear();
+  hydratedScopedLocalBaselineCache.clear();
+};
 
 const getLocalDateKey = (date = new Date()) => {
   const y = date.getFullYear();
@@ -74,6 +103,251 @@ export const loadHistoryForUser = async (
 ): Promise<HistoryRecord[]> => {
   const all = await loadHistory();
   return all.filter((r) => (userId ? r.userId === userId : !r.userId));
+};
+
+const loadDeletedCompletionTombstones = async (): Promise<string[]> => {
+  try {
+    const raw = await AsyncStorage.getItem(DELETED_COMPLETIONS_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.map((id) => String(id)).filter((id) => id.length > 0) : [];
+  } catch {
+    return [];
+  }
+};
+
+const getHydrationCacheKey = (userId: string, legacyUserId?: string | null) => `${userId}|${legacyUserId ?? ''}`;
+
+const canonicalizeUserHistory = (records: HistoryRecord[], userId: string): HistoryRecord[] =>
+  records.map((record) => ({ ...record, userId }));
+
+const scopedHistorySignature = (records: HistoryRecord[], scopedLocalTombstoneApplied: boolean): string => JSON.stringify({
+  applied: scopedLocalTombstoneApplied,
+  records: records.map((record) => ({
+    completionId: record.completionId,
+    date: record.date,
+    malas: record.malas,
+    totalCount: record.totalCount,
+    japamId: record.japamId ?? null,
+  })),
+});
+
+const authoritativeScopedHistorySignature = (records: HistoryRecord[], scopedLocalTombstoneApplied: boolean): string =>
+  scopedHistorySignature(
+    records.filter((record) => record.syncStatus !== 'pending'),
+    scopedLocalTombstoneApplied,
+  );
+
+const replaceScopedHistory = (
+  allHistory: HistoryRecord[],
+  scopedHistory: HistoryRecord[],
+  matchesUser: (record: HistoryRecord) => boolean,
+): HistoryRecord[] => {
+  const replacement = scopedHistory.slice();
+  const result: HistoryRecord[] = [];
+  let inserted = false;
+
+  for (const record of allHistory) {
+    if (matchesUser(record)) {
+      if (!inserted) {
+        result.push(...replacement);
+        inserted = true;
+      }
+      continue;
+    }
+    result.push(record);
+  }
+
+  if (!inserted) result.push(...replacement);
+  return result;
+};
+
+const fetchRemoteHistoryForUser = async (
+  userId: string,
+  legacyUserId?: string | null,
+): Promise<HistoryRecord[] | null> => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { fetchJapamHistoryRows } = require('./supabaseRestHelper') as typeof import('./supabaseRestHelper');
+    const select = 'id,created_at,malas,count,user_name,completion_id,japam_id,japam_name';
+    const order = { column: 'created_at', ascending: true } as const;
+    const primary = await fetchJapamHistoryRows({ select, userId, order });
+    if (primary === null) return null;
+    const primaryRecords = (primary as RemoteLegacyHistoryRow[]).map((row) => remoteRowToHistoryRecord(row, userId));
+    if (!legacyUserId || legacyUserId === userId) {
+      return primaryRecords;
+    }
+    const legacyRows = await fetchJapamHistoryRows({ select, userId: legacyUserId, order });
+    if (legacyRows === null) return null;
+    return [
+      ...primaryRecords,
+      ...(legacyRows as RemoteLegacyHistoryRow[]).map((row) => remoteRowToHistoryRecord(row, userId)),
+    ];
+  } catch {
+    return null;
+  }
+};
+
+const fetchRemoteDeletedCompletions = async (
+  userId: string,
+  legacyUserId?: string | null,
+): Promise<string[] | null> => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { supabase } = require('./supabase') as typeof import('./supabase');
+    const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
+    if (!sessionToken) return null;
+
+    const fetchFor = async (uid: string): Promise<string[] | null> => {
+      const { data, error } = await supabase
+        .from('deleted_completions')
+        .select('completion_id')
+        .eq('user_id', uid);
+
+      if (error || !data) return null;
+      return (data as Array<{ completion_id?: unknown }>)
+        .map((row) => String(row.completion_id))
+        .filter((id) => id.length > 0);
+    };
+
+    const primary = await fetchFor(userId);
+    if (primary === null) return null;
+    if (!legacyUserId || legacyUserId === userId) {
+      return primary;
+    }
+    const legacy = await fetchFor(legacyUserId);
+    if (legacy === null) return null;
+    return mergeTombstones(primary, legacy);
+  } catch {
+    return null;
+  }
+};
+
+const fetchRemoteHydrationSnapshot = async (
+  userId: string,
+  legacyUserId?: string | null,
+  force = false,
+): Promise<RemoteHydrationSnapshot | null> => {
+  const cacheKey = getHydrationCacheKey(userId, legacyUserId);
+  if (!force) {
+    const cached = hydratedRemoteSnapshotCache.get(cacheKey);
+    if (cached) return cached;
+  }
+
+  const existing = hydratedHistoryInFlight.get(cacheKey);
+  if (existing) return existing;
+
+  const task = (async () => {
+    const remoteHistory = await fetchRemoteHistoryForUser(userId, legacyUserId);
+    const remoteTombstones = await fetchRemoteDeletedCompletions(userId, legacyUserId);
+    if (remoteHistory === null || remoteTombstones === null) return null;
+
+    const snapshot = { history: remoteHistory, tombstones: remoteTombstones };
+    hydratedRemoteSnapshotCache.set(cacheKey, snapshot);
+    return snapshot;
+  })();
+
+  hydratedHistoryInFlight.set(cacheKey, task);
+  try {
+    return await task;
+  } finally {
+    hydratedHistoryInFlight.delete(cacheKey);
+  }
+};
+
+export const hydrateHistoryForUserDetails = async (
+  userId: string | null | undefined,
+  legacyUserId?: string | null,
+  options: { force?: boolean } = {},
+): Promise<HydratedHistoryResult> => {
+  if (!userId) {
+    const guestHistory = await loadHistoryForUser(userId);
+    return {
+      records: guestHistory,
+      hydrationSucceeded: true,
+      localRecordCount: guestHistory.length,
+      hadLocalTombstones: false,
+      scopedLocalTombstoneApplied: false,
+      localStateAuthoritativelyChanged: false,
+    };
+  }
+
+  const allLocalHistory = await loadHistory();
+  const localTombstones = await loadDeletedCompletionTombstones();
+  const matchesIdentity = (record: HistoryRecord) => (
+    record.userId === userId || (legacyUserId != null && record.userId === legacyUserId)
+  );
+  const localScopedRaw = allLocalHistory.filter(matchesIdentity);
+  const scopedCompletionIds = new Set(localScopedRaw.map((record) => record.completionId));
+  const scopedLocalTombstones = localTombstones.filter((id) => scopedCompletionIds.has(id));
+  const localScoped = applyTombstones(localScopedRaw, scopedLocalTombstones);
+  const scopedLocalTombstoneApplied = scopedLocalTombstones.length > 0;
+  const cacheKey = getHydrationCacheKey(userId, legacyUserId);
+  const localScopedRecords = canonicalizeUserHistory(dedupeByCompletionId(localScoped), userId);
+  const currentScopedSignature = scopedHistorySignature(localScopedRecords, scopedLocalTombstoneApplied);
+  const previousScopedSignature = hydratedScopedLocalBaselineCache.get(cacheKey);
+  const localStateAuthoritativelyChanged = previousScopedSignature !== undefined
+    ? previousScopedSignature !== currentScopedSignature
+    : false;
+  if (previousScopedSignature === undefined) {
+    hydratedScopedLocalBaselineCache.set(cacheKey, authoritativeScopedHistorySignature(localScopedRecords, scopedLocalTombstoneApplied));
+  }
+  const remoteSnapshot = await fetchRemoteHydrationSnapshot(userId, legacyUserId, options.force);
+
+  if (remoteSnapshot === null) {
+    const scopedRecords = localScopedRecords;
+    const mergedLocal = replaceScopedHistory(allLocalHistory, scopedRecords, matchesIdentity);
+    if (JSON.stringify(mergedLocal) !== JSON.stringify(allLocalHistory)) {
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedLocal));
+    }
+    return {
+      records: scopedRecords,
+      hydrationSucceeded: false,
+      localRecordCount: scopedRecords.length,
+      hadLocalTombstones: localTombstones.length > 0,
+      scopedLocalTombstoneApplied,
+      localStateAuthoritativelyChanged,
+    };
+  }
+
+  const mergedTombstones = mergeTombstones(localTombstones, remoteSnapshot.tombstones);
+  const mergedScoped = canonicalizeUserHistory(
+    applyTombstones(
+      mergeHistories(localScoped, remoteSnapshot.history),
+      mergedTombstones,
+    ),
+    userId,
+  );
+  const mergedHistory = replaceScopedHistory(allLocalHistory, mergedScoped, matchesIdentity);
+
+  if (JSON.stringify(mergedHistory) !== JSON.stringify(allLocalHistory)) {
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
+  }
+  if (JSON.stringify(mergedTombstones) !== JSON.stringify(localTombstones)) {
+    await AsyncStorage.setItem(DELETED_COMPLETIONS_KEY, JSON.stringify(mergedTombstones));
+  }
+
+  hydratedScopedLocalBaselineCache.set(
+    cacheKey,
+    authoritativeScopedHistorySignature(mergedScoped, scopedLocalTombstoneApplied),
+  );
+
+  return {
+    records: mergedScoped,
+    hydrationSucceeded: true,
+    localRecordCount: mergedScoped.length,
+    hadLocalTombstones: mergedTombstones.length > 0,
+    scopedLocalTombstoneApplied,
+    localStateAuthoritativelyChanged,
+  };
+};
+
+export const hydrateHistoryForUser = async (
+  userId: string | null | undefined,
+  legacyUserId?: string | null,
+  options: { force?: boolean } = {},
+): Promise<HistoryRecord[]> => {
+  const hydrated = await hydrateHistoryForUserDetails(userId, legacyUserId, options);
+  return hydrated.records;
 };
 
 /**
@@ -163,7 +437,7 @@ type RemoteLegacyHistoryRow = {
   japam_name?: string | null;
 };
 
-const remoteRowToHistoryRecord = (row: RemoteLegacyHistoryRow, userId: string): HistoryRecord => {
+function remoteRowToHistoryRecord(row: RemoteLegacyHistoryRow, userId: string): HistoryRecord {
   const malas = Number(row.malas) || 0;
   const totalCount = Number(row.count) || malas * 108;
   const date = row.created_at || new Date().toISOString();
@@ -181,7 +455,7 @@ const remoteRowToHistoryRecord = (row: RemoteLegacyHistoryRow, userId: string): 
     japamId: row.japam_id ?? null,
     japamName: row.japam_name ?? null,
   };
-};
+}
 
 // The backfill is allowed to change only Japam attribution. Keep a stable snapshot of every
 // other History field so a user edit that lands while the remote PATCH loop is running remains

@@ -5,9 +5,7 @@ import {
   buildSupabaseHistoryPayload,
   dedupeByCompletionId,
   filterByJapam,
-  makeCompletionId,
   markSynced,
-  mergeHistories,
   mergeTombstones,
   normalizeAll,
   planHistoryDayAdjustment,
@@ -18,6 +16,7 @@ import { useCurrentJapam } from '../../contexts/current-japam-context';
 import CurrentJapamHeaderButton from '../../components/CurrentJapamHeaderButton';
 import { activeJapams } from '../../lib/japams';
 import { ensureJapamSyncedForHistory } from '../../lib/japamsRepository';
+import { hydrateHistoryForUserDetails } from '../../lib/historyRepository';
 import { repairLegacyStoredUserId, LEGACY_USER_ID_KEY } from '../../lib/anonymousAuth';
 import { supabase } from '../../lib/supabase';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -114,18 +113,6 @@ type DailyRow = {
   manualCount: number;
   autoCount: number;
   completionIds: string[];
-};
-
-type RemoteHistoryRow = {
-  id?: number | string;
-  created_at?: string;
-  malas?: number | string;
-  count?: number | string;
-  user_name?: string;
-  user_email?: string;
-  completion_id?: string;
-  japam_id?: string | null;
-  japam_name?: string | null;
 };
 
 type ManualSyncInput = {
@@ -329,78 +316,6 @@ const buildDailyRows = (sessions: Session[]) => {
   });
 
   return rowsWithAccumulated.reverse();
-};
-
-// TEMPORARY BRIDGE — the legacyUserId parameter and the second fetchBy call below exist only to
-// bridge users whose old numeric-Google-ID rows haven't been migrated to their Supabase UUID yet.
-// Remove legacyUserId support here (and its call site in loadHistory) once
-// db/migrate_numeric_user_ids_to_uuid.sql has been run and its post-verification query confirms
-// zero mappable numeric-id rows remain.
-let fetchRemoteSessionsInFlight = false;
-
-const fetchRemoteSessions = async (userId: string, legacyUserId?: string | null): Promise<Session[] | null> => {
-  if (!userId || fetchRemoteSessionsInFlight) return null;
-
-  const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
-  if (!sessionToken) return null;
-
-  fetchRemoteSessionsInFlight = true;
-  try {
-    // taggedUserId lets a legacy-id query's rows be tagged as belonging to the canonical UUID, so
-    // they merge/display/reconcile identically to rows fetched by the UUID itself.
-    const fetchBy = async (field: 'user_id' | 'user_name', value: string, taggedUserId: string) => {
-      const { data: rows, error } = await supabase
-        .from('japam_history')
-        .select('id,created_at,malas,count,user_name,completion_id,japam_id,japam_name')
-        .eq(field, value)
-        .order('created_at', { ascending: true })
-        .limit(10000);
-
-      if (error || !rows) {
-        console.log('Supabase history fetch error:', error);
-        return null;
-      }
-
-      return rows.map((row: RemoteHistoryRow) => {
-        const malas = Number(row.malas) || 0;
-        const totalCount = Number(row.count) || malas * 108;
-
-        return {
-          date: row.created_at || new Date().toISOString(),
-          malas: malas || Math.floor(totalCount / 108),
-          totalCount,
-          duration: 0,
-          manual: false,
-          userId: taggedUserId,
-          userName: row.user_name || undefined,
-          remoteId: row.id,
-          completionId: row.completion_id || makeCompletionId(taggedUserId, row.created_at || new Date().toISOString()),
-          syncStatus: 'synced' as const,
-          japamId: row.japam_id ?? null,
-          japamName: row.japam_name ?? null,
-        };
-      });
-    };
-
-    const primary = await fetchBy('user_id', userId, userId);
-    if (primary === null) return null;
-
-    if (legacyUserId && legacyUserId !== userId) {
-      const legacyRows = await fetchBy('user_id', legacyUserId, userId);
-      console.log(
-        '[DUAL_FETCH_BRIDGE] canonicalUserId=%s legacyUserId=%s primaryCount=%d legacyCount=%d',
-        userId, legacyUserId, primary.length, legacyRows?.length ?? 0
-      );
-      if (legacyRows && legacyRows.length > 0) return [...primary, ...legacyRows];
-    }
-
-    return primary;
-  } catch (error) {
-    console.log('Supabase history fetch error:', error);
-    return null;
-  } finally {
-    fetchRemoteSessionsInFlight = false;
-  }
 };
 
 const saveToSupabase = async (
@@ -883,7 +798,7 @@ export default function HistoryScreen() {
       }
 
       setShowAddModal(false);
-      await loadHistory();
+      await loadHistory({ force: true });
 
       DeviceEventEmitter.emit('japam-stats-updated');
       DeviceEventEmitter.emit('japam-history-updated', { userId: currentUserId });
@@ -906,7 +821,7 @@ export default function HistoryScreen() {
     }
   };
 
-  const loadHistory = useCallback(async () => {
+  const loadHistory = useCallback(async ({ force = false }: { force?: boolean } = {}) => {
     console.log('[LOCAL_FIX_BUILD_MARKER] history-table-v3 edit-confirm-v1');
     const requestGeneration = latestRequestRef.current.generation + 1;
     latestRequestRef.current = { generation: requestGeneration, scopeKey: `pending:${requestGeneration}` };
@@ -981,68 +896,39 @@ export default function HistoryScreen() {
     const matchesUser = (item: Session) =>
       (item.userId || null) === (currentUserId || null) && !isTombstoned(item);
 
-    let sessions = dedupeSessions(cleanedSessions.filter(matchesUser));
-
-    if (!isCurrentRequest(requestGeneration, scopeKey)) return;
-    setDailyRows(buildScopedRows(sessions, currentJapamId, currentJapamName));
-    setHistoryScopeState('ready');
-    latestAppliedScopeKeyRef.current = scopeKey;
-
-    // TEMPORARY BRIDGE: dual-fetch by legacy numeric id too — see fetchRemoteSessions's header
-    // comment and db/migrate_numeric_user_ids_to_uuid.sql for the removal trigger.
     const legacyUserId = await AsyncStorage.getItem(LEGACY_USER_ID_KEY);
     if (!isCurrentRequest(requestGeneration, scopeKey)) return;
-    const remoteSessions = currentUserId ? await fetchRemoteSessions(currentUserId, legacyUserId) : null;
+    const hydratedSessions = currentUserId
+      ? await hydrateHistoryForUserDetails(currentUserId, legacyUserId, { force })
+      : null;
     if (!isCurrentRequest(requestGeneration, scopeKey)) return;
 
-    if (remoteSessions !== null) {
-      const filteredRemoteSessions = remoteSessions.filter((item) => {
+    const localSessions = dedupeSessions(cleanedSessions.filter(matchesUser));
+    const sessions = hydratedSessions
+      ? dedupeSessions(hydratedSessions.records.filter((item) => {
         const dayKey = toDayKey(item.date);
         return dayKey === 'unknown' || dayKey <= todayKey;
-      });
+      })).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      : localSessions.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-      const latestRaw = await AsyncStorage.getItem('history');
-      const latestSessions = parseHistory(latestRaw);
-      const latestCleanedSessions = latestSessions.filter((item) => {
-        const dayKey = toDayKey(item.date);
-        return dayKey === 'unknown' || dayKey <= todayKey;
-      });
-      const mergedHistory = mergeHistories(latestCleanedSessions, filteredRemoteSessions);
-      // Honor tombstones on the merged result so a remote row that hasn't been deleted yet (or a
-      // remote delete still in flight) does NOT resurrect a locally-deleted record.
-      const tombFiltered = mergedHistory.filter((item) => !isTombstoned(item as Session));
-      const removedByTomb = mergedHistory.length - tombFiltered.length;
-      if (removedByTomb > 0) {
-        console.log('[TOMBSTONE_APPLIED] screen=history removed=%d', removedByTomb);
-      }
-      // Non-destructive reconcile: persist the merge of local + remote (first-local-wins by
-      // completionId) with tombstones already honored. A remotely-synced completion whose id is
-      // transiently absent from a stale fetch must NOT be pruned here — that would erase today's
-      // just-uploaded Timer completion and corrupt Day Streak until a later, consistent fetch.
-      // Cross-device deletes flow exclusively through the explicit `deletedCompletions` tombstone
-      // set (honor'd above as tombFiltered), so no remote-id-based prune is safe on read paths.
-      // Mirrors Timer's loadStats (PR #53) and the mergeHistories "never drops a local record"
-      // invariant in lib/historyStore.ts.
-      const mergedForStorage = tombFiltered;
-      sessions = dedupeSessions(mergedForStorage.filter((item) => (item.userId || null) === (currentUserId || null))).sort(
-        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-      );
+    if (scopeChanged && localSessions.length > 0) {
       if (!isCurrentRequest(requestGeneration, scopeKey)) return;
-      await AsyncStorage.setItem('history', JSON.stringify(mergedForStorage));
-      if (!isCurrentRequest(requestGeneration, scopeKey)) return;
-      console.log('[RESTORE_REMOTE_COUNT] screen=history count=%d', filteredRemoteSessions.length);
-      console.log(
-        '[MERGE_LOCAL_COUNT_BEFORE] screen=history count=%d pending=%d',
-        latestCleanedSessions.length,
-        latestCleanedSessions.filter((item) => (item.userId || null) === (currentUserId || null) && item.syncStatus === 'pending').length
-      );
-      console.log('[MERGE_LOCAL_COUNT_AFTER] screen=history count=%d', mergedForStorage.length);
+      setDailyRows(buildScopedRows(localSessions, currentJapamId, currentJapamName));
+      setHistoryScopeState('ready');
+      latestAppliedScopeKeyRef.current = scopeKey;
+    }
+
+    if (hydratedSessions && !hydratedSessions.hydrationSucceeded && shouldPreserveVisibleRows && !hydratedSessions.localStateAuthoritativelyChanged) {
+      return;
+    }
+
+    if (hydratedSessions?.hydrationSucceeded) {
+      console.log('[RESTORE_REMOTE_COUNT] screen=history count=%d', sessions.length);
       console.log('[LOCAL_DAY_BUCKET] screen=history todayKey=%s buckets=%o',
         todayKey,
         sessions.map((s) => ({ completionId: s.completionId, day: toDayKey(s.date) }))
       );
 
-      // Notify Home screen to re-sync stats from the updated local history
       if (!isCurrentRequest(requestGeneration, scopeKey)) return;
       DeviceEventEmitter.emit('japam-stats-updated');
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -1251,7 +1137,7 @@ export default function HistoryScreen() {
         setEditingRow(null);
       }
 
-      await loadHistory();
+      await loadHistory({ force: true });
       DeviceEventEmitter.emit('japam-stats-updated');
       DeviceEventEmitter.emit('japam-history-updated', { userId: currentUserId || 'guest' });
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -1268,7 +1154,7 @@ export default function HistoryScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void loadHistory();
+      void loadHistory({ force: historyScopeStateRef.current === 'ready' });
     }, [loadHistory])
   );
 
@@ -1284,7 +1170,7 @@ export default function HistoryScreen() {
 
   useEffect(() => {
     const onHistoryUpdated = () => {
-      void loadHistory();
+      void loadHistory({ force: true });
     };
 
     const onAuthUpdated = () => {
@@ -1297,11 +1183,11 @@ export default function HistoryScreen() {
         if (isRealUserScopeChange || !nextUserId) {
           setIsAuthHydrationPending(true);
           invalidateHistoryRequests('loading');
-          void loadHistory();
+          void loadHistory({ force: true });
           return;
         }
 
-        void loadHistory();
+        void loadHistory({ force: true });
       })();
     };
 
@@ -1432,7 +1318,7 @@ export default function HistoryScreen() {
           refreshing={refreshing}
           onRefresh={async () => {
             setRefreshing(true);
-            await loadHistory();
+            await loadHistory({ force: true });
             setRefreshing(false);
           }}
           tintColor="#0f766e"
