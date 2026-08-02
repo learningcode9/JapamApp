@@ -3,6 +3,29 @@ import { createDefaultJapamCreationCoordinator } from '../defaultJapamCreationCo
 import { type Japam } from '../japams';
 import * as japamsRepository from '../japamsRepository';
 
+let remoteJapamsRows: Record<string, unknown>[] = [];
+let remoteDeletedRows: Record<string, unknown>[] = [];
+
+const mockFrom = jest.fn((table: string) => {
+  const chain: any = {
+    select: jest.fn(() => chain),
+    eq: jest.fn(() => chain),
+    order: jest.fn(async () => {
+      if (table === 'japams') return { data: remoteJapamsRows, error: null };
+      if (table === 'deleted_japams') return { data: remoteDeletedRows, error: null };
+      return { data: [], error: null };
+    }),
+    upsert: jest.fn(async () => ({ data: null, error: null })),
+  };
+  return chain;
+});
+
+jest.mock('../supabase', () => ({
+  supabase: {
+    from: (table: string) => mockFrom(table),
+  },
+}));
+
 jest.mock('@react-native-async-storage/async-storage', () => {
   const store: Record<string, string> = {};
   return {
@@ -32,6 +55,9 @@ const makeJapam = (overrides: Partial<Japam> = {}): Japam => ({
 describe('default Japam — repository-level behavior', () => {
   beforeEach(async () => {
     await AsyncStorage.clear();
+    remoteJapamsRows = [];
+    remoteDeletedRows = [];
+    mockFrom.mockClear();
   });
 
   it('creates a "My Japam" for a new user with zero Japams', async () => {
@@ -86,6 +112,43 @@ describe('default Japam — repository-level behavior', () => {
     const loaded = await japamsRepository.loadJapams(UID);
     expect(loaded).toHaveLength(1);
     expect(loaded[0].name).toBe('My Japam');
+  });
+
+  it('keeps a restored default-named canonical Japam current instead of demoting it to another active Japam', async () => {
+    const canonicalId = '0d443fb7-da00-490f-a535-806a83575584';
+    const otherId = '9f4a0c40-6a52-4eb9-8f06-4f4e0b3a0c11';
+    const canonical = makeJapam({ id: canonicalId, name: 'My Japam' });
+    const other = makeJapam({ id: otherId, name: 'Gayatri' });
+
+    await japamsRepository.saveJapams(UID, [canonical, other]);
+    await japamsRepository.saveCurrentJapamId(UID, canonicalId);
+    remoteJapamsRows = [
+      {
+        id: canonicalId,
+        user_id: UID,
+        name: 'My Japam',
+        display_order: null,
+        created_at: canonical.createdAt,
+        updated_at: canonical.updatedAt,
+        archived_at: null,
+      },
+      {
+        id: otherId,
+        user_id: UID,
+        name: 'Gayatri',
+        display_order: null,
+        created_at: other.createdAt,
+        updated_at: other.updatedAt,
+        archived_at: null,
+      },
+    ];
+    remoteDeletedRows = [];
+
+    const result = await japamsRepository.ensureDefaultJapam(UID);
+
+    expect(result.currentJapamId).toBe(canonicalId);
+    expect(result.japams.map((j) => j.id)).toEqual([canonicalId, otherId]);
+    expect(await japamsRepository.loadCurrentJapamId(UID)).toBe(canonicalId);
   });
 
   it('selects the default Japam via currentJapamId', async () => {

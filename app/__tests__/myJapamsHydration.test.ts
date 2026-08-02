@@ -201,6 +201,9 @@ const getStatBoxTexts = (tree: any) =>
     .findAll((node: any) => node.type === 'View' && node.props?.testID === 'japam-stat-box')
     .map((node: any) => extractText(node));
 
+const findPressableByAccessibilityLabel = (tree: any, label: string): any =>
+  tree.root.findAll((node: any) => node.type === 'Pressable' && node.props?.accessibilityLabel === label)[0];
+
 const getScreenState = (tree: any) => {
   const statBoxCount = countByTestId(tree, 'japam-stat-box');
   const skeletonCount = countByTestId(tree, 'japam-stat-skeleton');
@@ -363,6 +366,30 @@ describe('MyJapamsScreen hydration regression', () => {
     });
     await flush();
     expectShowsStats(tree, '3 malas');
+  });
+
+  it('moves the selection indicator immediately when the current Japam changes', async () => {
+    mockCurrentJapamState = {
+      ...mockCurrentJapamState,
+      japams: [
+        { id: JAPAM_ID, name: 'Morning Japam', archivedAt: null },
+        { id: 'japam-2', name: 'Evening Japam', archivedAt: null },
+      ],
+      currentJapamId: JAPAM_ID,
+      isLoading: false,
+    };
+
+    const tree = await renderScreen();
+    expect(findPressableByAccessibilityLabel(tree, 'Select Morning Japam, currently selected')).toBeDefined();
+
+    mockCurrentJapamState = {
+      ...mockCurrentJapamState,
+      currentJapamId: 'japam-2',
+    };
+    await updateTree(tree);
+
+    expect(findPressableByAccessibilityLabel(tree, 'Select Evening Japam, currently selected')).toBeDefined();
+    expect(findPressableByAccessibilityLabel(tree, 'Select Morning Japam')).toBeDefined();
   });
 
   it('keeps showing ready stats instead of zeroing them out when a stale same-user refresh fails', async () => {
