@@ -34,8 +34,13 @@ export type LegacyHistoryBackfillPlan = {
 
 export type LegacyHistoryBackfillOptions = {
   /**
-   * When supplied, only these completion ids may be reassigned. The caller builds this set from
-   * History's own Japam attribution rule; records outside it remain byte-for-byte untouched.
+   * When supplied, only these completion ids may be reassigned LOCALLY. The caller builds this set
+   * from History's own Japam attribution rule; records outside it remain byte-for-byte untouched.
+   *
+   * This scopes the local plan only. The remote half of the backfill (see
+   * historyRepository.applyLegacyHistoryBackfill) independently derives its eligible set from the
+   * authoritative remote rows through the same shared attribution rule, so a local snapshot that
+   * lags behind (or lacks) rows that exist remotely cannot leave those rows unassigned.
    */
   onlyCompletionIds?: ReadonlySet<string>;
 };

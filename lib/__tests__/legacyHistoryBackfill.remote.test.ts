@@ -252,3 +252,180 @@ describe('legacy History backfill across History and Group', () => {
     });
   });
 });
+
+// ─── Production stabilization: eligible legacy rows stayed null-japamId ───
+//
+// Production evidence: History lifetime totals (merged local+remote, attributed via
+// filterByJapam includeBlankLegacy) included eligible null-japamId legacy rows, but the Groups
+// RPC — which counts only japam_history rows with japam_id = p_japam_id — did not. Root cause:
+// the remote half of the backfill gated every PATCH on a completion-id set derived from the
+// client's LOCAL AsyncStorage snapshot at startup. When local lagged behind (or lacked) the rows
+// that existed remotely, that stale set was empty/partial and the remote rows were never patched.
+// The fix makes the remote source authoritative: eligibility is decided on the remote rows via the
+// SAME shared filterByJapam attribution rule, so no local/remote divergence can skip a row, while
+// ambiguous/named-other-Japam rows still stay untouched.
+describe('legacy History backfill production stabilization (remote source is authoritative)', () => {
+  const remoteLegacyRow = (
+    id: number,
+    completionId: string,
+    over: Record<string, unknown> = {},
+  ) => ({
+    id,
+    user_id: USER_ID,
+    created_at: '2026-08-01T10:00:00.000Z',
+    malas: 1,
+    count: 108,
+    completion_id: completionId,
+    japam_id: null,
+    japam_name: null,
+    ...over,
+  });
+
+  it('patches first-active-Japam blank legacy rows that exist only remotely (no local copy)', async () => {
+    remoteRows.splice(0, remoteRows.length,
+      remoteLegacyRow(101, 'blank-1'),
+      remoteLegacyRow(102, 'blank-2', { malas: 2, count: 216 }),
+      remoteLegacyRow(103, 'named-govinda', { japam_name: OTHER_NAME }),
+      remoteLegacyRow(104, 'tagged-other', { japam_id: OTHER_ID, japam_name: OTHER_NAME }),
+    );
+    // The device has no local copy of the legacy rows yet — the exact divergence that left the
+    // remote rows unassigned. The runner's local-derived onlyCompletionIds is therefore empty.
+    localStore.history = JSON.stringify([
+      legacyRecord('local-tagged-default', 1, { japamId: DEFAULT_ID, japamName: DEFAULT_NAME }),
+    ]);
+
+    const plan = await applyLegacyHistoryBackfill(
+      USER_ID,
+      DEFAULT_ID,
+      DEFAULT_NAME,
+      { onlyCompletionIds: new Set<string>(), japams: defaultJapams },
+    );
+
+    expect(plan.remoteSyncedIds.sort()).toEqual(['blank-1', 'blank-2']);
+    expect(remoteRows.find((r) => r.id === 101)).toMatchObject({
+      japam_id: DEFAULT_ID,
+      japam_name: DEFAULT_NAME,
+    });
+    expect(remoteRows.find((r) => r.id === 102)).toMatchObject({
+      japam_id: DEFAULT_ID,
+      japam_name: DEFAULT_NAME,
+    });
+    // A null-japamId row named for a DIFFERENT Japam stays null — never guessed at the default.
+    expect(remoteRows.find((r) => r.id === 103)).toMatchObject({ japam_id: null });
+    // A row already assigned to another Japam is untouched.
+    expect(remoteRows.find((r) => r.id === 104)).toMatchObject({ japam_id: OTHER_ID });
+  });
+
+  it('a sole active Japam claims every eligible null-japam row (blank or uniquely named)', async () => {
+    const soleJapam: Japam = {
+      id: 'sole-japam',
+      userId: USER_ID,
+      name: 'Gayatri',
+      displayOrder: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      archivedAt: null,
+    };
+    remoteRows.splice(0, remoteRows.length,
+      remoteLegacyRow(201, 'sole-blank-1'),
+      remoteLegacyRow(202, 'sole-blank-2', { malas: 2, count: 216 }),
+      remoteLegacyRow(203, 'sole-named', { japam_name: 'Gayatri' }),
+      remoteLegacyRow(204, 'sole-tagged', { japam_id: 'sole-japam', japam_name: 'Gayatri' }),
+    );
+    localStore.history = JSON.stringify([
+      legacyRecord('sole-blank-1', 1),
+      legacyRecord('sole-blank-2', 2),
+      legacyRecord('sole-named', 1, { japamName: 'Gayatri' }),
+      legacyRecord('sole-tagged', 1, { japamId: 'sole-japam', japamName: 'Gayatri' }),
+    ]);
+
+    const plan = await applyLegacyHistoryBackfill(USER_ID, 'sole-japam', 'Gayatri', {
+      japams: [soleJapam],
+    });
+
+    expect(plan.reassignedRecords.map((r) => r.completionId).sort()).toEqual([
+      'sole-blank-1', 'sole-blank-2', 'sole-named',
+    ]);
+    expect(plan.remoteSyncedIds.sort()).toEqual(['sole-blank-1', 'sole-blank-2', 'sole-named']);
+    for (const id of [201, 202, 203]) {
+      expect(remoteRows.find((r) => r.id === id)).toMatchObject({ japam_id: 'sole-japam' });
+    }
+    const persisted = JSON.parse(localStore.history) as HistoryRecord[];
+    expect(persisted.filter((r) => r.userId === USER_ID && r.japamId === 'sole-japam'))
+      .toHaveLength(4);
+  });
+
+  it('ambiguous "My Japam" named rows remain untouched (shared name claimed by no Japam)', async () => {
+    const ambiguousJapams: Japam[] = ['japam-a', 'japam-b'].map((id) => ({
+      id,
+      userId: USER_ID,
+      name: 'My Japam',
+      displayOrder: null,
+      createdAt: `2026-01-0${id === 'japam-a' ? '1' : '2'}T00:00:00.000Z`,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      archivedAt: null,
+    }));
+    remoteRows.splice(0, remoteRows.length,
+      remoteLegacyRow(301, 'ambiguous-named', { japam_name: 'My Japam' }),
+      remoteLegacyRow(302, 'c-blank'),
+    );
+    localStore.history = JSON.stringify([
+      legacyRecord('ambiguous-named', 1, { japamName: 'My Japam' }),
+      legacyRecord('c-blank', 1),
+    ]);
+
+    const plan = await applyLegacyHistoryBackfill(USER_ID, 'japam-a', 'My Japam', {
+      // The runner's attribution rule only ever puts the blank row in the eligible set — the
+      // ambiguous "My Japam" row is excluded by the shared name index (2+ Japams share the name).
+      onlyCompletionIds: new Set(['c-blank']),
+      japams: ambiguousJapams,
+    });
+
+    expect(plan.reassignedRecords.map((r) => r.completionId)).toEqual(['c-blank']);
+    expect(plan.remoteSyncedIds).toEqual(['c-blank']);
+    expect(remoteRows.find((r) => r.id === 301)).toMatchObject({ japam_id: null, japam_name: 'My Japam' });
+    expect(remoteRows.find((r) => r.id === 302)).toMatchObject({ japam_id: 'japam-a' });
+    const persisted = JSON.parse(localStore.history) as HistoryRecord[];
+    expect(persisted.find((r) => r.completionId === 'ambiguous-named')).toMatchObject({ japamId: null });
+    expect(persisted.find((r) => r.completionId === 'c-blank')).toMatchObject({ japamId: 'japam-a' });
+  });
+
+  it('rerun is idempotent: already-assigned rows are neither re-patched nor duplicated', async () => {
+    remoteRows.splice(0, remoteRows.length,
+      remoteLegacyRow(101, 'blank-1'),
+      remoteLegacyRow(102, 'blank-2', { malas: 2, count: 216 }),
+    );
+    localStore.history = JSON.stringify([
+      legacyRecord('local-tagged-default', 1, { japamId: DEFAULT_ID, japamName: DEFAULT_NAME }),
+    ]);
+
+    const first = await applyLegacyHistoryBackfill(
+      USER_ID,
+      DEFAULT_ID,
+      DEFAULT_NAME,
+      { onlyCompletionIds: new Set<string>(), japams: defaultJapams },
+    );
+    expect(first.remoteSyncedIds.sort()).toEqual(['blank-1', 'blank-2']);
+
+    const rowsAfterFirst = JSON.stringify(remoteRows);
+    const historyAfterFirst = localStore.history;
+
+    const second = await applyLegacyHistoryBackfill(
+      USER_ID,
+      DEFAULT_ID,
+      DEFAULT_NAME,
+      { onlyCompletionIds: new Set<string>(), japams: defaultJapams },
+    );
+
+    expect(second.needsBackfill).toBe(false);
+    expect(second.reassignedRecords).toEqual([]);
+    expect(second.remoteSyncedIds).toEqual([]);
+    // No inserts, no duplicates, no new patches, and the local store is byte-for-byte unchanged.
+    expect(JSON.stringify(remoteRows)).toBe(rowsAfterFirst);
+    expect(localStore.history).toBe(historyAfterFirst);
+    expect(remoteRows).toHaveLength(2);
+    for (const id of [101, 102]) {
+      expect(remoteRows.find((r) => r.id === id)).toMatchObject({ japam_id: DEFAULT_ID });
+    }
+  });
+});
