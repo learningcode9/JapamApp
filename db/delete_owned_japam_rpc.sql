@@ -1,10 +1,16 @@
--- Delete exactly one owned Japam, authenticated-only, with fixed search_path.
+-- Tombstone exactly one owned Japam, authenticated-only, with fixed search_path.
 -- This RPC is the only runtime path for permanent Japam delete.
 
 create or replace function public.delete_owned_japam(
   p_japam_id uuid
 )
-returns table (deleted_japam_id uuid)
+returns table (
+  deleted_japam_id uuid,
+  scoped_history_deleted bigint,
+  legacy_history_deleted bigint,
+  tombstones_written bigint,
+  ambiguous_legacy_count bigint
+)
 language plpgsql
 security definer
 set search_path = public
@@ -13,6 +19,7 @@ declare
   v_uid text;
   v_deleted_id uuid;
   v_row_count integer;
+  v_tombstones_written bigint := 0;
 begin
   v_uid := auth.uid()::text;
 
@@ -20,18 +27,27 @@ begin
     raise exception 'authentication required';
   end if;
 
-  delete from public.japams
+  select id into v_deleted_id
+  from public.japams
   where id = p_japam_id
-    and user_id = v_uid
-  returning id into v_deleted_id;
+    and user_id = v_uid;
 
-  get diagnostics v_row_count = row_count;
-
-  if v_row_count <> 1 or v_deleted_id is distinct from p_japam_id then
+  if v_deleted_id is null then
     raise exception 'delete_owned_japam failed to delete exactly one owned Japam';
   end if;
 
+  insert into public.deleted_japams (japam_id, user_id, deleted_at)
+  values (p_japam_id, v_uid, now())
+  on conflict (japam_id) do nothing;
+
+  get diagnostics v_row_count = row_count;
+  v_tombstones_written := v_row_count::bigint;
+
   deleted_japam_id := v_deleted_id;
+  scoped_history_deleted := 0;
+  legacy_history_deleted := 0;
+  tombstones_written := v_tombstones_written;
+  ambiguous_legacy_count := 0;
   return next;
 end;
 $$;

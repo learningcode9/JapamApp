@@ -34,12 +34,14 @@ import {
   ensureJapamSyncedForHistory,
 } from '../japamsRepository';
 import { type Japam } from '../japams';
+import { uuidV5 } from '../deterministicUuid';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 /* eslint-enable import/first */
 
 const UID = 'user-123';
 const UID_OTHER = 'user-999';
 const NOW = '2026-07-22T10:00:00.000Z';
+const DEFAULT_JAPAM_UUID_NAMESPACE = '62f5824e-58fd-5d39-9f87-1f761082d8e3';
 
 const JAPAM_ID_A = '550e8400-e29b-41d4-a716-446655440000';
 
@@ -56,8 +58,11 @@ const makeJapam = (overrides: Partial<Japam> = {}): Japam => ({
 
 const mockUpsert = jest.fn();
 const mockSelect = jest.fn();
+const mockTombstoneSelect = jest.fn();
 const mockEq = jest.fn();
 const mockOrder = jest.fn();
+const mockTombstoneEq = jest.fn();
+const mockTombstoneOrder = jest.fn();
 const mockFrom = mockSupabase.from as jest.Mock;
 const mockRpc = mockSupabase.rpc as jest.Mock;
 
@@ -86,8 +91,20 @@ const mockRemoteJapams = (rows: ReturnType<typeof makeRemoteJapam>[], error: unk
   mockOrder.mockResolvedValue({ data: rows, error });
 };
 
+const mockRemoteDeletedJapams = (rows: { japam_id: string }[] = [], error: unknown = null) => {
+  mockTombstoneOrder.mockResolvedValue({ data: rows, error });
+};
+
+type DeleteRpcRow = {
+  deleted_japam_id: string;
+  scoped_history_deleted?: number;
+  legacy_history_deleted?: number;
+  tombstones_written?: number;
+  ambiguous_legacy_count?: number;
+};
+
 const mockRemoteDelete = (
-  rows: { deleted_japam_id: string }[] = [{ deleted_japam_id: JAPAM_ID_A }],
+  rows: DeleteRpcRow[] = [{ deleted_japam_id: JAPAM_ID_A }],
   error: unknown = null,
 ) => {
   mockRpc.mockResolvedValue({ data: rows, error });
@@ -98,12 +115,26 @@ beforeEach(async () => {
   mockUpsert.mockReset();
   mockRpc.mockReset();
   mockSelect.mockReset();
+  mockTombstoneSelect.mockReset();
   mockEq.mockReset();
+  mockTombstoneEq.mockReset();
   mockOrder.mockReset();
+  mockTombstoneOrder.mockReset();
   mockSelect.mockReturnValue({ eq: mockEq });
   mockEq.mockReturnValue({ order: mockOrder });
-  mockFrom.mockReturnValue({ upsert: mockUpsert, select: mockSelect });
+  mockTombstoneSelect.mockReturnValue({ eq: mockTombstoneEq });
+  mockTombstoneEq.mockReturnValue({ order: mockTombstoneOrder });
+  mockFrom.mockImplementation((table: string) => {
+    if (table === 'japams') {
+      return { upsert: mockUpsert, select: mockSelect };
+    }
+    if (table === 'deleted_japams') {
+      return { select: mockTombstoneSelect };
+    }
+    return { select: mockSelect };
+  });
   mockRemoteJapams([]);
+  mockRemoteDeletedJapams([]);
   mockRemoteDelete();
   jest.spyOn(console, 'warn').mockImplementation(() => {});
 });
@@ -178,6 +209,16 @@ describe('syncJapam (unit)', () => {
     expect(result).toBe(false);
   });
 
+  it('blocks tombstoned Japams before upsert', async () => {
+    const tombstoned = makeJapam({ id: 'tombstoned-japam' });
+    await AsyncStorage.setItem(`deletedJapams:${UID}`, JSON.stringify([tombstoned.id]));
+
+    const result = await syncJapam(UID, tombstoned);
+
+    expect(result).toBe(false);
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
   it('never throws', async () => {
     mockUpsert.mockRejectedValue('unknown error');
     await expect(syncJapam(UID, makeJapam())).resolves.toBe(false);
@@ -208,6 +249,17 @@ describe('ensureJapamSyncedForHistory', () => {
     expect(mockUpsert).not.toHaveBeenCalled();
   });
 
+  it('blocks history upload when only a remote tombstone exists', async () => {
+    const japam = makeJapam({ id: 'remote-only-tombstone', name: 'Remote Tombstone' });
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([japam]));
+    mockRemoteDeletedJapams([{ japam_id: japam.id }]);
+
+    const result = await ensureJapamSyncedForHistory(UID, japam.id);
+
+    expect(result).toBe(false);
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
   it('keeps history pending on an initial Japam sync failure and allows a later retry', async () => {
     const japam = makeJapam({ id: 'retry-japam', name: 'Retry Japam' });
     await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([japam]));
@@ -218,6 +270,16 @@ describe('ensureJapamSyncedForHistory', () => {
     await expect(ensureJapamSyncedForHistory(UID, japam.id)).resolves.toBe(false);
     await expect(ensureJapamSyncedForHistory(UID, japam.id)).resolves.toBe(true);
     expect(mockUpsert).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects tombstoned Japams before history sync upsert', async () => {
+    const japam = makeJapam({ id: 'history-tombstone-japam', name: 'History Tombstone' });
+    await AsyncStorage.setItem(`deletedJapams:${UID}`, JSON.stringify([japam.id]));
+
+    const result = await ensureJapamSyncedForHistory(UID, japam.id);
+
+    expect(result).toBe(false);
+    expect(mockUpsert).not.toHaveBeenCalled();
   });
 });
 
@@ -268,6 +330,47 @@ describe('ensureDefaultJapam', () => {
 
   it('does not create a default when remote state is unknown', async () => {
     mockRemoteJapams([], { code: '401', message: 'Unauthorized' });
+
+    const result = await ensureDefaultJapam(UID);
+
+    expect(result.japams).toEqual([]);
+    expect(result.currentJapamId).toBeNull();
+    expect(result.created).toBeNull();
+    expect(mockUpsert).not.toHaveBeenCalled();
+    expect(await loadJapams(UID)).toEqual([]);
+  });
+
+  it('repairs a persisted tombstoned current Japam to the sole active remote Japam', async () => {
+    const archivedCurrent = makeRemoteJapam({
+      id: '11111111-1111-4111-8111-111111111111',
+      name: 'My Japam',
+      created_at: '2026-07-19T00:00:00.000Z',
+      archived_at: '2026-07-22T00:00:00.000Z',
+      updated_at: '2026-07-22T00:00:00.000Z',
+    });
+    const active = makeRemoteJapam({
+      id: '22222222-2222-4222-8222-222222222222',
+      name: 'Govinda',
+      created_at: '2026-07-20T00:00:00.000Z',
+    });
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, archivedCurrent.id);
+    mockRemoteJapams([archivedCurrent, active]);
+    mockRemoteDeletedJapams([{ japam_id: archivedCurrent.id }]);
+
+    const result = await ensureDefaultJapam(UID);
+
+    expect(result.currentJapamId).toBe(active.id);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(active.id);
+    expect(result.japams.map((j) => j.id)).toEqual([active.id]);
+  });
+
+  it('stale web cache cannot recreate a deleted My Japam once the remote tombstone is known', async () => {
+    const tombstonedDefaultId = uuidV5(`${UID}:default-japam`, DEFAULT_JAPAM_UUID_NAMESPACE);
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([
+      makeJapam({ id: tombstonedDefaultId, name: 'My Japam', archivedAt: '2026-07-22T00:00:00.000Z' }),
+    ]));
+    mockRemoteJapams([]);
+    mockRemoteDeletedJapams([{ japam_id: tombstonedDefaultId }]);
 
     const result = await ensureDefaultJapam(UID);
 
@@ -333,6 +436,22 @@ describe('ensureDefaultJapam', () => {
     expect(first.currentJapamId).not.toBe(second.currentJapamId);
   });
 
+  it('adopts an existing remote My Japam instead of creating another', async () => {
+    const remote = makeRemoteJapam({
+      id: '11111111-1111-4111-8111-111111111111',
+      name: 'My Japam',
+      created_at: '2026-07-20T00:00:00.000Z',
+    });
+    mockRemoteJapams([remote]);
+
+    const result = await ensureDefaultJapam(UID);
+
+    expect(result.japams).toHaveLength(1);
+    expect(result.japams[0].id).toBe(remote.id);
+    expect(result.created).toBeNull();
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
   it('existing manual active Japam is adopted; no default is added, renamed, or removed', async () => {
     const manual = makeJapam({
       id: '22222222-2222-4222-8222-222222222222',
@@ -344,6 +463,22 @@ describe('ensureDefaultJapam', () => {
 
     const result = await ensureDefaultJapam(UID);
     await flushMicrotasks();
+
+    expect(result.japams).toEqual([manual]);
+    expect(result.currentJapamId).toBe(manual.id);
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it('preserves differently named offline Japams', async () => {
+    const manual = makeJapam({
+      id: '22222222-2222-4222-8222-222222222222',
+      name: 'Govinda',
+      createdAt: '2026-07-19T00:00:00.000Z',
+    });
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([manual]));
+    mockRemoteJapams([]);
+
+    const result = await ensureDefaultJapam(UID);
 
     expect(result.japams).toEqual([manual]);
     expect(result.currentJapamId).toBe(manual.id);
@@ -477,6 +612,7 @@ describe('ensureDefaultJapam', () => {
     mockRemoteJapams([remoteArchived]);
 
     const result = await ensureDefaultJapam(UID);
+    await flushMicrotasks();
 
     expect(result.japams.find((j) => j.id === sharedId)?.archivedAt).toBe(remoteArchived.archived_at);
     expect(result.japams.find((j) => j.id === sharedId)?.name).toBe('Remote Archived');
@@ -764,6 +900,32 @@ describe('deleteJapam lifecycle sync', () => {
       code: 'UNEXPECTED_RESPONSE',
       message: 'Delete did not return exactly one matching Japam ID',
     });
+  });
+
+  it('accepts the legacy five-column delete RPC response shape', async () => {
+    const active = makeJapam({ id: 'active-japam', name: 'Active Japam' });
+    const archived = makeJapam({
+      id: 'archived-japam',
+      name: 'Archived Japam',
+      archivedAt: '2026-07-23T00:00:00.000Z',
+      updatedAt: '2026-07-23T00:00:00.000Z',
+    });
+
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([active, archived]));
+    mockRemoteDelete([
+      {
+        deleted_japam_id: archived.id,
+        scoped_history_deleted: 0,
+        legacy_history_deleted: 0,
+        tombstones_written: 1,
+        ambiguous_legacy_count: 0,
+      },
+    ], null);
+
+    const result = await deleteJapam(UID, archived.id);
+
+    expect(result.map((j) => j.id)).toEqual([active.id]);
+    expect(mockRpc).toHaveBeenCalledWith('delete_owned_japam', { p_japam_id: archived.id });
   });
 
   it('keeps the archived Japam visible locally when remote delete errors', async () => {
