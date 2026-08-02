@@ -7,6 +7,8 @@
 --     History rows and zero group references
 --   - preserve every History row and every group_members link on the target
 --   - fail closed otherwise
+-- Deployment order: 1) db/get_owned_japam_usage_rpc.sql 2) db/restore_owned_japam_rpc.sql
+-- 3) web/client deployment that calls restore_owned_japam.
 
 create or replace function public.restore_owned_japam(
   p_japam_id uuid

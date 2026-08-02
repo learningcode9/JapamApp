@@ -281,10 +281,14 @@ describe('db/groups_workspace_isolation.sql structural contract', () => {
       expect(body).toMatch(/gm\.japam_id is null/);
     });
 
-    it('legacy get_my_groups(text) fails closed instead of returning broad memberships', () => {
+    it('legacy get_my_groups(text) preserves caller-scoped active memberships', () => {
       const body = functionBody(active, 'get_my_groups', ['text']);
-      expect(body).toMatch(/workspace-scoped clients must call get_my_groups\(text, uuid\)/i);
-      expect(body).not.toMatch(/gm\.japam_id/);
+      expect(body).toMatch(/_groups_require_caller_id\(\)/);
+      expect(body).toMatch(/_groups_legacy_sub\(\)/);
+      expect(body).toMatch(/caller_memberships/);
+      expect(body).toMatch(/g\.is_active/);
+      expect(body).toMatch(/order by g\.name, g\.id/i);
+      expect(body).not.toMatch(/workspace-scoped clients must call get_my_groups\(text, uuid\)/i);
       expect(body).not.toMatch(/_groups_sole_active_japam_id\(\)/);
     });
 

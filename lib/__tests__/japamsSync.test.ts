@@ -418,18 +418,22 @@ describe('ensureDefaultJapam', () => {
     expect(await loadJapams(UID)).toEqual([]);
   });
 
-  it('restores an archived canonical Japam with history instead of creating a fresh empty My Japam', async () => {
+  it('Sarada regression: restores the archived canonical My Japam and retires only the empty active conflict', async () => {
     const canonical = makeJapam({
-      id: 'canonical-history',
+      id: 'sarada-canonical',
       name: 'My Japam',
       archivedAt: '2026-07-22T00:00:00.000Z',
       updatedAt: '2026-07-22T00:00:00.000Z',
     });
-    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([canonical]));
-    await AsyncStorage.setItem(`deletedJapams:${UID}`, JSON.stringify([canonical.id]));
-    await AsyncStorage.setItem('history', JSON.stringify([
+    const conflict = makeJapam({
+      id: 'sarada-conflict',
+      name: 'My Japam',
+      createdAt: '2026-07-29T02:22:09.527Z',
+      updatedAt: '2026-07-29T02:22:09.527Z',
+    });
+    const historyRaw = JSON.stringify([
       {
-        completionId: 'history-1',
+        completionId: 'sarada-history-1',
         userId: UID,
         date: '2026-07-22T12:00:00.000Z',
         malas: 1,
@@ -437,21 +441,31 @@ describe('ensureDefaultJapam', () => {
         japamId: canonical.id,
         japamName: canonical.name,
       },
-    ]));
+    ]);
+
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([canonical, conflict]));
+    await AsyncStorage.setItem(`deletedJapams:${UID}`, JSON.stringify([canonical.id]));
+    await AsyncStorage.setItem('history', historyRaw);
     mockRemoteJapams([]);
     mockRemoteDeletedJapams([{ japam_id: canonical.id }]);
     mockRemoteJapamUsage(canonical.id, { history_count: 506, group_ref_count: 1 });
+    mockRemoteJapamUsage(conflict.id, { history_count: 0, group_ref_count: 0 });
     mockRemoteRestore([{ restored_japam_id: canonical.id }]);
 
     const result = await ensureDefaultJapam(UID);
 
     expect(result.created).toBeNull();
     expect(result.currentJapamId).toBe(canonical.id);
-    expect(result.japams).toHaveLength(1);
-    expect(result.japams[0].archivedAt).toBeNull();
+    expect(result.japams.map((j) => ({ id: j.id, archivedAt: j.archivedAt }))).toEqual([
+      { id: canonical.id, archivedAt: null },
+    ]);
+    const storedJapams = JSON.parse((await AsyncStorage.getItem(`userJapams:${UID}`)) ?? '[]') as Array<{ id: string; archivedAt: string | null }>;
+    expect(storedJapams).toHaveLength(1);
+    expect(storedJapams[0]).toMatchObject({ id: canonical.id, archivedAt: null });
+    expect(await AsyncStorage.getItem('history')).toBe(historyRaw);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(canonical.id);
     expect(mockUpsert).not.toHaveBeenCalled();
     expect(mockRpc).toHaveBeenCalledWith('restore_owned_japam', { p_japam_id: canonical.id });
-    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(canonical.id);
   });
 
   it('does not create a default while deleted_japams fetch is unavailable, then still refuses a tombstoned default on retry', async () => {

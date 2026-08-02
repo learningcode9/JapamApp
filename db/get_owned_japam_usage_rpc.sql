@@ -1,5 +1,7 @@
 -- Read-only usage probe for one owned Japam. This is used to choose a canonical restore target
 -- and to prove a conflicting default is actually empty before it is retired.
+-- Deployment order: run this before db/restore_owned_japam_rpc.sql, then deploy the client/web
+-- code that calls the restore RPC.
 
 create or replace function public.get_owned_japam_usage(
   p_japam_id uuid
