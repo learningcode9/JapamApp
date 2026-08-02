@@ -18,12 +18,16 @@ import { parseStoredJapams, type Japam } from './japams';
 
 const USER_JAPAMS_KEY = 'userJapams';
 const CURRENT_JAPAM_ID_KEY = 'currentJapamId';
+const DELETED_JAPAMS_KEY = 'deletedJapams';
 
 export const userJapamsStorageKey = (userId: string | null | undefined): string =>
   `${USER_JAPAMS_KEY}:${userId || 'guest'}`;
 
 export const currentJapamIdStorageKey = (userId: string | null | undefined): string =>
   `${CURRENT_JAPAM_ID_KEY}:${userId || 'guest'}`;
+
+export const deletedJapamsStorageKey = (userId: string | null | undefined): string =>
+  `${DELETED_JAPAMS_KEY}:${userId || 'guest'}`;
 
 /** Load this user's (or guest's) locally-cached Japams. Never touches the network. */
 export const loadJapams = async (userId: string | null | undefined): Promise<Japam[]> => {
@@ -73,5 +77,27 @@ export const saveCurrentJapamId = async (
     }
   } catch {
     // Best-effort -- a failure here just means the next launch won't auto-reopen correctly.
+  }
+};
+
+export const loadDeletedJapams = async (userId: string | null | undefined): Promise<string[]> => {
+  try {
+    const raw = await AsyncStorage.getItem(deletedJapamsStorageKey(userId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
+};
+
+export const saveDeletedJapams = async (
+  userId: string | null | undefined,
+  deletedJapams: string[],
+): Promise<void> => {
+  try {
+    await AsyncStorage.setItem(deletedJapamsStorageKey(userId), JSON.stringify(deletedJapams));
+  } catch {
+    // Best-effort local cache write; tombstones still live server-side.
   }
 };

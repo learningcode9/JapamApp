@@ -23,14 +23,18 @@ import {
   renameJapam as renameJapamPure,
   archiveJapam as archiveJapamPure,
   restoreJapam as restoreJapamPure,
+  applyJapamTombstones,
   type Japam,
 } from './japams';
+import { mergeTombstones } from './historyStore';
 import { uuidV5 } from './deterministicUuid';
 import {
   loadJapams as loadJapamsFromStorage,
   saveJapams as saveJapamsToStorage,
   loadCurrentJapamId as loadCurrentJapamIdFromStorage,
   saveCurrentJapamId as saveCurrentJapamIdToStorage,
+  loadDeletedJapams as loadDeletedJapamsFromStorage,
+  saveDeletedJapams as saveDeletedJapamsToStorage,
 } from './japamsStorage';
 
 const DEFAULT_JAPAM_NAME = 'My Japam';
@@ -145,6 +149,57 @@ const fetchRemoteJapams = async (userId: string): Promise<Japam[] | null> => {
   }
 };
 
+const fetchRemoteDeletedJapams = async (userId: string): Promise<string[] | null> => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { supabase } = require('./supabase');
+    const { data, error } = await supabase
+      .from('deleted_japams')
+      .select('japam_id')
+      .eq('user_id', userId)
+      .order('deleted_at', { ascending: true });
+
+    if (error) {
+      console.warn('[JAPAM_TOMBSTONE_LOAD_FAILED]', {
+        code: error.code,
+        message: error.message,
+      });
+      return null;
+    }
+
+    return ((data ?? []) as Array<{ japam_id?: unknown }>).map((row) => String(row.japam_id)).filter((id) => id.length > 0);
+  } catch {
+    console.warn('[JAPAM_TOMBSTONE_LOAD_FAILED]', {
+      code: 'NETWORK_ERROR',
+      message: 'Network error during Japam tombstone load',
+    });
+    return null;
+  }
+};
+
+const loadMergedDeletedJapams = async (userId: string | null | undefined): Promise<Set<string>> => {
+  if (!userId) return new Set();
+  const local = await loadDeletedJapamsFromStorage(userId);
+  const remote = await fetchRemoteDeletedJapams(userId);
+  const merged = remote === null ? local : mergeTombstones(local, remote);
+  if (merged.length !== local.length) {
+    await saveDeletedJapamsToStorage(userId, merged);
+  }
+  return new Set(merged);
+};
+
+const loadAuthoritativeDeletedJapams = async (userId: string | null | undefined): Promise<Set<string> | null> => {
+  if (!userId) return new Set();
+  const local = await loadDeletedJapamsFromStorage(userId);
+  const remote = await fetchRemoteDeletedJapams(userId);
+  if (remote === null) return null;
+  const merged = mergeTombstones(local, remote);
+  if (merged.length !== local.length) {
+    await saveDeletedJapamsToStorage(userId, merged);
+  }
+  return new Set(merged);
+};
+
 const deleteRemoteJapam = async (japamId: string): Promise<boolean> => {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -229,7 +284,9 @@ const syncLoop = async (userId: string, japamId: string): Promise<void> => {
 };
 
 export const loadJapams = (userId: string | null | undefined): Promise<Japam[]> =>
-  loadJapamsFromStorage(userId);
+  Promise.all([loadJapamsFromStorage(userId), loadMergedDeletedJapams(userId)]).then(([japams, tombstones]) =>
+    applyJapamTombstones(japams, tombstones ?? new Set()),
+  );
 
 export const saveJapams = (userId: string | null | undefined, japams: Japam[]): Promise<void> =>
   saveJapamsToStorage(userId, japams);
@@ -257,7 +314,11 @@ const ensureDefaultJapamInternal = async (
 ): Promise<{ japams: Japam[]; currentJapamId: string | null; created: Japam | null }> => {
   const local = await loadJapamsFromStorage(userId);
   const remote = await fetchRemoteJapams(userId);
-  const merged = remote === null ? local : mergeJapamsById(local, remote);
+  const tombstones = await loadAuthoritativeDeletedJapams(userId);
+  if (tombstones === null) {
+    return { japams: local, currentJapamId: null, created: null };
+  }
+  const merged = applyJapamTombstones(remote === null ? local : mergeJapamsById(local, remote), tombstones);
   await saveJapamsToStorage(userId, merged);
 
   const persistedCurrentId = await loadCurrentJapamIdFromStorage(userId);
@@ -289,6 +350,7 @@ const ensureDefaultJapamInternal = async (
     now,
   });
   if (created === null) return { japams: merged, currentJapamId: null, created: null };
+  if (tombstones.has(created.id)) return { japams: merged, currentJapamId: null, created: null };
 
   const updated = [...merged, created].sort(sortByCreatedAtThenId);
   await saveJapamsToStorage(userId, updated);
@@ -385,9 +447,14 @@ export const deleteJapam = async (
   if (userId) {
     const deletedRemotely = await deleteRemoteJapam(japamId);
     if (!deletedRemotely) return existing;
+
+    const tombstones = await loadDeletedJapamsFromStorage(userId);
+    if (!tombstones.includes(japamId)) {
+      await saveDeletedJapamsToStorage(userId, [...tombstones, japamId]);
+    }
   }
 
-  const updated = existing.filter((j) => j.id !== japamId);
+  const updated = applyJapamTombstones(existing, [japamId]);
   await saveJapamsToStorage(userId, updated);
   return updated;
 };
@@ -418,6 +485,31 @@ export const syncJapam = async (
       japamId: japam.id,
       code: 'USER_ID_MISMATCH',
       message: 'Japam userId does not match authenticated user',
+    });
+    return false;
+  }
+
+  const localTombstones = await loadDeletedJapamsFromStorage(userId);
+  if (localTombstones.includes(japam.id)) {
+    console.warn('[JAPAM_SYNC_FAILED]', {
+      japamId: japam.id,
+      code: 'TOMBSTONED_JAPAM',
+      message: 'Cannot sync a permanently deleted Japam',
+    });
+    return false;
+  }
+
+  const remoteTombstones = await fetchRemoteDeletedJapams(userId);
+  if (remoteTombstones === null) {
+    return false;
+  }
+  if (remoteTombstones?.includes(japam.id)) {
+    const merged = mergeTombstones(localTombstones, remoteTombstones);
+    await saveDeletedJapamsToStorage(userId, merged);
+    console.warn('[JAPAM_SYNC_FAILED]', {
+      japamId: japam.id,
+      code: 'TOMBSTONED_JAPAM',
+      message: 'Cannot sync a permanently deleted Japam',
     });
     return false;
   }
@@ -469,6 +561,9 @@ export const ensureJapamSyncedForHistory = async (
   japamId: string | null | undefined,
 ): Promise<boolean> => {
   if (!userId || !japamId) return false;
+  const tombstones = await loadAuthoritativeDeletedJapams(userId);
+  if (tombstones === null) return false;
+  if (tombstones.has(japamId)) return false;
   const japams = await loadJapamsFromStorage(userId);
   const japam = japams.find((j) => j.id === japamId);
   if (!japam) {

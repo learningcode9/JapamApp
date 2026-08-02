@@ -93,6 +93,7 @@ const mockSupabaseFrom = jest.fn(() => ({
   upsert: jest.fn(async () => ({ error: null })),
   select: jest.fn(() => ({
     eq: jest.fn(() => ({
+      order: jest.fn(async () => ({ data: [], error: null })),
       single: jest.fn(async () => ({ data: null, error: null })),
     })),
   })),
