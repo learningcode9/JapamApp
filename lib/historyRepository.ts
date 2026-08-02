@@ -183,6 +183,25 @@ const remoteRowToHistoryRecord = (row: RemoteLegacyHistoryRow, userId: string): 
   };
 };
 
+// The backfill is allowed to change only Japam attribution. Keep a stable snapshot of every
+// other History field so a user edit that lands while the remote PATCH loop is running remains
+// pending instead of being mistaken for the exact version the backfill wrote.
+const historyBackfillVersion = (record: HistoryRecord): string => JSON.stringify({
+  date: record.date,
+  malas: record.malas,
+  totalCount: record.totalCount,
+  duration: record.duration,
+  manual: record.manual,
+  userId: record.userId ?? null,
+  userName: record.userName ?? null,
+  userEmail: record.userEmail ?? null,
+  source: record.source ?? null,
+  remoteId: record.remoteId ?? null,
+  completionId: record.completionId,
+  japamId: record.japamId ?? null,
+  japamName: record.japamName ?? null,
+});
+
 /**
  * Best-effort remote half of the legacy backfill. The query is scoped to the authenticated user,
  * and the caller supplies the same History-attributed records that are safe to assign locally.
@@ -295,6 +314,9 @@ export const applyLegacyHistoryBackfill = async (
   const forOthers = all.filter((r) => !matchesIdentity(r));
 
   const plan = planLegacyHistoryBackfill(forThisIdentity, japamId, japamName, options);
+  const expectedBackfillVersions = new Map(
+    plan.reassignedRecords.map((record) => [record.completionId, historyBackfillVersion(record)])
+  );
   let remoteSyncedIds: string[] = [];
 
   if (plan.needsBackfill) {
@@ -318,11 +340,12 @@ export const applyLegacyHistoryBackfill = async (
     if (remoteSyncedIds.length > 0) {
       const latest = await loadHistory();
       const synced = new Set(remoteSyncedIds);
-      const updatedLatest = latest.map((record) => (
-        synced.has(record.completionId) && record.japamId === japamId
-          ? { ...record, syncStatus: 'synced' as const }
-          : record
-      ));
+      const updatedLatest = latest.map((record) => {
+        if (!synced.has(record.completionId) || record.japamId !== japamId) return record;
+        const expectedVersion = expectedBackfillVersions.get(record.completionId);
+        if (!expectedVersion || historyBackfillVersion(record) !== expectedVersion) return record;
+        return { ...record, syncStatus: 'synced' as const };
+      });
       await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updatedLatest));
     }
   }

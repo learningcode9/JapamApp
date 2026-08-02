@@ -19,6 +19,7 @@ const mockListeners = new Map<string, Set<(...args: unknown[]) => void>>();
 const mockReplace = jest.fn();
 let mockIsFocused = true;
 let mockPathname = '/groups-dashboard';
+let mockAuthCallback: ((event: string, session: unknown) => void) | null = null;
 
 jest.mock('react-native', () => {
   const React = require('react');
@@ -109,7 +110,7 @@ jest.mock('../../lib/supabase', () => ({
     auth: {
       getSession: (...args: unknown[]) => mockGetSession(...args),
       onAuthStateChange: (_event: string, callback: (event: string, session: unknown) => void) => {
-        void callback;
+        mockAuthCallback = callback;
         return { data: { subscription: { unsubscribe: jest.fn() } } };
       },
     },
@@ -225,6 +226,7 @@ const createDeferred = <T,>() => {
 
 beforeEach(async () => {
   mockListeners.clear();
+  mockAuthCallback = null;
   jest.clearAllMocks();
   mockIsFocused = true;
   mockPathname = '/groups-dashboard';
@@ -370,6 +372,49 @@ describe('Groups dashboard auth hydration', () => {
 
     expect(mockGetGroupDashboard).not.toHaveBeenCalled();
     expect(allText(tree).join(' ')).toContain('Sign in required');
+  });
+
+  it('never paints the old account after logout and login switch while its request is pending', async () => {
+    const staleOldUser = createDeferred<any[]>();
+    const oldUser = UID;
+    const newUser = 'user-b';
+    mockGetGroupDashboard
+      .mockImplementationOnce(() => staleOldUser.promise)
+      .mockResolvedValue([row(`${newUser}-b`, 'New User')]);
+
+    const tree = await renderScreen();
+    expect(mockGetGroupDashboard).toHaveBeenCalledWith(
+      'group-1',
+      oldUser,
+      expect.any(String),
+      expect.any(String),
+      WORKSPACE_A
+    );
+    expect(mockAuthCallback).not.toBeNull();
+
+    await act(async () => {
+      mockAuthCallback?.('SIGNED_OUT', null);
+      await Promise.resolve();
+    });
+    await AsyncStorage.setItem('userId', newUser);
+    mockCurrentJapamState = { currentJapamId: WORKSPACE_B };
+    mockGetSession.mockResolvedValue({
+      data: { session: { access_token: 'new-user-token', user: { id: newUser } } },
+    });
+    await act(async () => {
+      mockAuthCallback?.('SIGNED_IN', {
+        access_token: 'new-user-token',
+        user: { id: newUser },
+      });
+      await Promise.resolve();
+    });
+    await flush();
+    await updateTree(tree);
+
+    staleOldUser.resolve([row(`${oldUser}-old`, 'Old User')]);
+    await flush();
+
+    expect(allText(tree).join(' ')).not.toContain('Old User');
   });
 
 });

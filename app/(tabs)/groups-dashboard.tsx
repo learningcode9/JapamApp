@@ -134,6 +134,7 @@ export default function GroupsDashboardScreen() {
   const loadInFlightRef = useRef(false);
   const authSessionRef = useRef<Session | null | undefined>(undefined);
   const requestAuthUserRef = useRef<string | null>(null);
+  const authGenerationRef = useRef(0);
 
   // Stale-response guard for the dashboard's own workspace scope — only the response for the
   // CURRENTLY selected Japam may render. currentJapamIdRef tracks the LATEST render's selected
@@ -155,6 +156,7 @@ export default function GroupsDashboardScreen() {
   }, [currentJapamId]);
 
   const clearDashboardForLogout = useCallback(() => {
+    authGenerationRef.current += 1;
     authSessionRef.current = null;
     requestAuthUserRef.current = null;
     loadInFlightRef.current = false;
@@ -176,6 +178,9 @@ export default function GroupsDashboardScreen() {
       if (!session?.access_token) {
         clearDashboardForLogout();
         return;
+      }
+      if (authSessionRef.current?.user?.id !== session.user?.id) {
+        authGenerationRef.current += 1;
       }
       authSessionRef.current = session;
       setAuthSession(session);
@@ -242,40 +247,42 @@ export default function GroupsDashboardScreen() {
         return;
       }
 
+      if (authSessionRef.current?.user?.id !== currentSession.user.id) {
+        authGenerationRef.current += 1;
+      }
+      const requestGeneration = authGenerationRef.current;
+      const requestUserId = currentSession.user.id;
       authSessionRef.current = currentSession;
       requestAuthUserRef.current = currentSession.user.id;
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
       setUserId(savedUserId);
 
-      if (!savedUserId || !groupId || !currentJapamId) {
+      if (!savedUserId || savedUserId !== requestUserId || !groupId || !currentJapamId) {
         if (!silent) setLoading(false);
         return;
       }
 
       if (!silent) setLoading(true);
       setError('');
-      requestJapamRef.current = currentJapamId;
+      const requestJapamId = currentJapamId;
+      requestJapamRef.current = requestJapamId;
+      const isRequestCurrent = () => (
+        authGenerationRef.current === requestGeneration
+        && authSessionRef.current?.user?.id === requestUserId
+        && currentJapamIdRef.current === requestJapamId
+      );
       try {
         const { start, end } = getLocalTodayBoundsIso();
-        const result = await getGroupDashboard(groupId, savedUserId, start, end, currentJapamId);
-        if (
-          requestAuthUserRef.current !== authSessionRef.current?.user?.id ||
-          requestJapamRef.current !== currentJapamIdRef.current
-        ) return;
+        const result = await getGroupDashboard(groupId, savedUserId, start, end, requestJapamId);
+        if (!isRequestCurrent()) return;
         setRows(result);
-        loadedForJapamRef.current = currentJapamId;
+        loadedForJapamRef.current = requestJapamId;
       } catch (err: any) {
-        if (
-          requestAuthUserRef.current !== authSessionRef.current?.user?.id ||
-          requestJapamRef.current !== currentJapamIdRef.current
-        ) return;
+        if (!isRequestCurrent()) return;
         if (!silent) setError(err?.message || 'Could not load this group.');
       } finally {
-        if (
-          !silent &&
-          requestAuthUserRef.current === authSessionRef.current?.user?.id &&
-          requestJapamRef.current === currentJapamIdRef.current
-        ) setLoading(false);
+        if (!isRequestCurrent()) return;
+        if (!silent) setLoading(false);
         leaveIfWorkspaceMismatch();
       }
     } finally {

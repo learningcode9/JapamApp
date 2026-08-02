@@ -274,11 +274,13 @@ security definer
 set search_path = public
 as $$
 declare
-  v_user_id     text := auth.uid()::text;
-  v_group_id    uuid;
-  v_group_name  text;
-  v_is_active   boolean;
-  v_inserted    boolean;
+  v_user_id          text := auth.uid()::text;
+  v_legacy_sub      text := public._groups_legacy_sub();
+  v_group_id        uuid;
+  v_group_name      text;
+  v_is_active       boolean;
+  v_existing_user   text;
+  v_existing_japam  uuid;
 begin
   if v_user_id is null then
     raise exception 'authentication required to join a group'
@@ -313,12 +315,48 @@ begin
     return;
   end if;
 
-  insert into public.group_members (group_id, user_id, user_name, role, japam_id)
-  values (v_group_id, v_user_id, nullif(btrim(p_user_name), ''), 'member', p_japam_id)
-  on conflict (group_id, user_id) do nothing;
+  -- Resolve both the current UUID and the legacy Google-sub identity before inserting. A
+  -- pre-migration row may still be stored under the latter, and must not be duplicated under the
+  -- current UUID. A null legacy membership can safely be attached to this selected Japam; a row
+  -- already attached to another Japam is a real workspace conflict, not a successful join.
+  loop
+    select gm.user_id, gm.japam_id
+      into v_existing_user, v_existing_japam
+    from public.group_members gm
+    where gm.group_id = v_group_id
+      and (gm.user_id = v_user_id or (v_legacy_sub is not null and gm.user_id = v_legacy_sub))
+    order by case when gm.user_id = v_user_id then 0 else 1 end
+    limit 1;
 
-  v_inserted := found;
-  return query select v_group_id, v_group_name, true, not v_inserted;
+    if found then
+      if v_existing_japam is null then
+        update public.group_members
+        set japam_id = p_japam_id
+        where group_id = v_group_id
+          and user_id = v_existing_user
+          and japam_id is null;
+        if not found then
+          continue;
+        end if;
+      elsif v_existing_japam <> p_japam_id then
+        raise exception 'already a member of this group under a different Japam';
+      end if;
+
+      return query select v_group_id, v_group_name, true, true;
+      return;
+    end if;
+
+    insert into public.group_members (group_id, user_id, user_name, role, japam_id)
+    values (v_group_id, v_user_id, nullif(btrim(p_user_name), ''), 'member', p_japam_id)
+    on conflict (group_id, user_id) do nothing;
+
+    if found then
+      return query select v_group_id, v_group_name, true, false;
+      return;
+    end if;
+    -- A concurrent insert won the unique constraint; re-read it through the same identity and
+    -- workspace checks instead of surfacing a raw conflict or reporting a false success.
+  end loop;
 end;
 $$;
 
@@ -455,7 +493,8 @@ security definer
 set search_path = public
 as $$
 declare
-  v_caller text := public._groups_require_caller_id();
+  v_caller     text := public._groups_require_caller_id();
+  v_legacy_sub text := public._groups_legacy_sub();
 begin
   if p_japam_id is null then
     raise exception 'selecting a Japam is required';
@@ -465,7 +504,7 @@ begin
     select 1
     from public.group_members gm
     where gm.group_id = p_group_id
-      and gm.user_id = v_caller
+      and (gm.user_id = v_caller or (v_legacy_sub is not null and gm.user_id = v_legacy_sub))
   ) then
     raise exception 'not a member of this group';
   end if;
@@ -483,7 +522,7 @@ begin
   update public.group_members gm
   set japam_id = p_japam_id
   where gm.group_id = p_group_id
-    and gm.user_id = v_caller
+    and (gm.user_id = v_caller or (v_legacy_sub is not null and gm.user_id = v_legacy_sub))
     and gm.japam_id is null;
 
   if not found then

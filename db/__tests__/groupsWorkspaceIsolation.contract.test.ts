@@ -259,11 +259,22 @@ describe('db/groups_workspace_isolation.sql structural contract', () => {
       expect(body).toMatch(/gm\.japam_id is null/);
     });
 
-    it("attach_group_membership_to_japam touches only the caller's own unassigned row", () => {
+    it("attach_group_membership_to_japam accepts the current or legacy identity and touches only its unassigned row", () => {
       const body = functionBody(active, 'attach_group_membership_to_japam', ['uuid', 'uuid']);
-      expect(body).toMatch(/gm\.user_id = v_caller/);
+      expect(body).toMatch(/v_legacy_sub text := public\._groups_legacy_sub\(\)/);
+      expect(body).toMatch(/gm\.user_id = v_caller or \(v_legacy_sub is not null and gm\.user_id = v_legacy_sub\)/);
       expect(body).toMatch(/gm\.japam_id is null/);
       expect(body).toMatch(/already attached to a Japam/);
+    });
+
+    it('join_group_by_invite_code attaches null legacy membership and rejects another workspace', () => {
+      const body = functionBody(active, 'join_group_by_invite_code', ['text', 'text', 'uuid']);
+      expect(body).toMatch(/v_legacy_sub\s+text := public\._groups_legacy_sub\(\)/);
+      expect(body).toMatch(/v_existing_user\s+text/);
+      expect(body).toMatch(/v_existing_japam\s+uuid/);
+      expect(body).toMatch(/gm\.user_id = v_user_id or \(v_legacy_sub is not null and gm\.user_id = v_legacy_sub\)/);
+      expect(body).toMatch(/set japam_id = p_japam_id/);
+      expect(body).toMatch(/already a member of this group under a different Japam/);
     });
   });
 

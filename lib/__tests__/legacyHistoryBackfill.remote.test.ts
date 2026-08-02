@@ -208,4 +208,47 @@ describe('legacy History backfill across History and Group', () => {
     expect(groupRows[0]).toMatchObject({ todayMalas: 5, todayCount: 540, totalMalas: 5, totalCount: 540 });
     expect(mockRpc).toHaveBeenCalledWith('get_group_dashboard', expect.objectContaining({ p_japam_id: DEFAULT_ID }));
   });
+
+  it('keeps a concurrently edited row pending after the remote Japam patch succeeds', async () => {
+    const eligibleIds = new Set(['legacy-1', 'legacy-2', 'legacy-3', 'legacy-4']);
+    let editedDuringPatch = false;
+    global.fetch = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = new URL(String(input));
+      const method = init?.method ?? 'GET';
+      if (method === 'GET') return response(remoteRows.filter((row) => row.user_id === USER_ID));
+
+      const id = requestUrl.searchParams.get('id')?.replace(/^eq\./, '');
+      const userId = requestUrl.searchParams.get('user_id')?.replace(/^eq\./, '');
+      const row = remoteRows.find((candidate) => String(candidate.id) === id && candidate.user_id === userId);
+      if (!row) return response([], false);
+
+      if (!editedDuringPatch) {
+        editedDuringPatch = true;
+        const current = JSON.parse(localStore.history) as HistoryRecord[];
+        localStore.history = JSON.stringify(current.map((record) => (
+          record.completionId === 'legacy-1'
+            ? { ...record, malas: 7, totalCount: 756, syncStatus: 'pending' as const }
+            : record
+        )));
+      }
+
+      Object.assign(row, JSON.parse(String(init?.body)));
+      return response([]);
+    }) as unknown as typeof fetch;
+
+    await applyLegacyHistoryBackfill(
+      USER_ID,
+      DEFAULT_ID,
+      DEFAULT_NAME,
+      { onlyCompletionIds: eligibleIds, japams: defaultJapams },
+    );
+
+    const persisted = JSON.parse(localStore.history) as HistoryRecord[];
+    expect(persisted.find((row) => row.completionId === 'legacy-1')).toMatchObject({
+      malas: 7,
+      totalCount: 756,
+      japamId: DEFAULT_ID,
+      syncStatus: 'pending',
+    });
+  });
 });

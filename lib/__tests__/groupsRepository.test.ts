@@ -121,6 +121,15 @@ describe('joinGroupByInviteCode', () => {
     const outcome = await joinGroupByInviteCode('ABCDEFG', USER_ID, 'Ram', JAPAM_ID);
     expect(outcome).toEqual({ kind: 'error', message: 'selected Japam does not belong to your account or is not active' });
   });
+
+  it('does not report success when the server rejects a different workspace membership', async () => {
+    rpcResult(mockRpc, null, new Error('already a member of this group under a different Japam'));
+    const outcome = await joinGroupByInviteCode('ABCDEFG', USER_ID, 'Ram', JAPAM_ID);
+    expect(outcome).toEqual({
+      kind: 'error',
+      message: 'already a member of this group under a different Japam',
+    });
+  });
 });
 
 describe('attachGroupMembershipToJapam', () => {

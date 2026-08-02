@@ -113,8 +113,9 @@ export async function joinGroupByInviteCode(
   if (!row) return { kind: 'notFound' };
   if (!row.is_active) return { kind: 'inactive' };
 
-  // already_member is true when the (group_id, user_id) row already existed (unique constraint
-  // preserved) — treat as a successful join, matching the historical 23505 handling.
+  // already_member is true only when the server confirmed the existing membership is already
+  // attached to this workspace (or safely attached an unassigned legacy membership). A different
+  // workspace is returned by the RPC as an error and never reaches this success path.
   return { kind: 'joined', groupId: row.id, groupName: row.name };
 }
 
