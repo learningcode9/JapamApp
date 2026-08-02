@@ -316,6 +316,16 @@ describe('db/groups_workspace_isolation.sql structural contract', () => {
   });
 
   it.each([...AUTHORITATIVE_RPCS, ...LEGACY_WRAPPER_RPCS])(
+    '%s%s explicitly revokes anon EXECUTE',
+    (rpcName, types) => {
+      const typesJoined = [...types].join(', ');
+      expect(active).toMatch(
+        new RegExp(`revoke all on function public\\.${rpcName}\\(${typesJoined}\\) from anon;`, 'i')
+      );
+    }
+  );
+
+  it.each([...AUTHORITATIVE_RPCS, ...LEGACY_WRAPPER_RPCS])(
     '%s%s is revoked from PUBLIC and granted to authenticated + service_role',
     (rpcName, types) => {
       const header = functionHeaders(active, rpcName).find(

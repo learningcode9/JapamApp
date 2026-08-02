@@ -704,42 +704,52 @@ $$;
 -- preserves an existing function's ACL, so the statements below are idempotent re-assertions.
 
 revoke all on function public.create_group(text, text, text, uuid) from public;
+revoke all on function public.create_group(text, text, text, uuid) from anon;
 grant execute on function public.create_group(text, text, text, uuid) to authenticated;
 grant execute on function public.create_group(text, text, text, uuid) to service_role;
 
 revoke all on function public.create_group(text, text, text) from public;
+revoke all on function public.create_group(text, text, text) from anon;
 grant execute on function public.create_group(text, text, text) to authenticated;
 grant execute on function public.create_group(text, text, text) to service_role;
 
 revoke all on function public.join_group_by_invite_code(text, text, uuid) from public;
+revoke all on function public.join_group_by_invite_code(text, text, uuid) from anon;
 grant execute on function public.join_group_by_invite_code(text, text, uuid) to authenticated;
 grant execute on function public.join_group_by_invite_code(text, text, uuid) to service_role;
 
 revoke all on function public.join_group_by_invite_code(text, text) from public;
+revoke all on function public.join_group_by_invite_code(text, text) from anon;
 grant execute on function public.join_group_by_invite_code(text, text) to authenticated;
 grant execute on function public.join_group_by_invite_code(text, text) to service_role;
 
 revoke all on function public.get_my_groups(text, uuid) from public;
+revoke all on function public.get_my_groups(text, uuid) from anon;
 grant execute on function public.get_my_groups(text, uuid) to authenticated;
 grant execute on function public.get_my_groups(text, uuid) to service_role;
 
 revoke all on function public.get_my_groups(text) from public;
+revoke all on function public.get_my_groups(text) from anon;
 grant execute on function public.get_my_groups(text) to authenticated;
 grant execute on function public.get_my_groups(text) to service_role;
 
 revoke all on function public.get_my_unassigned_groups() from public;
+revoke all on function public.get_my_unassigned_groups() from anon;
 grant execute on function public.get_my_unassigned_groups() to authenticated;
 grant execute on function public.get_my_unassigned_groups() to service_role;
 
 revoke all on function public.attach_group_membership_to_japam(uuid, uuid) from public;
+revoke all on function public.attach_group_membership_to_japam(uuid, uuid) from anon;
 grant execute on function public.attach_group_membership_to_japam(uuid, uuid) to authenticated;
 grant execute on function public.attach_group_membership_to_japam(uuid, uuid) to service_role;
 
 revoke all on function public.get_group_dashboard(uuid, text, timestamptz, timestamptz, uuid) from public;
+revoke all on function public.get_group_dashboard(uuid, text, timestamptz, timestamptz, uuid) from anon;
 grant execute on function public.get_group_dashboard(uuid, text, timestamptz, timestamptz, uuid) to authenticated;
 grant execute on function public.get_group_dashboard(uuid, text, timestamptz, timestamptz, uuid) to service_role;
 
 revoke all on function public.get_group_dashboard(uuid, text, timestamptz, timestamptz) from public;
+revoke all on function public.get_group_dashboard(uuid, text, timestamptz, timestamptz) from anon;
 grant execute on function public.get_group_dashboard(uuid, text, timestamptz, timestamptz) to authenticated;
 grant execute on function public.get_group_dashboard(uuid, text, timestamptz, timestamptz) to service_role;
 
