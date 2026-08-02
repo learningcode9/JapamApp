@@ -168,9 +168,33 @@ describe('db/workspace_consolidation.sql structural contract (apply)', () => {
     expect(active).toMatch(/create or replace function public\._ws_guard_history_archived_japam\(\)/);
     expect(active).toMatch(/create trigger _ws_no_history_to_archived_japam/);
     expect(active).toMatch(/JAPAM_ARCHIVED_WRITE_BLOCKED/);
+    expect(active).toMatch(/JAPAM_HISTORY_NULL_BLOCKED/);
+    expect(active).toMatch(/NEW\.user_id in \(/);
+    for (const id of [
+      '3c313835-e391-4607-853f-e23a108d9c2b',
+      '6829d5ea-285c-458c-9577-7bce4422c45c',
+      'd25472a6-741a-48ee-8c6e-fcb8ea8394f5',
+      'f1887c24-5728-4246-9912-699de2ea2f05',
+      '87f50692-bdf2-49ad-97cf-0e79da8788fa',
+    ]) {
+      expect(active).toContain(id);
+    }
     expect(active).toMatch(/create or replace function public\._ws_guard_no_unarchive\(\)/);
     expect(active).toMatch(/create trigger _ws_no_unarchive/);
     expect(active).toMatch(/JAPAM_UNARCHIVE_BLOCKED/);
+  });
+
+  it('E: scopes the unarchive guard to the migration archived duplicate ids only', () => {
+    for (const id of [
+      '19748f34-124d-4b78-8580-321bf82a1063',
+      '0c4773b3-d9d0-431e-bbff-6a0774573636',
+      'fdc2961b-4512-4308-afc9-9da36522d10b',
+      '69ebd607-d755-4272-aabc-09041c1f94c3',
+      '69c01af2-578b-4a7c-85ef-4a839277d8cd',
+      '64b10996-e692-43e0-9706-6006c2c21e62',
+    ]) {
+      expect(active).toContain(id);
+    }
   });
 
   it('D: never describes the apply as cleanup/rollback', () => {
@@ -219,6 +243,7 @@ describe('db/workspace_consolidation_rollback.sql structural contract', () => {
     expect(active).toMatch(/drop trigger if exists _ws_no_unarchive/);
     expect(active).toMatch(/backup artifacts intentionally kept/);
   });
+
 });
 
 describe('db/workspace_consolidation_cleanup.sql structural contract', () => {

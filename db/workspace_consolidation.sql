@@ -316,6 +316,8 @@ create temp table _ws_pre_totals on commit drop as
 -- clients. These two triggers REJECT both vectors. They are durable (kept after apply);
 -- rollback drops them; the staging fixture teardown drops them to restore the exact
 -- pre-test schema.
+-- The history guard also rejects NULL japam_id writes for the 5 migrated users only,
+-- because old Android clients can still emit legacy null-workspace history.
 create or replace function public._ws_guard_history_archived_japam()
 returns trigger
 language plpgsql
@@ -323,6 +325,15 @@ security definer
 set search_path = public
 as $$
 begin
+  if NEW.user_id in (
+    '3c313835-e391-4607-853f-e23a108d9c2b',
+    '6829d5ea-285c-458c-9577-7bce4422c45c',
+    'd25472a6-741a-48ee-8c6e-fcb8ea8394f5',
+    'f1887c24-5728-4246-9912-699de2ea2f05',
+    '87f50692-bdf2-49ad-97cf-0e79da8788fa'
+  ) and NEW.japam_id is null then
+    raise exception 'JAPAM_HISTORY_NULL_BLOCKED: legacy null-japam history is not allowed for the migrated Family members';
+  end if;
   if NEW.japam_id is not null and exists (
     select 1 from public.japams j
     where j.id = NEW.japam_id and j.archived_at is not null
@@ -345,7 +356,16 @@ security definer
 set search_path = public
 as $$
 begin
-  if TG_OP = 'UPDATE' and OLD.archived_at is not null and NEW.archived_at is null then
+  if TG_OP = 'UPDATE'
+    and OLD.id in (
+      '19748f34-124d-4b78-8580-321bf82a1063',
+      '0c4773b3-d9d0-431e-bbff-6a0774573636',
+      'fdc2961b-4512-4308-afc9-9da36522d10b',
+      '69ebd607-d755-4272-aabc-09041c1f94c3',
+      '69c01af2-578b-4a7c-85ef-4a839277d8cd',
+      '64b10996-e692-43e0-9706-6006c2c21e62'
+    )
+    and OLD.archived_at is not null and NEW.archived_at is null then
     raise exception 'JAPAM_UNARCHIVE_BLOCKED: archived japam % cannot be re-activated; create a new Japam instead', NEW.id;
   end if;
   return NEW;
