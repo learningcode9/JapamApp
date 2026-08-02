@@ -10,18 +10,19 @@
  * CurrentJapamContext at all, it's just another consumer of it).
  *
  * Flow, in order:
- *   1. Check (read-only, via historyRepository.loadHistoryForUser + the pure
- *      planLegacyHistoryBackfill) whether this identity has ANY null-japamId history at all. No
- *      Japam is created for this check -- planLegacyHistoryBackfill is pure and never persists
- *      anything, so a placeholder id/name here is safe and discarded.
- *   2. Only if step 1 found something: resolve the canonical/default Japam via the shared
- *      deterministic helper used by CurrentJapamProvider.
+ *   1. Read this identity's local history (read-only) so the eligible completion-id set can be
+ *      derived through History's attribution rule. Deliberately NOT a gate: for signed-in
+ *      identities, local storage can be empty (or already-assigned) while the authoritative
+ *      remote japam_history still holds eligible null-japamId rows -- the History screen's remote
+ *      merge has not run yet at startup, or this device never downloaded those rows. The remote
+ *      half of step 3 decides eligibility from the remote rows themselves, so this runner always
+ *      proceeds; a no-op local snapshot just means no local rewrite happens.
+ *   2. Resolve the canonical/default Japam via the shared deterministic helper used by
+ *      CurrentJapamProvider.
  *   3. Persist the real reassignment via historyRepository.applyLegacyHistoryBackfill, using the
- *      resolved Japam's real id/name.
+ *      resolved Japam's real id/name. Idempotent: no-ops when nothing is left to reassign.
  *   4. Mark this identity's "already backfilled" flag complete.
- *   5. Show a single, dismissible, non-blocking notice.
- * If step 1 finds nothing to migrate, the flag is marked complete immediately and no Japam is
- * created at all -- a genuinely new user is untouched by this feature.
+ *   5. Show a single, dismissible, non-blocking notice (only on the first run that did work).
  *
  * The shared helper may consult remote state for signed-in users before deciding whether to
  * create anything, but it still resolves to a single canonical Japam id for the same user across
@@ -34,7 +35,6 @@ import { useCurrentJapam } from '../contexts/current-japam-context';
 import * as historyRepository from '../lib/historyRepository';
 import { activeJapams } from '../lib/japams';
 import { filterByJapam } from '../lib/historyStore';
-import { planLegacyHistoryBackfill } from '../lib/legacyHistoryBackfill';
 import * as japamsRepository from '../lib/japamsRepository';
 import {
   isLegacyHistoryBackfillComplete,
@@ -42,9 +42,6 @@ import {
 } from '../lib/legacyHistoryBackfillStorage';
 
 const USER_ID_KEY = 'userId';
-// Never persisted -- only used to ask planLegacyHistoryBackfill "is there anything to reassign?"
-// without actually reassigning anything yet.
-const CHECK_ONLY_PLACEHOLDER = '__legacy_backfill_check_only__';
 
 export default function LegacyHistoryBackfillRunner() {
   const { isLoading } = useCurrentJapam();
@@ -78,18 +75,17 @@ export default function LegacyHistoryBackfillRunner() {
 
       const alreadyComplete = await isLegacyHistoryBackfillComplete(userId);
 
-      // Step 1: read-only check. No Japam created yet, nothing persisted.
+      // Step 1: read this identity's local history so the eligible completion-id set below can be
+      // derived through History's attribution rule. This is NOT a gate on whether to run the
+      // backfill at all: local AsyncStorage can be empty (or hold only already-assigned rows)
+      // while the authoritative remote japam_history still has eligible null-japamId rows -- the
+      // History screen's remote merge has not populated local storage yet at startup, or this
+      // device never downloaded those rows. Deciding "nothing to do" from the local snapshot alone
+      // is exactly what left production's eligible remote rows unassigned. The remote half of
+      // applyLegacyHistoryBackfill derives its eligible set from the remote rows themselves, so the
+      // runner always reaches it for a signed-in identity; a no-op local snapshot simply means the
+      // local plan writes nothing.
       const existing = await historyRepository.loadHistoryForUser(userId);
-      const { needsBackfill } = planLegacyHistoryBackfill(
-        existing,
-        CHECK_ONLY_PLACEHOLDER,
-        CHECK_ONLY_PLACEHOLDER
-      );
-
-      if (existing.length === 0 || (!needsBackfill && !alreadyComplete)) {
-        await markLegacyHistoryBackfillComplete(userId);
-        return;
-      }
 
       // Step 2: resolve the canonical/default Japam through the same deterministic helper the
       // provider uses. This either adopts an existing active Japam or creates the one default
@@ -124,8 +120,9 @@ export default function LegacyHistoryBackfillRunner() {
       // Step 4.
       await markLegacyHistoryBackfillComplete(userId);
 
-      // Step 5: one-time, dismissible, non-blocking notice.
-      if (plan.needsBackfill) {
+      // Step 5: one-time, dismissible, non-blocking notice -- only on the first run that actually
+      // reassigned something. A later launch (flag already set) never re-alerts.
+      if (!alreadyComplete && plan.needsBackfill) {
         Alert.alert(
           'History organized',
           `We've added your past Japam history to "${defaultJapam.name}". You can rename it anytime from My Japams.`,
