@@ -17,8 +17,14 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { activeJapams, archivedJapams, type Japam } from '../lib/japams';
-import { loadJapamStats, japamStatsFor, type JapamStats } from '../lib/historyRepository';
+import {
+  hydrateHistoryForUserDetails,
+  japamStatsFor,
+  type JapamStats,
+} from '../lib/historyRepository';
+import { statsByJapam, statsByJapamWithAttribution, toLocalDayKey } from '../lib/historyStore';
 import { useCurrentJapam } from '../contexts/current-japam-context';
+import { LEGACY_USER_ID_KEY } from '../lib/anonymousAuth';
 
 const USER_ID_KEY = 'userId';
 
@@ -108,6 +114,7 @@ export default function MyJapamsScreen() {
     const currentJapamSignature = computeJapamSignature(japams);
     const appliedUserKey = getUserKeyFromScopeKey(latestAppliedStatsScopeKeyRef.current);
     const hasReadyStatsForUser = appliedUserKey === userKey && statsScopeStateRef.current === 'ready';
+    const todayKey = toLocalDayKey(new Date().toISOString());
 
     if (isLoading) {
       const loadingScopeKey = `loading:${userKey}`;
@@ -140,7 +147,14 @@ export default function MyJapamsScreen() {
       setResolvedJapamIds(new Set());
     }
 
-    const stats = await loadJapamStats(userId, japams);
+    const legacyUserId = await AsyncStorage.getItem(LEGACY_USER_ID_KEY);
+    const hydratedHistory = await hydrateHistoryForUserDetails(userId, legacyUserId, { force });
+    const inputs = japams.map((j) => ({ id: j.id, name: j.name }));
+    const firstActiveJapamId = activeJapams(japams)[0]?.id ?? null;
+    const stats = japams.length > 0
+      ? statsByJapamWithAttribution(hydratedHistory.records, userId, inputs, firstActiveJapamId, todayKey, toLocalDayKey)
+      : statsByJapam(hydratedHistory.records, userId, todayKey, toLocalDayKey);
+    if (!hydratedHistory.hydrationSucceeded && hasReadyStatsForUser && !hydratedHistory.localStateAuthoritativelyChanged) return;
     if (!isCurrentStatsRequest(requestGeneration, statsScopeKey)) return;
 
     setStatsMap(stats);
@@ -156,7 +170,7 @@ export default function MyJapamsScreen() {
   // historyRepository for the already-computed stats and renders them.
   useFocusEffect(
     useCallback(() => {
-      void loadStats();
+      void loadStats({ force: statsScopeStateRef.current === 'ready' });
     }, [loadStats])
   );
 
