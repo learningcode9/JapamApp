@@ -355,15 +355,15 @@ begin
       '90000000-0000-0000-0000-0000000000f2',
       'a0000000-0000-0000-0000-000000000001',
       date_trunc('day', now()), date_trunc('day', now()) + interval '1 day');
-    raise exception 'expected multiple-active-Japams rejection';
+    raise exception 'expected null-membership rejection';
   exception when others then
-    if sqlerrm like '%multiple active Japams%' then
-      raise notice 'PASS: null membership fails clearly when A has multiple active Japams';
+    if sqlerrm like '%not assigned to a Japam%' then
+      raise notice 'PASS: null membership fails clearly without a Japam assignment';
     else raise; end if;
   end;
 end $$;
 
--- A null membership with a sole active Japam may fall back safely.
+-- A null membership with a sole active Japam still fails clearly rather than auto-selecting.
 set request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000005';
 insert into public.groups (id, name, invite_code, created_by, created_at, is_active) values
   ('90000000-0000-0000-0000-0000000000f3', 'Legacy Null Single Group', 'LNSG001', 'a0000000-0000-0000-0000-000000000005', now(), true);
@@ -374,16 +374,18 @@ insert into public.japam_history (user_id, malas, count, completion_id, japam_na
   ('a0000000-0000-0000-0000-000000000005', 7, 756, 'c0000000-0000-0000-0000-00000000e1', 'E1', 'b0000000-0000-0000-0000-0000000000e1', now() - interval '15 minutes');
 
 do $$
-declare v_total int; v_count int;
 begin
-  select total_malas, total_count into v_total, v_count
-  from public.get_group_dashboard(
-    '90000000-0000-0000-0000-0000000000f3',
-    'a0000000-0000-0000-0000-000000000005',
-    date_trunc('day', now()), date_trunc('day', now()) + interval '1 day')
-  where user_id = 'a0000000-0000-0000-0000-000000000005';
-  assert v_total = 7, 'sole-active fallback must resolve E1 totals';
-  assert v_count = 756, 'sole-active fallback must resolve E1 counts';
+  begin
+    perform * from public.get_group_dashboard(
+      '90000000-0000-0000-0000-0000000000f3',
+      'a0000000-0000-0000-0000-000000000005',
+      date_trunc('day', now()), date_trunc('day', now()) + interval '1 day');
+    raise exception 'expected null-membership rejection';
+  exception when others then
+    if sqlerrm like '%not assigned to a Japam%' then
+      raise notice 'PASS: null membership always fails clearly';
+    else raise; end if;
+  end;
 end $$;
 
 -- Legacy create/join wrappers still use the sole-active-Japam rule and must fail clearly when A

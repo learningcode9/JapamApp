@@ -267,14 +267,15 @@ describe('db/groups_workspace_isolation.sql structural contract', () => {
       expect(body).not.toMatch(/_groups_sole_active_japam_id\(\)/);
     });
 
-    it('legacy get_group_dashboard resolves the membership Japam first, then falls back to sole-active only when needed', () => {
+    it('legacy get_group_dashboard resolves the membership Japam first and fails on unassigned memberships', () => {
       const body = functionBody(active, 'get_group_dashboard', ['uuid', 'text', 'timestamptz', 'timestamptz']);
       expect(body).toMatch(/_groups_require_caller_id\(\)/);
       expect(body).toMatch(/_groups_legacy_sub\(\)/);
       expect(body).toMatch(/select gm\.japam_id\s+into v_japam/);
       expect(body).toMatch(/if not found then/);
       expect(body).toMatch(/if v_japam is null then/);
-      expect(body).toMatch(/_groups_sole_active_japam_id\(\)/);
+      expect(body).not.toMatch(/_groups_sole_active_japam_id\(\)/);
+      expect(body).toMatch(/this legacy group membership is not assigned to a Japam/);
       expect(body).toMatch(/not a member of this group/);
     });
   });

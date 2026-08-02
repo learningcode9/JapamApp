@@ -685,9 +685,9 @@ end;
 $$;
 
 -- ── 5j. get_group_dashboard (legacy 4-arg wrapper) — old clients resolve the Japam from the
---      caller's own membership for this group. If that membership is unassigned, fall back to
---      the sole active Japam only when unambiguous; otherwise fail clearly. Never mutates or
---      auto-attaches a membership and never exposes a dashboard through the wrong workspace.
+--      caller's own membership for this group. Unassigned memberships fail clearly. Never
+--      mutates or auto-attaches a membership and never exposes a dashboard through the wrong
+--      workspace.
 create or replace function public.get_group_dashboard(
   p_group_id uuid,
   p_current_user_id text,
@@ -727,7 +727,7 @@ begin
   end if;
 
   if v_japam is null then
-    v_japam := public._groups_sole_active_japam_id();
+    raise exception 'this legacy group membership is not assigned to a Japam; update the app or attach the group to a Japam';
   end if;
 
   return query select * from public.get_group_dashboard(p_group_id, p_current_user_id, p_today_start, p_today_end, v_japam);
