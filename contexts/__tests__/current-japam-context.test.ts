@@ -8,6 +8,7 @@ const mockLoadCurrentJapamId = jest.fn();
 const mockSaveCurrentJapamId = jest.fn();
 const mockEnsureDefaultJapam = jest.fn();
 const mockReconcileAllJapams = jest.fn();
+const mockRestoreJapam = jest.fn();
 
 jest.mock('../../lib/japamsRepository', () => ({
   loadJapams: (...args: unknown[]) => mockLoadJapams(...args),
@@ -18,7 +19,7 @@ jest.mock('../../lib/japamsRepository', () => ({
   createJapam: jest.fn(),
   renameJapam: jest.fn(),
   archiveJapam: jest.fn(),
-  restoreJapam: jest.fn(),
+  restoreJapam: (...args: unknown[]) => mockRestoreJapam(...args),
   deleteJapam: jest.fn(),
 }));
 
@@ -71,9 +72,29 @@ const Capture = ({ onSnapshot }: { onSnapshot: (snapshot: Snapshot) => void }) =
   return null;
 };
 
-const renderProvider = async (userId: string | null) => {
+const Control = ({
+  onReady,
+}: {
+  onReady: (value: ReturnType<typeof useCurrentJapam>) => void;
+}) => {
+  const value = useCurrentJapam();
+
+  React.useEffect(() => {
+    onReady(value);
+  }, [onReady, value]);
+
+  return null;
+};
+
+const renderProvider = async (
+  userId: string | null,
+  onReady?: (value: ReturnType<typeof useCurrentJapam>) => void,
+  options: { clearStorage?: boolean } = {},
+) => {
   const snapshots: Snapshot[] = [];
-  await AsyncStorage.clear();
+  if (options.clearStorage !== false) {
+    await AsyncStorage.clear();
+  }
   if (userId !== null) {
     await AsyncStorage.setItem('userId', userId);
   }
@@ -83,11 +104,18 @@ const renderProvider = async (userId: string | null) => {
       React.createElement(
         CurrentJapamProvider,
         null,
-        React.createElement(Capture, {
-          onSnapshot: (snapshot: Snapshot) => {
-            snapshots.push(snapshot);
-          },
-        }),
+        React.createElement(React.Fragment, null,
+          React.createElement(Capture, {
+            onSnapshot: (snapshot: Snapshot) => {
+              snapshots.push(snapshot);
+            },
+          }),
+          onReady
+            ? React.createElement(Control, {
+                onReady,
+              })
+            : null,
+        ),
       ),
     );
     await Promise.resolve();
@@ -107,6 +135,7 @@ beforeEach(async () => {
   mockSaveCurrentJapamId.mockReset();
   mockEnsureDefaultJapam.mockReset();
   mockReconcileAllJapams.mockReset();
+  mockRestoreJapam.mockReset();
 });
 
 afterEach(() => {
@@ -255,6 +284,74 @@ describe('CurrentJapamProvider refresh', () => {
     expect(mockEnsureDefaultJapam).toHaveBeenCalledTimes(1);
     expect(snapshots.at(-1)?.currentJapamId).toBe('canonical');
     expect(mockSaveCurrentJapamId).not.toHaveBeenCalled();
+  });
+
+  it('restore makes the canonical Japam current so a fresh refresh reopens it', async () => {
+    mockEnsureDefaultJapam.mockResolvedValue({
+      japams: [
+        {
+          id: 'restored-canonical',
+          userId: 'user-123',
+          name: 'My Japam',
+          displayOrder: null,
+          createdAt: '2026-07-19T00:00:00.000Z',
+          updatedAt: '2026-07-20T00:00:00.000Z',
+          archivedAt: '2026-07-22T00:00:00.000Z',
+        },
+      ],
+      currentJapamId: null,
+      created: null,
+    });
+    mockRestoreJapam.mockResolvedValue([
+      {
+        id: 'restored-canonical',
+        userId: 'user-123',
+        name: 'My Japam',
+        displayOrder: null,
+        createdAt: '2026-07-19T00:00:00.000Z',
+        updatedAt: '2026-07-23T00:00:00.000Z',
+        archivedAt: null,
+      },
+    ]);
+
+    let api: ReturnType<typeof useCurrentJapam> | null = null;
+    const first = await renderProvider('user-123', (value) => {
+      api = value;
+    });
+
+    await act(async () => {
+      await api!.restoreJapam('restored-canonical');
+      await Promise.resolve();
+    });
+
+    expect(mockRestoreJapam).toHaveBeenCalledWith('user-123', 'restored-canonical');
+    expect(mockSaveCurrentJapamId).toHaveBeenCalledWith('user-123', 'restored-canonical');
+    expect(first.snapshots.at(-1)).toMatchObject({
+      currentJapamId: 'restored-canonical',
+      japamIds: ['restored-canonical'],
+    });
+
+    mockEnsureDefaultJapam.mockResolvedValue({
+      japams: [
+        {
+          id: 'restored-canonical',
+          userId: 'user-123',
+          name: 'My Japam',
+          displayOrder: null,
+          createdAt: '2026-07-19T00:00:00.000Z',
+          updatedAt: '2026-07-23T00:00:00.000Z',
+          archivedAt: null,
+        },
+      ],
+      currentJapamId: 'restored-canonical',
+      created: null,
+    });
+
+    const second = await renderProvider('user-123', undefined, { clearStorage: false });
+    expect(second.snapshots.at(-1)).toMatchObject({
+      currentJapamId: 'restored-canonical',
+      japamIds: ['restored-canonical'],
+    });
   });
 
   it('signed-in refresh persists and selects a remote-only Japam missing locally', async () => {

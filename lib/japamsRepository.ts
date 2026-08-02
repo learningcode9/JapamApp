@@ -24,6 +24,7 @@ import {
   archiveJapam as archiveJapamPure,
   restoreJapam as restoreJapamPure,
   applyJapamTombstones,
+  normalizeJapamName,
   type Japam,
 } from './japams';
 import { mergeTombstones } from './historyStore';
@@ -177,6 +178,56 @@ const fetchRemoteDeletedJapams = async (userId: string): Promise<string[] | null
   }
 };
 
+type RemoteJapamUsageRow = {
+  japam_id: string;
+  name: string;
+  history_count: number;
+  group_ref_count: number;
+  archived_at?: string | null;
+};
+
+type RemoteJapamUsage = {
+  japamId: string;
+  name: string;
+  historyCount: number;
+  groupRefCount: number;
+  archivedAt: string | null;
+};
+
+const fetchRemoteJapamUsage = async (japamId: string): Promise<RemoteJapamUsage | null> => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { supabase } = require('./supabase');
+    const { data, error } = await supabase.rpc('get_owned_japam_usage', {
+      p_japam_id: japamId,
+    });
+
+    if (error) {
+      console.warn('[JAPAM_USAGE_LOAD_FAILED]', {
+        code: error.code,
+        message: error.message,
+      });
+      return null;
+    }
+
+    const row = Array.isArray(data) ? (data[0] as RemoteJapamUsageRow | undefined) : (data as RemoteJapamUsageRow | null | undefined);
+    if (!row) return null;
+    return {
+      japamId: row.japam_id,
+      name: row.name,
+      historyCount: Number(row.history_count) || 0,
+      groupRefCount: Number(row.group_ref_count) || 0,
+      archivedAt: row.archived_at ?? null,
+    };
+  } catch {
+    console.warn('[JAPAM_USAGE_LOAD_FAILED]', {
+      code: 'NETWORK_ERROR',
+      message: 'Network error during Japam usage load',
+    });
+    return null;
+  }
+};
+
 const loadMergedDeletedJapams = async (userId: string | null | undefined): Promise<Set<string>> => {
   if (!userId) return new Set();
   const local = await loadDeletedJapamsFromStorage(userId);
@@ -198,6 +249,121 @@ const loadAuthoritativeDeletedJapams = async (userId: string | null | undefined)
     await saveDeletedJapamsToStorage(userId, merged);
   }
   return new Set(merged);
+};
+
+const restoreRemoteJapam = async (japamId: string): Promise<boolean> => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { supabase } = require('./supabase');
+    const { data, error } = await supabase.rpc('restore_owned_japam', {
+      p_japam_id: japamId,
+    });
+
+    if (error) {
+      console.warn('[JAPAM_REMOTE_RESTORE_FAILED]', {
+        japamId,
+        code: error.code,
+        message: error.message,
+      });
+      return false;
+    }
+
+    const returnedIds = Array.isArray(data)
+      ? data
+          .map((row) => (row && typeof row === 'object' ? (row as { restored_japam_id?: unknown }).restored_japam_id : null))
+          .filter((id): id is string => typeof id === 'string')
+      : [];
+
+    if (returnedIds.length !== 1 || returnedIds[0] !== japamId) {
+      console.warn('[JAPAM_REMOTE_RESTORE_FAILED]', {
+        japamId,
+        code: 'UNEXPECTED_RESPONSE',
+        message: 'Restore did not return exactly one matching Japam ID',
+      });
+      return false;
+    }
+
+    return true;
+  } catch {
+    console.warn('[JAPAM_REMOTE_RESTORE_FAILED]', {
+      japamId,
+      code: 'NETWORK_ERROR',
+      message: 'Network error during Japam restore',
+    });
+    return false;
+  }
+};
+
+const restoreJapamInStorage = async (
+  userId: string | null | undefined,
+  existing: Japam[],
+  target: Japam,
+): Promise<Japam[] | null> => {
+  if (userId) {
+    const restoredRemotely = await restoreRemoteJapam(target.id);
+    if (!restoredRemotely) return null;
+  }
+
+  const conflictCandidates = normalizeJapamName(target.name) === DEFAULT_JAPAM_NAME
+    ? existing.filter(
+        (j) =>
+          j.id !== target.id
+          && j.archivedAt === null
+          && normalizeJapamName(j.name) === DEFAULT_JAPAM_NAME,
+      )
+    : [];
+  const conflictUsage = userId
+    ? await Promise.all(conflictCandidates.map(async (conflict) => ({
+        conflict,
+        usage: await fetchRemoteJapamUsage(conflict.id),
+      })))
+    : conflictCandidates.map((conflict) => ({
+        conflict,
+        usage: { japamId: conflict.id, name: conflict.name, historyCount: 0, groupRefCount: 0, archivedAt: null },
+      }));
+
+  if (conflictUsage.some(({ usage }) => usage === null)) return null;
+  if (conflictUsage.some(({ usage }) => (usage?.historyCount ?? 0) > 0 || (usage?.groupRefCount ?? 0) > 0)) {
+    return null;
+  }
+
+  const restored = restoreJapamPure(target);
+  const retiredConflictIds = new Set(conflictUsage.map(({ conflict }) => conflict.id));
+  const updated = existing
+    .filter((j) => !retiredConflictIds.has(j.id))
+    .map((j) => (j.id === target.id ? restored : j));
+  const tombstones = userId ? await loadDeletedJapamsFromStorage(userId) : [];
+  const nextTombstones = tombstones.filter((id) => id !== target.id && !retiredConflictIds.has(id));
+  const nextDeleted = [...nextTombstones, ...conflictUsage.map(({ conflict }) => conflict.id)];
+
+  await saveJapamsToStorage(userId, updated);
+  if (userId) {
+    await saveDeletedJapamsToStorage(userId, Array.from(new Set(nextDeleted)));
+  }
+  await saveCurrentJapamIdToStorage(userId, restored.id);
+  if (userId) enqueueSync(userId, restored);
+
+  return updated;
+};
+
+const findRestoreCandidate = async (
+  userId: string,
+  japams: Japam[],
+): Promise<Japam | null> => {
+  const archived = japams
+    .filter((j) => j.archivedAt !== null && normalizeJapamName(j.name) === DEFAULT_JAPAM_NAME)
+    .sort(sortByCreatedAtThenId);
+  if (archived.length === 0) return null;
+
+  const usage = await Promise.all(archived.map(async (j) => ({
+    japam: j,
+    usage: await fetchRemoteJapamUsage(j.id),
+  })));
+  if (usage.some(({ usage: u }) => u === null)) return null;
+
+  const eligible = usage.filter(({ usage: u }) => (u?.historyCount ?? 0) > 0 || (u?.groupRefCount ?? 0) > 0);
+  if (eligible.length !== 1) return null;
+  return eligible[0].japam;
 };
 
 const deleteRemoteJapam = async (japamId: string): Promise<boolean> => {
@@ -318,7 +484,8 @@ const ensureDefaultJapamInternal = async (
   if (tombstones === null) {
     return { japams: local, currentJapamId: null, created: null };
   }
-  const merged = applyJapamTombstones(remote === null ? local : mergeJapamsById(local, remote), tombstones);
+  const mergedBeforeTombstones = remote === null ? local : mergeJapamsById(local, remote);
+  const merged = applyJapamTombstones(mergedBeforeTombstones, tombstones);
   await saveJapamsToStorage(userId, merged);
 
   const persistedCurrentId = await loadCurrentJapamIdFromStorage(userId);
@@ -326,14 +493,23 @@ const ensureDefaultJapamInternal = async (
   const persistedStillActive = persistedCurrentId
     ? active.find((j) => j.id === persistedCurrentId)
     : undefined;
-  if (persistedStillActive) {
+  if (persistedStillActive && normalizeJapamName(persistedStillActive.name) !== DEFAULT_JAPAM_NAME) {
     return { japams: merged, currentJapamId: persistedStillActive.id, created: null };
   }
 
-  if (active.length > 0) {
-    const currentJapamId = active[0].id;
-    await saveCurrentJapamIdToStorage(userId, currentJapamId);
-    return { japams: merged, currentJapamId, created: null };
+  const firstActive = active[0] ?? null;
+  if (firstActive && normalizeJapamName(firstActive.name) !== DEFAULT_JAPAM_NAME) {
+    await saveCurrentJapamIdToStorage(userId, firstActive.id);
+    return { japams: merged, currentJapamId: firstActive.id, created: null };
+  }
+
+  const restoreCandidate = await findRestoreCandidate(userId, mergedBeforeTombstones);
+  if (restoreCandidate) {
+    const restored = await restoreJapamInStorage(userId, mergedBeforeTombstones, restoreCandidate);
+    if (restored) {
+      return { japams: restored, currentJapamId: restoreCandidate.id, created: null };
+    }
+    return { japams: merged, currentJapamId: null, created: null };
   }
 
   // If remote could not be loaded, do not guess that the signed-in user has no remote Japams.
@@ -342,6 +518,11 @@ const ensureDefaultJapamInternal = async (
       await saveCurrentJapamIdToStorage(userId, null);
     }
     return { japams: merged, currentJapamId: null, created: null };
+  }
+
+  if (firstActive) {
+    await saveCurrentJapamIdToStorage(userId, firstActive.id);
+    return { japams: merged, currentJapamId: firstActive.id, created: null };
   }
 
   const now = new Date().toISOString();
@@ -421,14 +602,8 @@ export const restoreJapam = async (
   const existing = await loadJapamsFromStorage(userId);
   const target = existing.find((j) => j.id === japamId);
   if (!target) return existing;
-  const restored = restoreJapamPure(target);
-  const updated = existing.map((j) => (j.id === japamId ? restored : j));
-  await saveJapamsToStorage(userId, updated);
-  if (userId) {
-    const current = updated.find((j) => j.id === japamId);
-    if (current) enqueueSync(userId, current);
-  }
-  return updated;
+  const updated = await restoreJapamInStorage(userId, existing, target);
+  return updated ?? existing;
 };
 
 /**

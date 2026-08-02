@@ -65,6 +65,26 @@ const mockTombstoneEq = jest.fn();
 const mockTombstoneOrder = jest.fn();
 const mockFrom = mockSupabase.from as jest.Mock;
 const mockRpc = mockSupabase.rpc as jest.Mock;
+let deleteRpcResponse: { data: DeleteRpcRow[]; error: unknown } = {
+  data: [],
+  error: null,
+};
+let restoreRpcResponse: { data: RestoreRpcRow[]; error: unknown } = {
+  data: [],
+  error: null,
+};
+let usageRpcResponses: Record<string, { data: JapamUsageRpcRow[]; error: unknown }> = {};
+
+const zeroUsageResponse = (japamId: string): { data: JapamUsageRpcRow[]; error: unknown } => ({
+  data: [{
+    japam_id: japamId,
+    name: 'My Japam',
+    archived_at: null,
+    history_count: 0,
+    group_ref_count: 0,
+  }],
+  error: null,
+});
 
 const flushMicrotasks = () => new Promise<void>((r) => setTimeout(r, 0));
 
@@ -103,11 +123,48 @@ type DeleteRpcRow = {
   ambiguous_legacy_count?: number;
 };
 
+type RestoreRpcRow = {
+  restored_japam_id: string;
+  tombstones_deleted?: number;
+};
+
+type JapamUsageRpcRow = {
+  japam_id: string;
+  name: string;
+  archived_at: string | null;
+  history_count: number;
+  group_ref_count: number;
+};
+
 const mockRemoteDelete = (
   rows: DeleteRpcRow[] = [{ deleted_japam_id: JAPAM_ID_A }],
   error: unknown = null,
 ) => {
-  mockRpc.mockResolvedValue({ data: rows, error });
+  deleteRpcResponse = { data: rows, error };
+};
+
+const mockRemoteRestore = (
+  rows: RestoreRpcRow[] = [{ restored_japam_id: JAPAM_ID_A }],
+  error: unknown = null,
+) => {
+  restoreRpcResponse = { data: rows, error };
+};
+
+const mockRemoteJapamUsage = (
+  japamId: string,
+  row: Partial<JapamUsageRpcRow> = {},
+  error: unknown = null,
+) => {
+  usageRpcResponses[japamId] = {
+    data: [{
+      japam_id: japamId,
+      name: row.name ?? 'My Japam',
+      archived_at: row.archived_at ?? null,
+      history_count: row.history_count ?? 0,
+      group_ref_count: row.group_ref_count ?? 0,
+    }],
+    error,
+  };
 };
 
 beforeEach(async () => {
@@ -133,9 +190,20 @@ beforeEach(async () => {
     }
     return { select: mockSelect };
   });
+  mockRpc.mockImplementation((rpcName: string, params?: { p_japam_id?: string }) => {
+    if (rpcName === 'delete_owned_japam') return Promise.resolve(deleteRpcResponse);
+    if (rpcName === 'restore_owned_japam') return Promise.resolve(restoreRpcResponse);
+    if (rpcName === 'get_owned_japam_usage') {
+      const japamId = params?.p_japam_id ?? JAPAM_ID_A;
+      return Promise.resolve(usageRpcResponses[japamId] ?? zeroUsageResponse(japamId));
+    }
+    return Promise.resolve({ data: null, error: null });
+  });
   mockRemoteJapams([]);
   mockRemoteDeletedJapams([]);
   mockRemoteDelete();
+  mockRemoteRestore();
+  usageRpcResponses = {};
   jest.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
@@ -348,6 +416,42 @@ describe('ensureDefaultJapam', () => {
     expect(result.created).toBeNull();
     expect(mockUpsert).not.toHaveBeenCalled();
     expect(await loadJapams(UID)).toEqual([]);
+  });
+
+  it('restores an archived canonical Japam with history instead of creating a fresh empty My Japam', async () => {
+    const canonical = makeJapam({
+      id: 'canonical-history',
+      name: 'My Japam',
+      archivedAt: '2026-07-22T00:00:00.000Z',
+      updatedAt: '2026-07-22T00:00:00.000Z',
+    });
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([canonical]));
+    await AsyncStorage.setItem(`deletedJapams:${UID}`, JSON.stringify([canonical.id]));
+    await AsyncStorage.setItem('history', JSON.stringify([
+      {
+        completionId: 'history-1',
+        userId: UID,
+        date: '2026-07-22T12:00:00.000Z',
+        malas: 1,
+        totalCount: 108,
+        japamId: canonical.id,
+        japamName: canonical.name,
+      },
+    ]));
+    mockRemoteJapams([]);
+    mockRemoteDeletedJapams([{ japam_id: canonical.id }]);
+    mockRemoteJapamUsage(canonical.id, { history_count: 506, group_ref_count: 1 });
+    mockRemoteRestore([{ restored_japam_id: canonical.id }]);
+
+    const result = await ensureDefaultJapam(UID);
+
+    expect(result.created).toBeNull();
+    expect(result.currentJapamId).toBe(canonical.id);
+    expect(result.japams).toHaveLength(1);
+    expect(result.japams[0].archivedAt).toBeNull();
+    expect(mockUpsert).not.toHaveBeenCalled();
+    expect(mockRpc).toHaveBeenCalledWith('restore_owned_japam', { p_japam_id: canonical.id });
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(canonical.id);
   });
 
   it('does not create a default while deleted_japams fetch is unavailable, then still refuses a tombstoned default on retry', async () => {
@@ -831,11 +935,32 @@ describe('restoreJapam lifecycle sync', () => {
     await flushMicrotasks();
     await archiveJapam(UID, r!.created.id);
     await flushMicrotasks();
+    mockRemoteRestore([{ restored_japam_id: r!.created.id }]);
     mockUpsert.mockReset();
     await restoreJapam(UID, r!.created.id);
     await flushMicrotasks();
     expect(mockUpsert).toHaveBeenCalledTimes(1);
     expect(mockUpsert.mock.calls[0][0].archived_at).toBeNull();
+  });
+
+  it('restores a tombstoned archived Japam atomically and makes it current', async () => {
+    const archived = makeJapam({
+      id: 'restore-me',
+      name: 'My Japam',
+      archivedAt: '2026-07-23T00:00:00.000Z',
+      updatedAt: '2026-07-23T00:00:00.000Z',
+    });
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([archived]));
+    await AsyncStorage.setItem(`deletedJapams:${UID}`, JSON.stringify([archived.id]));
+    mockRemoteRestore([{ restored_japam_id: archived.id }]);
+
+    const result = await restoreJapam(UID, archived.id);
+
+    expect(mockRpc).toHaveBeenCalledWith('restore_owned_japam', { p_japam_id: archived.id });
+    expect(result.find((j) => j.id === archived.id)?.archivedAt).toBeNull();
+    expect(await AsyncStorage.getItem(`deletedJapams:${UID}`)).toBe('[]');
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(archived.id);
+    expect((await loadJapams(UID)).find((j) => j.id === archived.id)?.archivedAt).toBeNull();
   });
 });
 
@@ -1201,6 +1326,7 @@ describe('race-condition: latest-state-wins serialization', () => {
     const r = await createJapam(UID, 'Toggle');
     await flushMicrotasks();
     mockUpsert.mockReset();
+    mockRemoteRestore([{ restored_japam_id: r!.created.id }]);
 
     let callCount = 0;
     let resolveFirst: (v: unknown) => void;
@@ -1234,6 +1360,7 @@ describe('race-condition: latest-state-wins serialization', () => {
     await archiveJapam(UID, r!.created.id);
     await flushMicrotasks();
     mockUpsert.mockReset();
+    mockRemoteRestore([{ restored_japam_id: r!.created.id }]);
 
     let callCount = 0;
     let resolveFirst: (v: unknown) => void;

@@ -161,9 +161,10 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   const restoreJapam = useCallback(async (japamId: string): Promise<void> => {
     const updated = await japamsRepository.restoreJapam(userIdRef.current, japamId);
     setJapams(updated);
-    // Restoring is a "manage archived Japams" action, not a selection -- it deliberately does not
-    // change currentJapamId.
-  }, []);
+    if (updated.find((j) => j.id === japamId)?.archivedAt === null) {
+      selectJapam(japamId);
+    }
+  }, [selectJapam]);
 
   const deleteJapam = useCallback(async (japamId: string): Promise<void> => {
     const updated = await japamsRepository.deleteJapam(userIdRef.current, japamId);

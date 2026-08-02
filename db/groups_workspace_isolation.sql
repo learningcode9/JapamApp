@@ -429,10 +429,9 @@ begin
 end;
 $$;
 
--- ── 5f. get_my_groups (legacy 1-arg wrapper) — old clients get all active groups they belong
---      to, resolved from the caller's own memberships (current UUID or legacy Google sub).
---      Never trusts the client-supplied p_user_id for identity, and never exposes another
---      user's memberships.
+-- ── 5f. get_my_groups (legacy 1-arg wrapper) — retired. Workspace-scoped clients must call
+--      the authoritative 2-arg RPC with an explicit japam_id; this wrapper now fails closed so
+--      no broad or arbitrary fallback can resurrect the old cross-workspace behavior.
 create or replace function public.get_my_groups(p_user_id text)
 returns table (
   group_id   uuid,
@@ -445,27 +444,8 @@ language plpgsql
 security definer
 set search_path = public
 as $$
-declare
-  v_caller     text := public._groups_require_caller_id();
-  v_legacy_sub text := public._groups_legacy_sub();
 begin
-  return query
-  with caller_memberships as (
-    select distinct on (gm.group_id)
-      gm.group_id,
-      gm.japam_id,
-      gm.role,
-      gm.joined_at
-    from public.group_members gm
-    where gm.user_id = v_caller
-       or (v_legacy_sub is not null and gm.user_id = v_legacy_sub)
-    order by gm.group_id, (gm.user_id = v_caller) desc, gm.joined_at asc
-  )
-  select g.id, g.name, cm.role, g.is_active, cm.joined_at
-  from caller_memberships cm
-  join public.groups g on g.id = cm.group_id
-  where g.is_active
-  order by g.name, g.id;
+  raise exception 'workspace-scoped clients must call get_my_groups(text, uuid)';
 end;
 $$;
 

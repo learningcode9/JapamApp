@@ -256,17 +256,6 @@ describe('db/groups_workspace_isolation.sql structural contract', () => {
   );
 
   describe('legacy membership-aware wrappers', () => {
-    it('get_my_groups(text) authenticates with auth.uid(), supports legacy sub resolution, and does not call the sole-active helper', () => {
-      const body = functionBody(active, 'get_my_groups', ['text']);
-      expect(body).toMatch(/_groups_require_caller_id\(\)/);
-      expect(body).toMatch(/_groups_legacy_sub\(\)/);
-      expect(body).toMatch(/gm\.japam_id/);
-      expect(body).toMatch(/g\.is_active/);
-      expect(body).toMatch(/gm\.user_id = v_caller/);
-      expect(body).toMatch(/v_legacy_sub is not null and gm\.user_id = v_legacy_sub/);
-      expect(body).not.toMatch(/_groups_sole_active_japam_id\(\)/);
-    });
-
     it('legacy get_group_dashboard resolves the membership Japam first and fails on unassigned memberships', () => {
       const body = functionBody(active, 'get_group_dashboard', ['uuid', 'text', 'timestamptz', 'timestamptz']);
       expect(body).toMatch(/_groups_require_caller_id\(\)/);
@@ -290,6 +279,13 @@ describe('db/groups_workspace_isolation.sql structural contract', () => {
     it('get_my_unassigned_groups returns only japam_id IS NULL memberships', () => {
       const body = functionBody(active, 'get_my_unassigned_groups', []);
       expect(body).toMatch(/gm\.japam_id is null/);
+    });
+
+    it('legacy get_my_groups(text) fails closed instead of returning broad memberships', () => {
+      const body = functionBody(active, 'get_my_groups', ['text']);
+      expect(body).toMatch(/workspace-scoped clients must call get_my_groups\(text, uuid\)/i);
+      expect(body).not.toMatch(/gm\.japam_id/);
+      expect(body).not.toMatch(/_groups_sole_active_japam_id\(\)/);
     });
 
     it("attach_group_membership_to_japam accepts the current or legacy identity and touches only its unassigned row", () => {
