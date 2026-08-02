@@ -324,6 +324,21 @@ describe('Groups dashboard workspace scope', () => {
     expect(mockReplace).not.toHaveBeenCalled();
   });
 
+  it('does not call the dashboard RPC when workspace switches while /groups is active', async () => {
+    const tree = await renderScreen();
+    const callsBeforeSwitch = mockGetGroupDashboard.mock.calls.length;
+    expect(callsBeforeSwitch).toBeGreaterThan(0);
+
+    // The dashboard remains mounted in the tab navigator, but Groups is now the active route.
+    mockIsFocused = false;
+    mockPathname = '/groups';
+    mockCurrentJapamState = { currentJapamId: WORKSPACE_B };
+    await updateTree(tree);
+
+    expect(mockGetGroupDashboard).toHaveBeenCalledTimes(callsBeforeSwitch);
+    expect(allText(tree).join(' ')).not.toContain('Person B');
+  });
+
   it('never paints a slow prior-workspace response into the new workspace', async () => {
     const staleA = createDeferred<any[]>();
     mockGetGroupDashboard.mockImplementationOnce(() => staleA.promise);

@@ -132,6 +132,7 @@ export default function GroupsDashboardScreen() {
   // load can all fire close together; this ensures only one get_group_dashboard request is ever
   // in flight at a time, exactly like the same pattern already used by syncPendingHistory.
   const loadInFlightRef = useRef(false);
+  const dashboardLoadGenerationRef = useRef(0);
   const authSessionRef = useRef<Session | null | undefined>(undefined);
   const requestAuthUserRef = useRef<string | null>(null);
   const authGenerationRef = useRef(0);
@@ -151,15 +152,20 @@ export default function GroupsDashboardScreen() {
   // The Japam this dashboard is currently scoped to (set once a load has successfully rendered
   // that workspace's roster). While it is null (nothing loaded yet) no navigation happens.
   const loadedForJapamRef = useRef<string | null>(null);
+  const workspaceGenerationRef = useRef(0);
+  const previousJapamIdRef = useRef(currentJapamId);
+  const workspaceSwitchPendingRef = useRef(false);
   useEffect(() => {
     currentJapamIdRef.current = currentJapamId;
   }, [currentJapamId]);
 
   const clearDashboardForLogout = useCallback(() => {
     authGenerationRef.current += 1;
+    dashboardLoadGenerationRef.current += 1;
     authSessionRef.current = null;
     requestAuthUserRef.current = null;
     loadInFlightRef.current = false;
+    workspaceSwitchPendingRef.current = false;
     setAuthSession(null);
     setUserId(null);
     setRows([]);
@@ -221,6 +227,29 @@ export default function GroupsDashboardScreen() {
   }, [currentJapamId, isFocused, pathname, leaveIfWorkspaceMismatch]);
 
   useEffect(() => {
+    if (previousJapamIdRef.current === currentJapamId) return;
+    previousJapamIdRef.current = currentJapamId;
+    workspaceGenerationRef.current += 1;
+    dashboardLoadGenerationRef.current += 1;
+    loadInFlightRef.current = false;
+    if (loadedForJapamRef.current !== null || requestJapamRef.current !== null) {
+      workspaceSwitchPendingRef.current = true;
+    }
+    loadedForJapamRef.current = null;
+    requestJapamRef.current = null;
+    setRows([]);
+    setError('');
+    setInviteCode(null);
+    setLoading(false);
+  }, [currentJapamId]);
+
+  useEffect(() => {
+    if (pathname !== '/groups-dashboard') {
+      workspaceSwitchPendingRef.current = false;
+    }
+  }, [pathname]);
+
+  useEffect(() => {
     setDisplayGroupName(groupName);
     setRenameInput(groupName);
   }, [groupName]);
@@ -230,8 +259,14 @@ export default function GroupsDashboardScreen() {
   // table would flash back to a loading state every ~12s or after every completion, which is far
   // more disruptive than the staleness this feature is meant to fix.
   const load = useCallback(async (options?: { silent?: boolean }) => {
+    const { isFocused: routeIsFocused, pathname: activePathname } = dashboardRouteStateRef.current;
+    if (!routeIsFocused || activePathname !== '/groups-dashboard' || workspaceSwitchPendingRef.current) {
+      return;
+    }
     if (loadInFlightRef.current) return;
     loadInFlightRef.current = true;
+    const requestLoadGeneration = dashboardLoadGenerationRef.current;
+    const requestWorkspaceGeneration = workspaceGenerationRef.current;
     const silent = options?.silent ?? false;
     try {
       const session = authSessionRef.current;
@@ -267,9 +302,13 @@ export default function GroupsDashboardScreen() {
       const requestJapamId = currentJapamId;
       requestJapamRef.current = requestJapamId;
       const isRequestCurrent = () => (
-        authGenerationRef.current === requestGeneration
+        dashboardLoadGenerationRef.current === requestLoadGeneration
+        && workspaceGenerationRef.current === requestWorkspaceGeneration
+        && authGenerationRef.current === requestGeneration
         && authSessionRef.current?.user?.id === requestUserId
         && currentJapamIdRef.current === requestJapamId
+        && dashboardRouteStateRef.current.isFocused
+        && dashboardRouteStateRef.current.pathname === '/groups-dashboard'
       );
       try {
         const { start, end } = getLocalTodayBoundsIso();
@@ -286,7 +325,9 @@ export default function GroupsDashboardScreen() {
         leaveIfWorkspaceMismatch();
       }
     } finally {
-      loadInFlightRef.current = false;
+      if (dashboardLoadGenerationRef.current === requestLoadGeneration) {
+        loadInFlightRef.current = false;
+      }
     }
   }, [authSession, currentJapamId, groupId, leaveIfWorkspaceMismatch]);
 
