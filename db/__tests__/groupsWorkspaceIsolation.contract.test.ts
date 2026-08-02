@@ -21,7 +21,9 @@
  *     membership that is already assigned, and returns the required report columns
  *   - all 10 RPC signatures exist exactly once (6 authoritative + 4 legacy wrappers)
  *   - every authoritative RPC body derives the caller identity from auth.uid() via
- *     _groups_require_caller_id(); every legacy wrapper auto-binds via _groups_sole_active_japam_id()
+ *     _groups_require_caller_id(); create/join legacy wrappers auto-bind via
+ *     _groups_sole_active_japam_id(); legacy get_my_groups and dashboard wrappers resolve from the
+ *     caller's own memberships and only use the sole-active fallback when needed
  *   - the dashboard aggregates per-member by h.user_id = gm.user_id AND h.japam_id = gm.japam_id,
  *     ignores unassigned memberships, never counts null-japam_id legacy history, and never sums by
  *     user_id alone
@@ -43,12 +45,18 @@ const AUTHORITATIVE_RPCS = [
   ['get_group_dashboard', ['uuid', 'text', 'timestamptz', 'timestamptz', 'uuid']],
 ] as const;
 
-const LEGACY_WRAPPER_RPCS = [
+const LEGACY_SOLE_BIND_WRAPPER_RPCS = [
   ['create_group', ['text', 'text', 'text']],
   ['join_group_by_invite_code', ['text', 'text']],
+] as const;
+
+const LEGACY_MEMBERSHIP_WRAPPER_RPCS = [
   ['get_my_groups', ['text']],
   ['get_group_dashboard', ['uuid', 'text', 'timestamptz', 'timestamptz']],
 ] as const;
+
+const ALL_LEGACY_RPCS = [...LEGACY_SOLE_BIND_WRAPPER_RPCS, ...LEGACY_MEMBERSHIP_WRAPPER_RPCS] as const;
+const ALL_RPCS = [...AUTHORITATIVE_RPCS, ...ALL_LEGACY_RPCS] as const;
 
 const HELPER_FUNCTIONS = ['_groups_sole_active_japam_id', '_groups_backfill_unassigned_memberships'];
 
@@ -214,7 +222,7 @@ describe('db/groups_workspace_isolation.sql structural contract', () => {
     }
   );
 
-  it.each(LEGACY_WRAPPER_RPCS)(
+  it.each(ALL_LEGACY_RPCS)(
     '%s%s exists exactly once as the legacy wrapper signature',
     (rpcName, types) => {
       const matching = functionHeaders(active, rpcName).filter(
@@ -238,7 +246,7 @@ describe('db/groups_workspace_isolation.sql structural contract', () => {
     }
   );
 
-  it.each(LEGACY_WRAPPER_RPCS)(
+  it.each(LEGACY_SOLE_BIND_WRAPPER_RPCS)(
     '%s%s is a thin wrapper that auto-binds via _groups_sole_active_japam_id()',
     (rpcName, types) => {
       const body = functionBody(active, rpcName, [...types]);
@@ -246,6 +254,30 @@ describe('db/groups_workspace_isolation.sql structural contract', () => {
       expect(body).toMatch(/select \* from public\./);
     }
   );
+
+  describe('legacy membership-aware wrappers', () => {
+    it('get_my_groups(text) authenticates with auth.uid(), supports legacy sub resolution, and does not call the sole-active helper', () => {
+      const body = functionBody(active, 'get_my_groups', ['text']);
+      expect(body).toMatch(/_groups_require_caller_id\(\)/);
+      expect(body).toMatch(/_groups_legacy_sub\(\)/);
+      expect(body).toMatch(/gm\.japam_id/);
+      expect(body).toMatch(/g\.is_active/);
+      expect(body).toMatch(/gm\.user_id = v_caller/);
+      expect(body).toMatch(/v_legacy_sub is not null and gm\.user_id = v_legacy_sub/);
+      expect(body).not.toMatch(/_groups_sole_active_japam_id\(\)/);
+    });
+
+    it('legacy get_group_dashboard resolves the membership Japam first, then falls back to sole-active only when needed', () => {
+      const body = functionBody(active, 'get_group_dashboard', ['uuid', 'text', 'timestamptz', 'timestamptz']);
+      expect(body).toMatch(/_groups_require_caller_id\(\)/);
+      expect(body).toMatch(/_groups_legacy_sub\(\)/);
+      expect(body).toMatch(/select gm\.japam_id\s+into v_japam/);
+      expect(body).toMatch(/if not found then/);
+      expect(body).toMatch(/if v_japam is null then/);
+      expect(body).toMatch(/_groups_sole_active_japam_id\(\)/);
+      expect(body).toMatch(/not a member of this group/);
+    });
+  });
 
   describe('workspace-scoped reads never leak across workspaces', () => {
     it("get_my_groups filters INSIDE the RPC by the caller's own memberships with japam_id = p_japam_id", () => {
@@ -315,7 +347,7 @@ describe('db/groups_workspace_isolation.sql structural contract', () => {
     expect(active).not.toMatch(/GRANT ALL ON FUNCTION[\s\S]*?TO anon/i);
   });
 
-  it.each([...AUTHORITATIVE_RPCS, ...LEGACY_WRAPPER_RPCS])(
+  it.each(ALL_RPCS)(
     '%s%s explicitly revokes anon EXECUTE',
     (rpcName, types) => {
       const typesJoined = [...types].join(', ');
@@ -325,7 +357,7 @@ describe('db/groups_workspace_isolation.sql structural contract', () => {
     }
   );
 
-  it.each([...AUTHORITATIVE_RPCS, ...LEGACY_WRAPPER_RPCS])(
+  it.each(ALL_RPCS)(
     '%s%s is revoked from PUBLIC and granted to authenticated + service_role',
     (rpcName, types) => {
       const header = functionHeaders(active, rpcName).find(
