@@ -48,6 +48,7 @@ import {
 } from '../../lib/anonymousAuth';
 import { supabase } from '../../lib/supabase';
 import { fetchJapamHistoryRows } from '../../lib/supabaseRestHelper';
+import { claimAuthResponse, emitJapamAuthUpdated } from '../../lib/authEvents';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -224,7 +225,7 @@ export default function TimerScreen() {
     setShowGuestNameModal(false);
     setShowUserModal(false);
     setGuestNameInput('');
-    DeviceEventEmitter.emit('japam-auth-updated');
+    emitJapamAuthUpdated();
   }, [guestNameInput]);
 
   const loadStats = useCallback(async () => {
@@ -300,6 +301,9 @@ export default function TimerScreen() {
       toLocalDayKey,
       getPreviousDateKey,
       { includeBlankLegacy },
+      // Pass the live Japam list so legacy-name attribution is ambiguity-safe and identical to
+      // My Japams' statsByJapamWithAttribution (shared rule).
+      japams,
     );
     const safeTodayTotal = scopedStats.todayTotalCount;
     const nextStreak = scopedStats.dayStreak;
@@ -375,7 +379,7 @@ export default function TimerScreen() {
     // Supabase UUID (set by signInAsGuest). Do not overwrite it with the Google numeric ID.
     setUserName(googleName);
     setShowUserModal(false);
-    DeviceEventEmitter.emit('japam-auth-updated');
+    emitJapamAuthUpdated();
     DeviceEventEmitter.emit('japam-stats-updated');
     void loadStats();
   }, [loadStats, migrateGuestHistoryToGoogle]);
@@ -461,10 +465,12 @@ export default function TimerScreen() {
     return () => signInSub.remove();
   }, [handleNativeGoogleSignIn]);
 
+  const handledWebAuthResponseRef = useRef<NonNullable<typeof response> | null>(null);
+
   useEffect(() => {
     const handleGoogleLogin = async () => {
       if (Platform.OS !== 'web') return; // native platforms use handleNativeGoogleSignIn
-      if (!response) return;
+      if (!claimAuthResponse(handledWebAuthResponseRef, response)) return;
 
       console.log('[AUTH_CALLBACK] source=timer-web response.type=%s', response.type);
       if (response.type !== 'success') {
@@ -575,10 +581,9 @@ export default function TimerScreen() {
         await AsyncStorage.setItem(USER_ID_KEY, userId);
         setUserName(googleName);
         setShowUserModal(false);
-        DeviceEventEmitter.emit('japam-auth-updated');
+        emitJapamAuthUpdated();
         DeviceEventEmitter.emit('japam-stats-updated');
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
-          window.dispatchEvent(new Event('japam-auth-updated'));
           window.dispatchEvent(new Event('japam-stats-updated'));
         }
         void loadStats();

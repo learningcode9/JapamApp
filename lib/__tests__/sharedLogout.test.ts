@@ -129,7 +129,7 @@ describe('runSharedLogoutFlow', () => {
 
     expect(mockGoogleSignOut).not.toHaveBeenCalled();
     expect(mockSupabaseSignOut).toHaveBeenCalledTimes(1);
-    expect(DeviceEventEmitter.emit).toHaveBeenCalledWith('japam-auth-updated');
+    expect(DeviceEventEmitter.emit).not.toHaveBeenCalledWith('japam-auth-updated');
     expect(dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'japam-auth-updated' }));
   });
 });

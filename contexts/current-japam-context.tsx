@@ -72,7 +72,6 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   // switches never overwrite a still-in-flight entry — each user's creation promise and waiter
   // count lives independently and is cleaned up only when that user's last caller exits.
   const coordinator = useMemo(() => createDefaultJapamCreationCoordinator(), []);
-
   const refresh = useCallback(async () => {
     setIsLoading(true);
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
@@ -112,16 +111,13 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void refresh();
-    const authSub = DeviceEventEmitter.addListener('japam-auth-updated', () => void refresh());
+    const authHandler = () => void refresh();
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      window.addEventListener('japam-auth-updated', refresh as EventListener);
+      window.addEventListener('japam-auth-updated', authHandler);
+      return () => window.removeEventListener('japam-auth-updated', authHandler);
     }
-    return () => {
-      authSub.remove();
-      if (Platform.OS === 'web' && typeof window !== 'undefined') {
-        window.removeEventListener('japam-auth-updated', refresh as EventListener);
-      }
-    };
+    const authSub = DeviceEventEmitter.addListener('japam-auth-updated', authHandler);
+    return () => authSub.remove();
   }, [refresh]);
 
   const selectJapam = useCallback((japamId: string | null) => {

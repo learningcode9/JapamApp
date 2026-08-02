@@ -33,6 +33,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { fetchJapamHistoryRows } from '../../lib/supabaseRestHelper';
 import { runSharedLogoutFlow } from '../../lib/sharedLogout';
+import { claimAuthResponse, emitJapamAuthUpdated } from '../../lib/authEvents';
 
 import {
   Alert,
@@ -1314,7 +1315,7 @@ export default function JapamMain() {
     setShowGuestNameModal(false);
     setShowUserModal(false);
     setGuestNameInput('');
-    DeviceEventEmitter.emit('japam-auth-updated');
+    emitJapamAuthUpdated();
   }, [guestNameInput]);
 
   const handleNativeGoogleSignIn = useCallback(async () => {
@@ -1364,7 +1365,7 @@ export default function JapamMain() {
       await migrateGuestHistoryToGoogle(userId);
       await AsyncStorage.setItem(USER_ID_KEY, userId);
       userIdRef.current = userId;
-      DeviceEventEmitter.emit('japam-auth-updated');
+      emitJapamAuthUpdated();
 
       await loadJapamNameFromSupabase(userId);
       await restoreTodayTotal();
@@ -1387,10 +1388,12 @@ export default function JapamMain() {
     restoreTotal,
   ]);
 
+  const handledWebAuthResponseRef = useRef<NonNullable<typeof response> | null>(null);
+
   useEffect(() => {
     const handleGoogleLogin = async () => {
       if (Platform.OS !== 'web') return; // native platforms use handleNativeGoogleSignIn
-      if (!response) return;
+      if (!claimAuthResponse(handledWebAuthResponseRef, response)) return;
 
       console.log('[AUTH_CALLBACK] source=tap-japam-web response.type=%s', response.type);
       if (response.type !== 'success') {
@@ -1507,10 +1510,7 @@ export default function JapamMain() {
         await migrateGuestHistoryToGoogle(userId);
         await AsyncStorage.setItem(USER_ID_KEY, userId);
         userIdRef.current = userId;
-        DeviceEventEmitter.emit('japam-auth-updated');
-        if (Platform.OS === 'web' && typeof window !== 'undefined') {
-          window.dispatchEvent(new Event('japam-auth-updated'));
-        }
+        emitJapamAuthUpdated();
 
         await loadJapamNameFromSupabase(userId);
         await restoreTodayTotal();

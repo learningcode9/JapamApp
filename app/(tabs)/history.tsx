@@ -751,8 +751,10 @@ export default function HistoryScreen() {
   }, []);
 
   const buildScopedRows = useCallback((sessions: Session[], japamId: string, japamName: string) => {
-    return buildDailyRows(filterByJapam(sessions, japamId, japamName, { includeBlankLegacy }));
-  }, [includeBlankLegacy]);
+    // Pass the live Japam list so filterByJapam's legacy-name attribution is ambiguity-safe and
+    // identical to My Japams' statsByJapamWithAttribution (shared rule).
+    return buildDailyRows(filterByJapam(sessions, japamId, japamName, { includeBlankLegacy }, japams));
+  }, [includeBlankLegacy, japams]);
 
   const getDisplayedUserKey = useCallback(() => {
     const appliedScopeKey = latestAppliedScopeKeyRef.current;

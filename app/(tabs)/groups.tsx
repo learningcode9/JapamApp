@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -16,12 +16,15 @@ import {
   View,
 } from 'react-native';
 import {
+  attachGroupMembershipToJapam,
   createGroup,
   getMyGroups,
+  getMyUnassignedGroups,
   joinGroupByInviteCode,
   type CreateGroupResult,
   type MyGroup,
 } from '../../lib/groupsRepository';
+import { useCurrentJapam } from '../../contexts/current-japam-context';
 
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
@@ -29,12 +32,15 @@ const TEAL = '#0F8F87';
 
 export default function GroupsScreen() {
   const router = useRouter();
+  const { currentJapamId, currentJapam, isLoading: japamLoading } = useCurrentJapam();
 
   const [userId, setUserId] = useState<string | null>(null);
   const [userName, setUserName] = useState('');
   const [loading, setLoading] = useState(true);
   const [groups, setGroups] = useState<MyGroup[]>([]);
+  const [unassignedGroups, setUnassignedGroups] = useState<MyGroup[]>([]);
   const [listError, setListError] = useState('');
+  const [attachError, setAttachError] = useState('');
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createName, setCreateName] = useState('');
@@ -47,33 +53,89 @@ export default function GroupsScreen() {
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState('');
 
-  const loadGroups = useCallback(async () => {
+  // Stale-response guard: only the response for the CURRENTLY selected workspace may populate
+  // the list, so a slow Workspace-A response can never overwrite Workspace-B state after a
+  // switch (the server also scopes, but the client must never render cross-workspace data).
+  const requestJapamRef = useRef<string | null>(null);
+  const loadPromiseRef = useRef<Promise<void> | null>(null);
+  const loadInFlightKeyRef = useRef<string | null>(null);
+  const lastLoadedKeyRef = useRef<string | null>(null);
+  const settledLoadKeyRef = useRef<string | null>(null);
+  const currentLoadKey = `${userId ?? 'guest'}:${currentJapamId ?? 'none'}`;
+  const initialLoading = settledLoadKeyRef.current !== currentLoadKey;
+  const backgroundRefreshing = !initialLoading && (loading || japamLoading);
+  const isInteractionLoading = initialLoading || backgroundRefreshing;
+
+  const loadGroups = useCallback(async (options?: { force?: boolean }) => {
+    const force = options?.force ?? false;
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
     const savedUserName = (await AsyncStorage.getItem(USER_NAME_KEY)) || '';
-    setUserId(savedUserId);
-    setUserName(savedUserName);
+    const loadKey = `${savedUserId ?? 'guest'}:${currentJapamId ?? 'none'}`;
 
-    if (!savedUserId) {
-      setGroups([]);
-      setLoading(false);
+    if (loadPromiseRef.current && loadInFlightKeyRef.current === loadKey) {
+      return loadPromiseRef.current;
+    }
+
+    if (!force && lastLoadedKeyRef.current === loadKey) {
+      setUserId(savedUserId);
+      setUserName(savedUserName);
       return;
     }
 
-    setLoading(true);
-    setListError('');
-    try {
-      const result = await getMyGroups(savedUserId);
-      setGroups(result);
-    } catch (error: any) {
-      setListError(error?.message || 'Could not load your groups.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    const promise = (async () => {
+      setUserId(savedUserId);
+      setUserName(savedUserName);
+
+      if (!savedUserId || !currentJapamId) {
+        setGroups([]);
+        setUnassignedGroups([]);
+        // Clear the in-flight marker too, so a slow response from a previously selected workspace
+        // can never repopulate the list after the user deselects/leaves the workspace.
+        requestJapamRef.current = null;
+        lastLoadedKeyRef.current = loadKey;
+        settledLoadKeyRef.current = loadKey;
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      setListError('');
+      setAttachError('');
+      requestJapamRef.current = currentJapamId;
+      try {
+        const [result, unassigned] = await Promise.all([
+          getMyGroups(savedUserId, currentJapamId),
+          getMyUnassignedGroups(),
+        ]);
+        if (requestJapamRef.current !== currentJapamId) return;
+        setGroups(result);
+        setUnassignedGroups(unassigned);
+        lastLoadedKeyRef.current = loadKey;
+      } catch (error: any) {
+        if (requestJapamRef.current !== currentJapamId) return;
+        setListError(error?.message || 'Could not load your groups.');
+      } finally {
+        if (requestJapamRef.current === currentJapamId) {
+          settledLoadKeyRef.current = loadKey;
+          setLoading(false);
+        }
+      }
+    })();
+
+    loadPromiseRef.current = promise;
+    loadInFlightKeyRef.current = loadKey;
+    promise.finally(() => {
+      if (loadPromiseRef.current === promise) {
+        loadPromiseRef.current = null;
+        loadInFlightKeyRef.current = null;
+      }
+    });
+    return promise;
+  }, [currentJapamId]);
 
   useFocusEffect(
     useCallback(() => {
-      void loadGroups();
+      void loadGroups({ force: true });
     }, [loadGroups])
   );
 
@@ -84,19 +146,33 @@ export default function GroupsScreen() {
     });
   };
 
+  const handleAttachGroup = async (groupId: string) => {
+    if (!currentJapamId) return;
+    setAttachError('');
+    const outcome = await attachGroupMembershipToJapam(groupId, currentJapamId);
+    if (outcome.kind === 'error') {
+      setAttachError(outcome.message || 'Could not attach this group to the selected Japam.');
+      return;
+    }
+    await loadGroups({ force: true });
+  };
+
   const handleCreateSubmit = async () => {
     const name = createName.trim();
     if (!name) {
       setCreateError('Please enter a group name.');
       return;
     }
-    if (!userId) return;
+    if (!userId || !currentJapamId) {
+      setCreateError('Select a Japam first — groups are tied to the selected Japam.');
+      return;
+    }
     setCreating(true);
     setCreateError('');
     try {
-      const result = await createGroup(name, userId, userName);
+      const result = await createGroup(name, userId, userName, currentJapamId);
       setCreateName('');
-      await loadGroups();
+      await loadGroups({ force: true });
       // Show the success view (invite code + Share) instead of navigating immediately — the
       // user decides when to leave, after optionally sharing the code.
       setCreatedGroup(result);
@@ -140,11 +216,14 @@ export default function GroupsScreen() {
       setJoinError('Please enter an invite code.');
       return;
     }
-    if (!userId) return;
+    if (!userId || !currentJapamId) {
+      setJoinError('Select a Japam first — joined groups are tied to the selected Japam.');
+      return;
+    }
     setJoining(true);
     setJoinError('');
     try {
-      const outcome = await joinGroupByInviteCode(code, userId, userName);
+      const outcome = await joinGroupByInviteCode(code, userId, userName, currentJapamId);
       if (outcome.kind === 'notFound') {
         setJoinError('No group found with that code.');
         return;
@@ -159,7 +238,7 @@ export default function GroupsScreen() {
       }
       setShowJoinModal(false);
       setJoinCode('');
-      await loadGroups();
+      await loadGroups({ force: true });
       openGroupDashboard(outcome.groupId, outcome.groupName);
     } finally {
       setJoining(false);
@@ -182,39 +261,90 @@ export default function GroupsScreen() {
   return (
     <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <Text style={styles.header}>Family Japam Groups</Text>
+        <Text style={styles.header}>Groups</Text>
+
+        <View style={styles.workspaceBanner}>
+          <Ionicons name="layers-outline" size={16} color={TEAL} />
+          <Text style={styles.workspaceBannerText}>
+            {currentJapam
+              ? `Showing groups for: ${currentJapam.name}`
+              : japamLoading
+                ? 'Loading your selected Japam...'
+                : 'Select a Japam to manage your groups'}
+          </Text>
+        </View>
 
         <View style={styles.actionsRow}>
-          <Pressable style={styles.primaryButton} onPress={() => setShowCreateModal(true)}>
+          <Pressable
+            style={[styles.primaryButton, (!currentJapamId || isInteractionLoading) && styles.disabledButton]}
+            disabled={!currentJapamId || isInteractionLoading}
+            onPress={() => setShowCreateModal(true)}
+          >
             <Text style={styles.primaryButtonText}>Create Group</Text>
           </Pressable>
-          <Pressable style={styles.secondaryButton} onPress={() => setShowJoinModal(true)}>
+          <Pressable
+            style={[styles.secondaryButton, (!currentJapamId || isInteractionLoading) && styles.disabledButton]}
+            disabled={!currentJapamId || isInteractionLoading}
+            onPress={() => setShowJoinModal(true)}
+          >
             <Text style={styles.secondaryButtonText}>Join Group</Text>
           </Pressable>
         </View>
 
-        {loading ? (
+        {initialLoading ? (
           <ActivityIndicator color={TEAL} style={styles.loadingSpinner} />
         ) : listError ? (
           <Text style={styles.errorText}>{listError}</Text>
-        ) : groups.length === 0 ? (
+        ) : !currentJapamId ? (
           <Text style={styles.emptyText}>
-            You're not in any groups yet. Create one or join with an invite code.
+            Groups are tied to the Japam you&apos;ve selected. Open the My Japams tab and pick a Japam to
+            see its groups.
+          </Text>
+        ) : groups.length === 0 && unassignedGroups.length === 0 ? (
+          <Text style={styles.emptyText}>
+            You&apos;re not in any groups for this Japam yet. Create one or join with an invite code.
           </Text>
         ) : (
-          groups.map((group) => (
-            <Pressable
-              key={group.groupId}
-              style={styles.groupRow}
-              onPress={() => openGroupDashboard(group.groupId, group.name)}
-            >
-              <View style={styles.groupRowText}>
-                <Text style={styles.groupName}>{group.name}</Text>
-                {group.role === 'admin' && <Text style={styles.adminBadge}>Admin</Text>}
+          <>
+            {groups.map((group) => (
+              <Pressable
+                key={group.groupId}
+                style={styles.groupRow}
+                onPress={() => openGroupDashboard(group.groupId, group.name)}
+              >
+                <View style={styles.groupRowText}>
+                  <Text style={styles.groupName}>{group.name}</Text>
+                  {group.role === 'admin' && <Text style={styles.adminBadge}>Admin</Text>}
+                </View>
+                <Ionicons name="chevron-forward" size={20} color={TEAL} />
+              </Pressable>
+            ))}
+
+            {unassignedGroups.length > 0 ? (
+              <View style={styles.unassignedSection}>
+                <Text style={styles.unassignedTitle}>Unassigned Groups</Text>
+                <Text style={styles.unassignedHint}>
+                  These groups aren&apos;t tied to a Japam yet. Attach them to{' '}
+                  {currentJapam?.name ?? 'this Japam'} to see them here and on the dashboard.
+                </Text>
+                {attachError ? <Text style={styles.errorText}>{attachError}</Text> : null}
+                {unassignedGroups.map((group) => (
+                  <View key={group.groupId} style={styles.unassignedRow}>
+                    <View style={styles.groupRowText}>
+                      <Text style={styles.groupName}>{group.name}</Text>
+                      {group.role === 'admin' && <Text style={styles.adminBadge}>Admin</Text>}
+                    </View>
+                    <Pressable
+                      style={styles.attachButton}
+                      onPress={() => handleAttachGroup(group.groupId)}
+                    >
+                      <Text style={styles.attachButtonText}>Attach</Text>
+                    </Pressable>
+                  </View>
+                ))}
               </View>
-              <Ionicons name="chevron-forward" size={20} color={TEAL} />
-            </Pressable>
-          ))
+            ) : null}
+          </>
         )}
       </ScrollView>
 
@@ -329,6 +459,44 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: { color: '#0f172a', fontWeight: '900', fontSize: 16 },
   disabledButton: { opacity: 0.5 },
+  workspaceBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(15,143,135,0.10)',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 14,
+  },
+  workspaceBannerText: { fontSize: 14, fontWeight: '600', color: '#12383c', flex: 1 },
+  unassignedSection: {
+    marginTop: 18,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(15,118,110,0.15)',
+    paddingTop: 14,
+  },
+  unassignedTitle: { fontSize: 16, fontWeight: '800', color: '#12383c', marginBottom: 4 },
+  unassignedHint: { fontSize: 13, lineHeight: 19, color: '#365f61', marginBottom: 10 },
+  unassignedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#f2faf8',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.12)',
+  },
+  attachButton: {
+    backgroundColor: TEAL,
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+  },
+  attachButtonText: { color: '#fff', fontWeight: '800', fontSize: 14 },
   loadingSpinner: { marginTop: 24 },
   emptyText: { color: '#365f61', fontSize: 15, lineHeight: 22, textAlign: 'center', marginTop: 24 },
   errorText: { color: '#b91c1c', fontSize: 14, marginBottom: 12, textAlign: 'center' },

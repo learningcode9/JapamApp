@@ -111,6 +111,7 @@ jest.mock('../../lib/historyRepository', () => ({
 }));
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { DeviceEventEmitter } from 'react-native';
 import React from 'react';
 const renderer = require('react-test-renderer');
 const { act } = renderer;
@@ -232,7 +233,7 @@ describe('MyJapamsScreen hydration regression', () => {
     expect(countByTestId(tree, 'japam-stat-value-shell')).toBe(2);
     expect(countByTestId(tree, 'japam-stat-skeleton')).toBe(0);
     expect(mockLoadJapamStats).toHaveBeenCalledTimes(1);
-    expect(mockLoadJapamStats).toHaveBeenCalledWith(UID);
+    expect(mockLoadJapamStats).toHaveBeenCalledWith(UID, mockCurrentJapamState.japams);
   });
 
   it('shows loading at most once per user change and never returns to loading after ready during same-user Japam updates', async () => {
@@ -321,6 +322,65 @@ describe('MyJapamsScreen hydration regression', () => {
     states.push(getScreenState(tree));
     expect(states).toEqual(['loading', 'ready', 'ready', 'ready', 'ready']);
     expect(allText(tree)).toContain('2 malas');
+    expect(countByTestId(tree, 'japam-stat-skeleton')).toBe(0);
+  });
+
+  it('preserves displayed stats during a background event refresh while the reload is pending, then updates to the new totals', async () => {
+    const refreshDeferred = createDeferred<Map<string, { todayMalas: number; todayTotalCount: number; lifetimeMalas: number; lifetimeTotalCount: number }>>();
+    let callCount = 0;
+    mockLoadJapamStats.mockImplementation(async (userId: string | null) => {
+      callCount += 1;
+      if (userId !== UID) return new Map();
+      if (callCount === 1) {
+        return new Map([
+          [JAPAM_ID, {
+            todayMalas: 1,
+            todayTotalCount: 108,
+            lifetimeMalas: 2,
+            lifetimeTotalCount: 216,
+          }],
+        ]);
+      }
+      return refreshDeferred.promise;
+    });
+
+    const tree = await renderScreen();
+    expect(getScreenState(tree)).toBe('loading');
+
+    await AsyncStorage.setItem('userId', UID);
+    mockCurrentJapamState = {
+      ...mockCurrentJapamState,
+      isLoading: false,
+    };
+    await updateTree(tree);
+
+    expect(getScreenState(tree)).toBe('ready');
+    expect(allText(tree)).toContain('2 malas');
+    expect(countByTestId(tree, 'japam-stat-skeleton')).toBe(0);
+
+    DeviceEventEmitter.emit('japam-stats-updated');
+    await flush();
+
+    expect(getScreenState(tree)).toBe('ready');
+    expect(allText(tree)).toContain('2 malas');
+    expect(countByTestId(tree, 'japam-stat-skeleton')).toBe(0);
+
+    await act(async () => {
+      refreshDeferred.resolve(new Map([
+        [JAPAM_ID, {
+          todayMalas: 1,
+          todayTotalCount: 108,
+          lifetimeMalas: 3,
+          lifetimeTotalCount: 324,
+        }],
+      ]));
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(getScreenState(tree)).toBe('ready');
+    expect(allText(tree)).toContain('3 malas');
+    expect(allText(tree)).not.toContain('2 malas');
     expect(countByTestId(tree, 'japam-stat-skeleton')).toBe(0);
   });
 });

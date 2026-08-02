@@ -25,14 +25,21 @@ import { DeviceEventEmitter, Platform } from 'react-native';
 import {
   normalizeAll,
   statsByJapam,
+  statsByJapamWithAttribution,
   japamStatsFor as japamStatsForSelector,
   filterByJapam,
   toLocalDayKey,
   type HistoryRecord,
+  type JapamAttributionInput,
   type RawHistoryRecord,
   type JapamStats,
 } from './historyStore';
-import { planLegacyHistoryBackfill, type LegacyHistoryBackfillPlan } from './legacyHistoryBackfill';
+import {
+  planLegacyHistoryBackfill,
+  type LegacyHistoryBackfillOptions,
+  type LegacyHistoryBackfillPlan,
+} from './legacyHistoryBackfill';
+import { activeJapams, type Japam } from './japams';
 
 export type { JapamStats };
 /** Re-exported so screens have one single import path for both loading and reading stats — they
@@ -78,27 +85,50 @@ export const loadHistoryForUser = async (
  * japamName is an optional fallback: when japamId is a real UUID, filterByJapam also includes
  * legacy records whose japam_id is null but whose japam_name matches — rows created before Japam
  * workspaces existed, or rows whose japam_id was dropped by a NULL FK.
+ *
+ * The optional `japams` list is passed through to filterByJapam so that legacy-name attribution is
+ * ambiguity-safe and identical to My Japams' statsByJapamWithAttribution (shared rule): a legacy
+ * name shared by more than one Japam is claimed by none of them.
  */
 export const loadHistoryForJapam = async (
   userId: string | null | undefined,
   japamId: string | null,
   japamName?: string | null,
   options: { includeBlankLegacy?: boolean } = {},
+  japams?: Japam[] | null,
 ): Promise<HistoryRecord[]> => {
   const forUser = await loadHistoryForUser(userId);
-  return filterByJapam(forUser, japamId, japamName, options);
+  const inputs: JapamAttributionInput[] | null = japams && japams.length > 0
+    ? japams.map((j) => ({ id: j.id, name: j.name }))
+    : null;
+  return filterByJapam(forUser, japamId, japamName, options, inputs);
 };
 
 /**
  * Every Japam's today + lifetime stats at once, for this user (or guest) — the "My Japams" list's
  * one-stop read. Returns the same Map shape lib/historyStore.ts's statsByJapam already produces;
  * look up one Japam's stats out of it with japamStatsFor (re-exported above).
+ *
+ * When the caller also supplies the current Japam list, stats are computed through
+ * statsByJapamWithAttribution so pre-Workspaces legacy records are attributed to a Japam exactly
+ * the way History/Timer attribute them (matching japam_id; unambiguous japam_name match; blank
+ * legacy to the first ACTIVE Japam — `activeJapams(japams)[0]`, the canonical default bucket, NOT
+ * merely `japams[0]`). Every record is assigned to exactly one Japam and the null bucket holds only
+ * records no Japam claims, so a Japam's lifetime total on My Japams agrees with History's per-Japam
+ * total. Callers without a Japam list (loadTodayStats/loadLifetimeStats below) fall back to the
+ * strict japamId-only statsByJapam — unchanged behavior.
  */
 export const loadJapamStats = async (
   userId: string | null | undefined,
+  japams?: Japam[] | null,
 ): Promise<Map<string | null, JapamStats>> => {
   const history = await loadHistoryForUser(userId);
   const todayKey = getLocalDateKey();
+  if (japams && japams.length > 0) {
+    const inputs: JapamAttributionInput[] = japams.map((j) => ({ id: j.id, name: j.name }));
+    const firstActiveJapamId = activeJapams(japams)[0]?.id ?? null;
+    return statsByJapamWithAttribution(history, userId, inputs, firstActiveJapamId, todayKey, toLocalDayKey);
+  }
   return statsByJapam(history, userId, todayKey, toLocalDayKey);
 };
 
@@ -120,6 +150,134 @@ export const loadLifetimeStats = async (
   const statsMap = await loadJapamStats(userId);
   const stats = japamStatsFor(statsMap, japamId);
   return { malas: stats.lifetimeMalas, totalCount: stats.lifetimeTotalCount };
+};
+
+type RemoteLegacyHistoryRow = {
+  id?: number | string;
+  created_at?: string;
+  malas?: number | string;
+  count?: number | string;
+  user_name?: string | null;
+  completion_id?: string | null;
+  japam_id?: string | null;
+  japam_name?: string | null;
+};
+
+const remoteRowToHistoryRecord = (row: RemoteLegacyHistoryRow, userId: string): HistoryRecord => {
+  const malas = Number(row.malas) || 0;
+  const totalCount = Number(row.count) || malas * 108;
+  const date = row.created_at || new Date().toISOString();
+  return {
+    date,
+    malas: malas || Math.floor(totalCount / 108),
+    totalCount,
+    duration: 0,
+    manual: false,
+    userId,
+    userName: row.user_name || undefined,
+    remoteId: row.id,
+    completionId: row.completion_id || `${userId}:${new Date(date).getTime()}`,
+    syncStatus: 'synced',
+    japamId: row.japam_id ?? null,
+    japamName: row.japam_name ?? null,
+  };
+};
+
+// The backfill is allowed to change only Japam attribution. Keep a stable snapshot of every
+// other History field so a user edit that lands while the remote PATCH loop is running remains
+// pending instead of being mistaken for the exact version the backfill wrote.
+const historyBackfillVersion = (record: HistoryRecord): string => JSON.stringify({
+  date: record.date,
+  malas: record.malas,
+  totalCount: record.totalCount,
+  duration: record.duration,
+  manual: record.manual,
+  userId: record.userId ?? null,
+  userName: record.userName ?? null,
+  userEmail: record.userEmail ?? null,
+  source: record.source ?? null,
+  remoteId: record.remoteId ?? null,
+  completionId: record.completionId,
+  japamId: record.japamId ?? null,
+  japamName: record.japamName ?? null,
+});
+
+/**
+ * Best-effort remote half of the legacy backfill. The query is scoped to the authenticated user,
+ * and the caller supplies the same History-attributed records that are safe to assign locally.
+ * Existing rows are patched by their remote id, so retries are idempotent and cannot insert a
+ * duplicate or touch another user's/another Japam's history.
+ */
+const syncLegacyHistoryBackfillToSupabase = async (
+  userId: string,
+  japamId: string,
+  japamName: string,
+  japams: Japam[] | null | undefined,
+  onlyCompletionIds?: ReadonlySet<string>,
+): Promise<Set<string>> => {
+  if (!userId) return new Set();
+
+  const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
+  const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key) return new Set();
+
+  // Load lazily so historyRepository's pure/local tests do not need Supabase configuration.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { supabase } = require('./supabase') as typeof import('./supabase');
+  const accessToken = (await supabase.auth.getSession()).data.session?.access_token;
+  if (!accessToken) return new Set();
+
+  try {
+    const query = new URLSearchParams({
+      user_id: `eq.${userId}`,
+      select: 'id,created_at,malas,count,user_name,completion_id,japam_id,japam_name',
+    });
+    const response = await fetch(`${url}/rest/v1/japam_history?${query.toString()}`, {
+      headers: { apikey: key, Authorization: `Bearer ${accessToken}` },
+      cache: 'no-store',
+    });
+    if (!response.ok) return new Set();
+
+    const rows = (await response.json()) as RemoteLegacyHistoryRow[];
+    const remoteRecords = (Array.isArray(rows) ? rows : [])
+      .map((row) => remoteRowToHistoryRecord(row, userId));
+    const attributionInputs: JapamAttributionInput[] | null = japams && japams.length > 0
+      ? japams.map((j) => ({ id: j.id, name: j.name }))
+      : null;
+    const eligible = filterByJapam(
+      remoteRecords,
+      japamId,
+      japamName,
+      { includeBlankLegacy: true },
+      attributionInputs,
+    ).filter((record) => (
+      record.japamId == null
+      && record.remoteId != null
+      && (!onlyCompletionIds || onlyCompletionIds.has(record.completionId))
+    ));
+
+    const syncedIds = new Set<string>();
+    for (const record of eligible) {
+      const patchQuery = new URLSearchParams({
+        id: `eq.${record.remoteId}`,
+        user_id: `eq.${userId}`,
+      });
+      const patch = await fetch(`${url}/rest/v1/japam_history?${patchQuery.toString()}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: key,
+          Authorization: `Bearer ${accessToken}`,
+          Prefer: 'return=minimal',
+        },
+        body: JSON.stringify({ japam_id: japamId, japam_name: japamName }),
+      });
+      if (patch.ok) syncedIds.add(record.completionId);
+    }
+    return syncedIds;
+  } catch {
+    return new Set();
+  }
 };
 
 /**
@@ -148,13 +306,18 @@ export const applyLegacyHistoryBackfill = async (
   userId: string | null | undefined,
   japamId: string,
   japamName: string,
-): Promise<LegacyHistoryBackfillPlan> => {
+  options: LegacyHistoryBackfillOptions & { japams?: Japam[] | null } = {},
+): Promise<LegacyHistoryBackfillPlan & { remoteSyncedIds: string[] }> => {
   const all = await loadHistory();
   const matchesIdentity = (r: HistoryRecord) => (userId ? r.userId === userId : !r.userId);
   const forThisIdentity = all.filter(matchesIdentity);
   const forOthers = all.filter((r) => !matchesIdentity(r));
 
-  const plan = planLegacyHistoryBackfill(forThisIdentity, japamId, japamName);
+  const plan = planLegacyHistoryBackfill(forThisIdentity, japamId, japamName, options);
+  const expectedBackfillVersions = new Map(
+    plan.reassignedRecords.map((record) => [record.completionId, historyBackfillVersion(record)])
+  );
+  let remoteSyncedIds: string[] = [];
 
   if (plan.needsBackfill) {
     const merged = [...forOthers, ...plan.updatedRecords];
@@ -166,5 +329,26 @@ export const applyLegacyHistoryBackfill = async (
     }
   }
 
-  return plan;
+  if (userId) {
+    remoteSyncedIds = [...await syncLegacyHistoryBackfillToSupabase(
+      userId,
+      japamId,
+      japamName,
+      options.japams,
+      options.onlyCompletionIds,
+    )];
+    if (remoteSyncedIds.length > 0) {
+      const latest = await loadHistory();
+      const synced = new Set(remoteSyncedIds);
+      const updatedLatest = latest.map((record) => {
+        if (!synced.has(record.completionId) || record.japamId !== japamId) return record;
+        const expectedVersion = expectedBackfillVersions.get(record.completionId);
+        if (!expectedVersion || historyBackfillVersion(record) !== expectedVersion) return record;
+        return { ...record, syncStatus: 'synced' as const };
+      });
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(updatedLatest));
+    }
+  }
+
+  return { ...plan, remoteSyncedIds };
 };

@@ -32,6 +32,8 @@ import { useEffect, useRef } from 'react';
 import { Alert } from 'react-native';
 import { useCurrentJapam } from '../contexts/current-japam-context';
 import * as historyRepository from '../lib/historyRepository';
+import { activeJapams } from '../lib/japams';
+import { filterByJapam } from '../lib/historyStore';
 import { planLegacyHistoryBackfill } from '../lib/legacyHistoryBackfill';
 import * as japamsRepository from '../lib/japamsRepository';
 import {
@@ -74,7 +76,7 @@ export default function LegacyHistoryBackfillRunner() {
       if (checkedIdentitiesRef.current.has(userId)) return;
       checkedIdentitiesRef.current.add(userId);
 
-      if (await isLegacyHistoryBackfillComplete(userId)) return;
+      const alreadyComplete = await isLegacyHistoryBackfillComplete(userId);
 
       // Step 1: read-only check. No Japam created yet, nothing persisted.
       const existing = await historyRepository.loadHistoryForUser(userId);
@@ -84,7 +86,7 @@ export default function LegacyHistoryBackfillRunner() {
         CHECK_ONLY_PLACEHOLDER
       );
 
-      if (!needsBackfill) {
+      if (existing.length === 0 || (!needsBackfill && !alreadyComplete)) {
         await markLegacyHistoryBackfillComplete(userId);
         return;
       }
@@ -93,21 +95,43 @@ export default function LegacyHistoryBackfillRunner() {
       // provider uses. This either adopts an existing active Japam or creates the one default
       // record only when the user truly has none.
       const ensured = await japamsRepository.ensureDefaultJapam(userId);
-      const selectedJapam = ensured.japams.find((j) => j.id === ensured.currentJapamId) ?? null;
-      if (!selectedJapam) return;
+      const defaultJapam = activeJapams(ensured.japams)[0] ?? null;
+      if (!defaultJapam) return;
+
+      // History's canonical default bucket is the first active Japam. Use the exact same
+      // attribution rule (including blank legacy rows) to build the eligible completion-id set;
+      // null rows attributed to another named Japam, another user, or an ambiguous name stay
+      // untouched.
+      const attributedCompletionIds = new Set(
+        filterByJapam(
+          existing,
+          defaultJapam.id,
+          defaultJapam.name,
+          { includeBlankLegacy: true },
+          ensured.japams,
+        )
+          .map((record) => record.completionId)
+      );
 
       // Step 3: persist the real reassignment using the just-created Japam's real id/name.
-      await historyRepository.applyLegacyHistoryBackfill(userId, selectedJapam.id, selectedJapam.name);
+      const plan = await historyRepository.applyLegacyHistoryBackfill(
+        userId,
+        defaultJapam.id,
+        defaultJapam.name,
+        { onlyCompletionIds: attributedCompletionIds, japams: ensured.japams },
+      );
 
       // Step 4.
       await markLegacyHistoryBackfillComplete(userId);
 
       // Step 5: one-time, dismissible, non-blocking notice.
-      Alert.alert(
-        'History organized',
-        `We've added your past Japam history to "${selectedJapam.name}". You can rename it anytime from My Japams.`,
-        [{ text: 'Got it' }]
-      );
+      if (plan.needsBackfill) {
+        Alert.alert(
+          'History organized',
+          `We've added your past Japam history to "${defaultJapam.name}". You can rename it anytime from My Japams.`,
+          [{ text: 'Got it' }]
+        );
+      }
     })().catch(() => {
       // Best-effort, non-blocking: on any failure, the persisted flag is deliberately NOT marked
       // complete, so this identity's backfill is retried on a future launch instead of silently

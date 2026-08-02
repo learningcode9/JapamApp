@@ -1,7 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
-import { DeviceEventEmitter, Platform } from 'react-native';
+import { Platform } from 'react-native';
 import { clearAnonymousFlag, LEGACY_USER_ID_KEY } from './anonymousAuth';
+import { emitJapamAuthUpdated } from './authEvents';
 import { supabase } from './supabase';
 
 const USER_ID_KEY = 'userId';
@@ -70,10 +71,7 @@ export async function runSharedLogoutFlow(options: SharedLogoutOptions = {}): Pr
     }
   }
 
-  DeviceEventEmitter.emit('japam-auth-updated');
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    window.dispatchEvent(new Event('japam-auth-updated'));
-  }
+  emitJapamAuthUpdated();
 
   await options.onLoggedOut?.();
 }
