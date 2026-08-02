@@ -429,9 +429,10 @@ begin
 end;
 $$;
 
--- ── 5f. get_my_groups (legacy 1-arg wrapper) — old clients get a workspace-scoped list only
---      when their account has exactly one active Japam; otherwise a clear error. Never returns
---      cross-workspace data.
+-- ── 5f. get_my_groups (legacy 1-arg wrapper) — old clients get all active groups they belong
+--      to, resolved from the caller's own memberships (current UUID or legacy Google sub).
+--      Never trusts the client-supplied p_user_id for identity, and never exposes another
+--      user's memberships.
 create or replace function public.get_my_groups(p_user_id text)
 returns table (
   group_id   uuid,
@@ -445,9 +446,26 @@ security definer
 set search_path = public
 as $$
 declare
-  v_japam uuid := public._groups_sole_active_japam_id();
+  v_caller     text := public._groups_require_caller_id();
+  v_legacy_sub text := public._groups_legacy_sub();
 begin
-  return query select * from public.get_my_groups(p_user_id, v_japam);
+  return query
+  with caller_memberships as (
+    select distinct on (gm.group_id)
+      gm.group_id,
+      gm.japam_id,
+      gm.role,
+      gm.joined_at
+    from public.group_members gm
+    where gm.user_id = v_caller
+       or (v_legacy_sub is not null and gm.user_id = v_legacy_sub)
+    order by gm.group_id, (gm.user_id = v_caller) desc, gm.joined_at asc
+  )
+  select g.id, g.name, cm.role, g.is_active, cm.joined_at
+  from caller_memberships cm
+  join public.groups g on g.id = cm.group_id
+  where g.is_active
+  order by g.name, g.id;
 end;
 $$;
 
@@ -666,9 +684,10 @@ begin
 end;
 $$;
 
--- ── 5j. get_group_dashboard (legacy 4-arg wrapper) — old clients are scoped to their sole
---      active Japam only; otherwise a clear error. Never exposes a dashboard through the wrong
---      (or no) workspace context.
+-- ── 5j. get_group_dashboard (legacy 4-arg wrapper) — old clients resolve the Japam from the
+--      caller's own membership for this group. Unassigned memberships fail clearly. Never
+--      mutates or auto-attaches a membership and never exposes a dashboard through the wrong
+--      workspace.
 create or replace function public.get_group_dashboard(
   p_group_id uuid,
   p_current_user_id text,
@@ -691,8 +710,26 @@ security definer
 set search_path = public
 as $$
 declare
-  v_japam uuid := public._groups_sole_active_japam_id();
+  v_caller     text := public._groups_require_caller_id();
+  v_legacy_sub text := public._groups_legacy_sub();
+  v_japam      uuid;
 begin
+  select gm.japam_id
+    into v_japam
+  from public.group_members gm
+  where gm.group_id = p_group_id
+    and (gm.user_id = v_caller or (v_legacy_sub is not null and gm.user_id = v_legacy_sub))
+  order by (gm.user_id = v_caller) desc, gm.joined_at asc
+  limit 1;
+
+  if not found then
+    raise exception 'not a member of this group';
+  end if;
+
+  if v_japam is null then
+    raise exception 'this legacy group membership is not assigned to a Japam; update the app or attach the group to a Japam';
+  end if;
+
   return query select * from public.get_group_dashboard(p_group_id, p_current_user_id, p_today_start, p_today_end, v_japam);
 end;
 $$;

@@ -98,6 +98,11 @@ insert into public.japam_history (user_id, malas, count, completion_id, japam_na
   ('a0000000-0000-0000-0000-000000000002', 5, 540, 'c0000000-0000-0000-0000-00000000b1', 'B1', 'b0000000-0000-0000-0000-0000000000b1', now() - interval '30 minutes'),
   ('a0000000-0000-0000-0000-000000000002', 6, 648, 'c0000000-0000-0000-0000-00000000b2', 'B2', 'b0000000-0000-0000-0000-0000000000b2', now() - interval '4 hours');
 
+set request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000001';
+select * from public.create_group('Group Y', 'a0000000-0000-0000-0000-000000000001', 'Anand', 'b0000000-0000-0000-0000-0000000000a2') \gset groupy_
+
+insert into ctx values ('groupy_group_id', :'groupy_group_id');
+
 -- An "unassigned" (legacy, japam_id null) membership for User C in Group X — simulates a member
 -- who joined before Japams existed (or whose Japam was deleted). It must never contribute.
 insert into public.group_members (group_id, user_id, user_name, role, joined_at, japam_id) values
@@ -308,20 +313,84 @@ begin
   assert v_c = 1, 'legacy get_my_groups returns the sole-scope list';
 end $$;
 
--- A owns two active Japams (A1 + A2 at this point): legacy calls must fail clearly, never cross-scope.
+-- A owns two active Japams now: legacy get_my_groups must return all active groups across both
+-- memberships, not fail on a sole-active-Japam assumption.
 set request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000001';
+do $$
+declare v_count int; v_names text[];
+begin
+  select count(*), array_agg(name order by name)
+    into v_count, v_names
+  from public.get_my_groups('a0000000-0000-0000-0000-000000000001');
+  assert v_count = 2, 'legacy get_my_groups must return both active groups for A';
+  assert v_names @> array['Group X', 'Group Y'], 'legacy get_my_groups must include both A memberships';
+end $$;
+
+-- Legacy dashboard wrapper resolves the group's own japam_id from membership, so A can open the
+-- A2-bound group even while owning multiple active Japams.
+do $$
+declare v_total int; v_count int;
+begin
+  select total_malas, total_count into v_total, v_count
+  from public.get_group_dashboard(
+    (select v::uuid from ctx where k = 'groupy_group_id'),
+    'a0000000-0000-0000-0000-000000000001',
+    date_trunc('day', now()), date_trunc('day', now()) + interval '1 day')
+  where user_id = 'a0000000-0000-0000-0000-000000000001';
+  assert v_total = 4, 'legacy dashboard must resolve Group Y through A2';
+  assert v_count = 432, 'legacy dashboard count must resolve Group Y through A2';
+end $$;
+
+-- A null membership with multiple active Japams must fail cleanly instead of leaking data or
+-- silently selecting the wrong workspace.
+insert into public.groups (id, name, invite_code, created_by, created_at, is_active) values
+  ('90000000-0000-0000-0000-0000000000f2', 'Legacy Null Multi Group', 'LNMG001', 'a0000000-0000-0000-0000-000000000001', now(), true);
+insert into public.group_members (id, group_id, user_id, user_name, role, joined_at, japam_id) values
+  ('91000000-0000-0000-0000-0000000000f2', '90000000-0000-0000-0000-0000000000f2', 'a0000000-0000-0000-0000-000000000001', 'Anand', 'member', now(), null);
+
 do $$
 begin
   begin
-    perform * from public.get_my_groups('a0000000-0000-0000-0000-000000000001');
-    raise exception 'expected multiple-japams rejection';
+    perform * from public.get_group_dashboard(
+      '90000000-0000-0000-0000-0000000000f2',
+      'a0000000-0000-0000-0000-000000000001',
+      date_trunc('day', now()), date_trunc('day', now()) + interval '1 day');
+    raise exception 'expected null-membership rejection';
   exception when others then
-    if sqlerrm like '%multiple active Japams%' then
-      raise notice 'PASS: legacy list fails clearly for multi-japam A';
+    if sqlerrm like '%not assigned to a Japam%' then
+      raise notice 'PASS: null membership fails clearly without a Japam assignment';
     else raise; end if;
   end;
 end $$;
 
+-- A null membership with a sole active Japam still fails clearly rather than auto-selecting.
+set request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000005';
+insert into public.groups (id, name, invite_code, created_by, created_at, is_active) values
+  ('90000000-0000-0000-0000-0000000000f3', 'Legacy Null Single Group', 'LNSG001', 'a0000000-0000-0000-0000-000000000005', now(), true);
+insert into public.group_members (id, group_id, user_id, user_name, role, joined_at, japam_id) values
+  ('91000000-0000-0000-0000-0000000000f3', '90000000-0000-0000-0000-0000000000f3', 'a0000000-0000-0000-0000-000000000005', 'Esha', 'member', now(), null);
+
+insert into public.japam_history (user_id, malas, count, completion_id, japam_name, japam_id, created_at) values
+  ('a0000000-0000-0000-0000-000000000005', 7, 756, 'c0000000-0000-0000-0000-00000000e1', 'E1', 'b0000000-0000-0000-0000-0000000000e1', now() - interval '15 minutes');
+
+do $$
+begin
+  begin
+    perform * from public.get_group_dashboard(
+      '90000000-0000-0000-0000-0000000000f3',
+      'a0000000-0000-0000-0000-000000000005',
+      date_trunc('day', now()), date_trunc('day', now()) + interval '1 day');
+    raise exception 'expected null-membership rejection';
+  exception when others then
+    if sqlerrm like '%not assigned to a Japam%' then
+      raise notice 'PASS: null membership always fails clearly';
+    else raise; end if;
+  end;
+end $$;
+
+-- Legacy create/join wrappers still use the sole-active-Japam rule and must fail clearly when A
+-- owns multiple active Japams.
+set request.jwt.claim.sub = 'a0000000-0000-0000-0000-000000000001';
 do $$
 begin
   begin
