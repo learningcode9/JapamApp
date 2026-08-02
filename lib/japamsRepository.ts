@@ -490,17 +490,18 @@ const ensureDefaultJapamInternal = async (
 
   const persistedCurrentId = await loadCurrentJapamIdFromStorage(userId);
   const active = activeByCanonicalOrder(merged);
+  const firstActive = active[0] ?? null;
   const persistedStillActive = persistedCurrentId
     ? active.find((j) => j.id === persistedCurrentId)
     : undefined;
-  if (persistedStillActive && normalizeJapamName(persistedStillActive.name) !== DEFAULT_JAPAM_NAME) {
+  if (persistedStillActive) {
     return { japams: merged, currentJapamId: persistedStillActive.id, created: null };
   }
 
-  const firstActive = active[0] ?? null;
-  if (firstActive && normalizeJapamName(firstActive.name) !== DEFAULT_JAPAM_NAME) {
-    await saveCurrentJapamIdToStorage(userId, firstActive.id);
-    return { japams: merged, currentJapamId: firstActive.id, created: null };
+  const firstNonDefaultActive = active.find((j) => normalizeJapamName(j.name) !== DEFAULT_JAPAM_NAME) ?? null;
+  if (firstNonDefaultActive) {
+    await saveCurrentJapamIdToStorage(userId, firstNonDefaultActive.id);
+    return { japams: merged, currentJapamId: firstNonDefaultActive.id, created: null };
   }
 
   const restoreCandidate = await findRestoreCandidate(userId, mergedBeforeTombstones);
