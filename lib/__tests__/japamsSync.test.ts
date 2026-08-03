@@ -74,6 +74,17 @@ let restoreRpcResponse: { data: RestoreRpcRow[]; error: unknown } = {
   error: null,
 };
 let usageRpcResponses: Record<string, { data: JapamUsageRpcRow[]; error: unknown }> = {};
+// Pending adoption marker queue, modeling the two-phase peek + ack RPCs:
+//   - get_pending_japam_adoption(p_user_id) returns the caller's OLDEST marker for
+//     EXACTLY p_user_id WITHOUT deleting it
+//   - acknowledge_pending_japam_adoption(p_user_id, p_marker_id) validates the
+//     caller, then deletes the marker with that exact id (and belonging to that
+//     exact user_id). An empty queue, a peek for a user with no marker, or an ack
+//     against a marker that has already been ack'd returns zero rows
+//     (data: null), matching the deployed PL/pgSQL.
+let pendingAdoptionQueue: { marker_id: string; japam_id: string; user_id: string }[] = [];
+let adoptionPeekError: { code: string; message: string } | null = null;
+let adoptionAckError: { code: string; message: string } | null = null;
 
 const zeroUsageResponse = (japamId: string): { data: JapamUsageRpcRow[]; error: unknown } => ({
   data: [{
@@ -87,6 +98,53 @@ const zeroUsageResponse = (japamId: string): { data: JapamUsageRpcRow[]; error: 
 });
 
 const flushMicrotasks = () => new Promise<void>((r) => setTimeout(r, 0));
+
+let markerIdCounter = 0;
+const nextMarkerId = () => {
+  markerIdCounter += 1;
+  return `marker-${markerIdCounter}`;
+};
+const mockPendingAdoption = (japamId: string, userId = UID) => {
+  pendingAdoptionQueue = [...pendingAdoptionQueue, { marker_id: nextMarkerId(), japam_id: japamId, user_id: userId }];
+};
+const mockAdoptionPeekError = (code: string, message: string) => {
+  adoptionPeekError = { code, message };
+};
+const mockAdoptionAckError = (code: string, message: string) => {
+  adoptionAckError = { code, message };
+};
+const peekAdoptionRpc = (userId: unknown) => {
+  if (adoptionPeekError) {
+    const err = adoptionPeekError;
+    adoptionPeekError = null;
+    return Promise.resolve({ data: null, error: err });
+  }
+  const owned = pendingAdoptionQueue.filter((m) => m.user_id === userId);
+  if (owned.length === 0) {
+    return Promise.resolve({ data: null, error: null });
+  }
+  // Oldest first, WITHOUT deleting. The client must call ack to remove it.
+  const head = owned[0];
+  return Promise.resolve({ data: [{ marker_id: head.marker_id, japam_id: head.japam_id }], error: null });
+};
+const acknowledgeAdoptionRpc = (userId: unknown, markerId: unknown) => {
+  if (adoptionAckError) {
+    const err = adoptionAckError;
+    adoptionAckError = null;
+    return Promise.resolve({ data: null, error: err });
+  }
+  if (typeof userId !== 'string' || typeof markerId !== 'string') {
+    return Promise.resolve({ data: 0, error: null });
+  }
+  // Acknowledge removes exactly the (user, marker) pair — matching the deployed SQL
+  // `delete ... where id = p_marker_id and user_id = p_user_id`.
+  const before = pendingAdoptionQueue.length;
+  pendingAdoptionQueue = pendingAdoptionQueue.filter(
+    (m) => !(m.user_id === userId && m.marker_id === markerId),
+  );
+  const deleted = before - pendingAdoptionQueue.length;
+  return Promise.resolve({ data: deleted, error: null });
+};
 
 const makeRemoteJapam = (overrides: Partial<{
   id: string;
@@ -190,9 +248,17 @@ beforeEach(async () => {
     }
     return { select: mockSelect };
   });
-  mockRpc.mockImplementation((rpcName: string, params?: { p_japam_id?: string }) => {
+  mockRpc.mockImplementation((rpcName: string, params?: { p_japam_id?: string; p_user_id?: string; p_marker_id?: string }) => {
     if (rpcName === 'delete_owned_japam') return Promise.resolve(deleteRpcResponse);
     if (rpcName === 'restore_owned_japam') return Promise.resolve(restoreRpcResponse);
+    if (rpcName === 'get_pending_japam_adoption') {
+      const userId = (params as { p_user_id?: unknown } | undefined)?.p_user_id;
+      return peekAdoptionRpc(userId);
+    }
+    if (rpcName === 'acknowledge_pending_japam_adoption') {
+      const ackParams = params as { p_user_id?: unknown; p_marker_id?: unknown } | undefined;
+      return acknowledgeAdoptionRpc(ackParams?.p_user_id, ackParams?.p_marker_id);
+    }
     if (rpcName === 'get_owned_japam_usage') {
       const japamId = params?.p_japam_id ?? JAPAM_ID_A;
       return Promise.resolve(usageRpcResponses[japamId] ?? zeroUsageResponse(japamId));
@@ -204,6 +270,10 @@ beforeEach(async () => {
   mockRemoteDelete();
   mockRemoteRestore();
   usageRpcResponses = {};
+pendingAdoptionQueue = [];
+adoptionPeekError = null;
+adoptionAckError = null;
+markerIdCounter = 0;
   jest.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
@@ -914,6 +984,382 @@ describe('ensureDefaultJapam', () => {
     await ensureDefaultJapam(UID);
 
     expect(await AsyncStorage.getItem('history')).toBe(legacyHistory);
+  });
+});
+
+describe('pending selection adoption — staging restore flow (peek + acknowledge)', () => {
+  // Reproduces the exact staging scenario end-to-end at the repository contract level.
+  //   - PR55 is persisted as currentJapamId (left from before My Japam was archived)
+  //   - PR55 has 63 malas of history (real usage — must never be silently demoted by counts)
+  //   - My Japam was archived server-side and restored OUTSIDE the client restore flow
+  //     (migration / admin / pre-feature backfill), so it is now active on the server with
+  //     7 malas + 1 group ref
+  //   - A pending_japam_adoption marker for (user, My Japam) exists server-side — either
+  //     written by `restore_owned_japam` in the same transaction as the restore, or inserted
+  //     by the staging-only backfill for a Japam restored BEFORE the marker mechanism shipped
+  //   - On the next refresh, get_pending_japam_adoption PEEKS the marker (no delete),
+  //     the repository verifies My Japam is active, persists My Japam as currentJapamId,
+  //     and only THEN calls acknowledge_pending_japam_adoption to delete the marker
+  //   - If ANY step fails, the marker stays server-side; the next refresh retries the exact
+  //     same sequence
+  //   - Once ack'd, the marker is gone for good — a later manual user selection (back to
+  //     PR55) writes PR55 to the persisted pointer and subsequent refreshes find no marker,
+  //     so the manual choice is preserved
+  //   - The adoption ID is taken PURELY from the marker — never inferred from History counts,
+  //     group counts, names, or display order
+  //   - PR55 and My Japam data are never mutated by adoption
+
+  const MY_JAPAM_ID = 'restored-my-japam';
+  const PR55_ID = 'pr55-workspace';
+
+  const setupStagingState = async () => {
+    // Server-side state: My Japam (active, restored) + PR55 (active).
+    mockRemoteJapams([
+      makeRemoteJapam({
+        id: MY_JAPAM_ID,
+        name: 'My Japam',
+        created_at: '2026-07-21T00:00:00.000Z',
+        updated_at: '2026-08-02T12:00:00.000Z',
+        archived_at: null,
+      }),
+      makeRemoteJapam({
+        id: PR55_ID,
+        name: 'PR55',
+        created_at: '2026-07-22T00:00:00.000Z',
+      }),
+    ]);
+    mockRemoteDeletedJapams([]);
+    mockRemoteJapamUsage(MY_JAPAM_ID, { name: 'My Japam', history_count: 7, group_ref_count: 1 });
+    mockRemoteJapamUsage(PR55_ID, { name: 'PR55', history_count: 63, group_ref_count: 0 });
+
+    // Client AsyncStorage carryover from before the server-side restore:
+    //   - persisted current selection is PR55
+    //   - cached japam list still records My Japam as archived (it hasn't synced the restore
+    //     yet) — the merged-active list comes from the remote rows above
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, PR55_ID);
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([
+      makeJapam({
+        id: MY_JAPAM_ID,
+        name: 'My Japam',
+        createdAt: '2026-07-21T00:00:00.000Z',
+        archivedAt: '2026-07-30T00:00:00.000Z',
+        updatedAt: '2026-07-30T00:00:00.000Z',
+      }),
+      makeJapam({ id: PR55_ID, name: 'PR55', createdAt: '2026-07-22T00:00:00.000Z' }),
+    ]));
+  };
+
+  it('restored before this feature shipped + backfill marker adopts My Japam on the next client refresh', async () => {
+    await setupStagingState();
+    // The staging-only backfill inserts one marker for (user, My Japam). Modeled here as
+    // a single mock-pending-adoption marker.
+    mockPendingAdoption(MY_JAPAM_ID);
+
+    const result = await ensureDefaultJapam(UID);
+
+    // Peek was called.
+    expect(mockRpc).toHaveBeenCalledWith('get_pending_japam_adoption', { p_user_id: UID });
+    // The persisted pointer is now on My Japam — adoption was durable BEFORE ack.
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(MY_JAPAM_ID);
+    // The adopted ID surfaces as the current selection.
+    expect(result.currentJapamId).toBe(MY_JAPAM_ID);
+    // Acknowledge was issued with the marker's id (an opaque string from the client's POV).
+    expect(mockRpc).toHaveBeenCalledWith(
+      'acknowledge_pending_japam_adoption',
+      expect.objectContaining({ p_user_id: UID, p_marker_id: expect.any(String) }),
+    );
+    // Marker queue is empty after the ack.
+    expect(pendingAdoptionQueue).toHaveLength(0);
+  });
+
+  it('identity consistency regression: marker stored under the stored/legacy userId is peeked and acked with the SAME userId even when auth.uid differs', async () => {
+    // Scenario: the restored Japam's user_id is the client's STORED/legacy userId (UID) —
+    // the value the client keeps in AsyncStorage (`currentJapamId:<uid>`). For legacy
+    // Google sign-in the authenticated session's auth.uid() is a DIFFERENT UUID, so the
+    // repository must not assume identity equals auth.uid(). It passes its stored userId
+    // (UID) to BOTH the peek RPC and the ack RPC so the marker — keyed by the Japam's
+    // actual user_id (UID) server-side — is found and removed. Markers for a different
+    // user must stay invisible to the peek and untouched by the ack.
+    await setupStagingState();
+    mockPendingAdoption(MY_JAPAM_ID, UID);
+    // A marker belonging to ANOTHER user sits in the same queue — it must never be peeked
+    // by this caller and must not be removed by this caller's ack.
+    mockPendingAdoption('other-users-marker', UID_OTHER);
+
+    const result = await ensureDefaultJapam(UID);
+
+    // Peek passed the STORED userId (UID) — not an auth.uid() guess.
+    expect(mockRpc).toHaveBeenCalledWith('get_pending_japam_adoption', { p_user_id: UID });
+    // Acknowledge passed the SAME stored userId (UID) plus the marker id.
+    expect(mockRpc).toHaveBeenCalledWith(
+      'acknowledge_pending_japam_adoption',
+      expect.objectContaining({ p_user_id: UID, p_marker_id: expect.any(String) }),
+    );
+    // The caller's marker was acked; the other user's marker is untouched.
+    expect(pendingAdoptionQueue).toHaveLength(1);
+    expect(pendingAdoptionQueue[0]).toMatchObject({ user_id: UID_OTHER, japam_id: 'other-users-marker' });
+    // Adoption surfaced My Japam for the stored user.
+    expect(result.currentJapamId).toBe(MY_JAPAM_ID);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(MY_JAPAM_ID);
+  });
+
+  it('failure before persistence leaves the marker server-side and falls through to the persisted pointer; retry then succeeds', async () => {
+    await setupStagingState();
+    mockPendingAdoption(MY_JAPAM_ID);
+
+    // Persist of `currentJapamId:${UID}` fails on the first ensureDefaultJapam call ONLY.
+    // `saveCurrentJapamIdToStorage` swallows AsyncStorage errors silently (it never throws),
+    // so we model persist failure by making setItem reject for this key once. The repository
+    // re-reads the persisted key after the write to detect that the persist didn't take.
+    const setItemMock = AsyncStorage.setItem as unknown as jest.Mock;
+    const originalSetItem = setItemMock.getMockImplementation();
+    let firstPersistFailed = false;
+    setItemMock.mockImplementation(async (key: string, value: string) => {
+      if (key === `currentJapamId:${UID}` && !firstPersistFailed) {
+        firstPersistFailed = true;
+        throw new Error('persist failed');
+      }
+      if (originalSetItem) await originalSetItem(key, value);
+    });
+
+    try {
+      const first = await ensureDefaultJapam(UID);
+
+      // Persist pointer NOT updated — still PR55.
+      expect(first.currentJapamId).toBe(PR55_ID);
+      expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(PR55_ID);
+      // Peek was called but ack was NOT — persist threw before the ack step.
+      expect(mockRpc).toHaveBeenCalledWith('get_pending_japam_adoption', { p_user_id: UID });
+      expect(mockRpc).not.toHaveBeenCalledWith(
+        'acknowledge_pending_japam_adoption',
+        expect.anything(),
+      );
+      // Marker remains server-side for retry.
+      expect(pendingAdoptionQueue).toHaveLength(1);
+      // Persist failure was logged.
+      expect(console.warn).toHaveBeenCalledWith(
+        '[JAPAM_ADOPTION_PERSIST_FAILED]',
+        expect.objectContaining({ adoptionId: MY_JAPAM_ID }),
+      );
+
+      // Retry: persist no longer fails.
+      (mockRpc as jest.Mock).mockClear();
+      const second = await ensureDefaultJapam(UID);
+
+      expect(second.currentJapamId).toBe(MY_JAPAM_ID);
+      expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(MY_JAPAM_ID);
+      expect(pendingAdoptionQueue).toHaveLength(0);
+      expect(mockRpc).toHaveBeenCalledWith(
+        'acknowledge_pending_japam_adoption',
+        expect.objectContaining({ p_user_id: UID, p_marker_id: expect.any(String) }),
+      );
+    } finally {
+      // Restore the original setItem impl for subsequent tests.
+      setItemMock.mockImplementation(originalSetItem);
+    }
+  });
+
+  it('failure after persistence but before acknowledgement safely retries: persisted pointer committed, marker remains, second refresh acks', async () => {
+    await setupStagingState();
+    mockPendingAdoption(MY_JAPAM_ID);
+    // Persist succeeds; ONLY the ack RPC fails this first refresh.
+    mockAdoptionAckError('500', 'ack outage');
+
+    const first = await ensureDefaultJapam(UID);
+
+    // Persisted pointer IS durably on My Japam — the persist step succeeded.
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(MY_JAPAM_ID);
+    // Fall-through to the persisted-pointer branch returned My Japam (because the cached
+    // `persistedCurrentId` was updated to target.id before the ack attempt).
+    expect(first.currentJapamId).toBe(MY_JAPAM_ID);
+    // Ack failed: marker is still server-side for retry.
+    expect(pendingAdoptionQueue).toHaveLength(1);
+    expect(console.warn).toHaveBeenCalledWith(
+      '[JAPAM_ADOPTION_ACK_FAILED]',
+      expect.objectContaining({ markerId: expect.any(String) }),
+    );
+
+    // Retry: ack now succeeds (mockAdoptionAckError short-circuits after one error).
+    (mockRpc as jest.Mock).mockClear();
+    const second = await ensureDefaultJapam(UID);
+
+    expect(second.currentJapamId).toBe(MY_JAPAM_ID);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(MY_JAPAM_ID);
+    expect(pendingAdoptionQueue).toHaveLength(0);
+    expect(mockRpc).toHaveBeenCalledWith(
+      'acknowledge_pending_japam_adoption',
+      expect.objectContaining({ p_user_id: UID, p_marker_id: expect.any(String) }),
+    );
+  });
+
+  it('acknowledgement removes the marker once — after ack, the queue is empty and a redundant ack removes zero rows', async () => {
+    await setupStagingState();
+    mockPendingAdoption(MY_JAPAM_ID);
+
+    const result = await ensureDefaultJapam(UID);
+    expect(result.currentJapamId).toBe(MY_JAPAM_ID);
+    // Queue is now empty — exactly one marker was removed by the ack.
+    expect(pendingAdoptionQueue).toHaveLength(0);
+
+    // A redundant explicit ack (e.g. a buggy retry) returns 0 rows deleted — there is
+    // nothing left to remove. This matches the deployed PL/pgSQL function's `with deleted
+    // as (delete ... returning 1) select count(*)` semantics.
+    const redundant = await acknowledgeAdoptionRpc(UID, 'marker-no-longer-in-queue');
+    expect(redundant.data).toBe(0);
+    expect(redundant.error).toBeNull();
+  });
+
+  it('second refresh stays on My Japam after the marker is acked — peek returns no rows, persisted pointer wins, no re-adoption', async () => {
+    await setupStagingState();
+    mockPendingAdoption(MY_JAPAM_ID);
+
+    const first = await ensureDefaultJapam(UID);
+    expect(first.currentJapamId).toBe(MY_JAPAM_ID);
+    expect(pendingAdoptionQueue).toHaveLength(0);
+
+    (mockRpc as jest.Mock).mockClear();
+    const second = await ensureDefaultJapam(UID);
+
+    expect(second.currentJapamId).toBe(MY_JAPAM_ID);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(MY_JAPAM_ID);
+    // Every refresh probes the queue; on this refresh it returned no rows.
+    expect(mockRpc).toHaveBeenCalledWith('get_pending_japam_adoption', { p_user_id: UID });
+    // Ack was NOT called — peek returned nothing.
+    expect(mockRpc).not.toHaveBeenCalledWith(
+      'acknowledge_pending_japam_adoption',
+      expect.anything(),
+    );
+    // Selection is driven purely by the persisted pointer — not by a re-adoption.
+    expect(second.japams.map((j) => j.id).sort()).toEqual([MY_JAPAM_ID, PR55_ID].sort());
+  });
+
+  it('preserves a later manual user selection of PR55 — once the marker is acked, no marker means the persisted pointer wins', async () => {
+    await setupStagingState();
+    mockPendingAdoption(MY_JAPAM_ID);
+
+    // First refresh: adoption moves selection to My Japam and acks the marker.
+    const first = await ensureDefaultJapam(UID);
+    expect(first.currentJapamId).toBe(MY_JAPAM_ID);
+    expect(pendingAdoptionQueue).toHaveLength(0);
+
+    // User manually selects PR55 (taps PR55 in My Japams screen). The Context calls
+    // saveCurrentJapamId directly — modeled here as a persisted-pointer write.
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, PR55_ID);
+
+    // Second refresh: no marker — persisted pointer (PR55) wins.
+    (mockRpc as jest.Mock).mockClear();
+    const second = await ensureDefaultJapam(UID);
+
+    expect(second.currentJapamId).toBe(PR55_ID);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(PR55_ID);
+    // Both Japams are still present and active — the manual choice doesn't damage data.
+    expect(second.japams.map((j) => j.id).sort()).toEqual([MY_JAPAM_ID, PR55_ID].sort());
+    expect(second.japams.find((j) => j.id === MY_JAPAM_ID)?.archivedAt).toBeNull();
+    expect(second.japams.find((j) => j.id === PR55_ID)?.archivedAt).toBeNull();
+  });
+
+  it('Groups receives My Japam ID after adoption: result.currentJapamId (the input to getMyGroups) is My Japam', async () => {
+    await setupStagingState();
+    mockPendingAdoption(MY_JAPAM_ID);
+
+    const result = await ensureDefaultJapam(UID);
+
+    // The Groups screen calls getMyGroups(savedUserId, currentJapamId) using the Context's
+    // currentJapamId, which is set from the same ensureDefaultJapam return value. After the
+    // staging restore adoption, that ID is My Japam — so the Group members query
+    // (`group_members.japam_id = <current>`) scoping shifts back to My Japam and Sarada
+    // Test Group (scoped to My Japam) re-appears in-app.
+    expect(result.currentJapamId).toBe(MY_JAPAM_ID);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(MY_JAPAM_ID);
+  });
+
+  it('both Japams and their data remain unchanged — adoption is a selection-only move (no archive, no tombstone, no upsert)', async () => {
+    await setupStagingState();
+    mockPendingAdoption(MY_JAPAM_ID);
+
+    const result = await ensureDefaultJapam(UID);
+
+    // Both Japams still present and active.
+    expect(result.japams.map((j) => j.id).sort()).toEqual([MY_JAPAM_ID, PR55_ID].sort());
+    expect(result.japams.find((j) => j.id === PR55_ID)?.archivedAt).toBeNull();
+    expect(result.japams.find((j) => j.id === MY_JAPAM_ID)?.archivedAt).toBeNull();
+    // No tombstones were written for either Japam.
+    const tombstones = JSON.parse((await AsyncStorage.getItem(`deletedJapams:${UID}`)) ?? '[]') as string[];
+    expect(tombstones).not.toContain(PR55_ID);
+    expect(tombstones).not.toContain(MY_JAPAM_ID);
+    // No upsert fired during this adoption refresh — adoption is a selection-only move.
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it('never infers selection from History/group/counts: with no marker, persisted PR55 stays current even though My Japam has usage', async () => {
+    await setupStagingState();
+    // No pending adoption marker — the canonical scenario where NO server-side restore marker
+    // exists. Adoption MUST NOT fall back to inferring selection from History or group counts.
+    // (Pending marker queue is empty by default.)
+
+    const result = await ensureDefaultJapam(UID);
+
+    // Peek was called (every refresh probes the queue) but returned no rows, so we fell
+    // through to the persisted pointer. PR55 stays current despite My Japam having 7 malas +
+    // 1 group ref — those counts were never consulted for selection.
+    expect(mockRpc).toHaveBeenCalledWith('get_pending_japam_adoption', { p_user_id: UID });
+    expect(result.currentJapamId).toBe(PR55_ID);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(PR55_ID);
+    // And no per-Japam usage fetch was made for selection purposes.
+    expect(mockRpc).not.toHaveBeenCalledWith(
+      'get_owned_japam_usage',
+      expect.objectContaining({ p_japam_id: MY_JAPAM_ID }),
+    );
+    expect(mockRpc).not.toHaveBeenCalledWith(
+      'get_owned_japam_usage',
+      expect.objectContaining({ p_japam_id: PR55_ID }),
+    );
+  });
+
+  it('ignores a marker whose target is not in the active list: marker acknowledged (stale), persisted selection preserved, selection never inferred', async () => {
+    // Edge case: marker references a Japam that was archived/deleted server-side between
+    // the restore writing the marker and the client consuming it. The marker is ack'd (the
+    // stale one is removed so we don't retry forever) but adoption does NOT happen —
+    // selection stays put.
+    await setupStagingState();
+    const staleAdoptionId = 'my-japam-was-re-archived';
+    mockPendingAdoption(staleAdoptionId);
+
+    const result = await ensureDefaultJapam(UID);
+
+    // The marker was ack'd (removed) since its target is not active.
+    expect(pendingAdoptionQueue).toHaveLength(0);
+    // Selection stayed on PR55.
+    expect(result.currentJapamId).toBe(PR55_ID);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(PR55_ID);
+    // The console warning was logged for observability.
+    expect(console.warn).toHaveBeenCalledWith(
+      '[JAPAM_ADOPTION_TARGET_NOT_ACTIVE]',
+      expect.objectContaining({ adoptionId: staleAdoptionId }),
+    );
+  });
+
+  it('fails closed on peek RPC error: keeps PR55 current and leaves the server marker for the next refresh', async () => {
+    await setupStagingState();
+    mockPendingAdoption(MY_JAPAM_ID);
+    // Marker is queued server-side, but the peek RPC errors this refresh.
+    mockAdoptionPeekError('500', 'temporary outage');
+
+    const first = await ensureDefaultJapam(UID);
+
+    expect(first.currentJapamId).toBe(PR55_ID);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(PR55_ID);
+    // The mock queue still holds the marker (peek error short-circuits before removal)
+    // so a later refresh can retry once the outage clears.
+    expect(pendingAdoptionQueue).toHaveLength(1);
+
+    // Retry: outage cleared, marker is now peeked and acked.
+    (mockRpc as jest.Mock).mockClear();
+    const second = await ensureDefaultJapam(UID);
+
+    expect(second.currentJapamId).toBe(MY_JAPAM_ID);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(MY_JAPAM_ID);
+    expect(pendingAdoptionQueue).toHaveLength(0);
   });
 });
 
