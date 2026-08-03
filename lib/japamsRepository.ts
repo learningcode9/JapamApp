@@ -251,6 +251,91 @@ const loadAuthoritativeDeletedJapams = async (userId: string | null | undefined)
   return new Set(merged);
 };
 
+type PendingAdoptionMarker = { markerId: string; japamId: string };
+
+const peekPendingJapamAdoption = async (userId: string): Promise<PendingAdoptionMarker | null> => {
+  // Server-side, durable selection adoption marker. `restore_owned_japam` writes a marker
+  // into public.pending_japam_adoption in the SAME transaction as the restore itself. The
+  // peek RPC returns the caller's oldest marker (marker_id + japam_id) WITHOUT deleting
+  // it — the marker survives until the client successfully persists the adopted ID as
+  // currentJapamId AND calls `acknowledge_pending_japam_adoption(p_user_id, marker_id)`. If this peek
+  // fails (RPC error / network), null is returned and the next refresh retries from the
+  // top. The adoption ID is taken purely from the marker — never inferred from History
+  // rows, group counts, names, or display order. Returning null here also short-circuits
+  // the appointed acknowledge step so no marker is spuriously deleted on peek failure.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { supabase } = require('./supabase');
+    const { data, error } = await supabase.rpc('get_pending_japam_adoption', {
+      p_user_id: userId,
+    });
+
+    if (error) {
+      console.warn('[JAPAM_ADOPTION_PEEK_FAILED]', {
+        code: error.code,
+        message: error.message,
+      });
+      return null;
+    }
+
+    const rows = (Array.isArray(data) ? data : []) as { marker_id?: unknown; japam_id?: unknown }[];
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    const markerId = row.marker_id;
+    const japamId = row.japam_id;
+    if (typeof markerId !== 'string' || typeof japamId !== 'string') return null;
+    return { markerId, japamId };
+  } catch {
+    console.warn('[JAPAM_ADOPTION_PEEK_FAILED]', {
+      code: 'NETWORK_ERROR',
+      message: 'Network error during Japam adoption peek',
+    });
+    return null;
+  }
+};
+
+const acknowledgePendingJapamAdoption = async (
+  userId: string,
+  markerId: string,
+): Promise<boolean> => {
+  // Delete the specific pending marker ONLY. Called from ensureDefaultJapamInternal AFTER
+  // the adopted japam_id has been durably persisted to AsyncStorage as currentJapamId.
+  // The SAME stored userId passed to get_pending_japam_adoption is passed here as
+  // p_user_id — the server validates it against the authenticated caller and deletes
+  // exactly that user's marker. A false return (RPC error / network) leaves the marker
+  // server-side; the next refresh will peek it again, observe the persisted pointer is
+  // already on the target, persist (idempotently) again, and retry the ack. The marker
+  // is the source of truth for "an adoption is in-flight"; once ack'd, future refreshes
+  // find no marker and the persisted pointer (which may later be changed by user manual
+  // selection) drives selection.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { supabase } = require('./supabase');
+    const { error } = await supabase.rpc('acknowledge_pending_japam_adoption', {
+      p_user_id: userId,
+      p_marker_id: markerId,
+    });
+
+    if (error) {
+      console.warn('[JAPAM_ADOPTION_ACK_FAILED]', {
+        markerId,
+        code: error.code,
+        message: error.message,
+      });
+      return false;
+    }
+
+    return true;
+  } catch {
+    console.warn('[JAPAM_ADOPTION_ACK_FAILED]', {
+      markerId,
+      code: 'NETWORK_ERROR',
+      message: 'Network error during Japam adoption ack',
+    });
+    return false;
+  }
+};
+
 const restoreRemoteJapam = async (japamId: string): Promise<boolean> => {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -488,9 +573,88 @@ const ensureDefaultJapamInternal = async (
   const merged = applyJapamTombstones(mergedBeforeTombstones, tombstones);
   await saveJapamsToStorage(userId, merged);
 
-  const persistedCurrentId = await loadCurrentJapamIdFromStorage(userId);
+  let persistedCurrentId = await loadCurrentJapamIdFromStorage(userId);
   const active = activeByCanonicalOrder(merged);
   const firstActive = active[0] ?? null;
+
+  // Server-side two-phase selection adoption (peek + acknowledge).
+  //
+  // `restore_owned_japam` writes a marker into public.pending_japam_adoption in the
+  // SAME transaction as the restore itself; a staging-only backfill can also insert a
+  // marker for an already-restored Japam (see db/backfill_pending_japam_adoption_staging.sql).
+  //
+  // Flow (every refresh):
+  //   1. PEEK the pending marker via `get_pending_japam_adoption`. The marker is NOT
+  //      deleted by the peek; it survives until the client explicitly acknowledges it.
+  //   2. If the marker's japam_id is present in the merged ACTIVE list (verify), persist
+  //      that japam_id as `currentJapamId:<uid>` (overriding any stale persisted pointer
+  //      left from before the canonical "My Japam" was archived — e.g. a PR55 workspace
+  //      still pointing there with 63 malas of real usage, which must NEVER be silently
+  //      demoted by counts alone).
+  //   3. ONLY AFTER persistence commits, ACKNOWLEDGE / delete the marker via
+  //      `acknowledge_pending_japam_adoption(p_user_id, marker_id)`. Return the adopted ID.
+  //   4. If ANY step fails (peek error, target not active, persist didn't take, ack error),
+  //      the marker is LEFT server-side for the next refresh to retry. The persisted
+  //      pointer becomes the source of truth only after adoption completes durably.
+  //
+  // Persist-failure detection: `saveCurrentJapamIdToStorage` swallows AsyncStorage errors
+  // silently (it never throws), so a try/catch around it cannot detect failures. Instead
+  // we re-read the persisted key after the write and treat the read-back value as the
+  // source of truth: if it does NOT equal the target id, the persist did not take and we
+  // must leave the marker for retry.
+  //
+  // The adoption ID is taken PURELY from the marker — never inferred from History counts,
+  // group counts, names, or display order. Once ack'd, the marker is gone for good; a
+  // later manual user selection (back to PR55) writes PR55 to the persisted pointer and
+  // subsequent refreshes find no marker, so the manual choice is preserved.
+  const pendingMarker = await peekPendingJapamAdoption(userId);
+  if (pendingMarker) {
+    const target = active.find((j) => j.id === pendingMarker.japamId);
+    if (target) {
+      // (2)+(3) Persist the adopted ID, then re-verify it took. saveCurrentJapamIdToStorage
+      // swallows AsyncStorage.setItem errors silently; the re-read is the durability check.
+      await saveCurrentJapamIdToStorage(userId, target.id);
+      const verifiedId = await loadCurrentJapamIdFromStorage(userId);
+      persistedCurrentId = verifiedId;
+      if (verifiedId === target.id) {
+        // Persist committed durably. NOW acknowledge (delete) the marker.
+        const ackOk = await acknowledgePendingJapamAdoption(userId, pendingMarker.markerId);
+        if (ackOk) {
+          return { japams: merged, currentJapamId: target.id, created: null };
+        }
+        // Ack failed. Marker remains server-side for retry. Fall through to the
+        // persisted-pointer branch — `persistedCurrentId` is already target.id so the
+        // fall-through returns the adopted ID. The retry will re-peek, re-persist
+        // (idempotent), and re-ack.
+      } else {
+        // Persist did not take — AsyncStorage rejected the write (e.g. quota exceeded,
+        // native bridge failure) and saveCurrentJapamIdToStorage swallowed the error.
+        // Marker stays server-side for retry; persistedCurrentId is the verified (pre-
+        // adoption) value, so the fall-through returns it.
+        console.warn('[JAPAM_ADOPTION_PERSIST_FAILED]', {
+          markerId: pendingMarker.markerId,
+          adoptionId: pendingMarker.japamId,
+          expected: target.id,
+          actual: verifiedId,
+        });
+      }
+      // Fall through to the persisted-pointer branch (persistedCurrentId reflects reality).
+    } else {
+      // Marker target not in the active list (restored Japam was re-archived or
+      // tombstoned between the restore writing the marker and the client consuming it).
+      // Acknowledge the stale marker best-effort so we don't retry forever on an ID
+      // that cannot be selected; preserve the persisted pre-adoption selection.
+      console.warn('[JAPAM_ADOPTION_TARGET_NOT_ACTIVE]', { adoptionId: pendingMarker.japamId });
+      try {
+        await acknowledgePendingJapamAdoption(userId, pendingMarker.markerId);
+      } catch {
+        // Best-effort: if even the stale-marker ack fails, the marker stays and the
+        // next refresh retries. Not fatal — selection stays put either way.
+      }
+      // Fall through to the persisted-pointer branch.
+    }
+  }
+
   const persistedStillActive = persistedCurrentId
     ? active.find((j) => j.id === persistedCurrentId)
     : undefined;
