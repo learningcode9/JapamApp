@@ -1306,11 +1306,11 @@ export default function HistoryScreen() {
     <ScrollView
       style={[
         styles.scroll,
-        Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom },
+        { marginBottom: tabBarSpaceFromBottom },
       ]}
       contentContainerStyle={[
         styles.content,
-        { paddingBottom: Platform.OS === 'web' ? tabBarSpaceFromBottom : 16 },
+        { paddingBottom: 16 },
       ]}
       bounces={Platform.OS !== 'ios'}
       refreshControl={
