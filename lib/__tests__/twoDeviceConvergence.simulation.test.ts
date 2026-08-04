@@ -64,7 +64,7 @@ jest.mock('../supabaseRestHelper', () => ({
 }));
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ensureDefaultJapam } from '../japamsRepository';
+import { ensureDefaultJapam, loadJapams, loadCurrentJapamId } from '../japamsRepository';
 import {
   __resetHistoryHydrationState,
   hydrateHistoryForUserDetails,
@@ -571,12 +571,51 @@ describe('two-device convergence simulation (web local smoke)', () => {
     expect(deleteRpcCalls).toHaveLength(0);
   });
 
-  it('guest/offline does not regress: no signed-in remote reconciliation is attempted for a guest userId', async () => {
-    // Guest storage is keyed by 'guest'. A guest has no signed-in remote world to converge to.
+  it('guest/offline does not regress: the real guest path is local-only and never signs in', async () => {
+    // The web guest flow (CurrentJapamProvider, !userId) reads only guest-scoped local storage
+    // via loadJapams(null) + loadCurrentJapamId(null); it NEVER calls ensureDefaultJapam, so a
+    // 'guest' userId string must not be sent down the signed-in reconcile path.
+    const guestJapam: Japam = {
+      id: 'guest-99999999-eeee',
+      userId: null,
+      name: 'Guest Japam',
+      displayOrder: null,
+      createdAt: '2026-07-20T00:00:00.000Z',
+      updatedAt: '2026-07-20T00:00:00.000Z',
+      archivedAt: null,
+    };
+    currentDevice = 'deviceA';
+    await resetDevice('deviceA');
+    activateDevice('deviceA');
+    await AsyncStorage.setItem(`userJapams:guest`, JSON.stringify([guestJapam]));
+    await AsyncStorage.setItem(`currentJapamId:guest`, guestJapam.id);
+
+    // Guest path must survive offline remote state and never attempt signed-in reconciliation.
     net.japams = false;
     net.tombstones = false;
-    const guestResult = await ensureDefaultJapam('guest');
-    expect(guestResult.currentJapamId).toBeNull();
-    expect(guestResult.created).toBeNull();
+    net.history = false;
+    net.deletedCompletions = false;
+    net.usage = false;
+
+    mockSupabase.from.mockClear();
+    mockSupabase.rpc.mockClear();
+    mockUpsert.mockClear();
+
+    const loadedJapams = await loadJapams(null);
+    const persistedSelection = await loadCurrentJapamId(null);
+
+    // Existing guest local selection remains readable and no default Japam was created.
+    expect(persistedSelection).toBe(guestJapam.id);
+    expect(loadedJapams.map((j) => j.id)).toEqual([guestJapam.id]);
+    const storedGuestJapams = JSON.parse((await AsyncStorage.getItem('userJapams:guest')) || '[]');
+    expect(storedGuestJapams.map((j: { id?: string }) => j.id)).toEqual([guestJapam.id]);
+
+    // No signed-in remote reconciliation: no table reads, no RPCs, no upserts.
+    expect(mockSupabase.from).not.toHaveBeenCalled();
+    expect(mockSupabase.rpc).not.toHaveBeenCalled();
+    expect(mockUpsert).not.toHaveBeenCalled();
+    expect(upsertCalls).toHaveLength(0);
+    expect(restoreRpcCalls).toHaveLength(0);
+    expect(deleteRpcCalls).toHaveLength(0);
   });
 });
