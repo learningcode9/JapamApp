@@ -1306,7 +1306,7 @@ export default function HistoryScreen() {
     <ScrollView
       style={[
         styles.scroll,
-        { marginBottom: tabBarSpaceFromBottom },
+        Platform.OS !== 'web' && { marginBottom: tabBarSpaceFromBottom },
       ]}
       contentContainerStyle={[
         styles.content,
@@ -1691,6 +1691,7 @@ export default function HistoryScreen() {
             : 'Use the row actions to edit, or long-press to delete a day.'}
         </Text>
       )}
+      {Platform.OS === 'web' ? <View style={{ height: tabBarSpaceFromBottom }} /> : null}
       </>
       )}
 
