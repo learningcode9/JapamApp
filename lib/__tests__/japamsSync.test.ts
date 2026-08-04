@@ -1363,6 +1363,161 @@ describe('pending selection adoption — staging restore flow (peek + acknowledg
   });
 });
 
+describe('production web regression — archived-duplicate selection convergence', () => {
+  // Mirrors the live Web outage: Sarada has an ACTIVE canonical "My Japam" (517 rows), plus an
+  // ARCHIVED duplicate "My Japam" that was tombstoned (deleted_japams), plus a second ARCHIVED
+  // "My Japam" with no tombstone. A device whose persisted currentJapamId points at the archived
+  // duplicate must converge to the canonical active Japam on login/refresh, must persist that
+  // pointer, must NOT create or restore a spurious Japam, and must NEVER report an empty
+  // (null) selection that would blank the History screen.
+
+  const CANONICAL = makeRemoteJapam({
+    id: 'canonical-11111111-aaaa',
+    name: 'My Japam',
+    created_at: '2026-07-29T02:22:09.000Z',
+    updated_at: '2026-07-29T02:22:09.000Z',
+  });
+  const DUPLICATE_ARCHIVED_TOMBSTONED = makeRemoteJapam({
+    id: 'duplicate-22222222-bbbb',
+    name: 'My Japam',
+    created_at: '2026-08-02T00:00:00.000Z',
+    updated_at: '2026-08-04T00:33:14.000Z',
+    archived_at: '2026-08-04T00:33:14.000Z',
+  });
+  const SECOND_ARCHIVED = makeRemoteJapam({
+    id: 'third-33333333-cccc',
+    name: 'My Japam',
+    created_at: '2026-07-29T02:22:09.527Z',
+    updated_at: '2026-08-02T00:00:00.000Z',
+    archived_at: '2026-08-02T00:00:00.000Z',
+  });
+
+  const setupProdState = () => {
+    mockRemoteJapams([CANONICAL, DUPLICATE_ARCHIVED_TOMBSTONED, SECOND_ARCHIVED]);
+    mockRemoteDeletedJapams([{ japam_id: DUPLICATE_ARCHIVED_TOMBSTONED.id }]);
+    mockRemoteJapamUsage(DUPLICATE_ARCHIVED_TOMBSTONED.id, { history_count: 0, group_ref_count: 0 });
+    mockRemoteJapamUsage(SECOND_ARCHIVED.id, { history_count: 0, group_ref_count: 0 });
+  };
+
+  it('selects AND persists the canonical when the persisted pointer is an archived, tombstoned duplicate', async () => {
+    setupProdState();
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, DUPLICATE_ARCHIVED_TOMBSTONED.id);
+
+    const result = await ensureDefaultJapam(UID);
+
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(CANONICAL.id);
+    expect(result.currentJapamId).toBe(CANONICAL.id);
+    expect(result.created).toBeNull();
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it('two devices with different local currentJapamId converge on the same canonical after login', async () => {
+    // Device A: persisted = canonical (healthy).
+    await AsyncStorage.clear();
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, CANONICAL.id);
+    setupProdState();
+    const deviceA = await ensureDefaultJapam(UID);
+
+    // Device B: a different device pointing at the archived duplicate.
+    await AsyncStorage.clear();
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, DUPLICATE_ARCHIVED_TOMBSTONED.id);
+    setupProdState();
+    const deviceB = await ensureDefaultJapam(UID);
+
+    expect(deviceA.currentJapamId).toBe(CANONICAL.id);
+    expect(deviceB.currentJapamId).toBe(CANONICAL.id);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(CANONICAL.id);
+  });
+
+  it('keeps a valid local active selection when remote japams AND tombstone authority both fail (no empty state)', async () => {
+    const canonicalLocal = makeJapam({
+      id: CANONICAL.id,
+      name: 'My Japam',
+      createdAt: CANONICAL.created_at,
+      updatedAt: (CANONICAL.updated_at as string) ?? CANONICAL.created_at,
+    });
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, canonicalLocal.id);
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([canonicalLocal]));
+    // Both the japams fetch and the deleted_japams fetch return an error (network blip).
+    mockRemoteJapams([], { code: '500', message: 'Transient outage' });
+    mockRemoteDeletedJapams([], { code: '500', message: 'Transient outage' });
+
+    const result = await ensureDefaultJapam(UID);
+
+    // The valid persisted pointer must survive: no wiped-to-null, no empty selection, no new Japam.
+    expect(result.currentJapamId).toBe(canonicalLocal.id);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(canonicalLocal.id);
+    expect(result.created).toBeNull();
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it('keeps a valid local selection when remote japams fail but tombstone authority stays available', async () => {
+    const canonical = makeJapam({
+      id: CANONICAL.id,
+      name: 'My Japam',
+      createdAt: CANONICAL.created_at,
+      updatedAt: (CANONICAL.updated_at as string) ?? CANONICAL.created_at,
+    });
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, canonical.id);
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([canonical]));
+    mockRemoteJapams([], { code: '500', message: 'Transient outage' });
+
+    const result = await ensureDefaultJapam(UID);
+
+    expect(result.currentJapamId).toBe(canonical.id);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(canonical.id);
+    expect(result.created).toBeNull();
+  });
+
+  it('with no adoption marker present, still selects the only valid active Japam (no restore of an archived duplicate)', async () => {
+    setupProdState();
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, DUPLICATE_ARCHIVED_TOMBSTONED.id);
+    // pendingAdoptionQueue is empty by default — no marker exists server-side.
+
+    const result = await ensureDefaultJapam(UID);
+
+    expect(result.currentJapamId).toBe(CANONICAL.id);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(CANONICAL.id);
+    // No archived "My Japam" was restored — the active canonical is selected.
+    expect(result.created).toBeNull();
+    expect(mockRpc).not.toHaveBeenCalledWith('restore_owned_japam', expect.anything());
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it('a later manual selection remains stable across refresh/relogin', async () => {
+    const manual = makeRemoteJapam({
+      id: 'manual-44444444-dddd',
+      name: 'Manual Pick',
+      created_at: '2026-08-05T00:00:00.000Z',
+    });
+    setupProdState();
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, CANONICAL.id);
+    mockRemoteJapams([CANONICAL, DUPLICATE_ARCHIVED_TOMBSTONED, SECOND_ARCHIVED, manual]);
+
+    const first = await ensureDefaultJapam(UID);
+    expect(first.currentJapamId).toBe(CANONICAL.id);
+
+    // User manually switches to the second active Japam via the persisted pointer write.
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, manual.id);
+
+    const second = await ensureDefaultJapam(UID);
+    expect(second.currentJapamId).toBe(manual.id);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(manual.id);
+    expect(second.created).toBeNull();
+  });
+
+  it('never creates a new default when a valid canonical exists after convergence', async () => {
+    setupProdState();
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, DUPLICATE_ARCHIVED_TOMBSTONED.id);
+
+    const result = await ensureDefaultJapam(UID);
+
+    expect(result.created).toBeNull();
+    expect(result.japams.map((j) => j.id)).not.toContain(uuidV5(`${UID}:default-japam`, DEFAULT_JAPAM_UUID_NAMESPACE));
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+});
+
 describe('renameJapam lifecycle sync', () => {
   it('does not trigger sync when userId is null', async () => {
     mockUpsert.mockResolvedValue({ error: null });

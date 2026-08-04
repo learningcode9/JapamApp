@@ -372,4 +372,45 @@ describe('historyRepository hydration', () => {
     expect(failed.records).toHaveLength(1);
     expect(japamStatsFor(statsByJapamWithAttribution(failed.records, UID, [{ id: JAPAM_ID, name: 'My Japam' }], JAPAM_ID, '2026-07-20', toLocalDayKey), JAPAM_ID).lifetimeMalas).toBe(2);
   });
+
+  it('stale empty local History plus populated remote History keeps the remote History visible after login/refresh', async () => {
+    // Regression: a device whose local history key is empty (or lost) must still surface the
+    // canonical's remote rows after login/refresh — an empty local cache must never hide them.
+    mockFetchJapamHistoryRows.mockResolvedValue([
+      {
+        id: 'remote-1',
+        created_at: '2026-07-20T09:00:00.000Z',
+        malas: 2,
+        count: 216,
+        user_name: 'learningcode9',
+        completion_id: 'remote-1',
+        japam_id: JAPAM_ID,
+        japam_name: 'My Japam',
+      },
+      {
+        id: 'remote-2',
+        created_at: '2026-07-21T09:00:00.000Z',
+        malas: 3,
+        count: 324,
+        user_name: 'learningcode9',
+        completion_id: 'remote-2',
+        japam_id: JAPAM_ID,
+        japam_name: 'My Japam',
+      },
+    ]);
+    mockSelectEq.mockResolvedValue({ data: [], error: null });
+
+    // Local history key is empty (stale device / first web load).
+    await AsyncStorage.setItem('history', JSON.stringify([]));
+
+    const hydrated = await hydrateHistoryForUserDetails(UID);
+
+    expect(hydrated.hydrationSucceeded).toBe(true);
+    expect(hydrated.records).toHaveLength(2);
+    expect(hydrated.records.map((row) => row.completionId)).toEqual(['remote-2', 'remote-1']);
+    const statsMap = statsByJapamWithAttribution(hydrated.records, UID, [{ id: JAPAM_ID, name: 'My Japam' }], JAPAM_ID, '2026-07-21', toLocalDayKey);
+    expect(japamStatsFor(statsMap, JAPAM_ID).lifetimeMalas).toBe(5);
+    // Remote rows were persisted back into the stale empty local cache.
+    expect(JSON.parse((await AsyncStorage.getItem('history')) || '[]')).toHaveLength(2);
+  });
 });
