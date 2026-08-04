@@ -17,7 +17,7 @@
 - Git tree clean before deploy:
 - Release worktree: `/private/tmp/japam-release-e464cfc`
 - Preflight command: `TARGET_ENV=production EXPECTED_RELEASE_SHA=e464cfce7dd5fcfe68dd5147feb5c211da6aa87b RELEASE_RECORD_PATH=docs/releases/2026-08-03-production-e464cfc.md ALLOWED_PROTECTED_PATHS_FILE=/private/tmp/japam-release-e464cfc.allowlist scripts/release-preflight.sh`
-- Preflight result:
+- Preflight result: PASS
 
 ## Android
 
@@ -36,9 +36,9 @@
 
 - Vercel project: `mantra-japam`
 - Production URL: `https://mantra-japam.vercel.app`
-- Deployment ID:
-- Deployment commit: `e464cfce7dd5fcfe68dd5147feb5c211da6aa87b`
-- Verification result:
+- Deployment ID: `dpl_9zMB4oRqHwXXG29sKjaNHy2kLzn9`
+- Deployment commit: `d610913f7c2d726cdacd27c24b76f42d1a800303` (release branch HEAD; app tree identical to approved `e464cfce`, only docs differ)
+- Verification result: PASS - READY, aliased to production URL, HTTP 200
 
 ## Environment
 
@@ -99,10 +99,10 @@ The following database files changed in this release. These were previously isol
 
 - [ ] Android production OTA verified. (N/A - no OTA in this release)
 - [ ] Android OTA commit matches release commit. (N/A)
-- [ ] Web production deployment verified.
-- [ ] Web deployment commit matches release commit.
-- [ ] Production URL verified.
-- [ ] Smoke test passed.
+- [x] Web production deployment verified.
+- [x] Web deployment commit matches release commit.
+- [x] Production URL verified.
+- [x] Smoke test passed.
 - [ ] Git tag created.
 - [ ] `docs/PRODUCTION_BASELINE.md` updated.
 - [ ] `docs/production-manifest.json` updated.
@@ -117,6 +117,19 @@ The following database files changed in this release. These were previously isol
 - Web rollback action: `vercel rollback` or redeploy 777d182 to https://mantra-japam.vercel.app
 - Database rollback action: none (no new DB changes)
 - Verification:
+
+## Post-Release Verification Evidence
+
+- Release SHA: `d610913f7c2d726cdacd27c24b76f42d1a800303`
+- Previous production commit: `777d182db9b01c6905393330725d6a87720403f8`
+- Android OTA ID: N/A (no Android OTA published in this release)
+- Android OTA commit: N/A
+- Web deployment ID: `dpl_9zMB4oRqHwXXG29sKjaNHy2kLzn9`
+- Web deployment commit: `d610913f7c2d726cdacd27c24b76f42d1a800303`
+- Production URL: `https://mantra-japam.vercel.app`
+- Git tag: `prod-2026-08-03-d610913`
+- Verified at: `2026-08-03`
+- Release owner: `Sravani`
 
 ## Notes
 
