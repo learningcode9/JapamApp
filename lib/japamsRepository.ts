@@ -567,15 +567,16 @@ const ensureDefaultJapamInternal = async (
   const remote = await fetchRemoteJapams(userId);
   const authoritativeTombstones = await loadAuthoritativeDeletedJapams(userId);
   if (authoritativeTombstones === null) {
-    // Remote tombstone authority is temporarily unavailable (network/RPC blip). Do NOT blank the
-    // selection or create a default: fall back to the local tombstone set and a local-only
-    // resolution so a valid persisted/local active Japam survives the refresh (the History screen
-    // gate would otherwise render an empty list). A later refresh with authority available retries.
+    // Remote tombstone authority is temporarily unavailable (network/RPC blip). Hide ALL
+    // archived Japams because we cannot distinguish a legitimately archived Japam from one
+    // with a permanent-delete tombstone. Active Japams remain visible and the persisted
+    // selection is preserved. Do NOT persist this filtered view to AsyncStorage — legitimate
+    // archived rows must survive and become visible again once tombstone authority recovers.
     const localTombstones = await loadDeletedJapamsFromStorage(userId);
-    const merged = applyJapamTombstones(local, localTombstones);
-    await saveJapamsToStorage(userId, merged);
+    const tombstoneFiltered = applyJapamTombstones(local, localTombstones);
+    const activeOnly = tombstoneFiltered.filter((j) => j.archivedAt === null);
     const persistedCurrentId = await loadCurrentJapamIdFromStorage(userId);
-    const active = activeByCanonicalOrder(merged);
+    const active = activeByCanonicalOrder(activeOnly);
     const persistedStillActive = persistedCurrentId
       ? active.find((j) => j.id === persistedCurrentId)
       : undefined;
@@ -583,7 +584,7 @@ const ensureDefaultJapamInternal = async (
     if (resolvedCurrentId !== null) {
       await saveCurrentJapamIdToStorage(userId, resolvedCurrentId);
     }
-    return { japams: merged, currentJapamId: resolvedCurrentId, created: null };
+    return { japams: activeOnly, currentJapamId: resolvedCurrentId, created: null };
   }
   const tombstones = authoritativeTombstones;
   const mergedBeforeTombstones = remote === null ? local : mergeJapamsById(local, remote);
@@ -793,7 +794,9 @@ export const restoreJapam = async (
   const target = existing.find((j) => j.id === japamId);
   if (!target) return existing;
   const updated = await restoreJapamInStorage(userId, existing, target);
-  return updated ?? existing;
+  if (updated !== null) return updated;
+  const tombstones = await loadMergedDeletedJapams(userId);
+  return applyJapamTombstones(existing, tombstones);
 };
 
 /**

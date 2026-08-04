@@ -2130,3 +2130,142 @@ describe('deletion semantics', () => {
     expect(call[0]).toHaveProperty('archived_at');
   });
 });
+
+describe('startup — tombstone authority unavailable (production regression)', () => {
+  const CANONICAL_ID = 'canonical-active-11';
+  const TOMBSTONED_DUP_ID = 'tombstoned-dup-22';
+  const LEGIT_ARCHIVED_ID = 'legit-archived-33';
+
+  const CANONICAL_REMOTE = makeRemoteJapam({
+    id: CANONICAL_ID,
+    name: 'My Japam',
+    created_at: '2026-07-20T00:00:00.000Z',
+    updated_at: '2026-07-20T10:00:00.000Z',
+  });
+  const DUPLICATE_REMOTE = makeRemoteJapam({
+    id: TOMBSTONED_DUP_ID,
+    name: 'My Japam',
+    created_at: '2026-07-28T00:00:00.000Z',
+    updated_at: '2026-07-28T10:00:00.000Z',
+    archived_at: '2026-07-28T10:00:00.000Z',
+  });
+  const LEGIT_REMOTE = makeRemoteJapam({
+    id: LEGIT_ARCHIVED_ID,
+    name: 'Legit Archived',
+    created_at: '2026-07-15T00:00:00.000Z',
+    updated_at: '2026-07-16T00:00:00.000Z',
+    archived_at: '2026-07-16T00:00:00.000Z',
+  });
+
+  const CANONICAL_LOCAL = makeJapam({
+    id: CANONICAL_ID,
+    name: 'My Japam',
+    createdAt: '2026-07-20T00:00:00.000Z',
+    updatedAt: '2026-07-20T10:00:00.000Z',
+  });
+  const DUPLICATE_LOCAL = makeJapam({
+    id: TOMBSTONED_DUP_ID,
+    name: 'My Japam',
+    createdAt: '2026-07-28T00:00:00.000Z',
+    updatedAt: '2026-07-28T10:00:00.000Z',
+    archivedAt: '2026-07-28T10:00:00.000Z',
+  });
+  const LEGIT_LOCAL = makeJapam({
+    id: LEGIT_ARCHIVED_ID,
+    name: 'Legit Archived',
+    createdAt: '2026-07-15T00:00:00.000Z',
+    updatedAt: '2026-07-16T00:00:00.000Z',
+    archivedAt: '2026-07-16T00:00:00.000Z',
+  });
+
+  const DUPLICATE_TOMBSTONE = { japam_id: TOMBSTONED_DUP_ID };
+
+  it('hides all archived japams and keeps the active canonical selected when tombstone authority is temporarily unavailable', async () => {
+    await AsyncStorage.setItem(
+      `userJapams:${UID}`,
+      JSON.stringify([CANONICAL_LOCAL, DUPLICATE_LOCAL, LEGIT_LOCAL]),
+    );
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, CANONICAL_ID);
+    mockRemoteJapams([CANONICAL_REMOTE, DUPLICATE_REMOTE, LEGIT_REMOTE]);
+    mockRemoteDeletedJapams([], { code: '500', message: 'Tombstone authority temporarily down' });
+
+    const result = await ensureDefaultJapam(UID);
+
+    expect(result.currentJapamId).toBe(CANONICAL_ID);
+    expect(result.created).toBeNull();
+
+    const resultIds = result.japams.map((j) => j.id);
+    expect(resultIds).toContain(CANONICAL_ID);
+    expect(resultIds).not.toContain(TOMBSTONED_DUP_ID);
+    expect(resultIds).not.toContain(LEGIT_ARCHIVED_ID);
+
+    expect(mockRpc).not.toHaveBeenCalledWith('restore_owned_japam', expect.anything());
+    expect(mockRpc).not.toHaveBeenCalledWith('delete_owned_japam', expect.anything());
+    expect(mockUpsert).not.toHaveBeenCalled();
+
+    const storedIds = (await loadJapams(UID)).map((j) => j.id);
+    expect(storedIds).toContain(LEGIT_ARCHIVED_ID);
+
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(CANONICAL_ID);
+  });
+
+  it('once tombstone authority recovers, permanently deleted duplicates stay hidden and legitimate archived japams become visible', async () => {
+    await AsyncStorage.setItem(
+      `userJapams:${UID}`,
+      JSON.stringify([CANONICAL_LOCAL, DUPLICATE_LOCAL, LEGIT_LOCAL]),
+    );
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, CANONICAL_ID);
+
+    mockRemoteJapams([CANONICAL_REMOTE, DUPLICATE_REMOTE, LEGIT_REMOTE]);
+    mockRemoteDeletedJapams([], { code: '500', message: 'Tombstone authority down' });
+    const firstRefresh = await ensureDefaultJapam(UID);
+
+    expect(firstRefresh.japams.map((j) => j.id)).not.toContain(TOMBSTONED_DUP_ID);
+    expect(firstRefresh.japams.map((j) => j.id)).not.toContain(LEGIT_ARCHIVED_ID);
+    expect(firstRefresh.currentJapamId).toBe(CANONICAL_ID);
+
+    mockRemoteJapams([CANONICAL_REMOTE, DUPLICATE_REMOTE, LEGIT_REMOTE]);
+    mockRemoteDeletedJapams([DUPLICATE_TOMBSTONE]);
+    mockRemoteJapamUsage(LEGIT_ARCHIVED_ID, { history_count: 5, group_ref_count: 0 });
+
+    const secondRefresh = await ensureDefaultJapam(UID);
+
+    expect(secondRefresh.japams.map((j) => j.id)).toContain(CANONICAL_ID);
+    expect(secondRefresh.japams.map((j) => j.id)).not.toContain(TOMBSTONED_DUP_ID);
+    expect(secondRefresh.japams.map((j) => j.id)).toContain(LEGIT_ARCHIVED_ID);
+    expect(secondRefresh.currentJapamId).toBe(CANONICAL_ID);
+  });
+});
+
+describe('restoreJapam failure hardening — tombstoned japam must not reappear', () => {
+  const CANONICAL_ID = 'canonical-rh-11';
+  const TOMBSTONED_ID = 'tombstoned-rh-22';
+  const LEGIT_ID = 'legit-rh-33';
+
+  it('restoreJapam does NOT re-introduce a tombstoned japam when the remote RPC fails', async () => {
+    const canonical = makeJapam({ id: CANONICAL_ID, name: 'My Japam' });
+    const tombstoned = makeJapam({
+      id: TOMBSTONED_ID, name: 'My Japam',
+      createdAt: '2026-07-28T00:00:00.000Z', updatedAt: '2026-07-28T10:00:00.000Z',
+      archivedAt: '2026-07-28T10:00:00.000Z',
+    });
+    const legitArchived = makeJapam({
+      id: LEGIT_ID, name: 'Legit Archived',
+      createdAt: '2026-07-15T00:00:00.000Z', updatedAt: '2026-07-16T00:00:00.000Z',
+      archivedAt: '2026-07-16T00:00:00.000Z',
+    });
+    await AsyncStorage.setItem(`userJapams:${UID}`, JSON.stringify([canonical, legitArchived, tombstoned]));
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, CANONICAL_ID);
+    await AsyncStorage.setItem(`deletedJapams:${UID}`, JSON.stringify([TOMBSTONED_ID]));
+    mockRemoteRestore([], { code: '42501', message: 'Japam is tombstoned' });
+
+    const result = await restoreJapam(UID, TOMBSTONED_ID);
+
+    expect(result.map((j) => j.id)).not.toContain(TOMBSTONED_ID);
+    expect(result.map((j) => j.id)).toEqual([CANONICAL_ID, LEGIT_ID]);
+    expect(mockRpc).toHaveBeenCalledWith('restore_owned_japam', { p_japam_id: TOMBSTONED_ID });
+
+    const restored = result.find((j) => j.id === LEGIT_ID);
+    expect(restored?.archivedAt).not.toBeNull();
+  });
+});
