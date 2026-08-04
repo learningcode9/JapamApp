@@ -38,6 +38,8 @@ import { DeviceEventEmitter, Platform } from 'react-native';
 import { createDefaultJapamCreationCoordinator } from '../lib/defaultJapamCreationCoordinator';
 import { activeJapams, type Japam } from '../lib/japams';
 import * as japamsRepository from '../lib/japamsRepository';
+import { hydrateHistoryForUserDetails } from '../lib/historyRepository';
+import { LEGACY_USER_ID_KEY } from '../lib/anonymousAuth';
 
 const USER_ID_KEY = 'userId';
 
@@ -72,6 +74,7 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   // switches never overwrite a still-in-flight entry — each user's creation promise and waiter
   // count lives independently and is cleaned up only when that user's last caller exits.
   const coordinator = useMemo(() => createDefaultJapamCreationCoordinator(), []);
+  const hydrationInFlight = useRef<{ userId: string; promise: Promise<void> } | null>(null);
   const refresh = useCallback(async () => {
     setIsLoading(true);
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
@@ -106,6 +109,41 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
 
     setJapams(result.japams);
     setCurrentJapamIdState(result.currentJapamId);
+
+    const entry = (() => {
+      const existing = hydrationInFlight.current;
+      if (existing && existing.userId === userId) {
+        return existing;
+      }
+      const promise = (async () => {
+        try {
+          const legacyUserId = await AsyncStorage.getItem(LEGACY_USER_ID_KEY);
+          await hydrateHistoryForUserDetails(userId, legacyUserId);
+        } catch {
+          // Don't block ready state on hydration failure
+        }
+      })();
+      const created = { userId, promise };
+      hydrationInFlight.current = created;
+      return created;
+    })();
+
+    await entry.promise;
+
+    if (hydrationInFlight.current !== entry) {
+      return;
+    }
+
+    if (userIdRef.current !== userId) {
+      hydrationInFlight.current = null;
+      return;
+    }
+
+    hydrationInFlight.current = null;
+    DeviceEventEmitter.emit('japam-stats-updated');
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('japam-stats-updated'));
+    }
     setIsLoading(false);
   }, [coordinator]);
 
