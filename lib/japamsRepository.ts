@@ -565,10 +565,27 @@ const ensureDefaultJapamInternal = async (
 ): Promise<{ japams: Japam[]; currentJapamId: string | null; created: Japam | null }> => {
   const local = await loadJapamsFromStorage(userId);
   const remote = await fetchRemoteJapams(userId);
-  const tombstones = await loadAuthoritativeDeletedJapams(userId);
-  if (tombstones === null) {
-    return { japams: local, currentJapamId: null, created: null };
+  const authoritativeTombstones = await loadAuthoritativeDeletedJapams(userId);
+  if (authoritativeTombstones === null) {
+    // Remote tombstone authority is temporarily unavailable (network/RPC blip). Do NOT blank the
+    // selection or create a default: fall back to the local tombstone set and a local-only
+    // resolution so a valid persisted/local active Japam survives the refresh (the History screen
+    // gate would otherwise render an empty list). A later refresh with authority available retries.
+    const localTombstones = await loadDeletedJapamsFromStorage(userId);
+    const merged = applyJapamTombstones(local, localTombstones);
+    await saveJapamsToStorage(userId, merged);
+    const persistedCurrentId = await loadCurrentJapamIdFromStorage(userId);
+    const active = activeByCanonicalOrder(merged);
+    const persistedStillActive = persistedCurrentId
+      ? active.find((j) => j.id === persistedCurrentId)
+      : undefined;
+    const resolvedCurrentId = persistedStillActive?.id ?? active[0]?.id ?? null;
+    if (resolvedCurrentId !== null) {
+      await saveCurrentJapamIdToStorage(userId, resolvedCurrentId);
+    }
+    return { japams: merged, currentJapamId: resolvedCurrentId, created: null };
   }
+  const tombstones = authoritativeTombstones;
   const mergedBeforeTombstones = remote === null ? local : mergeJapamsById(local, remote);
   const merged = applyJapamTombstones(mergedBeforeTombstones, tombstones);
   await saveJapamsToStorage(userId, merged);
@@ -677,10 +694,18 @@ const ensureDefaultJapamInternal = async (
     return { japams: merged, currentJapamId: null, created: null };
   }
 
-  // If remote could not be loaded, do not guess that the signed-in user has no remote Japams.
+  // If remote could not be loaded, do not guess that the signed-in user has no remote Japams:
+  // never create a default, never wipe a valid persisted pointer, and never return an empty
+  // selection when a valid local active Japam exists (the History screen gate would otherwise
+  // render an empty list on a transient network blip). The next successful refresh retries from
+  // the top and repairs the selection against authoritative remote state.
   if (remote === null) {
+    if (firstActive) {
+      await saveCurrentJapamIdToStorage(userId, firstActive.id);
+      return { japams: merged, currentJapamId: firstActive.id, created: null };
+    }
     if (persistedCurrentId !== null) {
-      await saveCurrentJapamIdToStorage(userId, null);
+      return { japams: merged, currentJapamId: persistedCurrentId, created: null };
     }
     return { japams: merged, currentJapamId: null, created: null };
   }
