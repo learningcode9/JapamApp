@@ -1310,7 +1310,7 @@ export default function HistoryScreen() {
       ]}
       contentContainerStyle={[
         styles.content,
-        { paddingBottom: 16 },
+        { paddingBottom: Platform.OS === 'web' ? tabBarSpaceFromBottom : 16 },
       ]}
       bounces={Platform.OS !== 'ios'}
       refreshControl={
