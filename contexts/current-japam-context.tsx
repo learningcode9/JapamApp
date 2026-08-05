@@ -51,6 +51,7 @@ type CurrentJapamContextValue = {
   /** True until the initial load for the current identity completes. */
   isLoading: boolean;
   selectJapam: (japamId: string | null) => void;
+  ensureDefaultJapam: (preferredName?: string) => Promise<Japam | null>;
   createJapam: (rawName: string) => Promise<Japam | null>;
   renameJapam: (japamId: string, rawName: string) => Promise<void>;
   archiveJapam: (japamId: string) => Promise<void>;
@@ -72,6 +73,20 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   // count lives independently and is cleaned up only when that user's last caller exits.
   const coordinator = useMemo(() => createDefaultJapamCreationCoordinator(), []);
 
+  const ensureDefaultJapam = useCallback(async (preferredName = 'My Japam'): Promise<Japam | null> => {
+    const userId = userIdRef.current;
+    if (!userId) return null;
+
+    await coordinator.ensureDefaultCreation(userId, {
+      hasActiveJapam: async () => activeJapams(await japamsRepository.loadJapams(userId)).length > 0,
+      create: async () => {
+        await japamsRepository.createJapam(userId, preferredName);
+      },
+    });
+
+    return activeJapams(await japamsRepository.loadJapams(userId))[0] ?? null;
+  }, [coordinator]);
+
   const refresh = useCallback(async () => {
     setIsLoading(true);
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
@@ -82,9 +97,7 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
     // This ensures Timer, Tap Japam, History, and Stats always have a real Japam ID to use
     // instead of falling through to null.
     if (activeJapams(loadedJapams).length === 0 && userId) {
-      await coordinator.ensureCreation(userId, () =>
-        japamsRepository.createJapam(userId, 'My Japam'),
-      );
+      await ensureDefaultJapam();
       // Re-read from storage after creation settles. This is the ONLY way every caller gets the
       // true persisted state — the promise's resolved value is unused precisely because it could
       // be stale for late-arriving waiters.
@@ -106,7 +119,7 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
       await japamsRepository.saveCurrentJapamId(userId, resolvedCurrentId);
     }
     setIsLoading(false);
-  }, [coordinator]);
+  }, [ensureDefaultJapam]);
 
   useEffect(() => {
     void refresh();
@@ -178,6 +191,7 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
     currentJapam,
     isLoading,
     selectJapam,
+    ensureDefaultJapam,
     createJapam,
     renameJapam,
     archiveJapam,
@@ -188,6 +202,7 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
     currentJapam,
     isLoading,
     selectJapam,
+    ensureDefaultJapam,
     createJapam,
     renameJapam,
     archiveJapam,

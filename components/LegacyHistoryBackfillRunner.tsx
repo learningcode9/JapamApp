@@ -6,7 +6,7 @@
  * Invisible (renders null), non-blocking (never gates app startup or any screen's render -- runs
  * in its own fire-and-forget effect, same pattern as app/_layout.tsx's existing
  * repairLegacyStoredUserId() call), and mounted INSIDE CurrentJapamProvider (so it can call the
- * Context's own createJapam/useCurrentJapam -- this file does not modify or redesign
+ * Context's own ensureDefaultJapam/useCurrentJapam -- this file does not modify or redesign
  * CurrentJapamContext at all, it's just another consumer of it).
  *
  * Flow, in order:
@@ -14,8 +14,8 @@
  *      planLegacyHistoryBackfill) whether this identity has ANY null-japamId history at all. No
  *      Japam is created for this check -- planLegacyHistoryBackfill is pure and never persists
  *      anything, so a placeholder id/name here is safe and discarded.
- *   2. Only if step 1 found something: create ONE default Japam via the Context's existing
- *      createJapam (which also auto-selects it -- untouched, existing behavior).
+ *   2. Only if step 1 found something: ensure ONE default Japam via the Context's idempotent
+ *      ensureDefaultJapam path (which auto-selects it when it is newly created).
  *   3. Persist the real reassignment via historyRepository.applyLegacyHistoryBackfill, using the
  *      just-created Japam's real id/name.
  *   4. Mark this identity's "already backfilled" flag complete.
@@ -102,7 +102,7 @@ const fetchSuggestedJapamName = async (userId: string | null): Promise<string> =
 };
 
 export default function LegacyHistoryBackfillRunner() {
-  const { isLoading, createJapam } = useCurrentJapam();
+  const { isLoading, ensureDefaultJapam } = useCurrentJapam();
   // Identity-aware run guard, not a single boolean: this component is mounted once for the app's
   // whole lifetime (inside CurrentJapamProvider, which itself never unmounts), so a single
   // hasRunRef would permanently skip a NEW identity's own check for the rest of the session after
@@ -144,11 +144,10 @@ export default function LegacyHistoryBackfillRunner() {
         return;
       }
 
-      // Step 2: create the one default Japam, named after the best available existing name.
-      // createJapam already auto-selects it -- existing, untouched Context behavior.
+      // Step 2: reuse or create the one default Japam, named after the best available existing name.
       const suggestedName = await fetchSuggestedJapamName(userId);
-      const created = await createJapam(suggestedName);
-      if (!created) return; // Defensive only: createJapam only returns null for a blank name.
+      const created = await ensureDefaultJapam(suggestedName);
+      if (!created) return; // Defensive only: ensureDefaultJapam can fail without a user identity.
 
       // Step 3: persist the real reassignment using the just-created Japam's real id/name.
       await historyRepository.applyLegacyHistoryBackfill(userId, created.id, created.name);
@@ -175,7 +174,7 @@ export default function LegacyHistoryBackfillRunner() {
         checkedIdentitiesRef.current.delete(identityKeyBeingAttempted);
       }
     });
-  }, [isLoading, createJapam]);
+  }, [isLoading, ensureDefaultJapam]);
 
   return null;
 }

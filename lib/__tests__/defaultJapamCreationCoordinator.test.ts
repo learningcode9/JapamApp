@@ -93,4 +93,37 @@ describe('DefaultJapamCreationCoordinator', () => {
     await coordinator.ensureCreation('user', create);
     expect(create).toHaveBeenCalledTimes(2);
   });
+
+  it('rechecks active state so startup and backfill paths create one default', async () => {
+    const records: { archivedAt: string | null }[] = [];
+    const create = jest.fn(async () => {
+      records.push({ archivedAt: null });
+    });
+    const ensureDefault = () => coordinator.ensureDefaultCreation('user', {
+      hasActiveJapam: async () => records.some((record) => record.archivedAt === null),
+      create,
+    });
+
+    await Promise.all([ensureDefault(), ensureDefault()]);
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(records).toHaveLength(1);
+  });
+
+  it('reuses an active Japam when legacy backfill runs after startup creation', async () => {
+    const create = jest.fn(async () => undefined);
+    let hasActive = false;
+    const options = {
+      hasActiveJapam: async () => hasActive,
+      create: async () => {
+        hasActive = true;
+        await create();
+      },
+    };
+
+    await coordinator.ensureDefaultCreation('user', options);
+    await coordinator.ensureDefaultCreation('user', options);
+
+    expect(create).toHaveBeenCalledTimes(1);
+  });
 });
