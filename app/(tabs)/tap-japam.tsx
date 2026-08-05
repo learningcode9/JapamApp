@@ -1294,7 +1294,9 @@ export default function JapamMain() {
   useEffect(() => {
     if (Platform.OS !== 'web') {
       GoogleSignin.configure({
-        webClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
+        webClientId:
+          process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
+          process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
       });
     }
   }, []);

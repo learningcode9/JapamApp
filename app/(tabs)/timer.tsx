@@ -352,7 +352,9 @@ export default function TimerScreen() {
   useEffect(() => {
     if (Platform.OS !== 'web') {
       GoogleSignin.configure({
-        webClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
+        webClientId:
+          process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ||
+          process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
       });
     }
   }, []);
@@ -367,6 +369,10 @@ export default function TimerScreen() {
     googleUserId: string,
     skipMigration: boolean
   ) => {
+    console.log('[GSI_DEBUG] finishGoogleSignIn START', {
+      googleUserId,
+      skipMigration,
+    });
     await AsyncStorage.setItem(USER_NAME_KEY, googleName);
     if (googleEmail) await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
     if (!skipMigration) {
@@ -375,6 +381,10 @@ export default function TimerScreen() {
       // numeric ID only if the session is unexpectedly unavailable.
       const session = (await supabase.auth.getSession()).data.session;
       const userId = session?.user?.id ?? googleUserId;
+      console.log('[GSI_DEBUG] finish sessionUser=%s isAnonymous=%s fallbackToGoogleId=%s',
+        session?.user?.id ?? 'none',
+        String(session?.user?.is_anonymous ?? 'n/a'),
+        String(!session?.user?.id));
       await migrateGuestHistoryToGoogle(userId);
       await AsyncStorage.setItem(USER_ID_KEY, userId);
     }
@@ -389,12 +399,15 @@ export default function TimerScreen() {
 
   const handleNativeGoogleSignIn = useCallback(async () => {
     console.log('SIGNIN PATH:', Platform.OS);
-    console.log('Using native GoogleSignin');
+    console.log('[TIMER_GSI_PATH] Using native GoogleSignin');
     setIsSigningIn(true);
     setShowUserModal(false);
     try {
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
       const userInfo = await GoogleSignin.signIn();
+      console.log('[GSI_DEBUG] after GoogleSignin.signIn returned');
+      console.log('[GSI_DEBUG] userInfo type=', typeof userInfo);
+      console.log('[GSI_DEBUG] userInfo keys=', Object.keys(userInfo || {}));
       const rawUserInfo = userInfo as any;
       console.log('Native Google sign-in result type:', rawUserInfo?.type || 'raw-user');
       const googleUser =
@@ -413,6 +426,9 @@ export default function TimerScreen() {
       }
       const { id, name, givenName, email } = googleUser;
       const idToken = rawUserInfo?.data?.idToken as string | null | undefined;
+      console.log('[GSI_DEBUG] rawUserInfo keys=', Object.keys(rawUserInfo || {}));
+      console.log('[GSI_DEBUG] data keys=', Object.keys(rawUserInfo?.data || {}));
+      console.log('[GSI_DEBUG] idToken exists=', !!idToken);
       const googleName = givenName || name || email || 'User';
       const googleEmail = email || '';
       const googleUserId = String(id).trim();
@@ -426,9 +442,21 @@ export default function TimerScreen() {
 
       let skipMigration = false;
 
+      console.log('[GSI_DEBUG] hasIdToken=%s', String(!!idToken));
       if (idToken) {
         const isAnonymous = await getIsAnonymous();
+        console.log('[GSI_DEBUG] before signInOrLinkGoogle', {
+          hasIdToken: !!idToken,
+          isAnonymous,
+        });
         const result = await signInOrLinkGoogle(idToken, isAnonymous);
+        console.log('[GSI_DEBUG] after signInOrLinkGoogle');
+        console.log('[GSI_DEBUG] signInOrLinkGoogle returned:', result.kind, result);
+        console.log('[GSI_DEBUG] result.kind=%s', result.kind);
+        if (result.kind === 'error') {
+          const e = result.error as { code?: string; message?: string };
+          console.log('[GSI_DEBUG] error.code=%s error.message=%s', e?.code, e?.message);
+        }
 
         if (result.kind === 'collision') {
           // Approved UX (no merge, no silent failure): "Sign In" completes a normal direct
@@ -453,9 +481,10 @@ export default function TimerScreen() {
         }
       }
 
+      console.log('[GSI_DEBUG] calling finishGoogleSignIn');
       await finishGoogleSignIn(googleName, googleEmail, googleUserId, skipMigration);
     } catch (error) {
-      console.log('Native Google sign-in error:', error);
+      console.log('[GSI_DEBUG] Native Google sign-in error:', error);
       setShowUserModal(true);
       showGoogleSignInRequiredAlert();
     } finally {
