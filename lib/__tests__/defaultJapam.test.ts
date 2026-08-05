@@ -4,12 +4,14 @@ import { type Japam } from '../japams';
 import * as japamsRepository from '../japamsRepository';
 
 const mockGetSession = jest.fn();
+const mockRpc = jest.fn();
 
 jest.mock('../supabase', () => ({
   supabase: {
     auth: {
       getSession: (...args: unknown[]) => mockGetSession(...args),
     },
+    rpc: (...args: unknown[]) => mockRpc(...args),
   },
 }));
 
@@ -62,6 +64,7 @@ describe('default Japam — repository-level behavior', () => {
     await AsyncStorage.clear();
     fetchMock.mockReset();
     mockGetSession.mockReset();
+    mockRpc.mockReset();
     process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
     process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'anon-key';
     mockGetSession.mockResolvedValue({ data: { session: null }, error: null });
@@ -78,6 +81,28 @@ describe('default Japam — repository-level behavior', () => {
     const loaded = await japamsRepository.loadJapams(UID);
     expect(loaded).toHaveLength(1);
     expect(loaded[0].name).toBe('My Japam');
+  });
+
+  it('uses the server idempotency RPC for the signed-in default', async () => {
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: 'token' } }, error: null });
+    mockRpc.mockResolvedValue({
+      data: [{
+        id: 'server-default',
+        user_id: UID,
+        name: 'My Japam',
+        display_order: null,
+        created_at: '2026-07-06T10:00:00.000Z',
+        updated_at: '2026-07-06T10:00:00.000Z',
+        archived_at: null,
+      }],
+      error: null,
+    });
+
+    const result = await japamsRepository.ensureDefaultJapam(UID);
+
+    expect(mockRpc).toHaveBeenCalledWith('ensure_default_japam', { p_user_id: UID });
+    expect(result?.defaultJapam.id).toBe('server-default');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('persists the default Japam across re-loads', async () => {

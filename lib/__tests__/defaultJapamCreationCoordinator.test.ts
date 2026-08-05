@@ -100,7 +100,7 @@ describe('DefaultJapamCreationCoordinator', () => {
       records.push({ archivedAt: null });
     });
     const ensureDefault = () => coordinator.ensureDefaultCreation('user', {
-      hasActiveJapam: async () => records.some((record) => record.archivedAt === null),
+      hasActiveDefaultJapam: async () => records.some((record) => record.archivedAt === null),
       create,
     });
 
@@ -114,7 +114,7 @@ describe('DefaultJapamCreationCoordinator', () => {
     const create = jest.fn(async () => undefined);
     let hasActive = false;
     const options = {
-      hasActiveJapam: async () => hasActive,
+      hasActiveDefaultJapam: async () => hasActive,
       create: async () => {
         hasActive = true;
         await create();
@@ -122,6 +122,22 @@ describe('DefaultJapamCreationCoordinator', () => {
     };
 
     await coordinator.ensureDefaultCreation('user', options);
+    await coordinator.ensureDefaultCreation('user', options);
+
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not treat an active custom Japam as the default', async () => {
+    const create = jest.fn(async () => undefined);
+    let hasDefault = false;
+    const options = {
+      hasActiveDefaultJapam: async () => hasDefault,
+      create: async () => {
+        hasDefault = true;
+        await create();
+      },
+    };
+
     await coordinator.ensureDefaultCreation('user', options);
 
     expect(create).toHaveBeenCalledTimes(1);

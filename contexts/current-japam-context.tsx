@@ -78,13 +78,15 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
     if (!userId) return null;
 
     await coordinator.ensureDefaultCreation(userId, {
-      hasActiveJapam: async () => activeJapams(await japamsRepository.loadJapams(userId)).length > 0,
+      hasActiveDefaultJapam: async () => (await japamsRepository.loadJapams(userId))
+        .some((japam) => japam.name === 'My Japam' && japam.archivedAt === null),
       create: async () => {
-        await japamsRepository.createJapam(userId, preferredName);
+        await japamsRepository.ensureDefaultJapam(userId);
       },
     });
 
-    return activeJapams(await japamsRepository.loadJapams(userId))[0] ?? null;
+    return (await japamsRepository.loadJapams(userId))
+      .find((japam) => japam.name === 'My Japam' && japam.archivedAt === null) ?? null;
   }, [coordinator]);
 
   const refresh = useCallback(async () => {

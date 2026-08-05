@@ -197,6 +197,30 @@ const syncTargetsForStartup = (local: Japam[], remote: Japam[]): Japam[] => {
   return local.filter((j) => Boolean(j.userId) && (j.syncStatus !== 'synced' || !remoteIds.has(j.id)));
 };
 
+const DEFAULT_JAPAM_NAME = 'My Japam';
+
+/**
+ * Ask PostgreSQL to return the canonical active default. The RPC takes a transaction advisory lock
+ * per user, so concurrent devices/processes cannot both insert a default row.
+ */
+const ensureRemoteDefaultJapam = async (
+  userId: string,
+  _ctx: SyncContext,
+): Promise<Japam | null> => {
+  try {
+    const { data, error } = await supabase.rpc('ensure_default_japam', { p_user_id: userId });
+    if (error) {
+      console.log('[JAPAM_DEFAULT_RPC_FAILED] message=%s', error.message);
+      return null;
+    }
+    const row = Array.isArray(data) ? data[0] : data;
+    return mapRemoteJapam(row as RemoteJapamRow);
+  } catch {
+    console.log('[JAPAM_DEFAULT_RPC_FAILED] reason=network');
+    return null;
+  }
+};
+
 const saveJapamsWithSyncStatus = async (
   userId: string | null | undefined,
   japams: Japam[],
@@ -260,6 +284,30 @@ export const createJapam = async (
   }
 
   return { created, japams: updated };
+};
+
+/**
+ * Ensure the signed-in user's active default exists without creating a client-generated duplicate.
+ * Existing local rows are never deleted; the server result is merged by stable ID.
+ */
+export const ensureDefaultJapam = async (
+  userId: string | null | undefined,
+): Promise<{ defaultJapam: Japam; japams: Japam[] } | null> => {
+  if (!userId) return null;
+
+  const local = await loadJapamsFromStorage(userId);
+  const localDefault = local.find(
+    (japam) => japam.name === DEFAULT_JAPAM_NAME && japam.archivedAt === null,
+  );
+  const ctx = await getSyncContext(userId);
+  if (!ctx) return localDefault ? { defaultJapam: localDefault, japams: local } : null;
+
+  const remoteDefault = await ensureRemoteDefaultJapam(userId, ctx);
+  if (!remoteDefault) return localDefault ? { defaultJapam: localDefault, japams: local } : null;
+
+  const merged = mergeLocalAndRemoteJapams(local, [remoteDefault]);
+  await saveJapamsWithSyncStatus(userId, merged);
+  return { defaultJapam: remoteDefault, japams: merged };
 };
 
 /** Rename a Japam and persist it. No-op (returns the list unchanged) if japamId isn't found. */

@@ -4,7 +4,7 @@ type InflightEntry = {
 };
 
 type DefaultCreationOptions = {
-  hasActiveJapam: () => Promise<boolean>;
+  hasActiveDefaultJapam: () => Promise<boolean>;
   create: () => Promise<unknown>;
 };
 
@@ -47,7 +47,7 @@ export function createDefaultJapamCreationCoordinator() {
       userId: string,
       options: DefaultCreationOptions,
     ): Promise<void> => runExclusive(userId, async () => {
-      if (await options.hasActiveJapam()) return;
+      if (await options.hasActiveDefaultJapam()) return;
       await options.create();
     }),
   };
