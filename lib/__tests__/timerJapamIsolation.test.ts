@@ -1,4 +1,6 @@
 import { computeColdStartRestoreDecision } from '../timerColdStartRestore';
+import { canPersistJapamCompletion, getJapamActionReadiness } from '../japamActionReadiness';
+import { appendCompletion, type HistoryRecord } from '../historyStore';
 
 // Replicate the key helpers from timer-context.tsx to test them in isolation.
 // These are pure string functions — no AsyncStorage dependency needed.
@@ -8,6 +10,21 @@ const getUserKey = (key: string, uid: string) => `${key}:${uid}`;
 const UID = 'test-user-123';
 const JAPAM_A = 'japam-a-1111';
 const JAPAM_B = 'japam-b-2222';
+
+const timerCompletion = (overrides: Partial<HistoryRecord> = {}) => ({
+  date: '2026-07-18T00:00:00.000Z',
+  malas: 1,
+  totalCount: 108,
+  duration: 300,
+  manual: false,
+  userId: UID,
+  userName: 'Test User',
+  userEmail: 'user@example.com',
+  completionId: 'timer-session-1:loop-1',
+  japamId: JAPAM_A,
+  japamName: 'Japam A',
+  ...overrides,
+});
 
 describe('per-Japam timer key helpers', () => {
   it('getJapamKey produces key:uid:japamId', () => {
@@ -153,6 +170,73 @@ describe('force-stop restore: selected Japam persists', () => {
 });
 
 describe('running-session attribution stays with Japam captured at Start', () => {
+  it('authenticated timer start is blocked until a real Japam resolves', () => {
+    expect(getJapamActionReadiness({
+      userId: UID,
+      isAnonymous: false,
+      currentJapamId: null,
+      isJapamLoading: true,
+    }).canAct).toBe(false);
+
+    expect(getJapamActionReadiness({
+      userId: UID,
+      isAnonymous: false,
+      currentJapamId: null,
+      isJapamLoading: false,
+    }).canAct).toBe(false);
+
+    expect(getJapamActionReadiness({
+      userId: UID,
+      isAnonymous: false,
+      currentJapamId: JAPAM_A,
+      isJapamLoading: false,
+    }).canAct).toBe(true);
+  });
+
+  it('authenticated timer completion with japamId=null is rejected before local write', () => {
+    const completion = timerCompletion({ japamId: null, japamName: null });
+    const allowed = canPersistJapamCompletion({
+      userId: UID,
+      isAnonymous: false,
+      japamId: completion.japamId ?? null,
+    });
+
+    expect(allowed).toBe(false);
+  });
+
+  it('authenticated timer completion with a real japamId still saves correctly', () => {
+    const completion = timerCompletion();
+    const allowed = canPersistJapamCompletion({
+      userId: UID,
+      isAnonymous: false,
+      japamId: completion.japamId ?? null,
+    });
+
+    expect(allowed).toBe(true);
+    expect(appendCompletion([], completion)).toHaveLength(1);
+    expect(appendCompletion([], completion)[0].japamId).toBe(JAPAM_A);
+  });
+
+  it('guest and anonymous timer completion behavior remains unchanged', () => {
+    const guestCompletion = timerCompletion({
+      userId: null,
+      userName: undefined,
+      userEmail: undefined,
+      japamId: null,
+      japamName: null,
+    });
+    const anonymousCompletion = timerCompletion({
+      userId: 'anon-user',
+      japamId: null,
+      japamName: null,
+    });
+
+    expect(canPersistJapamCompletion({ userId: null, isAnonymous: false, japamId: null })).toBe(true);
+    expect(canPersistJapamCompletion({ userId: 'anon-user', isAnonymous: true, japamId: null })).toBe(true);
+    expect(appendCompletion([], guestCompletion)[0].japamId).toBeNull();
+    expect(appendCompletion([], anonymousCompletion)[0].japamId).toBeNull();
+  });
+
   it('activeJapamIdRef is a one-time snapshot, never updated on switch', () => {
     // This validates the existing architectural decision: activeJapamIdRef is set once
     // by setActiveJapamSelection at Start time, and is deliberately NOT kept in sync

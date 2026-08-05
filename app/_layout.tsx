@@ -5,7 +5,7 @@ import * as Updates from 'expo-updates';
 import { Asset } from 'expo-asset';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { AppState, Platform, View } from 'react-native';
 import 'react-native-reanimated';
 import { PaperProvider } from 'react-native-paper';
@@ -15,6 +15,7 @@ import { repairLegacyStoredUserId } from '@/lib/anonymousAuth';
 import { TimerProvider } from '../contexts/timer-context';
 import { CurrentJapamProvider } from '../contexts/current-japam-context';
 import LegacyHistoryBackfillRunner from '../components/LegacyHistoryBackfillRunner';
+import { startAuthLifecycle } from '../lib/authLifecycle';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -22,13 +23,20 @@ export const unstable_settings = {
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+  const [authReady, setAuthReady] = useState(false);
 
-  // Startup identity canonicalization: if a valid Supabase session already exists but the cached
-  // USER_ID_KEY is still a legacy numeric Google subject id, repair it to the session's UUID. A
-  // no-op when there's no session, the id is already a UUID, or the user is a guest — see
-  // lib/anonymousAuth.ts's repairLegacyStoredUserId for the exact gating conditions.
   useEffect(() => {
-    void repairLegacyStoredUserId();
+    let mounted = true;
+    const lifecycle = startAuthLifecycle();
+    void lifecycle.ready.then((auth) => {
+      if (auth.kind === 'AUTHENTICATED') return repairLegacyStoredUserId();
+    }).finally(() => {
+      if (mounted) setAuthReady(true);
+    });
+    return () => {
+      mounted = false;
+      lifecycle.stop();
+    };
   }, []);
 
   // Warm the background image cache in the background only. This must NEVER gate app render:
@@ -198,7 +206,7 @@ export default function RootLayout() {
     <View style={{ flex: 1, backgroundColor: '#edf7f4' }}>
       <PaperProvider>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-          <TimerProvider>
+          {authReady ? <TimerProvider>
             <CurrentJapamProvider>
               <LegacyHistoryBackfillRunner />
               <Stack>
@@ -209,7 +217,7 @@ export default function RootLayout() {
                 <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
               </Stack>
             </CurrentJapamProvider>
-          </TimerProvider>
+          </TimerProvider> : null}
           <StatusBar style="auto" />
         </ThemeProvider>
       </PaperProvider>

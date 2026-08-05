@@ -69,7 +69,7 @@ export default function CurrentJapamHeaderButton({ variant }: CurrentJapamHeader
   const button = (
     <Pressable
       style={({ pressed }) => [styles.button, variantStyle.button, pressed && styles.pressed]}
-      onPress={() => router.push('/my-japams')}
+      onPress={() => router.push('/my-japams?mode=selector')}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
     >

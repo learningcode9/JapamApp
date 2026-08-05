@@ -122,6 +122,31 @@ function resolveSameIdJapam(local: Japam, remote: Japam): Japam {
 const deterministicDefaultJapamId = (userId: string): string =>
   uuidV5(`${userId}:default-japam`, DEFAULT_JAPAM_UUID_NAMESPACE);
 
+/**
+ * Ask PostgreSQL to return the canonical active default. The RPC takes a transaction advisory lock
+ * per user, so concurrent devices/processes cannot both insert a default row. Returns null on any
+ * RPC/network failure so callers can fall back to deterministic client-side creation.
+ */
+const ensureRemoteDefaultJapam = async (userId: string): Promise<Japam | null> => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { supabase } = require('./supabase');
+    const { data, error } = await supabase.rpc('ensure_default_japam', { p_user_id: userId });
+    if (error) {
+      console.warn('[JAPAM_DEFAULT_RPC_FAILED]', { code: error.code, message: error.message });
+      return null;
+    }
+    const row = Array.isArray(data) ? (data[0] as RemoteJapamRow | undefined) : (data as RemoteJapamRow | null | undefined);
+    return row ? remoteRowToJapam(row) : null;
+  } catch {
+    console.warn('[JAPAM_DEFAULT_RPC_FAILED]', {
+      code: 'NETWORK_ERROR',
+      message: 'Network error during default Japam ensure',
+    });
+    return null;
+  }
+};
+
 const fetchRemoteJapams = async (userId: string): Promise<Japam[] | null> => {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -716,6 +741,26 @@ const ensureDefaultJapamInternal = async (
     return { japams: merged, currentJapamId: firstActive.id, created: null };
   }
 
+  // Server-side idempotent creation: prefer the ensure_default_japam RPC, which takes a per-user
+  // transaction advisory lock so concurrent devices/processes cannot both insert a default row.
+  // It returns the existing canonical default when one is already present (the earlier branches
+  // already short-circuited on an active default, so this path is normally the first-time insert).
+  const remoteDefault = await ensureRemoteDefaultJapam(userId);
+  if (remoteDefault) {
+    if (tombstones.has(remoteDefault.id)) {
+      return { japams: merged, currentJapamId: null, created: null };
+    }
+    const mergedWithDefault = applyJapamTombstones(
+      mergeJapamsById(mergedBeforeTombstones, [remoteDefault]),
+      tombstones,
+    );
+    await saveJapamsToStorage(userId, mergedWithDefault);
+    await saveCurrentJapamIdToStorage(userId, remoteDefault.id);
+    return { japams: mergedWithDefault, currentJapamId: remoteDefault.id, created: remoteDefault };
+  }
+
+  // Fallback when the RPC is unavailable (network blip / not yet deployed): deterministic
+  // client-side creation preserves main's behavior and keeps a signed-in user unblocked.
   const now = new Date().toISOString();
   const created = createJapamPure(userId, DEFAULT_JAPAM_NAME, {
     id: deterministicDefaultJapamId(userId),

@@ -30,10 +30,11 @@ const FILES_TO_SCAN = [
   'app/(tabs)/tap-japam.tsx',
   'app/(tabs)/timer.tsx',
   'contexts/timer-context.tsx',
+  'lib/japamsRepository.ts',
 ];
 
 const AUDITED_TABLE_PATTERN =
-  /rest\/v1\/(japam_history|deleted_completions|japam_user_totals|japam_timer_state)/g;
+  /rest\/v1\/(japam_history|deleted_completions|japam_user_totals|japam_timer_state|japams)/g;
 
 // The exact literal patterns this codebase used everywhere for the raw anon key variable.
 const RAW_ANON_KEY_BEARER_PATTERN = /Authorization:\s*`Bearer \$\{\s*(key|supabaseKey)\s*\}`/;
@@ -42,7 +43,7 @@ const RAW_ANON_KEY_BEARER_PATTERN = /Authorization:\s*`Bearer \$\{\s*(key|supaba
 // codebase defines its `headers: { ... }` within a few lines of the URL.
 const WINDOW_CHARS = 500;
 
-describe('japam_history / deleted_completions / japam_user_totals / japam_timer_state REST calls never use the raw anon key', () => {
+describe('audited Supabase REST calls never use the raw anon key as the Authorization bearer token', () => {
   for (const relativePath of FILES_TO_SCAN) {
     it(`${relativePath} has no anon-key Authorization header on an audited-table request`, () => {
       const filePath = path.join(REPO_ROOT, relativePath);

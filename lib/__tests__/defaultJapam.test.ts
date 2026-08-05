@@ -6,6 +6,7 @@ import * as japamsRepository from '../japamsRepository';
 let remoteJapamsRows: Record<string, unknown>[] = [];
 let remoteDeletedRows: Record<string, unknown>[] = [];
 
+const mockRpc = jest.fn();
 const mockFrom = jest.fn((table: string) => {
   const chain: any = {
     select: jest.fn(() => chain),
@@ -23,6 +24,7 @@ const mockFrom = jest.fn((table: string) => {
 jest.mock('../supabase', () => ({
   supabase: {
     from: (table: string) => mockFrom(table),
+    rpc: (...args: unknown[]) => mockRpc(...args),
   },
 }));
 
@@ -58,6 +60,7 @@ describe('default Japam — repository-level behavior', () => {
     remoteJapamsRows = [];
     remoteDeletedRows = [];
     mockFrom.mockClear();
+    mockRpc.mockReset();
   });
 
   it('creates a "My Japam" for a new user with zero Japams', async () => {
@@ -149,6 +152,46 @@ describe('default Japam — repository-level behavior', () => {
     expect(result.currentJapamId).toBe(canonicalId);
     expect(result.japams.map((j) => j.id)).toEqual([canonicalId, otherId]);
     expect(await japamsRepository.loadCurrentJapamId(UID)).toBe(canonicalId);
+  });
+
+  it('uses the server idempotency RPC to create the default for a signed-in user', async () => {
+    const serverDefault = {
+      id: 'server-default-1',
+      user_id: UID,
+      name: 'My Japam',
+      display_order: null,
+      created_at: '2026-07-06T10:00:00.000Z',
+      updated_at: '2026-07-06T10:00:00.000Z',
+      archived_at: null,
+    };
+    mockRpc.mockImplementation(async (fn: string) => {
+      if (fn === 'get_pending_japam_adoption') return { data: [], error: null };
+      if (fn === 'ensure_default_japam') return { data: [serverDefault], error: null };
+      return { data: [], error: null };
+    });
+
+    const result = await japamsRepository.ensureDefaultJapam(UID);
+
+    expect(mockRpc).toHaveBeenCalledWith('ensure_default_japam', { p_user_id: UID });
+    expect(result.currentJapamId).toBe('server-default-1');
+    expect(result.created?.id).toBe('server-default-1');
+    expect(result.japams.map((j) => j.id)).toContain('server-default-1');
+    expect(await japamsRepository.loadCurrentJapamId(UID)).toBe('server-default-1');
+  });
+
+  it('falls back to deterministic creation when the idempotency RPC fails', async () => {
+    mockRpc.mockImplementation(async (fn: string) => {
+      if (fn === 'get_pending_japam_adoption') return { data: [], error: null };
+      if (fn === 'ensure_default_japam') return { data: null, error: new Error('network') };
+      return { data: [], error: null };
+    });
+
+    const result = await japamsRepository.ensureDefaultJapam(UID);
+
+    expect(result.created).not.toBeNull();
+    expect(result.created?.name).toBe('My Japam');
+    expect(result.currentJapamId).toBe(result.created?.id);
+    expect(await japamsRepository.loadCurrentJapamId(UID)).toBe(result.created?.id);
   });
 
   it('selects the default Japam via currentJapamId', async () => {
