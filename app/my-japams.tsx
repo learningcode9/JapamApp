@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import {
   Alert,
@@ -27,6 +27,8 @@ type NameDialogMode = 'create' | 'rename';
 
 export default function MyJapamsScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ mode?: string }>();
+  const isSelectorMode = params.mode === 'selector';
   const insets = useSafeAreaInsets();
   const {
     japams,
@@ -218,7 +220,18 @@ export default function MyJapamsScreen() {
           <Text style={styles.hintText}>Long-press a Japam to archive it.</Text>
         )}
 
-        {archivedVisibleJapams.length > 0 && (
+        {isSelectorMode && archivedVisibleJapams.length > 0 && (
+          <Pressable
+            style={({ pressed }) => [styles.manageButton, pressed && styles.cardPressed]}
+            onPress={() => router.push('/my-japams')}
+            accessibilityRole="button"
+            accessibilityLabel="Manage My Japams"
+          >
+            <Text style={styles.manageButtonText}>Manage My Japams</Text>
+          </Pressable>
+        )}
+
+        {!isSelectorMode && archivedVisibleJapams.length > 0 && (
           <>
             <Text style={styles.sectionHeading}>Archived Japams</Text>
             {archivedVisibleJapams.map((japam) => {
@@ -456,6 +469,23 @@ const styles = StyleSheet.create({
   addButtonText: {
     color: '#ffffff',
     fontSize: 18,
+    fontWeight: '800',
+  },
+  manageButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
+    borderRadius: 999,
+    borderWidth: 2,
+    borderColor: 'rgba(15, 118, 110, 0.2)',
+    minHeight: 54,
+    marginTop: 24,
+    paddingHorizontal: 18,
+  },
+  manageButtonText: {
+    color: '#0f766e',
+    fontSize: 16,
     fontWeight: '800',
   },
   hintText: {
