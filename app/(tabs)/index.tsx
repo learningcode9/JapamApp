@@ -557,7 +557,10 @@ export default function JapamMain() {
 
   const [request, response, promptAsync] = Google.useAuthRequest({
     webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
-    clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
+    clientId:
+      process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ||
+      process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ||
+      process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
     scopes: ['openid', 'profile', 'email'],
     redirectUri: Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : undefined,
     responseType: Platform.OS === 'web' ? ResponseType.IdToken : undefined,
