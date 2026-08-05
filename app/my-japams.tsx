@@ -1,10 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
+  DeviceEventEmitter,
   Modal,
   Platform,
   Pressable,
@@ -16,19 +17,53 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { activeJapams, archivedJapams, type Japam } from '../lib/japams';
-import { loadJapamStats, japamStatsFor, type JapamStats } from '../lib/historyRepository';
+import {
+  hydrateHistoryForUserDetails,
+  japamStatsFor,
+  type JapamStats,
+} from '../lib/historyRepository';
+import { statsByJapam, statsByJapamWithAttribution, toLocalDayKey } from '../lib/historyStore';
 import { useCurrentJapam } from '../contexts/current-japam-context';
+import { LEGACY_USER_ID_KEY } from '../lib/anonymousAuth';
 
 const USER_ID_KEY = 'userId';
 
 const ZERO_STATS: JapamStats = { todayMalas: 0, todayTotalCount: 0, lifetimeMalas: 0, lifetimeTotalCount: 0 };
 
+/**
+ * Stable identity of the current Japam set for stats scoping. Any change to WHAT could affect a
+ * Japam's attributed totals must change this string, so a cached statsMap computed under an old
+ * signature is never shown as if it were current:
+ *
+ * - each Japam's id, CURRENT NAME (a rename changes which legacy null-japamId records match it via
+ *   japamName) and archivedAt (archive/restore);
+ * - the FIRST ACTIVE Japam's id (the canonical default bucket for blank-legacy records), so
+ *   reordering/archiving which Japam is first invalidates the attribution;
+ * - the full ordered list, so delete/reorder changes invalidate too.
+ */
+const computeJapamSignature = (japams: Japam[]): string => {
+  const firstActiveId = activeJapams(japams)[0]?.id ?? '';
+  const japamParts = japams.map((j) => `${j.id}:${j.name}:${j.archivedAt || ''}`).join('|');
+  return `${firstActiveId}|${japamParts}`;
+};
+
 type NameDialogMode = 'create' | 'rename';
+type StatsScopeState = 'loading' | 'ready';
+
+const renderStatValue = (value: string, isLoading: boolean) => {
+  return (
+    <View style={styles.statValueShell} testID="japam-stat-value-shell">
+      {isLoading ? (
+        <View style={styles.statValueSkeleton} testID="japam-stat-skeleton" />
+      ) : (
+        <Text style={styles.statValue}>{value}</Text>
+      )}
+    </View>
+  );
+};
 
 export default function MyJapamsScreen() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ mode?: string }>();
-  const isSelectorMode = params.mode === 'selector';
   const insets = useSafeAreaInsets();
   const {
     japams,
@@ -39,9 +74,95 @@ export default function MyJapamsScreen() {
     renameJapam,
     archiveJapam,
     restoreJapam,
+    deleteJapam,
   } = useCurrentJapam();
 
   const [statsMap, setStatsMap] = useState<Map<string | null, JapamStats>>(new Map());
+  const [statsScopeState, setStatsScopeState] = useState<StatsScopeState>('loading');
+  const [statsUserKey, setStatsUserKey] = useState('guest');
+  const [resolvedStatsScopeKey, setResolvedStatsScopeKey] = useState<string | null>(null);
+  const [resolvedJapamIds, setResolvedJapamIds] = useState<Set<string>>(new Set());
+  const statsScopeStateRef = useRef<StatsScopeState>('loading');
+  const latestAppliedStatsScopeKeyRef = useRef<string | null>(null);
+  const latestStatsRequestRef = useRef({ generation: 0, scopeKey: 'initial' });
+
+  useEffect(() => {
+    statsScopeStateRef.current = statsScopeState;
+  }, [statsScopeState]);
+
+  const isCurrentStatsRequest = useCallback((generation: number, scopeKey: string) => {
+    return (
+      latestStatsRequestRef.current.generation === generation
+      && latestStatsRequestRef.current.scopeKey === scopeKey
+    );
+  }, []);
+
+  const getUserKeyFromScopeKey = useCallback((scopeKey: string | null) => {
+    if (!scopeKey) return null;
+    const separatorIndex = scopeKey.indexOf(':');
+    return separatorIndex === -1 ? scopeKey : scopeKey.slice(0, separatorIndex);
+  }, []);
+
+  const loadStats = useCallback(async ({ force = false }: { force?: boolean } = {}) => {
+    const requestGeneration = latestStatsRequestRef.current.generation + 1;
+    latestStatsRequestRef.current = { generation: requestGeneration, scopeKey: `pending:${requestGeneration}` };
+
+    const userId = await AsyncStorage.getItem(USER_ID_KEY);
+    const userKey = userId || 'guest';
+    setStatsUserKey(userKey);
+    const currentJapamIds = japams.map((j) => j.id);
+    const currentJapamSignature = computeJapamSignature(japams);
+    const appliedUserKey = getUserKeyFromScopeKey(latestAppliedStatsScopeKeyRef.current);
+    const hasReadyStatsForUser = appliedUserKey === userKey && statsScopeStateRef.current === 'ready';
+    const todayKey = toLocalDayKey(new Date().toISOString());
+
+    if (isLoading) {
+      const loadingScopeKey = `loading:${userKey}`;
+      latestStatsRequestRef.current = { generation: requestGeneration, scopeKey: loadingScopeKey };
+      if (!isCurrentStatsRequest(requestGeneration, loadingScopeKey)) return;
+      if (!hasReadyStatsForUser && statsScopeStateRef.current !== 'loading') {
+        setStatsScopeState('loading');
+        setResolvedStatsScopeKey(null);
+        setResolvedJapamIds(new Set());
+      }
+      return;
+    }
+
+    const statsScopeKey = `${userKey}:${currentJapamSignature}`;
+    const scopeChanged = latestAppliedStatsScopeKeyRef.current !== statsScopeKey;
+    const sameScopeAlreadyLoading = latestStatsRequestRef.current.scopeKey === statsScopeKey;
+
+    if (!force && sameScopeAlreadyLoading) return;
+
+    if (!force && !scopeChanged) {
+      if (statsScopeStateRef.current === 'ready') return;
+    }
+
+    latestStatsRequestRef.current = { generation: requestGeneration, scopeKey: statsScopeKey };
+    if (!isCurrentStatsRequest(requestGeneration, statsScopeKey)) return;
+
+    if (scopeChanged && !hasReadyStatsForUser) {
+      setStatsScopeState('loading');
+      setResolvedStatsScopeKey(null);
+      setResolvedJapamIds(new Set());
+    }
+
+    const legacyUserId = await AsyncStorage.getItem(LEGACY_USER_ID_KEY);
+    const hydratedHistory = await hydrateHistoryForUserDetails(userId, legacyUserId, { force });
+    const inputs = japams.map((j) => ({ id: j.id, name: j.name }));
+    const firstActiveJapamId = activeJapams(japams)[0]?.id ?? null;
+    const stats = japams.length > 0
+      ? statsByJapamWithAttribution(hydratedHistory.records, userId, inputs, firstActiveJapamId, todayKey, toLocalDayKey)
+      : statsByJapam(hydratedHistory.records, userId, todayKey, toLocalDayKey);
+    if (!hydratedHistory.hydrationSucceeded && hasReadyStatsForUser && !hydratedHistory.localStateAuthoritativelyChanged) return;
+    if (!isCurrentStatsRequest(requestGeneration, statsScopeKey)) return;
+
+    setStatsMap(stats);
+    setStatsScopeState('ready');
+    latestAppliedStatsScopeKeyRef.current = statsScopeKey;
+    setResolvedStatsScopeKey(statsScopeKey);
+    setResolvedJapamIds(new Set(currentJapamIds));
+  }, [getUserKeyFromScopeKey, isCurrentStatsRequest, isLoading, japams]);
 
   // Reloads stats every time this screen is focused -- matching the same useFocusEffect convention
   // already used by Timer/History elsewhere in this app. This screen never reads AsyncStorage,
@@ -49,19 +170,33 @@ export default function MyJapamsScreen() {
   // historyRepository for the already-computed stats and renders them.
   useFocusEffect(
     useCallback(() => {
-      let cancelled = false;
-      (async () => {
-        const userId = await AsyncStorage.getItem(USER_ID_KEY);
-        if (cancelled) return;
-        const stats = await loadJapamStats(userId);
-        if (cancelled) return;
-        setStatsMap(stats);
-      })();
-      return () => {
-        cancelled = true;
-      };
-    }, [])
+      void loadStats({ force: statsScopeStateRef.current === 'ready' });
+    }, [loadStats])
   );
+
+  useEffect(() => {
+    void loadStats();
+  }, [loadStats]);
+
+  useEffect(() => {
+    const refresh = () => void loadStats({ force: true });
+    const historySubscription = DeviceEventEmitter.addListener('japam-history-updated', refresh);
+    const statsSubscription = DeviceEventEmitter.addListener('japam-stats-updated', refresh);
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.addEventListener('japam-history-updated', refresh as EventListener);
+      window.addEventListener('japam-stats-updated', refresh as EventListener);
+    }
+
+    return () => {
+      historySubscription.remove();
+      statsSubscription.remove();
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.removeEventListener('japam-history-updated', refresh as EventListener);
+        window.removeEventListener('japam-stats-updated', refresh as EventListener);
+      }
+    };
+  }, [loadStats]);
 
   const [showNameDialog, setShowNameDialog] = useState(false);
   const [nameDialogMode, setNameDialogMode] = useState<NameDialogMode>('create');
@@ -130,8 +265,33 @@ export default function MyJapamsScreen() {
     ]);
   };
 
+  const confirmDeletePermanent = (japam: Japam) => {
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm(`Delete Japam?\n\nThis will permanently delete this archived Japam. Its History will remain safe.\nThis action cannot be undone.`)) {
+        void deleteJapam(japam.id);
+      }
+      return;
+    }
+    Alert.alert(
+      'Delete Japam?',
+      'This will permanently delete this archived Japam. Its History will remain safe.\nThis action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => void deleteJapam(japam.id) },
+      ],
+    );
+  };
+
   const visibleJapams = activeJapams(japams);
   const archivedVisibleJapams = archivedJapams(japams);
+  const currentJapamSignature = computeJapamSignature(japams);
+  const currentStatsScopeKey = `${statsUserKey}:${currentJapamSignature}`;
+  const showStatsLoading = statsScopeState !== 'ready';
+  const shouldShowStatSkeleton = (japamId: string) => {
+    if (showStatsLoading) return true;
+    if (resolvedStatsScopeKey === currentStatsScopeKey) return false;
+    return !resolvedJapamIds.has(japamId);
+  };
 
   return (
     <LinearGradient colors={['#e7f5f5', '#c7e2e0', '#eef8f5']} style={styles.container}>
@@ -198,13 +358,13 @@ export default function MyJapamsScreen() {
               </View>
 
               <View style={styles.statsRow}>
-                <View style={styles.statBox}>
+                <View style={styles.statBox} testID="japam-stat-box">
                   <Text style={styles.statLabel}>Today</Text>
-                  <Text style={styles.statValue}>{stats.todayMalas} malas</Text>
+                  {renderStatValue(`${stats.todayMalas} malas`, shouldShowStatSkeleton(japam.id))}
                 </View>
-                <View style={styles.statBox}>
+                <View style={styles.statBox} testID="japam-stat-box">
                   <Text style={styles.statLabel}>Lifetime</Text>
-                  <Text style={styles.statValue}>{stats.lifetimeMalas} malas</Text>
+                  {renderStatValue(`${stats.lifetimeMalas} malas`, shouldShowStatSkeleton(japam.id))}
                 </View>
               </View>
             </Pressable>
@@ -220,18 +380,7 @@ export default function MyJapamsScreen() {
           <Text style={styles.hintText}>Long-press a Japam to archive it.</Text>
         )}
 
-        {isSelectorMode && archivedVisibleJapams.length > 0 && (
-          <Pressable
-            style={({ pressed }) => [styles.manageButton, pressed && styles.cardPressed]}
-            onPress={() => router.push('/my-japams')}
-            accessibilityRole="button"
-            accessibilityLabel="Manage My Japams"
-          >
-            <Text style={styles.manageButtonText}>Manage My Japams</Text>
-          </Pressable>
-        )}
-
-        {!isSelectorMode && archivedVisibleJapams.length > 0 && (
+        {archivedVisibleJapams.length > 0 && (
           <>
             <Text style={styles.sectionHeading}>Archived Japams</Text>
             {archivedVisibleJapams.map((japam) => {
@@ -259,15 +408,26 @@ export default function MyJapamsScreen() {
                   </View>
 
                   <View style={styles.statsRow}>
-                    <View style={styles.statBox}>
+                    <View style={styles.statBox} testID="japam-stat-box">
                       <Text style={styles.statLabel}>Today</Text>
-                      <Text style={styles.statValue}>{stats.todayMalas} malas</Text>
+                      {renderStatValue(`${stats.todayMalas} malas`, shouldShowStatSkeleton(japam.id))}
                     </View>
-                    <View style={styles.statBox}>
+                    <View style={styles.statBox} testID="japam-stat-box">
                       <Text style={styles.statLabel}>Lifetime</Text>
-                      <Text style={styles.statValue}>{stats.lifetimeMalas} malas</Text>
+                      {renderStatValue(`${stats.lifetimeMalas} malas`, shouldShowStatSkeleton(japam.id))}
                     </View>
                   </View>
+
+                  <Pressable
+                    style={styles.deleteButton}
+                    onPress={() => confirmDeletePermanent(japam)}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Delete ${japam.name} permanently`}
+                  >
+                    <Ionicons name="trash-outline" size={14} color="#b91c1c" />
+                    <Text style={styles.deleteButtonText}>Delete Permanently</Text>
+                  </Pressable>
                 </View>
               );
             })}
@@ -424,6 +584,24 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
   },
+  deleteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+    gap: 6,
+    minHeight: 36,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginTop: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(185, 28, 28, 0.08)',
+  },
+  deleteButtonText: {
+    color: '#b91c1c',
+    fontSize: 13,
+    fontWeight: '700',
+  },
   statsRow: {
     flexDirection: 'row',
     marginTop: 14,
@@ -435,6 +613,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 10,
     alignItems: 'center',
+    minHeight: 64,
   },
   statLabel: {
     color: '#547071',
@@ -447,7 +626,20 @@ const styles = StyleSheet.create({
     color: '#12383c',
     fontSize: 18,
     fontWeight: '800',
+    textAlign: 'center',
+  },
+  statValueShell: {
+    minHeight: 24,
+    width: 96,
     marginTop: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  statValueSkeleton: {
+    width: 72,
+    height: 18,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15, 118, 110, 0.16)',
   },
   sectionHeading: {
     color: '#102f34',
@@ -469,23 +661,6 @@ const styles = StyleSheet.create({
   addButtonText: {
     color: '#ffffff',
     fontSize: 18,
-    fontWeight: '800',
-  },
-  manageButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.85)',
-    borderRadius: 999,
-    borderWidth: 2,
-    borderColor: 'rgba(15, 118, 110, 0.2)',
-    minHeight: 54,
-    marginTop: 24,
-    paddingHorizontal: 18,
-  },
-  manageButtonText: {
-    color: '#0f766e',
-    fontSize: 16,
     fontWeight: '800',
   },
   hintText: {

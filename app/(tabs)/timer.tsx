@@ -2,15 +2,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import {
-  dayStreakForJapam,
   dedupeByCompletionId,
-  japamStatsFor,
-  mapSupabaseHistoryRow,
+  japamScopedStatsFor,
   mergeHistories,
-  normalizeAll,
-  statsByJapam,
   toLocalDayKey,
 } from '../../lib/historyStore';
+import { activeJapams } from '../../lib/japams';
 import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -49,14 +46,9 @@ import {
   signInOrLinkGoogle,
   showGoogleAccountCollisionDialog,
 } from '../../lib/anonymousAuth';
-import { getJapamActionReadiness } from '../../lib/japamActionReadiness';
-import { signInWithGoogleIdTokenAndStoreIdentity } from '../../lib/nativeGoogleAuth';
 import { supabase } from '../../lib/supabase';
-import {
-  clearPendingWebGoogleNonce,
-  readPendingWebGoogleNonce,
-  savePendingWebGoogleNonce,
-} from '../../lib/webGoogleNonce';
+import { fetchJapamHistoryRows } from '../../lib/supabaseRestHelper';
+import { claimAuthResponse, emitJapamAuthUpdated } from '../../lib/authEvents';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -144,7 +136,7 @@ const showGoogleSignInRequiredAlert = () => {
 export default function TimerScreen() {
   const router = useRouter();
   const timer = useTimer();
-  const { currentJapam, isLoading: isJapamLoading } = useCurrentJapam();
+  const { currentJapam, japams, isLoading: isJapamContextLoading } = useCurrentJapam();
   const insets = useSafeAreaInsets();
   // Mirror the floating tab bar geometry from _layout.tsx exactly.
   // _layout.tsx uses screenWidth < 500 as its isMobile threshold (different from
@@ -161,8 +153,6 @@ export default function TimerScreen() {
   const [showCustomInput, setShowCustomInput] = useState(false);
   const [customText, setCustomText] = useState('');
   const [userName, setUserName] = useState('');
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-  const [isAnonymousUser, setIsAnonymousUser] = useState(false);
   const [showUserModal, setShowUserModal] = useState(false);
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [showGuestWarningModal, setShowGuestWarningModal] = useState(false);
@@ -177,9 +167,8 @@ export default function TimerScreen() {
   const isIosDeviceWeb = isIOSDeviceWeb();
 
   const rawNonceRef = useRef<string>('');
-  const handledAuthResponseRef = useRef<string | null>(null);
+  const isRestoringRef = useRef(false);
   const [hashedNonce, setHashedNonce] = useState<string>('');
-  const [nonceReady, setNonceReady] = useState(Platform.OS !== 'web');
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     const arr = new Uint8Array(16);
@@ -191,9 +180,9 @@ export default function TimerScreen() {
       const hashed = Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
       console.log('[NONCE_GEN] timer hashed_prefix=%s', hashed.slice(0, 8));
       setHashedNonce(hashed);
-      setNonceReady(true);
     });
   }, []);
+
 
   const [request, response, promptAsync] = Google.useAuthRequest({
     webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || undefined,
@@ -201,28 +190,13 @@ export default function TimerScreen() {
     clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
     scopes: ['openid', 'profile', 'email'],
     redirectUri: Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : undefined,
-    responseType: Platform.OS === 'web' && nonceReady ? ResponseType.IdToken : undefined,
-    extraParams: Platform.OS === 'web' && nonceReady ? { nonce: hashedNonce } : undefined,
+    responseType: Platform.OS === 'web' ? ResponseType.IdToken : undefined,
+    extraParams: Platform.OS === 'web' && hashedNonce ? { nonce: hashedNonce } : undefined,
   });
 
   const loadUser = useCallback(async () => {
-    const [storedUserName, storedUserId, anonymous] = await Promise.all([
-      AsyncStorage.getItem(USER_NAME_KEY),
-      AsyncStorage.getItem(USER_ID_KEY),
-      getIsAnonymous(),
-    ]);
-    setUserName(storedUserName || '');
-    setCurrentUserId(storedUserId);
-    setIsAnonymousUser(anonymous);
+    setUserName((await AsyncStorage.getItem(USER_NAME_KEY)) || '');
   }, []);
-
-  const japamActionReadiness = getJapamActionReadiness({
-    userId: currentUserId,
-    isAnonymous: isAnonymousUser,
-    currentJapamId: currentJapam?.id ?? null,
-    isJapamLoading,
-  });
-  const isStartDisabled = !timer.isRunning && !japamActionReadiness.canAct;
 
   const openSignInModal = useCallback(() => {
     setIsSigningIn(false);
@@ -251,52 +225,44 @@ export default function TimerScreen() {
     setShowGuestNameModal(false);
     setShowUserModal(false);
     setGuestNameInput('');
-    DeviceEventEmitter.emit('japam-auth-updated');
+    emitJapamAuthUpdated();
   }, [guestNameInput]);
 
   const loadStats = useCallback(async () => {
+    if (isRestoringRef.current) return;
+    isRestoringRef.current = true;
+    try {
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
     const todayKey = getLocalDateKey();
     const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
     const localHistory = parseHistory(rawHistory);
     let mergedHistory = localHistory;
-    let rawSupabaseRows = 0;
-    let rawSupabaseCount = 0;
 
     // Option A: anonymous guest data syncs to Supabase immediately, same as a signed-in user —
     // no anonymous-specific suppression here.
     if (userId) {
-      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-      // Require a real session JWT — an anon-key request has no SELECT policy for this user's
-      // rows once RLS is tightened (mirrors syncPendingHistory's session-token preference). No
-      // session means mergedHistory stays local-only below (no remote merge attempted).
-      const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
-      if (url && key && sessionToken) {
         try {
-          const encodedUserId = encodeURIComponent(userId);
-          const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=id,created_at,malas,count,user_name,completion_id,japam_id,japam_name&order=created_at.asc&limit=10000`,
-            { headers: { apikey: key, Authorization: `Bearer ${sessionToken}` } }
-          );
-          if (res.ok) {
-            const rows: {
-              id?: number | string;
-              created_at: string;
-              malas: number | string;
-              count: number | string;
-              user_name?: string;
-              user_email?: string;
-              japam_id?: string | null;
-              japam_name?: string | null;
-              completion_id?: string;
-            }[] = await res.json();
-            rawSupabaseRows = rows.length;
-            const remoteHistory: Session[] = rows.map((row) => mapSupabaseHistoryRow(row, userId));
-            rawSupabaseCount = remoteHistory.reduce(
-              (sum, row) => sum + (Number(row.totalCount) || 0),
-              0
-            );
+          const remoteRows = await fetchJapamHistoryRows({
+            select: 'id,created_at,malas,count,user_name,completion_id,japam_id,japam_name',
+            userId,
+            order: { column: 'created_at', ascending: true },
+            limit: 10000,
+          });
+
+          if (remoteRows !== null) {
+            const remoteHistory: Session[] = remoteRows.map((row: any) => ({
+              date: row.created_at,
+              malas: Number(row.malas) || Math.floor((Number(row.count) || 0) / 108),
+              totalCount: Number(row.count) || (Number(row.malas) || 0) * 108,
+              duration: 0,
+              manual: false,
+              userId,
+              userName: row.user_name,
+              completionId: row.completion_id,
+              syncStatus: 'synced' as const,
+              japamId: row.japam_id ?? null,
+              japamName: row.japam_name ?? null,
+            }));
             mergedHistory = mergeHistories(localHistory, remoteHistory);
             const rawTombData = await AsyncStorage.getItem('deletedCompletions');
             if (rawTombData) {
@@ -307,43 +273,11 @@ export default function TimerScreen() {
                 );
               }
             }
-            const remoteCount = rows.length;
-            const localSynced = localHistory.filter(
-              (r) => r.userId === userId && r.syncStatus === 'synced'
-            ).length;
-            const localPending = localHistory.filter(
-              (r) => r.userId === userId && r.syncStatus === 'pending'
-            ).length;
-            console.log(
-              '[RECONCILE_PRE] screen=timer remote_count=%d local_synced=%d local_pending=%d',
-              remoteCount, localSynced, localPending
-            );
-            const remoteIds = new Set(normalizeAll(remoteHistory).map((r) => r.completionId));
-            if (remoteCount >= 10000) {
-              console.log('[RECONCILE_SKIPPED] screen=timer reason=possible-truncation count=%d', remoteCount);
-            } else {
-              const before = mergedHistory.length;
-              mergedHistory = mergedHistory.filter((r) =>
-                !r.completionId || (r.userId || null) !== userId || r.syncStatus !== 'synced' || remoteIds.has(r.completionId)
-              );
-              console.log('[RECONCILE_APPLIED] screen=timer removed=%d', before - mergedHistory.length);
-            }
-            await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
-            console.log('[RESTORE_REMOTE_COUNT] screen=timer count=%d', remoteHistory.length);
-            console.log(
-              '[MERGE_LOCAL_COUNT_BEFORE] screen=timer count=%d pending=%d',
-              localHistory.length,
-              localHistory.filter((item) => item.userId === userId && item.syncStatus === 'pending').length
-            );
-            console.log('[MERGE_LOCAL_COUNT_AFTER] screen=timer count=%d', mergedHistory.length);
-          } else {
-            console.log('[SYNC_FAILED] source=timer-stats-restore status=%d', res.status);
           }
         } catch {
           console.log('[SYNC_FAILED] source=timer-stats-restore reason=network');
         }
       }
-    }
 
     const history = dedupeHistoryForStats(mergedHistory).filter((item) => {
       if (!userId) return !item.userId;
@@ -352,36 +286,35 @@ export default function TimerScreen() {
 
     // Scoped to the currently selected Japam only -- Home/Timer must never show a combined total
     // across every Japam (product requirement: Home/Timer/Tap Japam always reflect the selected
-    // Japam, matching History/My Japams). null means legacy/unassigned history, same convention as
-    // statsByJapam/dayStreakForJapam everywhere else.
+    // Japam, matching History/My Japams). Routed through japamScopedStatsFor, which uses the SAME
+    // filterByJapam selector History uses (dedupe + strict japamId match + legacy null/name
+    // fallback) so Timer and History can never disagree on which records belong to the selected
+    // Japam -- including null-japamId legacy records that match the selected Japam's name.
     const japamId = currentJapam?.id ?? null;
-    const { todayTotalCount: safeTodayTotal } = japamStatsFor(
-      statsByJapam(history, userId, todayKey, toLocalDayKey),
-      japamId
-    );
-    const nextStreak = dayStreakForJapam(
+    const includeBlankLegacy = japamId === activeJapams(japams)[0]?.id;
+    const scopedStats = japamScopedStatsFor(
       history,
       userId,
       japamId,
+      currentJapam?.name ?? null,
       todayKey,
       toLocalDayKey,
-      getPreviousDateKey
+      getPreviousDateKey,
+      { includeBlankLegacy },
+      // Pass the live Japam list so legacy-name attribution is ambiguity-safe and identical to
+      // My Japams' statsByJapamWithAttribution (shared rule).
+      japams,
     );
+    const safeTodayTotal = scopedStats.todayTotalCount;
+    const nextStreak = scopedStats.dayStreak;
 
     setTodayCount(safeTodayTotal);
-    setMalasToday(Math.floor(safeTodayTotal / 108));
+    setMalasToday(scopedStats.todayMalas);
     setDayStreak(nextStreak);
-    console.log('[TimerStatsDate] deviceLocalTime=%s userLocalDate=%s japamId=%s rawSupabaseRows=%d rawSupabaseCount=%d appMalasToday=%d todayTotal=%d streak=%d',
-      new Date().toString(),
-      todayKey,
-      japamId || 'legacy',
-      rawSupabaseRows,
-      rawSupabaseCount,
-      Math.floor(safeTodayTotal / 108),
-      safeTodayTotal,
-      nextStreak
-    );
-  }, [currentJapam]);
+  } finally {
+    isRestoringRef.current = false;
+  }
+  }, [currentJapam, japams]);
 
   useFocusEffect(
     useCallback(() => {
@@ -421,20 +354,24 @@ export default function TimerScreen() {
     }
   }, []);
 
-  // Shared tail of native Google sign-in: stores the Google profile locally and, for direct
-  // signed-in flows, migrates any guest-only history rows to the authenticated Supabase UUID.
+  // Shared tail of native Google sign-in: stores the Google identity locally and (unless this was
+  // a linkIdentity success, or the user chose to sign in anyway after a collision) migrates any
+  // local guest-only history rows to this googleUserId — same storage steps as today, just
+  // factored out so the collision dialog's "Sign In" button can reach them too.
   const finishGoogleSignIn = useCallback(async (
     googleName: string,
     googleEmail: string,
-    userId: string | null,
+    googleUserId: string,
     skipMigration: boolean
   ) => {
     await AsyncStorage.setItem(USER_NAME_KEY, googleName);
     if (googleEmail) await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
     if (!skipMigration) {
-      if (!userId) {
-        return;
-      }
+      // Direct Google sign-in (no prior anonymous session): use the Supabase UUID that
+      // signInWithIdToken / signInOrLinkGoogle just established, falling back to the Google
+      // numeric ID only if the session is unexpectedly unavailable.
+      const session = (await supabase.auth.getSession()).data.session;
+      const userId = session?.user?.id ?? googleUserId;
       await migrateGuestHistoryToGoogle(userId);
       await AsyncStorage.setItem(USER_ID_KEY, userId);
     }
@@ -442,7 +379,7 @@ export default function TimerScreen() {
     // Supabase UUID (set by signInAsGuest). Do not overwrite it with the Google numeric ID.
     setUserName(googleName);
     setShowUserModal(false);
-    DeviceEventEmitter.emit('japam-auth-updated');
+    emitJapamAuthUpdated();
     DeviceEventEmitter.emit('japam-stats-updated');
     void loadStats();
   }, [loadStats, migrateGuestHistoryToGoogle]);
@@ -484,28 +421,10 @@ export default function TimerScreen() {
         return;
       }
 
-      if (!idToken) {
-        setShowUserModal(true);
-        showGoogleSignInRequiredAlert();
-        return;
-      }
-
       let skipMigration = false;
-      let authenticatedUserId: string | null = null;
 
-      const isAnonymous = await getIsAnonymous();
-      if (!isAnonymous) {
-        const authResult = await signInWithGoogleIdTokenAndStoreIdentity(idToken, googleName, googleEmail);
-        if (!authResult.ok) {
-          if (authResult.error) {
-            console.log('signInWithGoogleIdTokenAndStoreIdentity error:', authResult.error);
-          }
-          setShowUserModal(true);
-          showGoogleSignInRequiredAlert();
-          return;
-        }
-        authenticatedUserId = authResult.userId;
-      } else {
+      if (idToken) {
+        const isAnonymous = await getIsAnonymous();
         const result = await signInOrLinkGoogle(idToken, isAnonymous);
 
         if (result.kind === 'collision') {
@@ -513,7 +432,7 @@ export default function TimerScreen() {
           // sign-in into the existing linked account, abandoning this device's anonymous
           // history; "Cancel" leaves the current anonymous session untouched.
           showGoogleAccountCollisionDialog(
-            () => { void finishGoogleSignIn(googleName, googleEmail, null, true); },
+            () => { void finishGoogleSignIn(googleName, googleEmail, googleUserId, true); },
             () => { /* leave the current anonymous session untouched */ }
           );
           return;
@@ -521,7 +440,8 @@ export default function TimerScreen() {
 
         if (result.kind === 'error') {
           console.log('signInOrLinkGoogle error:', result.error);
-          // Preserve today's tolerant behavior for anonymous-link attempts only.
+          // Preserve today's tolerant behavior: a Supabase auth error was always discarded and
+          // never blocked sign-in, so fall through and store the Google identity locally anyway.
         }
 
         if (result.kind === 'linked') {
@@ -530,7 +450,7 @@ export default function TimerScreen() {
         }
       }
 
-      await finishGoogleSignIn(googleName, googleEmail, authenticatedUserId, skipMigration);
+      await finishGoogleSignIn(googleName, googleEmail, googleUserId, skipMigration);
     } catch (error) {
       console.log('Native Google sign-in error:', error);
       setShowUserModal(true);
@@ -545,13 +465,16 @@ export default function TimerScreen() {
     return () => signInSub.remove();
   }, [handleNativeGoogleSignIn]);
 
+  const handledWebAuthResponseRef = useRef<NonNullable<typeof response> | null>(null);
+
   useEffect(() => {
     const handleGoogleLogin = async () => {
-      if (Platform.OS !== 'web') return;
-      if (!response) return;
+      if (Platform.OS !== 'web') return; // native platforms use handleNativeGoogleSignIn
+      if (!claimAuthResponse(handledWebAuthResponseRef, response)) return;
+
+      console.log('[AUTH_CALLBACK] source=timer-web response.type=%s', response.type);
       if (response.type !== 'success') {
         setIsSigningIn(false);
-        await clearPendingWebGoogleNonce();
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
         if (!savedUserId) {
@@ -559,15 +482,6 @@ export default function TimerScreen() {
           showGoogleSignInRequiredAlert();
         }
         return;
-      }
-
-      // Idempotency guard: derive stable identifier from safe non-secret fields
-      const responseId = 'params' in response ? String(response.params?.state ?? '') : '';
-      if (responseId && handledAuthResponseRef.current === responseId) {
-        return;
-      }
-      if (responseId) {
-        handledAuthResponseRef.current = responseId;
       }
 
       setIsSigningIn(true);
@@ -581,8 +495,11 @@ export default function TimerScreen() {
         authentication?.idToken ||
         ('params' in response ? (response.params as Record<string, string>)?.id_token : undefined);
 
+      console.log('[AUTH_CALLBACK] source=timer-web hasIdToken=%s hasAccessToken=%s paramKeys=%s',
+        !!idToken, !!accessToken,
+        'params' in response ? Object.keys(response.params ?? {}).join(',') : 'none');
+
       if (!accessToken && !idToken) {
-        await clearPendingWebGoogleNonce();
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         setIsSigningIn(false);
         setShowUserModal(true);
@@ -592,44 +509,31 @@ export default function TimerScreen() {
 
       try {
         if (idToken) {
-          const persistedNonce = await readPendingWebGoogleNonce();
-          if (!persistedNonce) {
-            // Nonce already consumed — check if session is still valid
-            const existing = (await supabase.auth.getSession()).data.session;
-            const existingValid = existing?.access_token &&
-              !((existing?.user as { is_anonymous?: boolean } | undefined)?.is_anonymous);
-            if (existingValid) {
-              return;
-            }
-            await clearPendingWebGoogleNonce();
-            setShowUserModal(true);
-            showGoogleSignInRequiredAlert();
-            return;
-          }
-          console.log('[SUPABASE_AUTH] timer nonce_prefix=%s', persistedNonce.slice(0, 8));
+          console.log('[SUPABASE_AUTH] timer nonce_prefix=%s', rawNonceRef.current.slice(0, 8));
           const { error: supaAuthError } = await supabase.auth.signInWithIdToken({
             provider: 'google',
             token: idToken,
-            nonce: persistedNonce,
+            nonce: rawNonceRef.current,
           });
-          if (supaAuthError) {
-            console.log('[SUPABASE_AUTH] timer signInWithIdToken error:', supaAuthError.message);
-            await clearPendingWebGoogleNonce();
-          } else {
-            console.log('[SUPABASE_AUTH] timer web session established');
-            await clearPendingWebGoogleNonce();
-          }
+          if (supaAuthError) console.log('[SUPABASE_AUTH] timer signInWithIdToken error:', supaAuthError.message);
+          else console.log('[SUPABASE_AUTH] timer web session established');
         } else {
           console.log('[SUPABASE_AUTH] timer no id_token — session not established');
-          await clearPendingWebGoogleNonce();
         }
 
         const session = (await supabase.auth.getSession()).data.session;
         const sessionIsAnonymous =
           !!((session?.user as { is_anonymous?: boolean } | undefined)?.is_anonymous);
+        console.log(
+          '[SUPABASE_AUTH] timer session.user.id=%s session.user.email=%s hasAccessToken=%s tokenLength=%s isAnonymous=%s',
+          session?.user?.id || 'none',
+          session?.user?.email || 'none',
+          !!session?.access_token,
+          session?.access_token?.length || 0,
+          sessionIsAnonymous
+        );
         if (!session?.access_token || sessionIsAnonymous) {
           console.log('[SUPABASE_AUTH] timer missing non-anonymous Supabase session after Google login');
-          await clearPendingWebGoogleNonce();
           setShowUserModal(true);
           showGoogleSignInRequiredAlert();
           return;
@@ -662,7 +566,6 @@ export default function TimerScreen() {
         }
 
         if (!googleUserId) {
-          await clearPendingWebGoogleNonce();
           setShowUserModal(true);
           showGoogleSignInRequiredAlert();
           return;
@@ -678,16 +581,14 @@ export default function TimerScreen() {
         await AsyncStorage.setItem(USER_ID_KEY, userId);
         setUserName(googleName);
         setShowUserModal(false);
-        DeviceEventEmitter.emit('japam-auth-updated');
+        emitJapamAuthUpdated();
         DeviceEventEmitter.emit('japam-stats-updated');
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
-          window.dispatchEvent(new Event('japam-auth-updated'));
           window.dispatchEvent(new Event('japam-stats-updated'));
         }
         void loadStats();
       } catch (error) {
         console.log('Google login error:', error);
-        await clearPendingWebGoogleNonce();
         setShowUserModal(true);
         showGoogleSignInRequiredAlert();
       } finally {
@@ -744,23 +645,15 @@ export default function TimerScreen() {
     };
   }, [isIosDeviceWeb]);
 
-  const handleStart = async () => {
+  const handleStart = () => {
     if (!timer.canStart) {
       openSignInModal();
       return;
     }
-    const [storedUserId, anonymous] = await Promise.all([
-      AsyncStorage.getItem(USER_ID_KEY),
-      getIsAnonymous(),
-    ]);
-    const resolvedReadiness = getJapamActionReadiness({
-      userId: currentUserId ?? storedUserId,
-      isAnonymous: currentUserId ? isAnonymousUser : anonymous,
-      currentJapamId: currentJapam?.id ?? null,
-      isJapamLoading,
-    });
-    if (!resolvedReadiness.canAct) return;
-    if (resolvedReadiness.requiresResolvedJapam && !currentJapam) return;
+    if (isJapamContextLoading || !currentJapam?.id || !currentJapam?.name) {
+      Alert.alert('Please wait', 'Your current Japam is still loading. Please try again in a moment.');
+      return;
+    }
     // Snapshot whichever Japam is current AT THIS EXACT MOMENT, once, before starting. Switching
     // the app's current Japam later must never retroactively change what this running session's
     // eventual completion is attributed to -- see setActiveJapamSelection in timer-context.tsx.
@@ -898,25 +791,12 @@ export default function TimerScreen() {
 
           <View style={styles.controls}>
             <Pressable
-              style={({ pressed }) => [
-                styles.startBtn,
-                pressed && !isStartDisabled && styles.softPressed,
-                isStartDisabled && styles.disabledButton,
-              ]}
+              style={({ pressed }) => [styles.startBtn, pressed && styles.softPressed]}
               onPress={timer.isRunning ? timer.pause : handleStart}
-              disabled={isStartDisabled}
             >
               <Ionicons name={timer.isRunning ? 'pause' : 'play'} size={20} color="#fff" style={{ marginRight: 8 }} />
               <Text style={styles.startBtnText}>
-                {timer.isRunning
-                  ? 'Pause'
-                  : isStartDisabled && japamActionReadiness.isBlockedByLoading
-                    ? 'Loading Japam...'
-                    : isStartDisabled && japamActionReadiness.isBlockedByMissingJapam
-                      ? 'Select a Japam'
-                      : timer.isPaused
-                        ? 'Resume'
-                        : 'Start'}
+                {timer.isRunning ? 'Pause' : timer.isPaused ? 'Resume' : 'Start'}
               </Text>
             </Pressable>
             <Pressable
@@ -1044,8 +924,8 @@ export default function TimerScreen() {
                   : 'Sign in with Google to sync your Japam across devices.'}
               </Text>
               <Pressable
-                disabled={Platform.OS === 'web' && (!request || !nonceReady)}
-                style={[styles.modalButton, (Platform.OS === 'web' && (!request || !nonceReady)) && styles.disabledButton]}
+                disabled={Platform.OS === 'web' && !request}
+                style={[styles.modalButton, (Platform.OS === 'web' && !request) && styles.disabledButton]}
                 onPress={() => {
                   if (Platform.OS !== 'web') {
                     void handleNativeGoogleSignIn();
@@ -1057,10 +937,8 @@ export default function TimerScreen() {
                     void (async () => {
                       try {
                         await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
-                        await savePendingWebGoogleNonce(rawNonceRef.current);
                         const result = await promptAsync({ showInRecents: true });
                         if (result.type !== 'success') {
-                          await clearPendingWebGoogleNonce();
                           await AsyncStorage.removeItem(AUTH_PENDING_KEY);
                           setIsSigningIn(false);
                           setShowUserModal(true);
@@ -1068,7 +946,6 @@ export default function TimerScreen() {
                         }
                       } catch (error) {
                         console.log('Google prompt error:', error);
-                        await clearPendingWebGoogleNonce();
                         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
                         setIsSigningIn(false);
                         setShowUserModal(true);

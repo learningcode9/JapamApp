@@ -10,20 +10,20 @@ If this file and `docs/production-manifest.json` disagree, stop immediately and 
 
 | Field | Value |
 | --- | --- |
-| Current production commit | `ab1c9191bd3708fe6d41da2e6a4ac89756607810` |
-| Previous production commit | `UNKNOWN` |
+| Current production commit | `d610913f7c2d726cdacd27c24b76f42d1a800303` |
+| Previous production commit | `777d182db9b01c6905393330725d6a87720403f8` |
 | Repository remote | `https://github.com/learningcode9/JapamApp.git` |
-| Android OTA update ID | `019f697b-2e1a-7fa5-8d00-ffb6c13a95a8` |
+| Android OTA update ID | `019f81fb-dcdc-7074-b2ef-0d245e0af5b4` |
 | Android runtime | `1.0.0` |
 | Android package | `com.japamapp.mantrajapam` |
 | Android versionCode | `5` |
-| Web deployment ID | `dpl_4R4BfrLm2hvRnBhyBQMbyxXDBF9C` |
+| Web deployment ID | `dpl_9zMB4oRqHwXXG29sKjaNHy2kLzn9` |
 | Production URL | `https://mantra-japam.vercel.app` |
 | Production Supabase project | `rftlqybgnbixotnpanec` |
 | Staging Supabase project | `nhacglvxdypevrbvvkhn` |
-| Production branch | `UNKNOWN` |
+| Production branch | `release/prod-2026-08-03-e464cfc` |
 | Verified | `true` |
-| Verification date | `2026-07-15` |
+| Verification date | `2026-08-03` |
 | Release owner | `Sravani` |
 
 ## Release Invariants

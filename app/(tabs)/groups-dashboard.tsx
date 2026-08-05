@@ -1,8 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useIsFocused } from '@react-navigation/native';
+import { useFocusEffect, useLocalSearchParams, usePathname, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type { Session } from '@supabase/supabase-js';
 import {
   ActivityIndicator,
   DeviceEventEmitter,
@@ -27,6 +29,8 @@ import {
   renameGroup,
   type GroupDashboardRow,
 } from '../../lib/groupsRepository';
+import { useCurrentJapam } from '../../contexts/current-japam-context';
+import { supabase } from '../../lib/supabase';
 
 // While the dashboard is focused, re-fetch this often so other members' completions show up
 // without anyone needing to leave and re-enter the screen. Kept well above the Supabase round
@@ -86,12 +90,18 @@ export default function GroupsDashboardScreen() {
     : Math.max(22, insets.bottom + 14));
 
   const router = useRouter();
+  const isFocused = useIsFocused();
+  const pathname = usePathname();
+  const { currentJapamId } = useCurrentJapam();
   const params = useLocalSearchParams<{ groupId?: string; groupName?: string }>();
   const groupId = params.groupId || '';
   const groupName = params.groupName || 'Group';
   const [displayGroupName, setDisplayGroupName] = useState(groupName);
 
   const [userId, setUserId] = useState<string | null>(null);
+  // undefined means Supabase has not finished restoring the persisted session yet. A stored
+  // userId alone is not enough to authorize the RPC: the request must carry a real access token.
+  const [authSession, setAuthSession] = useState<Session | null | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<GroupDashboardRow[]>([]);
   const [error, setError] = useState('');
@@ -109,11 +119,12 @@ export default function GroupsDashboardScreen() {
   const [removeError, setRemoveError] = useState('');
   const [removing, setRemoving] = useState(false);
 
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  // Delete and Leave are mutually exclusive actions. Keeping them in one state prevents a stale
+  // Leave modal from remaining mounted when an admin chooses Delete from the menu.
+  const [groupExitModal, setGroupExitModal] = useState<'delete' | 'leave' | null>(null);
   const [deleteError, setDeleteError] = useState('');
   const [deleting, setDeleting] = useState(false);
 
-  const [showLeaveModal, setShowLeaveModal] = useState(false);
   const [leaveError, setLeaveError] = useState('');
   const [leaving, setLeaving] = useState(false);
 
@@ -121,6 +132,122 @@ export default function GroupsDashboardScreen() {
   // load can all fire close together; this ensures only one get_group_dashboard request is ever
   // in flight at a time, exactly like the same pattern already used by syncPendingHistory.
   const loadInFlightRef = useRef(false);
+  const dashboardLoadGenerationRef = useRef(0);
+  const authSessionRef = useRef<Session | null | undefined>(undefined);
+  const requestAuthUserRef = useRef<string | null>(null);
+  const authGenerationRef = useRef(0);
+
+  // Stale-response guard for the dashboard's own workspace scope — only the response for the
+  // CURRENTLY selected Japam may render. currentJapamIdRef tracks the LATEST render's selected
+  // Japam (not a closure copy), so a slow Workspace-A request that resolves after the user
+  // switched away — even one whose load started before the switch — is rejected and can never
+  // paint Workspace-A rows into Workspace-B state.
+  const requestJapamRef = useRef<string | null>(null);
+  const currentJapamIdRef = useRef<string | null>(currentJapamId);
+  // Async dashboard loads can finish after this screen blurs to another tab. Keep the latest
+  // focus/path state in a ref so their mismatch callback can never replace the route that is now
+  // active (especially /history) with /groups.
+  const dashboardRouteStateRef = useRef({ isFocused, pathname });
+  dashboardRouteStateRef.current = { isFocused, pathname };
+  // The Japam this dashboard is currently scoped to (set once a load has successfully rendered
+  // that workspace's roster). While it is null (nothing loaded yet) no navigation happens.
+  const loadedForJapamRef = useRef<string | null>(null);
+  const workspaceGenerationRef = useRef(0);
+  const previousJapamIdRef = useRef(currentJapamId);
+  const workspaceSwitchPendingRef = useRef(false);
+  useEffect(() => {
+    currentJapamIdRef.current = currentJapamId;
+  }, [currentJapamId]);
+
+  const clearDashboardForLogout = useCallback(() => {
+    authGenerationRef.current += 1;
+    dashboardLoadGenerationRef.current += 1;
+    authSessionRef.current = null;
+    requestAuthUserRef.current = null;
+    loadInFlightRef.current = false;
+    workspaceSwitchPendingRef.current = false;
+    setAuthSession(null);
+    setUserId(null);
+    setRows([]);
+    setError('');
+    setInviteCode(null);
+    setLoading(false);
+    loadedForJapamRef.current = null;
+    requestJapamRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const applySession = (session: Session | null) => {
+      if (!mounted) return;
+      if (!session?.access_token) {
+        clearDashboardForLogout();
+        return;
+      }
+      if (authSessionRef.current?.user?.id !== session.user?.id) {
+        authGenerationRef.current += 1;
+      }
+      authSessionRef.current = session;
+      setAuthSession(session);
+    };
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      applySession(session);
+    });
+
+    void supabase.auth.getSession().then(({ data }) => {
+      applySession(data.session ?? null);
+    });
+
+    return () => {
+      mounted = false;
+      authListener.subscription.unsubscribe();
+    };
+  }, [clearDashboardForLogout]);
+
+  // The dashboard shows this group through the VIEWER's membership, which is tied to the Japam
+  // they created/joined the group under (get_group_dashboard scopes by the caller's own
+  // membership japam_id). If they switch their selected Japam elsewhere, this group no longer
+  // belongs to the active workspace — bounce back to the list so it reloads for the new workspace
+  // instead of showing a stale/incorrect dashboard. The comparison covers both a loaded roster
+  // and an in-flight request, and is run from both the effect below and the end of every load, so
+  // a switch at any moment (including mid-flight) navigates away rather than leaving a spinner.
+  const leaveIfWorkspaceMismatch = useCallback(() => {
+    const { isFocused: routeIsFocused, pathname: activePathname } = dashboardRouteStateRef.current;
+    if (!routeIsFocused || activePathname !== '/groups-dashboard') return;
+    const scopedFor = loadedForJapamRef.current ?? requestJapamRef.current;
+    if (scopedFor !== null && currentJapamIdRef.current !== scopedFor) {
+      router.replace('/groups');
+    }
+  }, [router]);
+
+  useEffect(() => {
+    leaveIfWorkspaceMismatch();
+  }, [currentJapamId, isFocused, pathname, leaveIfWorkspaceMismatch]);
+
+  useEffect(() => {
+    if (previousJapamIdRef.current === currentJapamId) return;
+    previousJapamIdRef.current = currentJapamId;
+    workspaceGenerationRef.current += 1;
+    dashboardLoadGenerationRef.current += 1;
+    loadInFlightRef.current = false;
+    if (loadedForJapamRef.current !== null || requestJapamRef.current !== null) {
+      workspaceSwitchPendingRef.current = true;
+    }
+    loadedForJapamRef.current = null;
+    requestJapamRef.current = null;
+    setRows([]);
+    setError('');
+    setInviteCode(null);
+    setLoading(false);
+  }, [currentJapamId]);
+
+  useEffect(() => {
+    if (pathname !== '/groups-dashboard') {
+      workspaceSwitchPendingRef.current = false;
+    }
+  }, [pathname]);
 
   useEffect(() => {
     setDisplayGroupName(groupName);
@@ -132,33 +259,77 @@ export default function GroupsDashboardScreen() {
   // table would flash back to a loading state every ~12s or after every completion, which is far
   // more disruptive than the staleness this feature is meant to fix.
   const load = useCallback(async (options?: { silent?: boolean }) => {
+    const { isFocused: routeIsFocused, pathname: activePathname } = dashboardRouteStateRef.current;
+    if (!routeIsFocused || activePathname !== '/groups-dashboard' || workspaceSwitchPendingRef.current) {
+      return;
+    }
     if (loadInFlightRef.current) return;
     loadInFlightRef.current = true;
+    const requestLoadGeneration = dashboardLoadGenerationRef.current;
+    const requestWorkspaceGeneration = workspaceGenerationRef.current;
     const silent = options?.silent ?? false;
     try {
+      const session = authSessionRef.current;
+      if (session === undefined) return;
+      if (!session?.access_token || !session.user?.id) {
+        return;
+      }
+
+      const { data: currentSessionData } = await supabase.auth.getSession();
+      const currentSession = currentSessionData.session;
+      if (!currentSession?.access_token || !currentSession.user?.id) {
+        clearDashboardForLogout();
+        return;
+      }
+
+      if (authSessionRef.current?.user?.id !== currentSession.user.id) {
+        authGenerationRef.current += 1;
+      }
+      const requestGeneration = authGenerationRef.current;
+      const requestUserId = currentSession.user.id;
+      authSessionRef.current = currentSession;
+      requestAuthUserRef.current = currentSession.user.id;
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
       setUserId(savedUserId);
 
-      if (!savedUserId || !groupId) {
+      if (!savedUserId || savedUserId !== requestUserId || !groupId || !currentJapamId) {
         if (!silent) setLoading(false);
         return;
       }
 
       if (!silent) setLoading(true);
       setError('');
+      const requestJapamId = currentJapamId;
+      requestJapamRef.current = requestJapamId;
+      const isRequestCurrent = () => (
+        dashboardLoadGenerationRef.current === requestLoadGeneration
+        && workspaceGenerationRef.current === requestWorkspaceGeneration
+        && authGenerationRef.current === requestGeneration
+        && authSessionRef.current?.user?.id === requestUserId
+        && currentJapamIdRef.current === requestJapamId
+        && dashboardRouteStateRef.current.isFocused
+        && dashboardRouteStateRef.current.pathname === '/groups-dashboard'
+      );
       try {
         const { start, end } = getLocalTodayBoundsIso();
-        const result = await getGroupDashboard(groupId, savedUserId, start, end);
+        const result = await getGroupDashboard(groupId, savedUserId, start, end, requestJapamId);
+        if (!isRequestCurrent()) return;
         setRows(result);
+        loadedForJapamRef.current = requestJapamId;
       } catch (err: any) {
+        if (!isRequestCurrent()) return;
         if (!silent) setError(err?.message || 'Could not load this group.');
       } finally {
+        if (!isRequestCurrent()) return;
         if (!silent) setLoading(false);
+        leaveIfWorkspaceMismatch();
       }
     } finally {
-      loadInFlightRef.current = false;
+      if (dashboardLoadGenerationRef.current === requestLoadGeneration) {
+        loadInFlightRef.current = false;
+      }
     }
-  }, [groupId]);
+  }, [authSession, currentJapamId, groupId, leaveIfWorkspaceMismatch]);
 
   useFocusEffect(
     useCallback(() => {
@@ -296,7 +467,12 @@ export default function GroupsDashboardScreen() {
   const openDeleteModal = () => {
     setDeleteError('');
     setShowAdminMenu(false);
-    setShowDeleteModal(true);
+    setGroupExitModal('delete');
+  };
+
+  const openLeaveModal = () => {
+    setLeaveError('');
+    setGroupExitModal('leave');
   };
 
   const handleDeleteGroup = async () => {
@@ -309,7 +485,7 @@ export default function GroupsDashboardScreen() {
       setDeleteError(outcome.message || 'Could not delete this group.');
       return;
     }
-    setShowDeleteModal(false);
+    setGroupExitModal(null);
     router.replace('/groups');
   };
 
@@ -327,7 +503,7 @@ export default function GroupsDashboardScreen() {
       }
       return;
     }
-    setShowLeaveModal(false);
+    setGroupExitModal(null);
     router.replace('/groups');
   };
 
@@ -460,10 +636,7 @@ export default function GroupsDashboardScreen() {
             </View>
             <Pressable
               style={styles.leaveGroupButton}
-              onPress={() => {
-                setLeaveError('');
-                setShowLeaveModal(true);
-              }}
+              onPress={openLeaveModal}
             >
               <Ionicons name="exit-outline" size={20} color="#b42318" />
               <Text style={styles.leaveGroupText}>Leave Group</Text>
@@ -555,7 +728,7 @@ export default function GroupsDashboardScreen() {
         </View>
       </Modal>
 
-      <Modal visible={showDeleteModal} transparent animationType="fade" onRequestClose={() => setShowDeleteModal(false)}>
+      <Modal visible={groupExitModal === 'delete'} transparent animationType="fade" onRequestClose={() => setGroupExitModal(null)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Delete group?</Text>
@@ -564,7 +737,7 @@ export default function GroupsDashboardScreen() {
             </Text>
             {deleteError ? <Text style={styles.modalError}>{deleteError}</Text> : null}
             <View style={styles.modalActions}>
-              <Pressable style={styles.modalSecondaryButton} onPress={() => setShowDeleteModal(false)} disabled={deleting}>
+              <Pressable style={styles.modalSecondaryButton} onPress={() => setGroupExitModal(null)} disabled={deleting}>
                 <Text style={styles.modalSecondaryText}>Cancel</Text>
               </Pressable>
               <Pressable style={styles.dangerButton} onPress={handleDeleteGroup} disabled={deleting}>
@@ -575,7 +748,7 @@ export default function GroupsDashboardScreen() {
         </View>
       </Modal>
 
-      <Modal visible={showLeaveModal} transparent animationType="fade" onRequestClose={() => setShowLeaveModal(false)}>
+      <Modal visible={groupExitModal === 'leave'} transparent animationType="fade" onRequestClose={() => setGroupExitModal(null)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Leave group?</Text>
@@ -584,7 +757,7 @@ export default function GroupsDashboardScreen() {
             </Text>
             {leaveError ? <Text style={styles.modalError}>{leaveError}</Text> : null}
             <View style={styles.modalActions}>
-              <Pressable style={styles.modalSecondaryButton} onPress={() => setShowLeaveModal(false)} disabled={leaving}>
+              <Pressable style={styles.modalSecondaryButton} onPress={() => setGroupExitModal(null)} disabled={leaving}>
                 <Text style={styles.modalSecondaryText}>Cancel</Text>
               </Pressable>
               <Pressable style={styles.dangerButton} onPress={handleLeaveGroup} disabled={leaving}>

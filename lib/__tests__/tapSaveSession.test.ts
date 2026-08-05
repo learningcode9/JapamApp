@@ -11,15 +11,23 @@ import {
   toLocalDayKey,
 } from '../historyStore';
 import * as historyRepository from '../historyRepository';
-import * as japamsRepository from '../japamsRepository';
-
-const mockGetSession = jest.fn();
+import { supabase } from '../supabase';
 
 jest.mock('../supabase', () => ({
   supabase: {
     auth: {
-      getSession: (...args: unknown[]) => mockGetSession(...args),
+      getSession: jest.fn().mockResolvedValue({ data: { session: null }, error: null }),
     },
+    from: jest.fn(() => ({
+      upsert: jest.fn().mockResolvedValue({ error: null }),
+      select: jest.fn(() => ({
+        eq: jest.fn(() => ({
+          order: jest.fn().mockResolvedValue({ data: [], error: null }),
+          single: jest.fn().mockResolvedValue({ data: null, error: null }),
+          maybeSingle: jest.fn().mockResolvedValue({ data: null, error: null }),
+        })),
+      })),
+    })),
   },
 }));
 
@@ -41,10 +49,8 @@ const JAPAM_ID = 'my-japam-uuid-456def';
 const JAPAM_NAME = 'My Japam';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
-const IS_ANONYMOUS_KEY = 'isAnonymousUser';
-const fetchMock = jest.fn();
-
-(global as any).fetch = fetchMock;
+const USER_JAPAMS_KEY = 'userJapams';
+const flushAsync = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 const today = () => {
   const d = new Date();
@@ -73,34 +79,27 @@ const makeRefs = (): TapSaveSessionRefs => ({
 });
 
 const identity = { userId: UID, japamId: JAPAM_ID, japamName: JAPAM_NAME };
+const seedSelectedJapam = async () => {
+  await AsyncStorage.setItem(`${USER_JAPAMS_KEY}:${UID}`, JSON.stringify([{
+    id: JAPAM_ID,
+    userId: UID,
+    name: JAPAM_NAME,
+    displayOrder: null,
+    createdAt: '2026-07-01T00:00:00.000Z',
+    updatedAt: '2026-07-01T00:00:00.000Z',
+    archivedAt: null,
+  }]));
+};
 
 describe('tapSaveSession — real runtime pipeline', () => {
   beforeEach(async () => {
+    jest.clearAllMocks();
     await AsyncStorage.clear();
     await AsyncStorage.setItem(USER_ID_KEY, UID);
     await AsyncStorage.setItem(USER_NAME_KEY, 'Test User');
-    await AsyncStorage.setItem(IS_ANONYMOUS_KEY, 'false');
-    fetchMock.mockReset();
-    mockGetSession.mockReset();
-    mockGetSession.mockResolvedValue({ data: { session: null }, error: null });
-    process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
-    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'anon-key';
+    (supabase.auth.getSession as jest.Mock).mockResolvedValue({ data: { session: null }, error: null });
+    (global as any).fetch = jest.fn().mockResolvedValue({ ok: true });
     resetStages();
-  });
-
-  it('blocks authenticated null-scoped completions at the save boundary', async () => {
-    const refs = makeRefs();
-    refs.activeJapamId.current = null;
-    refs.activeJapamName.current = null;
-
-    const result = await tapSaveSession(0, 1, 108, 108, 'tap', refs, {
-      userId: UID,
-      japamId: null,
-      japamName: null,
-    }, 'Test User');
-
-    expect(result).toBe(false);
-    expect(await AsyncStorage.getItem('history')).toBeNull();
   });
 
   it('completes one mala and persists through the entire pipeline', async () => {
@@ -177,6 +176,79 @@ describe('tapSaveSession — real runtime pipeline', () => {
     expect(saved[0].userId).toBe(UID);
     expect(saved[0].japamId).toBe(JAPAM_ID);
     expect(saved[0].source).toBe('tap');
+  });
+
+  it('does not save an authenticated tap completion while current Japam is unresolved', async () => {
+    const emitSpy = jest.spyOn(DeviceEventEmitter, 'emit');
+    const refs = makeRefs();
+    refs.activeJapamId.current = null;
+    refs.activeJapamName.current = null;
+
+    const result = await tapSaveSession(0, 1, 108, 108, 'tap', refs, {
+      userId: UID,
+      japamId: null,
+      japamName: null,
+    }, 'Test User');
+
+    expect(result).toBe(false);
+    expect(await AsyncStorage.getItem('history')).toBeNull();
+    expect(emitSpy).not.toHaveBeenCalledWith('japam-stats-updated');
+  });
+
+  it('uploads the selected Japam UUID/name for signed-in tap completions', async () => {
+    (supabase.auth.getSession as jest.Mock).mockResolvedValue({
+      data: { session: { access_token: 'session-token' } },
+      error: null,
+    });
+    process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
+    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'anon-key';
+    await seedSelectedJapam();
+
+    const refs = makeRefs();
+    const result = await tapSaveSession(0, 1, 108, 108, 'tap', refs, identity, 'Test User');
+    await flushAsync();
+    await flushAsync();
+
+    expect(result).toBe(true);
+    expect(global.fetch).toHaveBeenCalledWith(
+      'https://example.supabase.co/rest/v1/japam_history?on_conflict=completion_id',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.any(String),
+      })
+    );
+    const request = (global.fetch as jest.Mock).mock.calls[0][1];
+    expect(JSON.parse(request.body)).toMatchObject({
+      user_id: UID,
+      japam_id: JAPAM_ID,
+      japam_name: JAPAM_NAME,
+      malas: 1,
+      count: 108,
+    });
+  });
+
+  it('keeps a tap completion pending and sends no FK-invalid upload when Japam sync is not confirmed', async () => {
+    (supabase.auth.getSession as jest.Mock).mockResolvedValue({
+      data: { session: { access_token: 'session-token' } },
+      error: null,
+    });
+    process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
+    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'anon-key';
+
+    const refs = makeRefs();
+    const result = await tapSaveSession(0, 1, 108, 108, 'tap', refs, identity, 'Test User');
+    await flushAsync();
+
+    expect(result).toBe(true);
+    expect(global.fetch).not.toHaveBeenCalled();
+    const saved = JSON.parse(await AsyncStorage.getItem('history') || '[]');
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({
+      userId: UID,
+      japamId: JAPAM_ID,
+      japamName: JAPAM_NAME,
+      syncStatus: 'pending',
+    });
   });
 
   it('multiple malas produce distinct history records', async () => {
@@ -268,35 +340,5 @@ describe('tapSaveSession — real runtime pipeline', () => {
       userId: UID,
       todayTotal: 108,
     }));
-  });
-
-  it('history with a real japamId waits for remote Japam confirmation before upload', async () => {
-    jest.spyOn(japamsRepository, 'ensureRemoteJapamExists').mockResolvedValue(false);
-    mockGetSession.mockResolvedValue({ data: { session: { access_token: 'jwt-token' } }, error: null });
-    const refs = makeRefs();
-
-    await tapSaveSession(0, 1, 108, 108, 'tap', refs, identity, 'Test User');
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(fetchMock).not.toHaveBeenCalled();
-    const saved = JSON.parse(await AsyncStorage.getItem('history') || '[]');
-    expect(saved[0].syncStatus).toBe('pending');
-    jest.restoreAllMocks();
-  });
-
-  it('successful remote Japam confirmation uploads history with the real japam_id', async () => {
-    jest.spyOn(japamsRepository, 'ensureRemoteJapamExists').mockResolvedValue(true);
-    mockGetSession.mockResolvedValue({ data: { session: { access_token: 'jwt-token' } }, error: null });
-    fetchMock.mockResolvedValue({ ok: true, status: 200, text: async () => '', json: async () => [] });
-    const refs = makeRefs();
-
-    await tapSaveSession(0, 1, 108, 108, 'tap', refs, identity, 'Test User');
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const body = JSON.parse(String(init.body));
-    expect(body.japam_id).toBe(JAPAM_ID);
-    jest.restoreAllMocks();
   });
 });

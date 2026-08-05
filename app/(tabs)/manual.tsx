@@ -5,8 +5,8 @@ import {
   markSynced,
   toLocalDayKey,
 } from '../../lib/historyStore';
-import * as japamsRepository from '../../lib/japamsRepository';
 import { supabase } from '../../lib/supabase';
+import { ensureJapamSyncedForHistory } from '../../lib/japamsRepository';
 import { useCurrentJapam } from '../../contexts/current-japam-context';
 import CurrentJapamHeaderButton from '../../components/CurrentJapamHeaderButton';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -109,10 +109,12 @@ const syncManualEntryToSupabase = async ({
       console.log('[Manual] MANUAL_SYNC_FAILED reason=no-session (stays pending)');
       return;
     }
-
-    if (japamId && !(await japamsRepository.ensureRemoteJapamExists(userId, japamId))) {
-      console.log('[Manual] MANUAL_SYNC_FAILED reason=missing-remote-japam (stays pending)');
-      return;
+    if (japamId) {
+      const japamReady = await ensureJapamSyncedForHistory(userId, japamId);
+      if (!japamReady) {
+        console.log('[Manual] MANUAL_SYNC_DEFERRED reason=japam-sync-pending completionId=%s', completionId);
+        return;
+      }
     }
 
     // Built from the actual saved values (including japamId/japamName), not re-derived --
@@ -173,7 +175,7 @@ const syncManualEntryToSupabase = async ({
 };
 
 export default function ManualEntry() {
-  const { currentJapam } = useCurrentJapam();
+  const { currentJapam, isLoading: isJapamContextLoading } = useCurrentJapam();
 
   const getLocalDate = () => {
     const d = new Date();
@@ -199,20 +201,25 @@ export default function ManualEntry() {
     console.log('[Manual] MANUAL_SAVE_START hasUser=%s', Boolean(userId));
 
     // onSave లో — alert బదులు:
-if (!userId) {
-    Alert.alert(
-      'Login Required',
-      'Please sign in with Google to save your japam history.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Go to Sign In', 
-          onPress: () => router.push('/') // main tab కి
-        }
-      ]
-    );
-    return;
-  }
+    if (!userId) {
+      Alert.alert(
+        'Login Required',
+        'Please sign in with Google to save your japam history.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Go to Sign In',
+            onPress: () => router.push('/') // main tab కి
+          }
+        ]
+      );
+      return;
+    }
+
+    if (isJapamContextLoading || !currentJapam?.id || !currentJapam?.name) {
+      Alert.alert('Please wait', 'Your current Japam is still loading. Please try again in a moment.');
+      return;
+    }
 
     const typedDateMatch = dateText.trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
     if (!typedDateMatch) {

@@ -135,6 +135,190 @@ export function showGoogleAccountCollisionDialog(onSignIn: () => void, onCancel?
   );
 }
 
+/**
+ * Migrates all AsyncStorage keys scoped by the legacy numeric userId to the new Supabase UUID
+ * AFTER repairLegacyStoredUserId has upgraded USER_ID_KEY and stored the old id under
+ * LEGACY_USER_ID_KEY.
+ *
+ * This is necessary because after identity repair:
+ *   - userJapams:{oldId}, currentJapamId:{oldId}, and all timer-scoped keys
+ *     ({key}:{oldId} and {key}:{oldId}:{japamId}) become orphaned
+ *   - History records with userId === oldId become invisible to syncPendingHistory
+ *     (which filters by r.userId === uid)
+ *
+ * Migration:
+ *   1. Reads all AsyncStorage keys
+ *   2. For each key containing :{oldId} (including :{oldId}: and :{oldId} at end),
+ *      renames it to use {newId} in place of {oldId}
+ *   3. Updates the userId field on pending history records
+ */
+export async function migrateScopedKeysAfterIdentityRepair(): Promise<void> {
+  const oldId = await AsyncStorage.getItem(LEGACY_USER_ID_KEY);
+  if (!oldId) return;
+
+  const newId = await AsyncStorage.getItem(USER_ID_KEY);
+  if (!newId || newId === oldId) return;
+
+  // Step 1: rename all AsyncStorage keys scoped by oldId.
+  // Never blindly overwrite an existing new-UUID key: merge JSON arrays
+  // (userJapams), skip for scalars (preserve existing). Delete old key only
+  // after the destination write succeeds.
+  const renames: [string, string][] = [];
+  const removals: string[] = [];
+  try {
+    const allKeys = await AsyncStorage.getAllKeys();
+    const pattern = new RegExp(`(.*\\:)${escapeRegex(oldId)}(.*)`);
+    for (const key of allKeys) {
+      const match = key.match(pattern);
+      if (match && key.includes(`:${oldId}`)) {
+        const newKey = key.replace(`:${oldId}`, `:${newId}`);
+        if (newKey !== key) {
+          const value = await AsyncStorage.getItem(key);
+          if (value !== null) {
+            const existing = await AsyncStorage.getItem(newKey);
+            if (existing !== null) {
+              const merged = mergeScopedValuesForKey(newKey, value, existing);
+              if (merged !== null) {
+                renames.push([newKey, merged]);
+              }
+            } else {
+              renames.push([newKey, value]);
+            }
+            removals.push(key);
+          }
+        }
+      }
+    }
+    if (renames.length > 0) {
+      await AsyncStorage.multiSet(renames);
+    }
+    if (removals.length > 0) {
+      await AsyncStorage.multiRemove(removals);
+    }
+  } catch {
+    // Non-fatal: scoped keys remain under oldId; sync may need retry
+    return;
+  }
+
+  // Step 2: update userId field on pending history records
+  try {
+    const HISTORY_KEY = 'history';
+    const raw = await AsyncStorage.getItem(HISTORY_KEY);
+    if (raw) {
+      const history: Record<string, unknown>[] = JSON.parse(raw);
+      let changed = false;
+      for (const rec of history) {
+        if (rec.userId === oldId) {
+          rec.userId = newId;
+          changed = true;
+        }
+      }
+      if (changed) {
+        await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+      }
+    }
+  } catch {
+    // Non-fatal: pending records keep old userId; sync filter may miss them
+  }
+
+  // Step 3: update userId in timerPendingCompletions:v1 entries
+  try {
+    const PENDING_COMPLETIONS_KEY = 'timerPendingCompletions:v1';
+    const raw = await AsyncStorage.getItem(PENDING_COMPLETIONS_KEY);
+    if (raw) {
+      const entries: Record<string, unknown>[] = JSON.parse(raw);
+      let changed = false;
+      for (const entry of entries) {
+        if (entry.userId === oldId) {
+          entry.userId = newId;
+          changed = true;
+        }
+      }
+      if (changed) {
+        await AsyncStorage.setItem(PENDING_COMPLETIONS_KEY, JSON.stringify(entries));
+      }
+    }
+  } catch {
+    // Non-fatal: pending completions keep old userId; timer may re-enqueue
+  }
+
+  // Step 4: update timerSessionUserId values (bare key + scoped keys) that
+  // still contain the legacy userId after the key rename above.
+  try {
+    const SESSION_USER_ID_KEY = 'timerSessionUserId';
+    // Bare key
+    const bareVal = await AsyncStorage.getItem(SESSION_USER_ID_KEY);
+    if (bareVal === oldId) {
+      await AsyncStorage.setItem(SESSION_USER_ID_KEY, newId);
+    }
+    // Scoped keys: timerSessionUserId:{newId} and timerSessionUserId:{newId}:{japamId}
+    // After the rename above, these keys exist but their values may still be oldId.
+    const allKeysAfterRename = await AsyncStorage.getAllKeys();
+    for (const key of allKeysAfterRename) {
+      if (key.startsWith(`${SESSION_USER_ID_KEY}:${newId}`)) {
+        const val = await AsyncStorage.getItem(key);
+        if (val === oldId) {
+          await AsyncStorage.setItem(key, newId);
+        }
+      }
+    }
+  } catch {
+    // Non-fatal: stale timerSessionUserId values; next timer session overwrites
+  }
+
+  // Step 5: update userId field on japam records inside userJapams:{newId}
+  try {
+    const japamKey = `userJapams:${newId}`;
+    const japamRaw = await AsyncStorage.getItem(japamKey);
+    if (japamRaw) {
+      const japams: Record<string, unknown>[] = JSON.parse(japamRaw);
+      let changed = false;
+      for (const japam of japams) {
+        if (japam.userId === oldId) {
+          japam.userId = newId;
+          changed = true;
+        }
+      }
+      if (changed) {
+        await AsyncStorage.setItem(japamKey, JSON.stringify(japams));
+      }
+    }
+  } catch {
+    // Non-fatal: stale userId fields; syncJapam retries on its own
+  }
+
+  console.log(
+    '[SCOPED_KEYS_MIGRATED] oldId=%s newId=%s keysRenamed=%d historyRecordsUpdated=true',
+    oldId, newId, renames.length
+  );
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Collision-safe merge for scoped-key migration.
+ *
+ * - userJapams:{id} (JSON array): merges arrays, dedup by `id`, keeps existing order.
+ * - All other keys (scalars): preserves existing value (returns null = skip rename).
+ */
+function mergeScopedValuesForKey(newKey: string, oldValue: string, existingValue: string): string | null {
+  if (newKey.startsWith('userJapams:')) {
+    try {
+      const oldArr: Record<string, unknown>[] = JSON.parse(oldValue);
+      const existingArr: Record<string, unknown>[] = JSON.parse(existingValue);
+      const existingIds = new Set(existingArr.map((item) => item.id));
+      const toAdd = oldArr.filter((item) => !existingIds.has(item.id));
+      if (toAdd.length === 0) return existingValue;
+      return JSON.stringify([...existingArr, ...toAdd]);
+    } catch {
+      return existingValue;
+    }
+  }
+  return null;
+}
+
 /** True if a remote Supabase write should be suppressed: no userId at all, or an anonymous user. */
 export function shouldSkipRemoteSync(userId: string | null | undefined, isAnonymous: boolean): boolean {
   return !userId || isAnonymous;

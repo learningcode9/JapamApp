@@ -51,11 +51,11 @@ type CurrentJapamContextValue = {
   /** True until the initial load for the current identity completes. */
   isLoading: boolean;
   selectJapam: (japamId: string | null) => void;
-  ensureDefaultJapam: (preferredName?: string) => Promise<Japam | null>;
   createJapam: (rawName: string) => Promise<Japam | null>;
   renameJapam: (japamId: string, rawName: string) => Promise<void>;
   archiveJapam: (japamId: string) => Promise<void>;
   restoreJapam: (japamId: string) => Promise<void>;
+  deleteJapam: (japamId: string) => Promise<void>;
 };
 
 const CurrentJapamContext = createContext<CurrentJapamContextValue | null>(null);
@@ -72,69 +72,52 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   // switches never overwrite a still-in-flight entry — each user's creation promise and waiter
   // count lives independently and is cleaned up only when that user's last caller exits.
   const coordinator = useMemo(() => createDefaultJapamCreationCoordinator(), []);
-
-  const ensureDefaultJapam = useCallback(async (preferredName = 'My Japam'): Promise<Japam | null> => {
-    const userId = userIdRef.current;
-    if (!userId) return null;
-
-    await coordinator.ensureDefaultCreation(userId, {
-      hasActiveDefaultJapam: async () => (await japamsRepository.loadJapams(userId))
-        .some((japam) => japam.name === 'My Japam' && japam.archivedAt === null),
-      create: async () => {
-        await japamsRepository.ensureDefaultJapam(userId);
-      },
-    });
-
-    return (await japamsRepository.loadJapams(userId))
-      .find((japam) => japam.name === 'My Japam' && japam.archivedAt === null) ?? null;
-  }, [coordinator]);
-
   const refresh = useCallback(async () => {
     setIsLoading(true);
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
     userIdRef.current = userId;
-    let loadedJapams = await japamsRepository.loadJapams(userId);
-
-    // Auto-create a real "My Japam" record for users with zero active Japams.
-    // This ensures Timer, Tap Japam, History, and Stats always have a real Japam ID to use
-    // instead of falling through to null.
-    if (activeJapams(loadedJapams).length === 0 && userId) {
-      await ensureDefaultJapam();
-      // Re-read from storage after creation settles. This is the ONLY way every caller gets the
-      // true persisted state — the promise's resolved value is unused precisely because it could
-      // be stale for late-arriving waiters.
-      loadedJapams = await japamsRepository.loadJapams(userId);
+    if (!userId) {
+      const loadedJapams = await japamsRepository.loadJapams(userId);
+      const persistedCurrentId = await japamsRepository.loadCurrentJapamId(userId);
+      setJapams(loadedJapams);
+      // Guest/local-only behavior stays unchanged: select from the local cache only.
+      const active = activeJapams(loadedJapams);
+      const persistedStillActive = persistedCurrentId
+        ? active.find((j) => j.id === persistedCurrentId)
+        : undefined;
+      const resolvedCurrentId = persistedStillActive?.id ?? active[0]?.id ?? null;
+      setCurrentJapamIdState(resolvedCurrentId);
+      if (resolvedCurrentId !== persistedCurrentId) {
+        await japamsRepository.saveCurrentJapamId(userId, resolvedCurrentId);
+      }
+      setIsLoading(false);
+      return;
     }
 
-    const persistedCurrentId = await japamsRepository.loadCurrentJapamId(userId);
-    setJapams(loadedJapams);
-    // Auto-reopen the last selected Japam, per the approved architecture -- but only if it still
-    // exists and is not archived. Otherwise fall back to the first active Japam, or null (empty
-    // state / no Japams yet) if there are none.
-    const active = activeJapams(loadedJapams);
-    const persistedStillActive = persistedCurrentId
-      ? active.find((j) => j.id === persistedCurrentId)
-      : undefined;
-    const resolvedCurrentId = persistedStillActive?.id ?? active[0]?.id ?? null;
-    setCurrentJapamIdState(resolvedCurrentId);
-    if (resolvedCurrentId !== persistedCurrentId) {
-      await japamsRepository.saveCurrentJapamId(userId, resolvedCurrentId);
+    // Signed-in startup always reconciles remote/local state through the repository helper and
+    // uses the returned merged list plus canonical selection directly.
+    const result = await coordinator.ensureCreation(userId, () =>
+      japamsRepository.ensureDefaultJapam(userId),
+    );
+    if (!result) {
+      setIsLoading(false);
+      return;
     }
+
+    setJapams(result.japams);
+    setCurrentJapamIdState(result.currentJapamId);
     setIsLoading(false);
-  }, [ensureDefaultJapam]);
+  }, [coordinator]);
 
   useEffect(() => {
     void refresh();
-    const authSub = DeviceEventEmitter.addListener('japam-auth-updated', () => void refresh());
+    const authHandler = () => void refresh();
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      window.addEventListener('japam-auth-updated', refresh as EventListener);
+      window.addEventListener('japam-auth-updated', authHandler);
+      return () => window.removeEventListener('japam-auth-updated', authHandler);
     }
-    return () => {
-      authSub.remove();
-      if (Platform.OS === 'web' && typeof window !== 'undefined') {
-        window.removeEventListener('japam-auth-updated', refresh as EventListener);
-      }
-    };
+    const authSub = DeviceEventEmitter.addListener('japam-auth-updated', authHandler);
+    return () => authSub.remove();
   }, [refresh]);
 
   const selectJapam = useCallback((japamId: string | null) => {
@@ -178,9 +161,20 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   const restoreJapam = useCallback(async (japamId: string): Promise<void> => {
     const updated = await japamsRepository.restoreJapam(userIdRef.current, japamId);
     setJapams(updated);
-    // Restoring is a "manage archived Japams" action, not a selection -- it deliberately does not
-    // change currentJapamId.
-  }, []);
+    if (updated.find((j) => j.id === japamId)?.archivedAt === null) {
+      selectJapam(japamId);
+    }
+  }, [selectJapam]);
+
+  const deleteJapam = useCallback(async (japamId: string): Promise<void> => {
+    const updated = await japamsRepository.deleteJapam(userIdRef.current, japamId);
+    setJapams(updated);
+    // If the deleted Japam was the current selection, fall back to the next active one.
+    if (currentJapamId === japamId) {
+      const nextActive = activeJapams(updated)[0]?.id ?? null;
+      selectJapam(nextActive);
+    }
+  }, [currentJapamId, selectJapam]);
 
   const currentJapam = useMemo(
     () => japams.find((j) => j.id === currentJapamId) ?? null,
@@ -193,22 +187,22 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
     currentJapam,
     isLoading,
     selectJapam,
-    ensureDefaultJapam,
     createJapam,
     renameJapam,
     archiveJapam,
     restoreJapam,
+    deleteJapam,
   }), [
     japams,
     currentJapamId,
     currentJapam,
     isLoading,
     selectJapam,
-    ensureDefaultJapam,
     createJapam,
     renameJapam,
     archiveJapam,
     restoreJapam,
+    deleteJapam,
   ]);
 
   return <CurrentJapamContext.Provider value={value}>{children}</CurrentJapamContext.Provider>;

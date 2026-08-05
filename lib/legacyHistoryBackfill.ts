@@ -32,16 +32,28 @@ export type LegacyHistoryBackfillPlan = {
   reassignedRecords: HistoryRecord[];
 };
 
+export type LegacyHistoryBackfillOptions = {
+  /**
+   * When supplied, only these completion ids may be reassigned. The caller builds this set from
+   * History's own Japam attribution rule; records outside it remain byte-for-byte untouched.
+   */
+  onlyCompletionIds?: ReadonlySet<string>;
+};
+
 export const planLegacyHistoryBackfill = (
   records: RawHistoryRecord[],
   japamId: string,
-  japamName: string
+  japamName: string,
+  options: LegacyHistoryBackfillOptions = {},
 ): LegacyHistoryBackfillPlan => {
   const normalized = dedupeByCompletionId(records);
   const reassignedRecords: HistoryRecord[] = [];
 
   const updatedRecords = normalized.map((record) => {
     if (record.japamId != null) return record;
+    if (options.onlyCompletionIds && !options.onlyCompletionIds.has(record.completionId)) {
+      return record;
+    }
 
     const reassigned: HistoryRecord = {
       ...record,

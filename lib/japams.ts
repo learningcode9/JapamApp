@@ -136,6 +136,13 @@ export const activeJapams = (japams: Japam[]): Japam[] =>
 export const archivedJapams = (japams: Japam[]): Japam[] =>
   sortJapams(japams.filter((j) => j.archivedAt !== null));
 
+/** Remove Japams whose ids are tombstoned (permanent-delete markers). */
+export const applyJapamTombstones = (japams: Japam[], tombstones: Iterable<string>): Japam[] => {
+  const t = tombstones instanceof Set ? tombstones : new Set<string>(tombstones);
+  if (t.size === 0) return japams;
+  return japams.filter((j) => !t.has(j.id));
+};
+
 /**
  * Resolve a display label for a japamId against the current (live) list of Japams — prefers the
  * Japam's current name so a rename is reflected everywhere immediately, falling back to the

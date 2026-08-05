@@ -32,6 +32,7 @@ import {
   showGoogleAccountCollisionDialog,
   shouldSkipRemoteSync,
   repairLegacyStoredUserId,
+  migrateScopedKeysAfterIdentityRepair,
 } from '../anonymousAuth';
 
 const mockedAuth = supabase.auth as unknown as {
@@ -269,6 +270,263 @@ describe('repairLegacyStoredUserId', () => {
     expect(second).toBe(UUID);
     expect(mockedAuth.getSession).not.toHaveBeenCalled(); // short-circuits: already a UUID
     expect(await AsyncStorage.getItem(LEGACY_USER_ID_KEY)).toBe(NUMERIC_ID); // untouched, not cleared
+  });
+});
+
+describe('migrateScopedKeysAfterIdentityRepair', () => {
+  const NUMERIC_ID = '108347881408167165195';
+  const UUID = '2793fca2-38fa-4c9e-9856-26c2b34d0acb';
+
+  beforeEach(async () => {
+    await AsyncStorage.clear();
+    jest.clearAllMocks();
+    // Provide a simple getAllKeys implementation for the mock
+    (AsyncStorage.getAllKeys as jest.Mock).mockImplementation(async () =>
+      Object.keys((AsyncStorage as any).__INTERNAL_MOCK_STORAGE__ || {})
+    );
+  });
+
+  it('no-ops when LEGACY_USER_ID_KEY is not set', async () => {
+    await AsyncStorage.setItem(USER_ID_KEY, UUID);
+
+    await migrateScopedKeysAfterIdentityRepair();
+
+    expect(await AsyncStorage.getItem(USER_ID_KEY)).toBe(UUID);
+  });
+
+  it('no-ops when LEGACY_USER_ID_KEY equals USER_ID_KEY', async () => {
+    await AsyncStorage.setItem(LEGACY_USER_ID_KEY, UUID);
+    await AsyncStorage.setItem(USER_ID_KEY, UUID);
+
+    await migrateScopedKeysAfterIdentityRepair();
+
+    expect(await AsyncStorage.getItem(USER_ID_KEY)).toBe(UUID);
+  });
+
+  it('migrates userJapams and currentJapamId scoped keys', async () => {
+    const JAPAM_LIST = JSON.stringify([{ id: 'japam-1', name: 'My Japam' }]);
+    await AsyncStorage.setItem(LEGACY_USER_ID_KEY, NUMERIC_ID);
+    await AsyncStorage.setItem(USER_ID_KEY, UUID);
+    await AsyncStorage.setItem(`userJapams:${NUMERIC_ID}`, JAPAM_LIST);
+    await AsyncStorage.setItem(`currentJapamId:${NUMERIC_ID}`, 'japam-1');
+
+    await migrateScopedKeysAfterIdentityRepair();
+
+    // Old keys removed
+    expect(await AsyncStorage.getItem(`userJapams:${NUMERIC_ID}`)).toBeNull();
+    expect(await AsyncStorage.getItem(`currentJapamId:${NUMERIC_ID}`)).toBeNull();
+    // New keys written
+    expect(await AsyncStorage.getItem(`userJapams:${UUID}`)).toBe(JAPAM_LIST);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UUID}`)).toBe('japam-1');
+  });
+
+  it('migrates timer-scoped keys', async () => {
+    await AsyncStorage.setItem(LEGACY_USER_ID_KEY, NUMERIC_ID);
+    await AsyncStorage.setItem(USER_ID_KEY, UUID);
+    await AsyncStorage.setItem(`timerSeconds:${NUMERIC_ID}`, '300');
+    await AsyncStorage.setItem(`timerRunning:${NUMERIC_ID}`, 'true');
+    await AsyncStorage.setItem(`timerSessionId:${NUMERIC_ID}`, 'session-1');
+
+    await migrateScopedKeysAfterIdentityRepair();
+
+    expect(await AsyncStorage.getItem(`timerSeconds:${NUMERIC_ID}`)).toBeNull();
+    expect(await AsyncStorage.getItem(`timerSeconds:${UUID}`)).toBe('300');
+    expect(await AsyncStorage.getItem(`timerRunning:${NUMERIC_ID}`)).toBeNull();
+    expect(await AsyncStorage.getItem(`timerRunning:${UUID}`)).toBe('true');
+    expect(await AsyncStorage.getItem(`timerSessionId:${NUMERIC_ID}`)).toBeNull();
+    expect(await AsyncStorage.getItem(`timerSessionId:${UUID}`)).toBe('session-1');
+  });
+
+  it('migrates per-Japam-scoped keys', async () => {
+    await AsyncStorage.setItem(LEGACY_USER_ID_KEY, NUMERIC_ID);
+    await AsyncStorage.setItem(USER_ID_KEY, UUID);
+    await AsyncStorage.setItem(`timerTarget:${NUMERIC_ID}:japam-1`, '600');
+    await AsyncStorage.setItem(`timerTarget:${NUMERIC_ID}:japam-2`, '300');
+
+    await migrateScopedKeysAfterIdentityRepair();
+
+    expect(await AsyncStorage.getItem(`timerTarget:${NUMERIC_ID}:japam-1`)).toBeNull();
+    expect(await AsyncStorage.getItem(`timerTarget:${UUID}:japam-1`)).toBe('600');
+    expect(await AsyncStorage.getItem(`timerTarget:${NUMERIC_ID}:japam-2`)).toBeNull();
+    expect(await AsyncStorage.getItem(`timerTarget:${UUID}:japam-2`)).toBe('300');
+  });
+
+  it('migrates userId in history records', async () => {
+    const history = [
+      { completionId: 'c1', userId: NUMERIC_ID, totalCount: 108 },
+      { completionId: 'c2', userId: 'other-user', totalCount: 108 },
+      { completionId: 'c3', userId: NUMERIC_ID, totalCount: 216 },
+    ];
+    await AsyncStorage.setItem(LEGACY_USER_ID_KEY, NUMERIC_ID);
+    await AsyncStorage.setItem(USER_ID_KEY, UUID);
+    await AsyncStorage.setItem('history', JSON.stringify(history));
+
+    await migrateScopedKeysAfterIdentityRepair();
+
+    const updated = JSON.parse((await AsyncStorage.getItem('history')) || '[]');
+    expect(updated[0].userId).toBe(UUID);
+    expect(updated[1].userId).toBe('other-user'); // unchanged
+    expect(updated[2].userId).toBe(UUID);
+  });
+
+  it('does not migrate non-scoped keys (bare keys without userId prefix)', async () => {
+    await AsyncStorage.setItem(LEGACY_USER_ID_KEY, NUMERIC_ID);
+    await AsyncStorage.setItem(USER_ID_KEY, UUID);
+    await AsyncStorage.setItem('timerSeconds', '100');
+    await AsyncStorage.setItem(NUMERIC_ID, 'should-not-touch'); // bare value with numeric id, no colon
+
+    await migrateScopedKeysAfterIdentityRepair();
+
+    expect(await AsyncStorage.getItem('timerSeconds')).toBe('100'); // untouched
+    expect(await AsyncStorage.getItem(NUMERIC_ID)).toBe('should-not-touch'); // untouched
+  });
+
+  it('collision: existing userJapams at new-UUID key merges arrays dedup by id', async () => {
+    await AsyncStorage.setItem(LEGACY_USER_ID_KEY, NUMERIC_ID);
+    await AsyncStorage.setItem(USER_ID_KEY, UUID);
+    // Old key has a unique japam + one that already exists at the destination
+    await AsyncStorage.setItem(
+      `userJapams:${NUMERIC_ID}`,
+      JSON.stringify([
+        { id: 'japam-old', name: 'Legacy Japam' },
+        { id: 'japam-common', name: 'Common (old name)' },
+      ]),
+    );
+    // Destination already has a japam, plus the common one
+    await AsyncStorage.setItem(
+      `userJapams:${UUID}`,
+      JSON.stringify([
+        { id: 'japam-existing', name: 'Existing Japam' },
+        { id: 'japam-common', name: 'Common (existing name)' },
+      ]),
+    );
+
+    await migrateScopedKeysAfterIdentityRepair();
+
+    const merged = JSON.parse((await AsyncStorage.getItem(`userJapams:${UUID}`)) || '[]');
+    expect(merged).toHaveLength(3);
+    const ids = merged.map((j: Record<string, unknown>) => j.id);
+    expect(ids).toContain('japam-existing');
+    expect(ids).toContain('japam-common');
+    expect(ids).toContain('japam-old');
+    // japam-common kept the existing entry's name (not overwritten by old)
+    const common = merged.find((j: Record<string, unknown>) => j.id === 'japam-common');
+    expect(common.name).toBe('Common (existing name)');
+    // Old key is removed
+    expect(await AsyncStorage.getItem(`userJapams:${NUMERIC_ID}`)).toBeNull();
+  });
+
+  it('collision: existing currentJapamId at new-UUID key preserves existing value', async () => {
+    await AsyncStorage.setItem(LEGACY_USER_ID_KEY, NUMERIC_ID);
+    await AsyncStorage.setItem(USER_ID_KEY, UUID);
+    await AsyncStorage.setItem(`currentJapamId:${NUMERIC_ID}`, 'old-japam');
+    await AsyncStorage.setItem(`currentJapamId:${UUID}`, 'existing-japam');
+
+    await migrateScopedKeysAfterIdentityRepair();
+
+    // Existing value preserved, old value NOT written
+    expect(await AsyncStorage.getItem(`currentJapamId:${UUID}`)).toBe('existing-japam');
+    expect(await AsyncStorage.getItem(`currentJapamId:${NUMERIC_ID}`)).toBeNull();
+  });
+
+  it('collision: existing timer-scoped keys at new-UUID key preserve existing values', async () => {
+    await AsyncStorage.setItem(LEGACY_USER_ID_KEY, NUMERIC_ID);
+    await AsyncStorage.setItem(USER_ID_KEY, UUID);
+    // Old timer state
+    await AsyncStorage.setItem(`timerSeconds:${NUMERIC_ID}`, '500');
+    await AsyncStorage.setItem(`timerRunning:${NUMERIC_ID}`, 'true');
+    await AsyncStorage.setItem(`timerSessionId:${NUMERIC_ID}`, 'old-session');
+    // New timer state (should be preserved)
+    await AsyncStorage.setItem(`timerSeconds:${UUID}`, '100');
+    await AsyncStorage.setItem(`timerRunning:${UUID}`, 'false');
+    await AsyncStorage.setItem(`timerSessionId:${UUID}`, 'new-session');
+
+    await migrateScopedKeysAfterIdentityRepair();
+
+    // Existing values preserved
+    expect(await AsyncStorage.getItem(`timerSeconds:${UUID}`)).toBe('100');
+    expect(await AsyncStorage.getItem(`timerRunning:${UUID}`)).toBe('false');
+    expect(await AsyncStorage.getItem(`timerSessionId:${UUID}`)).toBe('new-session');
+    // Old keys removed
+    expect(await AsyncStorage.getItem(`timerSeconds:${NUMERIC_ID}`)).toBeNull();
+    expect(await AsyncStorage.getItem(`timerRunning:${NUMERIC_ID}`)).toBeNull();
+    expect(await AsyncStorage.getItem(`timerSessionId:${NUMERIC_ID}`)).toBeNull();
+  });
+
+  it('collision: existing japam-scoped keys (timerTarget:{oldId}:{japamId}) preserve existing', async () => {
+    await AsyncStorage.setItem(LEGACY_USER_ID_KEY, NUMERIC_ID);
+    await AsyncStorage.setItem(USER_ID_KEY, UUID);
+    // Old japam-scoped key
+    await AsyncStorage.setItem(`timerTarget:${NUMERIC_ID}:japam-1`, '900');
+    // New japam-scoped key already exists
+    await AsyncStorage.setItem(`timerTarget:${UUID}:japam-1`, '300');
+
+    await migrateScopedKeysAfterIdentityRepair();
+
+    // Existing value preserved
+    expect(await AsyncStorage.getItem(`timerTarget:${UUID}:japam-1`)).toBe('300');
+    expect(await AsyncStorage.getItem(`timerTarget:${NUMERIC_ID}:japam-1`)).toBeNull();
+  });
+
+  it('migrates userId in timerPendingCompletions:v1 entries', async () => {
+    await AsyncStorage.setItem(LEGACY_USER_ID_KEY, NUMERIC_ID);
+    await AsyncStorage.setItem(USER_ID_KEY, UUID);
+    const completions = [
+      { version: 1, userId: NUMERIC_ID, sessionId: 's1', loopNumber: 1, totalLoops: 3, japamId: 'j1', japamName: 'J1', durationSeconds: 600, completedAt: '2026-07-30T00:00:00.000Z', completionId: 'c1' },
+      { version: 1, userId: 'other-user', sessionId: 's2', loopNumber: 1, totalLoops: 1, japamId: 'j2', japamName: 'J2', durationSeconds: 300, completedAt: '2026-07-30T01:00:00.000Z', completionId: 'c2' },
+      { version: 1, userId: NUMERIC_ID, sessionId: 's3', loopNumber: 2, totalLoops: 3, japamId: 'j1', japamName: 'J1', durationSeconds: 600, completedAt: '2026-07-30T02:00:00.000Z', completionId: 'c3' },
+    ];
+    await AsyncStorage.setItem('timerPendingCompletions:v1', JSON.stringify(completions));
+
+    await migrateScopedKeysAfterIdentityRepair();
+
+    const updated = JSON.parse((await AsyncStorage.getItem('timerPendingCompletions:v1')) || '[]');
+    expect(updated[0].userId).toBe(UUID);
+    expect(updated[1].userId).toBe('other-user'); // unchanged
+    expect(updated[2].userId).toBe(UUID);
+  });
+
+  it('migrates bare timerSessionUserId value from oldId to UUID', async () => {
+    await AsyncStorage.setItem(LEGACY_USER_ID_KEY, NUMERIC_ID);
+    await AsyncStorage.setItem(USER_ID_KEY, UUID);
+    await AsyncStorage.setItem('timerSessionUserId', NUMERIC_ID);
+
+    await migrateScopedKeysAfterIdentityRepair();
+
+    expect(await AsyncStorage.getItem('timerSessionUserId')).toBe(UUID);
+  });
+
+  it('migrates scoped timerSessionUserId:{UUID} value from oldId to UUID after rename', async () => {
+    await AsyncStorage.setItem(LEGACY_USER_ID_KEY, NUMERIC_ID);
+    await AsyncStorage.setItem(USER_ID_KEY, UUID);
+    // Scoped key stored with the oldId in the KEY suffix and VALUE
+    await AsyncStorage.setItem(`timerSessionUserId:${NUMERIC_ID}`, NUMERIC_ID);
+    // Per-japam scoped key
+    await AsyncStorage.setItem(`timerSessionUserId:${NUMERIC_ID}:japam-1`, NUMERIC_ID);
+
+    await migrateScopedKeysAfterIdentityRepair();
+
+    // After rename: key uses UUID, value should also be UUID
+    expect(await AsyncStorage.getItem(`timerSessionUserId:${UUID}`)).toBe(UUID);
+    expect(await AsyncStorage.getItem(`timerSessionUserId:${UUID}:japam-1`)).toBe(UUID);
+    // Old keys removed
+    expect(await AsyncStorage.getItem(`timerSessionUserId:${NUMERIC_ID}`)).toBeNull();
+    expect(await AsyncStorage.getItem(`timerSessionUserId:${NUMERIC_ID}:japam-1`)).toBeNull();
+  });
+
+  it('does NOT overwrite newer timerSessionUserId:${UUID} value with stale oldId', async () => {
+    await AsyncStorage.setItem(LEGACY_USER_ID_KEY, NUMERIC_ID);
+    await AsyncStorage.setItem(USER_ID_KEY, UUID);
+    // Old scoped key
+    await AsyncStorage.setItem(`timerSessionUserId:${NUMERIC_ID}`, NUMERIC_ID);
+    // Destination already has a DIFFERENT userId value (newer session)
+    await AsyncStorage.setItem(`timerSessionUserId:${UUID}`, 'different-uuid');
+
+    await migrateScopedKeysAfterIdentityRepair();
+
+    // Destination value is NOT overwritten (not equal to oldId, so migration skips it)
+    expect(await AsyncStorage.getItem(`timerSessionUserId:${UUID}`)).toBe('different-uuid');
+    expect(await AsyncStorage.getItem(`timerSessionUserId:${NUMERIC_ID}`)).toBeNull();
   });
 });
 

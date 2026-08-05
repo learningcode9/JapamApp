@@ -3,14 +3,27 @@ import { createDefaultJapamCreationCoordinator } from '../defaultJapamCreationCo
 import { type Japam } from '../japams';
 import * as japamsRepository from '../japamsRepository';
 
-const mockGetSession = jest.fn();
+let remoteJapamsRows: Record<string, unknown>[] = [];
+let remoteDeletedRows: Record<string, unknown>[] = [];
+
 const mockRpc = jest.fn();
+const mockFrom = jest.fn((table: string) => {
+  const chain: any = {
+    select: jest.fn(() => chain),
+    eq: jest.fn(() => chain),
+    order: jest.fn(async () => {
+      if (table === 'japams') return { data: remoteJapamsRows, error: null };
+      if (table === 'deleted_japams') return { data: remoteDeletedRows, error: null };
+      return { data: [], error: null };
+    }),
+    upsert: jest.fn(async () => ({ data: null, error: null })),
+  };
+  return chain;
+});
 
 jest.mock('../supabase', () => ({
   supabase: {
-    auth: {
-      getSession: (...args: unknown[]) => mockGetSession(...args),
-    },
+    from: (table: string) => mockFrom(table),
     rpc: (...args: unknown[]) => mockRpc(...args),
   },
 }));
@@ -29,29 +42,11 @@ jest.mock('@react-native-async-storage/async-storage', () => {
 });
 
 const UID = 'auth-user-123';
-const fetchMock = jest.fn();
-
-(global as any).fetch = fetchMock;
-
-const okJson = (body: unknown) => ({
-  ok: true,
-  status: 200,
-  json: async () => body,
-  text: async () => JSON.stringify(body),
-});
-
-const errorJson = (status: number, body: unknown) => ({
-  ok: false,
-  status,
-  json: async () => body,
-  text: async () => JSON.stringify(body),
-});
 
 const makeJapam = (overrides: Partial<Japam> = {}): Japam => ({
   id: 'existing-1',
   userId: UID,
   name: 'Gayatri',
-  syncStatus: 'synced',
   displayOrder: null,
   createdAt: '2026-07-06T10:00:00.000Z',
   updatedAt: '2026-07-06T10:00:00.000Z',
@@ -62,12 +57,10 @@ const makeJapam = (overrides: Partial<Japam> = {}): Japam => ({
 describe('default Japam — repository-level behavior', () => {
   beforeEach(async () => {
     await AsyncStorage.clear();
-    fetchMock.mockReset();
-    mockGetSession.mockReset();
+    remoteJapamsRows = [];
+    remoteDeletedRows = [];
+    mockFrom.mockClear();
     mockRpc.mockReset();
-    process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
-    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'anon-key';
-    mockGetSession.mockResolvedValue({ data: { session: null }, error: null });
   });
 
   it('creates a "My Japam" for a new user with zero Japams', async () => {
@@ -81,28 +74,6 @@ describe('default Japam — repository-level behavior', () => {
     const loaded = await japamsRepository.loadJapams(UID);
     expect(loaded).toHaveLength(1);
     expect(loaded[0].name).toBe('My Japam');
-  });
-
-  it('uses the server idempotency RPC for the signed-in default', async () => {
-    mockGetSession.mockResolvedValue({ data: { session: { access_token: 'token' } }, error: null });
-    mockRpc.mockResolvedValue({
-      data: [{
-        id: 'server-default',
-        user_id: UID,
-        name: 'My Japam',
-        display_order: null,
-        created_at: '2026-07-06T10:00:00.000Z',
-        updated_at: '2026-07-06T10:00:00.000Z',
-        archived_at: null,
-      }],
-      error: null,
-    });
-
-    const result = await japamsRepository.ensureDefaultJapam(UID);
-
-    expect(mockRpc).toHaveBeenCalledWith('ensure_default_japam', { p_user_id: UID });
-    expect(result?.defaultJapam.id).toBe('server-default');
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('persists the default Japam across re-loads', async () => {
@@ -144,6 +115,83 @@ describe('default Japam — repository-level behavior', () => {
     const loaded = await japamsRepository.loadJapams(UID);
     expect(loaded).toHaveLength(1);
     expect(loaded[0].name).toBe('My Japam');
+  });
+
+  it('keeps a restored default-named canonical Japam current instead of demoting it to another active Japam', async () => {
+    const canonicalId = '0d443fb7-da00-490f-a535-806a83575584';
+    const otherId = '9f4a0c40-6a52-4eb9-8f06-4f4e0b3a0c11';
+    const canonical = makeJapam({ id: canonicalId, name: 'My Japam' });
+    const other = makeJapam({ id: otherId, name: 'Gayatri' });
+
+    await japamsRepository.saveJapams(UID, [canonical, other]);
+    await japamsRepository.saveCurrentJapamId(UID, canonicalId);
+    remoteJapamsRows = [
+      {
+        id: canonicalId,
+        user_id: UID,
+        name: 'My Japam',
+        display_order: null,
+        created_at: canonical.createdAt,
+        updated_at: canonical.updatedAt,
+        archived_at: null,
+      },
+      {
+        id: otherId,
+        user_id: UID,
+        name: 'Gayatri',
+        display_order: null,
+        created_at: other.createdAt,
+        updated_at: other.updatedAt,
+        archived_at: null,
+      },
+    ];
+    remoteDeletedRows = [];
+
+    const result = await japamsRepository.ensureDefaultJapam(UID);
+
+    expect(result.currentJapamId).toBe(canonicalId);
+    expect(result.japams.map((j) => j.id)).toEqual([canonicalId, otherId]);
+    expect(await japamsRepository.loadCurrentJapamId(UID)).toBe(canonicalId);
+  });
+
+  it('uses the server idempotency RPC to create the default for a signed-in user', async () => {
+    const serverDefault = {
+      id: 'server-default-1',
+      user_id: UID,
+      name: 'My Japam',
+      display_order: null,
+      created_at: '2026-07-06T10:00:00.000Z',
+      updated_at: '2026-07-06T10:00:00.000Z',
+      archived_at: null,
+    };
+    mockRpc.mockImplementation(async (fn: string) => {
+      if (fn === 'get_pending_japam_adoption') return { data: [], error: null };
+      if (fn === 'ensure_default_japam') return { data: [serverDefault], error: null };
+      return { data: [], error: null };
+    });
+
+    const result = await japamsRepository.ensureDefaultJapam(UID);
+
+    expect(mockRpc).toHaveBeenCalledWith('ensure_default_japam', { p_user_id: UID });
+    expect(result.currentJapamId).toBe('server-default-1');
+    expect(result.created?.id).toBe('server-default-1');
+    expect(result.japams.map((j) => j.id)).toContain('server-default-1');
+    expect(await japamsRepository.loadCurrentJapamId(UID)).toBe('server-default-1');
+  });
+
+  it('falls back to deterministic creation when the idempotency RPC fails', async () => {
+    mockRpc.mockImplementation(async (fn: string) => {
+      if (fn === 'get_pending_japam_adoption') return { data: [], error: null };
+      if (fn === 'ensure_default_japam') return { data: null, error: new Error('network') };
+      return { data: [], error: null };
+    });
+
+    const result = await japamsRepository.ensureDefaultJapam(UID);
+
+    expect(result.created).not.toBeNull();
+    expect(result.created?.name).toBe('My Japam');
+    expect(result.currentJapamId).toBe(result.created?.id);
+    expect(await japamsRepository.loadCurrentJapamId(UID)).toBe(result.created?.id);
   });
 
   it('selects the default Japam via currentJapamId', async () => {
@@ -353,101 +401,5 @@ describe('default Japam — repository-level behavior', () => {
     expect(aResult.currentId).not.toBe(bResult.currentId);
 
     createSpy.mockRestore();
-  });
-
-  it('creates a Japam online and syncs the same UUID remotely', async () => {
-    mockGetSession.mockResolvedValue({ data: { session: { access_token: 'jwt-token' } }, error: null });
-    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body));
-      return okJson([{ id: body.id }]);
-    });
-
-    const result = await japamsRepository.createJapam(UID, 'My Japam');
-
-    expect(result).not.toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toContain('/rest/v1/japams?on_conflict=id');
-    expect(init.headers).toMatchObject({ Authorization: 'Bearer jwt-token' });
-    const body = JSON.parse(String(init.body));
-    expect(body.id).toBe(result!.created.id);
-    expect(body.user_id).toBe(UID);
-    expect(result!.created.syncStatus).toBe('synced');
-  });
-
-  it('creates a Japam offline and leaves it pending locally', async () => {
-    const result = await japamsRepository.createJapam(UID, 'My Japam');
-    expect(result).not.toBeNull();
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(result!.created.syncStatus).toBe('pending');
-  });
-
-  it('reconnect retries pending Japams and marks them synced', async () => {
-    await japamsRepository.saveJapams(UID, [makeJapam({ id: 'pending-1', name: 'Gayatri', syncStatus: 'pending' })]);
-    mockGetSession.mockResolvedValue({ data: { session: { access_token: 'jwt-token' } }, error: null });
-    fetchMock
-      .mockResolvedValueOnce(okJson([]))
-      .mockResolvedValueOnce(okJson([{ id: 'pending-1' }]));
-
-    const loaded = await japamsRepository.loadJapams(UID);
-
-    expect(loaded).toHaveLength(1);
-    expect(loaded[0].syncStatus).toBe('synced');
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it('rename syncs remotely without changing UUID', async () => {
-    await japamsRepository.saveJapams(UID, [makeJapam({ id: 'rename-1', syncStatus: 'synced' })]);
-    mockGetSession.mockResolvedValue({ data: { session: { access_token: 'jwt-token' } }, error: null });
-    fetchMock.mockResolvedValue(okJson([{ id: 'rename-1' }]));
-
-    const updated = await japamsRepository.renameJapam(UID, 'rename-1', 'Sri Gayatri');
-
-    expect(updated.find((j) => j.id === 'rename-1')?.name).toBe('Sri Gayatri');
-    expect(updated.find((j) => j.id === 'rename-1')?.syncStatus).toBe('synced');
-    const body = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body));
-    expect(body.id).toBe('rename-1');
-    expect(body.name).toBe('Sri Gayatri');
-  });
-
-  it('archive syncs archived_at remotely', async () => {
-    await japamsRepository.saveJapams(UID, [makeJapam({ id: 'archive-1', syncStatus: 'synced' })]);
-    mockGetSession.mockResolvedValue({ data: { session: { access_token: 'jwt-token' } }, error: null });
-    fetchMock.mockResolvedValue(okJson([{ id: 'archive-1' }]));
-
-    const updated = await japamsRepository.archiveJapam(UID, 'archive-1');
-
-    expect(updated.find((j) => j.id === 'archive-1')?.archivedAt).toBeTruthy();
-    const body = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body));
-    expect(body.id).toBe('archive-1');
-    expect(body.archived_at).toBeTruthy();
-  });
-
-  it('restore clears archived_at remotely', async () => {
-    await japamsRepository.saveJapams(UID, [makeJapam({ id: 'restore-1', archivedAt: '2026-07-07T00:00:00.000Z', syncStatus: 'synced' })]);
-    mockGetSession.mockResolvedValue({ data: { session: { access_token: 'jwt-token' } }, error: null });
-    fetchMock.mockResolvedValue(okJson([{ id: 'restore-1' }]));
-
-    const updated = await japamsRepository.restoreJapam(UID, 'restore-1');
-
-    expect(updated.find((j) => j.id === 'restore-1')?.archivedAt).toBeNull();
-    const body = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body));
-    expect(body.id).toBe('restore-1');
-    expect(body.archived_at).toBeNull();
-  });
-
-  it('remote failure leaves the local Japam intact and marks it failed', async () => {
-    await japamsRepository.saveJapams(UID, [makeJapam({ id: 'failed-1', syncStatus: 'synced' })]);
-    mockGetSession.mockResolvedValue({ data: { session: { access_token: 'jwt-token' } }, error: null });
-    fetchMock.mockResolvedValue(errorJson(500, { message: 'boom' }));
-
-    const updated = await japamsRepository.renameJapam(UID, 'failed-1', 'Still Local');
-
-    const local = updated.find((j) => j.id === 'failed-1');
-    expect(local?.name).toBe('Still Local');
-    expect(local?.syncStatus).toBe('failed');
-    const raw = await AsyncStorage.getItem('userJapams:auth-user-123');
-    const stored = JSON.parse(raw || '[]');
-    expect(stored.find((j: Japam) => j.id === 'failed-1')?.name).toBe('Still Local');
   });
 });

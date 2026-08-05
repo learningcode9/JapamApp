@@ -2,7 +2,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import {
   dayStreakForJapam,
-  mapSupabaseHistoryRow,
   mergeHistories,
   toLocalDayKey,
 } from '../../lib/historyStore';
@@ -15,19 +14,11 @@ import {
   createTapIdentitySnapshot,
   type TapIdentitySnapshot,
 } from '../../lib/tapJapamBehavior';
-import { getIsAnonymous } from '../../lib/anonymousAuth';
-import { signInWithGoogleIdTokenAndStoreIdentity } from '../../lib/nativeGoogleAuth';
-import { getJapamActionReadiness } from '../../lib/japamActionReadiness';
 import { tapSaveSession } from '../../lib/tapSaveSession';
 import { useCurrentJapam } from '../../contexts/current-japam-context';
 import CurrentJapamHeaderButton from '../../components/CurrentJapamHeaderButton';
 import { CircularProgressArc } from '../../components/CircularProgressArc';
 import { getWebOmAudioUri } from '../../lib/webOmAudio';
-import {
-  clearPendingWebGoogleNonce,
-  readPendingWebGoogleNonce,
-  savePendingWebGoogleNonce,
-} from '../../lib/webGoogleNonce';
 import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
 import { ResponseType } from 'expo-auth-session';
@@ -40,6 +31,9 @@ import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { fetchJapamHistoryRows } from '../../lib/supabaseRestHelper';
+import { runSharedLogoutFlow } from '../../lib/sharedLogout';
+import { claimAuthResponse, emitJapamAuthUpdated } from '../../lib/authEvents';
 
 import {
   Alert,
@@ -213,7 +207,7 @@ const isAuthPending = async () => {
 };
 
 export default function JapamMain() {
-  const { currentJapam, isLoading: isJapamLoading } = useCurrentJapam();
+  const { currentJapam, isLoading: isJapamContextLoading } = useCurrentJapam();
   // The Japam this screen's completions belong to. Tap Japam has no discrete "Start" button (see
   // handleStart below, which is not wired to any visible control on this screen) -- tapping the
   // circle is the actual interaction, with no clear start/stop boundary of its own. Treating
@@ -223,6 +217,12 @@ export default function JapamMain() {
   // state, matching the same discipline as Timer/Home's equivalent wiring.
   const activeJapamIdRef = useRef<string | null>(null);
   const activeJapamNameRef = useRef<string | null>(null);
+  useFocusEffect(
+    useCallback(() => {
+      activeJapamIdRef.current = currentJapam?.id ?? null;
+      activeJapamNameRef.current = currentJapam?.name ?? null;
+    }, [currentJapam])
+  );
 
   const insets = useSafeAreaInsets();
   const tabBarSpaceFromBottom = 74 + (isMobile
@@ -257,23 +257,7 @@ export default function JapamMain() {
   const [showGuestNameModal, setShowGuestNameModal] = useState(false);
   const [guestNameInput, setGuestNameInput] = useState('');
   const [isGuestMode, setIsGuestMode] = useState(false);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-  const [isAnonymousUser, setIsAnonymousUser] = useState(false);
   const [authReady, setAuthReady] = useState(false);
-  const japamActionReadiness = getJapamActionReadiness({
-    userId: currentUserId,
-    isAnonymous: isAnonymousUser,
-    currentJapamId: currentJapam?.id ?? null,
-    isJapamLoading,
-  });
-  const isTapDisabled = !authReady || !japamActionReadiness.canAct;
-  useFocusEffect(
-    useCallback(() => {
-      if (!japamActionReadiness.canSnapshot) return;
-      activeJapamIdRef.current = currentJapam?.id ?? null;
-      activeJapamNameRef.current = currentJapam?.name ?? null;
-    }, [currentJapam, japamActionReadiness.canSnapshot])
-  );
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [repetitionSoundEnabled, setRepetitionSoundEnabled] = useState(true);
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
@@ -309,6 +293,7 @@ export default function JapamMain() {
   const startTimerIntervalRef = useRef<() => void>(() => {});
   const appStateRef = useRef(AppState.currentState);
   const restoreTodayTotalRef = useRef<() => Promise<void>>(async () => {});
+  const isRestoringRef = useRef(false);
 
   const glowAnim = useRef(new Animated.Value(0)).current;
 
@@ -327,15 +312,9 @@ export default function JapamMain() {
   }, []);
 
   const syncStoredAuth = useCallback(async () => {
-    const [savedUserName, savedUserId, authPending, anonymous] = await Promise.all([
-      AsyncStorage.getItem(USER_NAME_KEY),
-      AsyncStorage.getItem(USER_ID_KEY),
-      isAuthPending(),
-      getIsAnonymous(),
-    ]);
-
-    setCurrentUserId(savedUserId);
-    setIsAnonymousUser(anonymous);
+    const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+    const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    const authPending = await isAuthPending();
 
     if (savedUserName && savedUserId) {
       userIdRef.current = savedUserId;
@@ -616,9 +595,7 @@ export default function JapamMain() {
   startTimerIntervalRef.current = startTimerInterval;
 
   const rawNonceRef = useRef<string>('');
-  const handledAuthResponseRef = useRef<string | null>(null);
   const [hashedNonce, setHashedNonce] = useState<string>('');
-  const [nonceReady, setNonceReady] = useState(Platform.OS !== 'web');
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     const arr = new Uint8Array(16);
@@ -630,7 +607,6 @@ export default function JapamMain() {
       const hashed = Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
       console.log('[NONCE_GEN] tap-japam hashed_prefix=%s', hashed.slice(0, 8));
       setHashedNonce(hashed);
-      setNonceReady(true);
     });
   }, []);
 
@@ -639,8 +615,8 @@ export default function JapamMain() {
     clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
     scopes: ['openid', 'profile', 'email'],
     redirectUri: Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : undefined,
-    responseType: Platform.OS === 'web' && nonceReady ? ResponseType.IdToken : undefined,
-    extraParams: Platform.OS === 'web' && nonceReady ? { nonce: hashedNonce } : undefined,
+    responseType: Platform.OS === 'web' ? ResponseType.IdToken : undefined,
+    extraParams: Platform.OS === 'web' && hashedNonce ? { nonce: hashedNonce } : undefined,
   });
 
   useFocusEffect(
@@ -806,6 +782,9 @@ export default function JapamMain() {
   };
 
   const restoreTodayTotal = useCallback(async (options?: { preserveManualCount?: boolean }) => {
+    if (isRestoringRef.current) return;
+    isRestoringRef.current = true;
+    try {
     const preserveManualCount = Boolean(options?.preserveManualCount);
     const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
     const todayKey = getLocalDateKey();
@@ -839,35 +818,28 @@ export default function JapamMain() {
       }
 
       try {
-        const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-        const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
         let remoteSessions: Session[] | null = null;
 
-        // Require a real session JWT — an anon-key request has no SELECT policy for another
-        // user's rows and none for this user's own rows once RLS is tightened (mirrors
-        // syncPendingHistory's session-token preference). No session means remoteSessions stays
-        // null below, which skips the merge and leaves local history untouched.
-        const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
-        if (url && key && sessionToken) {
-          const encodedUserId = encodeURIComponent(savedUserId);
-          const res = await fetch(
-            `${url}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=created_at,malas,count,user_name,completion_id,japam_id,japam_name&order=created_at.asc`,
-            { headers: { apikey: key, Authorization: `Bearer ${sessionToken}` } }
-          );
-          if (res.ok) {
-            const rows: {
-              created_at: string;
-              malas: number | string;
-              count: number | string;
-              user_name?: string;
-              user_email?: string;
-              japam_id?: string | null;
-              japam_name?: string | null;
-              completion_id?: string;
-            }[] =
-              await res.json();
-            remoteSessions = rows.map((row) => mapSupabaseHistoryRow(row, savedUserId));
-          }
+        const remoteRows = await fetchJapamHistoryRows({
+          select: 'created_at,malas,count,user_name,completion_id,japam_id,japam_name',
+          userId: savedUserId,
+          order: { column: 'created_at', ascending: true },
+        });
+
+        if (remoteRows !== null) {
+          remoteSessions = remoteRows.map((row: any) => ({
+            date: row.created_at,
+            malas: Number(row.malas) || 0,
+            totalCount: Number(row.count) || 0,
+            duration: 0,
+            manual: false,
+            userId: savedUserId,
+            userName: row.user_name,
+            completionId: row.completion_id,
+            syncStatus: 'synced' as const,
+            japamId: row.japam_id ?? null,
+            japamName: row.japam_name ?? null,
+            }));
         }
 
         if (remoteSessions !== null) {
@@ -923,6 +895,9 @@ export default function JapamMain() {
     }
     await refreshDayStreak({ userId: null, japamId });
     setHasRestoredTotal(true);
+  } finally {
+    isRestoringRef.current = false;
+  }
   }, [refreshDayStreak, restoreTotal]);
 
   useEffect(() => {
@@ -1261,26 +1236,28 @@ export default function JapamMain() {
 
   const restoreHistoryFromSupabase = useCallback(async (googleUserId: string) => {
     try {
-      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-      if (!supabaseUrl || !supabaseKey) return;
+      const remoteRows = await fetchJapamHistoryRows({
+        select: '*',
+        userId: googleUserId,
+        order: { column: 'created_at', ascending: true },
+      });
 
-      // Require a real session JWT — an anon-key request has no SELECT policy for this user's
-      // rows once RLS is tightened. No session means we leave local history untouched (same
-      // no-op path as any other fetch failure below).
-      const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
-      if (!sessionToken) return;
+      if (!remoteRows) return;
 
-      const encodedUserId = encodeURIComponent(googleUserId);
-      const response = await fetch(
-        `${supabaseUrl}/rest/v1/japam_history?user_id=eq.${encodedUserId}&select=*&order=created_at.asc`,
-        { headers: { apikey: supabaseKey, Authorization: `Bearer ${sessionToken}` } }
-      );
-
-      if (!response.ok) return;
-
-      const rows = await response.json();
-      const remoteHistory: Session[] = rows.map((item: any) => mapSupabaseHistoryRow(item, googleUserId));
+      const remoteHistory: Session[] = remoteRows.map((item: any) => ({
+        date: item.created_at,
+        malas: Number(item.malas) || 0,
+        totalCount: Number(item.count) || 0,
+        duration: 0,
+        manual: false,
+        userId: googleUserId,
+        userName: item.user_name,
+        userEmail: item.user_email,
+        completionId: item.completion_id,
+        syncStatus: 'synced' as const,
+        japamId: item.japam_id ?? null,
+        japamName: item.japam_name ?? null,
+      }));
 
       const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
       const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
@@ -1338,7 +1315,7 @@ export default function JapamMain() {
     setShowGuestNameModal(false);
     setShowUserModal(false);
     setGuestNameInput('');
-    DeviceEventEmitter.emit('japam-auth-updated');
+    emitJapamAuthUpdated();
   }, [guestNameInput]);
 
   const handleNativeGoogleSignIn = useCallback(async () => {
@@ -1357,6 +1334,12 @@ export default function JapamMain() {
       }
       const { id, name, givenName, email } = userInfo.data.user;
       const { idToken } = userInfo.data;
+      let supabaseUuid: string | undefined;
+      if (idToken) {
+        const { data: authData, error: authError } = await supabase.auth.signInWithIdToken({ provider: 'google', token: idToken });
+        if (authError) console.log('Supabase signInWithIdToken error:', authError.message);
+        else supabaseUuid = authData?.user?.id;
+      }
       const googleName = givenName || name || email || 'User';
       const googleEmail = email || '';
       const googleUserId = String(id).trim();
@@ -1368,23 +1351,7 @@ export default function JapamMain() {
         return;
       }
 
-      if (!idToken) {
-        setShowUserModal(true);
-        showGoogleSignInRequiredAlert();
-        return;
-      }
-
-      const authResult = await signInWithGoogleIdTokenAndStoreIdentity(idToken, googleName, googleEmail);
-      if (!authResult.ok) {
-        if (authResult.error) {
-          console.log('Supabase signInWithIdToken error:', authResult.error);
-        }
-        setShowUserModal(true);
-        showGoogleSignInRequiredAlert();
-        return;
-      }
-
-      const userId = authResult.userId;
+      const userId = supabaseUuid ?? googleUserId;
       setHasRestoredTimer(false);
       setUserName(googleName);
       setIsGuestMode(false);
@@ -1393,9 +1360,12 @@ export default function JapamMain() {
       setShowUserMenu(false);
       await restoreTotal(0, { userId: null });
       totalRef.current = 0;
+      await AsyncStorage.setItem(USER_NAME_KEY, googleName);
+      if (googleEmail) await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
       await migrateGuestHistoryToGoogle(userId);
+      await AsyncStorage.setItem(USER_ID_KEY, userId);
       userIdRef.current = userId;
-      DeviceEventEmitter.emit('japam-auth-updated');
+      emitJapamAuthUpdated();
 
       await loadJapamNameFromSupabase(userId);
       await restoreTodayTotal();
@@ -1418,13 +1388,16 @@ export default function JapamMain() {
     restoreTotal,
   ]);
 
+  const handledWebAuthResponseRef = useRef<NonNullable<typeof response> | null>(null);
+
   useEffect(() => {
     const handleGoogleLogin = async () => {
-      if (Platform.OS !== 'web') return;
-      if (!response) return;
+      if (Platform.OS !== 'web') return; // native platforms use handleNativeGoogleSignIn
+      if (!claimAuthResponse(handledWebAuthResponseRef, response)) return;
+
+      console.log('[AUTH_CALLBACK] source=tap-japam-web response.type=%s', response.type);
       if (response.type !== 'success') {
         setIsSigningIn(false);
-        await clearPendingWebGoogleNonce();
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
         if (!savedUserId) {
@@ -1432,15 +1405,6 @@ export default function JapamMain() {
           showGoogleSignInRequiredAlert();
         }
         return;
-      }
-
-      // Idempotency guard: derive stable identifier from safe non-secret fields
-      const responseId = 'params' in response ? String(response.params?.state ?? '') : '';
-      if (responseId && handledAuthResponseRef.current === responseId) {
-        return;
-      }
-      if (responseId) {
-        handledAuthResponseRef.current = responseId;
       }
 
       setIsSigningIn(true);
@@ -1454,8 +1418,11 @@ export default function JapamMain() {
         authentication?.idToken ||
         ('params' in response ? (response.params as Record<string, string>)?.id_token : undefined);
 
+      console.log('[AUTH_CALLBACK] source=tap-japam-web hasIdToken=%s hasAccessToken=%s paramKeys=%s',
+        !!idToken, !!accessToken,
+        'params' in response ? Object.keys(response.params ?? {}).join(',') : 'none');
+
       if (!accessToken && !idToken) {
-        await clearPendingWebGoogleNonce();
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         setIsSigningIn(false);
         setShowUserModal(true);
@@ -1465,43 +1432,31 @@ export default function JapamMain() {
 
       try {
         if (idToken) {
-          const persistedNonce = await readPendingWebGoogleNonce();
-          if (!persistedNonce) {
-            // Nonce already consumed — check if session is still valid
-            const existing = (await supabase.auth.getSession()).data.session;
-            const existingValid = existing?.access_token &&
-              !((existing?.user as { is_anonymous?: boolean } | undefined)?.is_anonymous);
-            if (existingValid) {
-              return;
-            }
-            await clearPendingWebGoogleNonce();
-            showGoogleSignInRequiredAlert();
-            return;
-          }
-          console.log('[SUPABASE_AUTH] tap-japam nonce_prefix=%s', persistedNonce.slice(0, 8));
+          console.log('[SUPABASE_AUTH] tap-japam nonce_prefix=%s', rawNonceRef.current.slice(0, 8));
           const { error: supaAuthError } = await supabase.auth.signInWithIdToken({
             provider: 'google',
             token: idToken,
-            nonce: persistedNonce,
+            nonce: rawNonceRef.current,
           });
-          if (supaAuthError) {
-            console.log('[SUPABASE_AUTH] tap-japam signInWithIdToken error:', supaAuthError.message);
-            await clearPendingWebGoogleNonce();
-          } else {
-            console.log('[SUPABASE_AUTH] tap-japam web session established');
-            await clearPendingWebGoogleNonce();
-          }
+          if (supaAuthError) console.log('[SUPABASE_AUTH] tap-japam signInWithIdToken error:', supaAuthError.message);
+          else console.log('[SUPABASE_AUTH] tap-japam web session established');
         } else {
           console.log('[SUPABASE_AUTH] tap-japam no id_token — session not established');
-          await clearPendingWebGoogleNonce();
         }
 
         const session = (await supabase.auth.getSession()).data.session;
         const sessionIsAnonymous =
           !!((session?.user as { is_anonymous?: boolean } | undefined)?.is_anonymous);
+        console.log(
+          '[SUPABASE_AUTH] tap-japam session.user.id=%s session.user.email=%s hasAccessToken=%s tokenLength=%s isAnonymous=%s',
+          session?.user?.id || 'none',
+          session?.user?.email || 'none',
+          !!session?.access_token,
+          session?.access_token?.length || 0,
+          sessionIsAnonymous
+        );
         if (!session?.access_token || sessionIsAnonymous) {
           console.log('[SUPABASE_AUTH] tap-japam missing non-anonymous Supabase session after Google login');
-          await clearPendingWebGoogleNonce();
           showGoogleSignInRequiredAlert();
           return;
         }
@@ -1533,7 +1488,6 @@ export default function JapamMain() {
         }
 
         if (!googleUserId) {
-          await clearPendingWebGoogleNonce();
           setShowUserModal(true);
           showGoogleSignInRequiredAlert();
           return;
@@ -1556,10 +1510,7 @@ export default function JapamMain() {
         await migrateGuestHistoryToGoogle(userId);
         await AsyncStorage.setItem(USER_ID_KEY, userId);
         userIdRef.current = userId;
-        DeviceEventEmitter.emit('japam-auth-updated');
-        if (Platform.OS === 'web' && typeof window !== 'undefined') {
-          window.dispatchEvent(new Event('japam-auth-updated'));
-        }
+        emitJapamAuthUpdated();
 
         await loadJapamNameFromSupabase(userId);
         await restoreTodayTotal();
@@ -1567,7 +1518,6 @@ export default function JapamMain() {
         await restoreTimerForUser(userId);
       } catch (error) {
         console.log('Google login error:', error);
-        await clearPendingWebGoogleNonce();
         setShowUserModal(true);
         showGoogleSignInRequiredAlert();
       } finally {
@@ -1870,24 +1820,16 @@ export default function JapamMain() {
 
   const handleTap = async () => {
     if (!requireLogin()) return;
-    if (!japamActionReadiness.canAct) return;
-    const resolvedCurrentJapam = currentJapam;
-    if (japamActionReadiness.requiresResolvedJapam && !resolvedCurrentJapam) return;
-    const scopedJapamId = japamActionReadiness.requiresResolvedJapam
-      ? resolvedCurrentJapam!.id
-      : activeJapamIdRef.current;
-    const scopedJapamName = japamActionReadiness.requiresResolvedJapam
-      ? resolvedCurrentJapam!.name
-      : activeJapamNameRef.current;
-    activeJapamIdRef.current = scopedJapamId;
-    activeJapamNameRef.current = scopedJapamName;
+    if (isJapamContextLoading || !currentJapam?.id || !currentJapam?.name) {
+      Alert.alert('Please wait', 'Your current Japam is still loading. Please try again in a moment.');
+      return;
+    }
     const tapIdentity = createTapIdentitySnapshot(
       userIdRef.current,
-      scopedJapamId,
-      scopedJapamName
+      activeJapamIdRef.current,
+      activeJapamNameRef.current
     );
     void primeWebCompletionAudio();
-    triggerDeepHardwarePulse(55);
 
     rippleAnim.setValue(0);
     Animated.timing(rippleAnim, {
@@ -1916,8 +1858,10 @@ export default function JapamMain() {
 
   const handleStart = () => {
     if (!requireLogin()) return;
-    if (!japamActionReadiness.canAct) return;
-    if (japamActionReadiness.requiresResolvedJapam && !currentJapam) return;
+    if (isJapamContextLoading || !currentJapam?.id || !currentJapam?.name) {
+      Alert.alert('Please wait', 'Your current Japam is still loading. Please try again in a moment.');
+      return;
+    }
     void primeWebCompletionAudio();
     const mins = Math.max(1, Math.floor(Number(minutesInput) || 1));
     const nextTargetSeconds = mins * 60;
@@ -2133,52 +2077,33 @@ export default function JapamMain() {
     setHasSetName(false); // ✅ reset on logout
     setShowUserModal(false);
 
-    try {
-      await supabase.auth.signOut();
-    } catch (error) {
-      console.log('Supabase signOut error:', error);
-    }
-
-    await AsyncStorage.removeItem(USER_NAME_KEY);
-    await AsyncStorage.removeItem(USER_EMAIL_KEY);
-    await AsyncStorage.removeItem(USER_ID_KEY);
-
-    if (Platform.OS !== 'web') {
-      try {
-        await GoogleSignin.signOut();
-      } catch (error) {
-        console.log('Google signOut error:', error);
-      }
-    }
-
-    DeviceEventEmitter.emit('japam-auth-updated');
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      window.dispatchEvent(new Event('japam-auth-updated'));
-    }
-
-    // TOTAL_KEY/MALAS_KEY/COUNT_KEY/MANUAL_* are no longer written under these bare names at all
-    // (see getJapamScopedKey) -- removing them here is now a harmless no-op for those names, kept
-    // only so a pre-upgrade install's leftover bare keys get cleaned up. The Japam that was active
-    // for this session is cleared explicitly by its real (scoped) key below, so no stale cached
-    // total for THIS Japam survives into the next sign-in on this device.
-    await AsyncStorage.multiRemove([
-      TOTAL_KEY,
-      COUNT_KEY,
-      MALAS_KEY,
-      MANUAL_TOTAL_KEY,
-      MANUAL_COUNT_KEY,
-      MANUAL_MALAS_KEY,
-      MANUAL_TOTAL_DATE_KEY,
-      LAST_TOTAL_KEY,
-      getJapamScopedKey(TOTAL_KEY, currentUserId, activeJapamIdRef.current),
-      getJapamScopedKey(COUNT_KEY, currentUserId, activeJapamIdRef.current),
-      getJapamScopedKey(MALAS_KEY, currentUserId, activeJapamIdRef.current),
-      getJapamScopedKey(TOTAL_DATE_KEY, currentUserId, activeJapamIdRef.current),
-      getJapamScopedKey(MANUAL_TOTAL_KEY, currentUserId, activeJapamIdRef.current),
-      getJapamScopedKey(MANUAL_COUNT_KEY, currentUserId, activeJapamIdRef.current),
-      getJapamScopedKey(MANUAL_MALAS_KEY, currentUserId, activeJapamIdRef.current),
-      getJapamScopedKey(MANUAL_TOTAL_DATE_KEY, currentUserId, activeJapamIdRef.current),
-    ]);
+    await runSharedLogoutFlow({
+      clearLocalState: async () => {
+        // TOTAL_KEY/MALAS_KEY/COUNT_KEY/MANUAL_* are no longer written under these bare names at all
+        // (see getJapamScopedKey) -- removing them here is now a harmless no-op for those names, kept
+        // only so a pre-upgrade install's leftover bare keys get cleaned up. The Japam that was active
+        // for this session is cleared explicitly by its real (scoped) key below, so no stale cached
+        // total for THIS Japam survives into the next sign-in on this device.
+        await AsyncStorage.multiRemove([
+          TOTAL_KEY,
+          COUNT_KEY,
+          MALAS_KEY,
+          MANUAL_TOTAL_KEY,
+          MANUAL_COUNT_KEY,
+          MANUAL_MALAS_KEY,
+          MANUAL_TOTAL_DATE_KEY,
+          LAST_TOTAL_KEY,
+          getJapamScopedKey(TOTAL_KEY, currentUserId, activeJapamIdRef.current),
+          getJapamScopedKey(COUNT_KEY, currentUserId, activeJapamIdRef.current),
+          getJapamScopedKey(MALAS_KEY, currentUserId, activeJapamIdRef.current),
+          getJapamScopedKey(TOTAL_DATE_KEY, currentUserId, activeJapamIdRef.current),
+          getJapamScopedKey(MANUAL_TOTAL_KEY, currentUserId, activeJapamIdRef.current),
+          getJapamScopedKey(MANUAL_COUNT_KEY, currentUserId, activeJapamIdRef.current),
+          getJapamScopedKey(MANUAL_MALAS_KEY, currentUserId, activeJapamIdRef.current),
+          getJapamScopedKey(MANUAL_TOTAL_DATE_KEY, currentUserId, activeJapamIdRef.current),
+        ]);
+      },
+    });
 
     totalRef.current = 0;
     setTotal(0);
@@ -2269,12 +2194,13 @@ export default function JapamMain() {
             <Pressable
               hitSlop={{ top: 40, bottom: 40, left: 40, right: 40 }}
               pressRetentionOffset={{ top: 45, bottom: 45, left: 45, right: 45 }}
-              onPress={handleTap}
-              disabled={isTapDisabled}
+              onPress={() => {
+                triggerDeepHardwarePulse(55);
+                handleTap();
+              }}
               style={({ pressed }) => [
                 styles.progressPressable,
-                pressed && !isTapDisabled && styles.progressPressed,
-                isTapDisabled && styles.disabledButton,
+                pressed && styles.progressPressed,
               ]}
             >
               <View style={{ width: progressRingSize, height: progressRingSize }}>
@@ -2340,8 +2266,8 @@ export default function JapamMain() {
                   : 'Sign in with Google to sync your Japam across devices.'}
               </Text>
               <Pressable
-                disabled={Platform.OS === 'web' && (!request || !nonceReady)}
-                style={[styles.modalButton, Platform.OS === 'web' && (!request || !nonceReady) && styles.disabledButton]}
+                disabled={Platform.OS === 'web' && !request}
+                style={[styles.modalButton, Platform.OS === 'web' && !request && styles.disabledButton]}
                 onPress={() => {
                   if (Platform.OS !== 'web') {
                     void handleNativeGoogleSignIn();
@@ -2351,20 +2277,9 @@ export default function JapamMain() {
                     setIsSigningIn(true);
                     setShowUserModal(false);
                     void (async () => {
-                      try {
-                        await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
-                        await savePendingWebGoogleNonce(rawNonceRef.current);
-                        const result = await promptAsync({ showInRecents: true });
-                        if (result.type !== 'success') {
-                          await clearPendingWebGoogleNonce();
-                          await AsyncStorage.removeItem(AUTH_PENDING_KEY);
-                          setIsSigningIn(false);
-                          setShowUserModal(true);
-                          showGoogleSignInRequiredAlert();
-                        }
-                      } catch (error) {
-                        console.log('Google prompt error:', error);
-                        await clearPendingWebGoogleNonce();
+                      await AsyncStorage.setItem(AUTH_PENDING_KEY, String(Date.now()));
+                      const result = await promptAsync({ showInRecents: true });
+                      if (result.type !== 'success') {
                         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
                         setIsSigningIn(false);
                         setShowUserModal(true);
