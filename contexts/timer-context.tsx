@@ -1148,6 +1148,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         const latest = latestRaw ? JSON.parse(latestRaw) : [];
         await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, syncedIds)));
         console.log('[MARK_SYNCED] count=%d ids=%s', syncedIds.length, syncedIds.join(','));
+        DeviceEventEmitter.emit('japam-history-remote-synced', { userId: uid });
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('japam-history-remote-synced'));
+        }
         DeviceEventEmitter.emit('japam-stats-updated');
         DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
         if (Platform.OS === 'web' && typeof window !== 'undefined') {

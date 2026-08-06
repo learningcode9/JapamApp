@@ -347,23 +347,17 @@ export default function GroupsDashboardScreen() {
     }, [load])
   );
 
-  // Immediate refresh when THIS device records a completion. Deliberately NOT scoped to focus —
-  // completing a mala always requires navigating to Timer/Tap Japam first, which blurs this
-  // screen (Expo Router tabs keep it mounted, just unfocused); a focus-gated listener would be
-  // torn down at exactly the moment the event it's waiting for fires. Mount-scoped instead, so the
-  // dashboard is already fresh the instant the viewer switches back to this tab — no manual
-  // refresh, no waiting for the next interval tick.
+  // Refresh immediately only after this device's completion is confirmed in Supabase. Personal
+  // History still receives local-first events, but those events can precede the remote upsert and
+  // must not cause the server-backed dashboard to reload prematurely. Polling above still picks
+  // up completions from other devices.
   useEffect(() => {
-    const historySub = DeviceEventEmitter.addListener('japam-history-updated', () => {
-      void load({ silent: true });
-    });
-    const statsSub = DeviceEventEmitter.addListener('japam-stats-updated', () => {
+    const syncedSub = DeviceEventEmitter.addListener('japam-history-remote-synced', () => {
       void load({ silent: true });
     });
 
     return () => {
-      historySub.remove();
-      statsSub.remove();
+      syncedSub.remove();
     };
   }, [load]);
 

@@ -187,6 +187,10 @@ export async function tapSaveSession(
             const latest = latestRaw ? JSON.parse(latestRaw) : [];
             await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, [savedRecord.completionId])));
             console.log('[MARK_SYNCED] source=%s completionId=%s', source, savedRecord.completionId);
+            DeviceEventEmitter.emit('japam-history-remote-synced', { userId });
+            if (Platform.OS === 'web' && typeof window !== 'undefined') {
+              window.dispatchEvent(new Event('japam-history-remote-synced'));
+            }
           } catch (error) {
             console.log('[SYNC_FAILED] source=%s completionId=%s reason=network', source, payload.completion_id);
             console.log('Tap Supabase save error:', error);

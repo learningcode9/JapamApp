@@ -1852,6 +1852,10 @@ export default function JapamMain() {
             const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
             const latest = latestRaw ? JSON.parse(latestRaw) : [];
             await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, [savedRecord.completionId])));
+            DeviceEventEmitter.emit('japam-history-remote-synced', { userId });
+            if (Platform.OS === 'web' && typeof window !== 'undefined') {
+              window.dispatchEvent(new Event('japam-history-remote-synced'));
+            }
           } else {
             console.log('[SYNC_FAILED] source=legacy-main completionId=%s status=%d', payload.completion_id, res.status);
           }
