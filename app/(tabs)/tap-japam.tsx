@@ -602,10 +602,8 @@ export default function JapamMain() {
     crypto.getRandomValues(arr);
     const raw = Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('');
     rawNonceRef.current = raw;
-    console.log('[NONCE_GEN] tap-japam raw_prefix=%s', raw.slice(0, 8));
     void crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw)).then((buf) => {
       const hashed = Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
-      console.log('[NONCE_GEN] tap-japam hashed_prefix=%s', hashed.slice(0, 8));
       setHashedNonce(hashed);
     });
   }, []);
@@ -1324,8 +1322,6 @@ export default function JapamMain() {
   }, [guestNameInput]);
 
   const handleNativeGoogleSignIn = useCallback(async () => {
-    console.log('SIGNIN PATH:', Platform.OS);
-    console.log('Using native GoogleSignin');
     setIsSigningIn(true);
     setShowUserModal(false);
     try {
@@ -1341,44 +1337,11 @@ export default function JapamMain() {
       const { idToken } = userInfo.data;
       let supabaseUuid: string | undefined;
       if (idToken) {
-        const configuredSupabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
-        const supabaseAuthUrl = configuredSupabaseUrl
-          ? `${configuredSupabaseUrl.replace(/\/$/, '')}/auth/v1/token?grant_type=id_token`
-          : 'missing';
-        console.log('[SUPABASE_AUTH_DEBUG] tap-japam native request', {
-          url: supabaseAuthUrl,
-          provider: 'google',
-          hasIdToken: true,
-          platform: Platform.OS,
-        });
         const { data: authData, error: authError } = await supabase.auth.signInWithIdToken({ provider: 'google', token: idToken });
-        if (authError) {
-          const details = authError as {
-            name?: string;
-            message?: string;
-            status?: number;
-            code?: string;
-            cause?: unknown;
-          };
-          console.log('[SUPABASE_AUTH_DEBUG] tap-japam native failure', {
-            url: supabaseAuthUrl,
-            name: details.name,
-            message: details.message,
-            status: details.status,
-            code: details.code,
-            cause: details.cause instanceof Error ? details.cause.message : String(details.cause || ''),
-          });
-        } else {
+        if (!authError) {
           const session = (await supabase.auth.getSession()).data.session;
           const sessionUserId = session?.user?.id;
           const returnedUserId = authData?.user?.id;
-          console.log('[SUPABASE_AUTH_DEBUG] tap-japam native response', {
-            url: supabaseAuthUrl,
-            hasSession: !!session,
-            hasAccessToken: !!session?.access_token,
-            hasRefreshToken: !!session?.refresh_token,
-            sessionUserId: sessionUserId || 'none',
-          });
           if (
             session?.access_token &&
             session.refresh_token &&
@@ -1402,7 +1365,6 @@ export default function JapamMain() {
       }
 
       if (!supabaseUuid) {
-        console.log('Missing valid Supabase session after native Google login.');
         setShowUserModal(true);
         showGoogleSignInRequiredAlert();
         return;
@@ -1429,7 +1391,6 @@ export default function JapamMain() {
       await restoreHistoryFromSupabase(userId);
       await restoreTimerForUser(userId);
     } catch (error) {
-      console.log('Native Google sign-in error:', error);
       setShowUserModal(true);
       showGoogleSignInRequiredAlert();
     } finally {
@@ -1452,7 +1413,6 @@ export default function JapamMain() {
       if (Platform.OS !== 'web') return; // native platforms use handleNativeGoogleSignIn
       if (!claimAuthResponse(handledWebAuthResponseRef, response)) return;
 
-      console.log('[AUTH_CALLBACK] source=tap-japam-web response.type=%s', response.type);
       if (response.type !== 'success') {
         setIsSigningIn(false);
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
@@ -1475,10 +1435,6 @@ export default function JapamMain() {
         authentication?.idToken ||
         ('params' in response ? (response.params as Record<string, string>)?.id_token : undefined);
 
-      console.log('[AUTH_CALLBACK] source=tap-japam-web hasIdToken=%s hasAccessToken=%s paramKeys=%s',
-        !!idToken, !!accessToken,
-        'params' in response ? Object.keys(response.params ?? {}).join(',') : 'none');
-
       if (!accessToken && !idToken) {
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         setIsSigningIn(false);
@@ -1489,31 +1445,17 @@ export default function JapamMain() {
 
       try {
         if (idToken) {
-          console.log('[SUPABASE_AUTH] tap-japam nonce_prefix=%s', rawNonceRef.current.slice(0, 8));
-          const { error: supaAuthError } = await supabase.auth.signInWithIdToken({
+          await supabase.auth.signInWithIdToken({
             provider: 'google',
             token: idToken,
             nonce: rawNonceRef.current,
           });
-          if (supaAuthError) console.log('[SUPABASE_AUTH] tap-japam signInWithIdToken error:', supaAuthError.message);
-          else console.log('[SUPABASE_AUTH] tap-japam web session established');
-        } else {
-          console.log('[SUPABASE_AUTH] tap-japam no id_token — session not established');
         }
 
         const session = (await supabase.auth.getSession()).data.session;
         const sessionIsAnonymous =
           !!((session?.user as { is_anonymous?: boolean } | undefined)?.is_anonymous);
-        console.log(
-          '[SUPABASE_AUTH] tap-japam session.user.id=%s session.user.email=%s hasAccessToken=%s tokenLength=%s isAnonymous=%s',
-          session?.user?.id || 'none',
-          session?.user?.email || 'none',
-          !!session?.access_token,
-          session?.access_token?.length || 0,
-          sessionIsAnonymous
-        );
         if (!session?.access_token || sessionIsAnonymous) {
-          console.log('[SUPABASE_AUTH] tap-japam missing non-anonymous Supabase session after Google login');
           showGoogleSignInRequiredAlert();
           return;
         }
@@ -1574,7 +1516,6 @@ export default function JapamMain() {
         await restoreHistoryFromSupabase(userId);
         await restoreTimerForUser(userId);
       } catch (error) {
-        console.log('Google login error:', error);
         setShowUserModal(true);
         showGoogleSignInRequiredAlert();
       } finally {
@@ -2329,8 +2270,6 @@ export default function JapamMain() {
                   if (Platform.OS !== 'web') {
                     void handleNativeGoogleSignIn();
                   } else {
-                    console.log('SIGNIN PATH:', Platform.OS);
-                    console.log('Using web promptAsync');
                     setIsSigningIn(true);
                     setShowUserModal(false);
                     void (async () => {

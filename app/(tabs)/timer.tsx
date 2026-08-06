@@ -175,10 +175,8 @@ export default function TimerScreen() {
     crypto.getRandomValues(arr);
     const raw = Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('');
     rawNonceRef.current = raw;
-    console.log('[NONCE_GEN] timer raw_prefix=%s', raw.slice(0, 8));
     void crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw)).then((buf) => {
       const hashed = Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
-      console.log('[NONCE_GEN] timer hashed_prefix=%s', hashed.slice(0, 8));
       setHashedNonce(hashed);
     });
   }, []);
@@ -369,10 +367,6 @@ export default function TimerScreen() {
     googleUserId: string,
     skipMigration: boolean
   ) => {
-    console.log('[GSI_DEBUG] finishGoogleSignIn START', {
-      googleUserId,
-      skipMigration,
-    });
     const session = (await supabase.auth.getSession()).data.session;
     const sessionUserId = session?.user?.id;
     const hasValidSession =
@@ -382,7 +376,6 @@ export default function TimerScreen() {
       (!session.user.is_anonymous || skipMigration);
 
     if (!hasValidSession) {
-      console.log('Missing valid Supabase session after native Google login.');
       setShowUserModal(true);
       showGoogleSignInRequiredAlert();
       return;
@@ -394,10 +387,6 @@ export default function TimerScreen() {
       // Direct Google sign-in (no prior anonymous session) uses only the Supabase UUID that
       // signInWithIdToken / signInOrLinkGoogle established.
       const userId = sessionUserId!;
-      console.log('[GSI_DEBUG] finish sessionUser=%s isAnonymous=%s fallbackToGoogleId=%s',
-        sessionUserId,
-        String(session?.user?.is_anonymous ?? 'n/a'),
-        'false');
       await migrateGuestHistoryToGoogle(userId);
       await AsyncStorage.setItem(USER_ID_KEY, userId);
     }
@@ -411,18 +400,12 @@ export default function TimerScreen() {
   }, [loadStats, migrateGuestHistoryToGoogle]);
 
   const handleNativeGoogleSignIn = useCallback(async () => {
-    console.log('SIGNIN PATH:', Platform.OS);
-    console.log('[TIMER_GSI_PATH] Using native GoogleSignin');
     setIsSigningIn(true);
     setShowUserModal(false);
     try {
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
       const userInfo = await GoogleSignin.signIn();
-      console.log('[GSI_DEBUG] after GoogleSignin.signIn returned');
-      console.log('[GSI_DEBUG] userInfo type=', typeof userInfo);
-      console.log('[GSI_DEBUG] userInfo keys=', Object.keys(userInfo || {}));
       const rawUserInfo = userInfo as any;
-      console.log('Native Google sign-in result type:', rawUserInfo?.type || 'raw-user');
       const googleUser =
         rawUserInfo?.type
           ? rawUserInfo.type === 'success'
@@ -431,7 +414,6 @@ export default function TimerScreen() {
           : rawUserInfo?.user;
 
       if (!googleUser) {
-        console.log('Native Google sign-in did not return a user.');
         setIsSigningIn(false);
         setShowUserModal(true);
         showGoogleSignInRequiredAlert();
@@ -439,9 +421,6 @@ export default function TimerScreen() {
       }
       const { id, name, givenName, email } = googleUser;
       const idToken = rawUserInfo?.data?.idToken as string | null | undefined;
-      console.log('[GSI_DEBUG] rawUserInfo keys=', Object.keys(rawUserInfo || {}));
-      console.log('[GSI_DEBUG] data keys=', Object.keys(rawUserInfo?.data || {}));
-      console.log('[GSI_DEBUG] idToken exists=', !!idToken);
       const googleName = givenName || name || email || 'User';
       const googleEmail = email || '';
       const googleUserId = String(id).trim();
@@ -455,49 +434,9 @@ export default function TimerScreen() {
 
       let skipMigration = false;
 
-      console.log('[GSI_DEBUG] hasIdToken=%s', String(!!idToken));
       if (idToken) {
         const isAnonymous = await getIsAnonymous();
-        const configuredSupabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
-        const supabaseAuthUrl = configuredSupabaseUrl
-          ? `${configuredSupabaseUrl.replace(/\/$/, '')}/auth/v1/token?grant_type=id_token`
-          : 'missing';
-        console.log('[SUPABASE_AUTH_DEBUG] timer native request', {
-          url: supabaseAuthUrl,
-          provider: 'google',
-          hasIdToken: true,
-          platform: Platform.OS,
-          isAnonymous,
-        });
-        console.log('[GSI_DEBUG] before signInOrLinkGoogle', {
-          hasIdToken: !!idToken,
-          isAnonymous,
-        });
         const result = await signInOrLinkGoogle(idToken, isAnonymous);
-        if (result.kind === 'error') {
-          const details = result.error as {
-            name?: string;
-            message?: string;
-            status?: number;
-            code?: string;
-            cause?: unknown;
-          };
-          console.log('[SUPABASE_AUTH_DEBUG] timer native failure', {
-            url: supabaseAuthUrl,
-            name: details?.name,
-            message: details?.message,
-            status: details?.status,
-            code: details?.code,
-            cause: details?.cause instanceof Error ? details.cause.message : String(details?.cause || ''),
-          });
-        }
-        console.log('[GSI_DEBUG] after signInOrLinkGoogle');
-        console.log('[GSI_DEBUG] signInOrLinkGoogle returned:', result.kind, result);
-        console.log('[GSI_DEBUG] result.kind=%s', result.kind);
-        if (result.kind === 'error') {
-          const e = result.error as { code?: string; message?: string };
-          console.log('[GSI_DEBUG] error.code=%s error.message=%s', e?.code, e?.message);
-        }
 
         if (result.kind === 'collision') {
           // Approved UX (no merge, no silent failure): "Sign In" completes a normal direct
@@ -511,7 +450,6 @@ export default function TimerScreen() {
         }
 
         if (result.kind === 'error') {
-          console.log('signInOrLinkGoogle error:', result.error);
           setShowUserModal(true);
           showGoogleSignInRequiredAlert();
           return;
@@ -523,10 +461,8 @@ export default function TimerScreen() {
         }
       }
 
-      console.log('[GSI_DEBUG] calling finishGoogleSignIn');
       await finishGoogleSignIn(googleName, googleEmail, googleUserId, skipMigration);
     } catch (error) {
-      console.log('[GSI_DEBUG] Native Google sign-in error:', error);
       setShowUserModal(true);
       showGoogleSignInRequiredAlert();
     } finally {
@@ -546,7 +482,6 @@ export default function TimerScreen() {
       if (Platform.OS !== 'web') return; // native platforms use handleNativeGoogleSignIn
       if (!claimAuthResponse(handledWebAuthResponseRef, response)) return;
 
-      console.log('[AUTH_CALLBACK] source=timer-web response.type=%s', response.type);
       if (response.type !== 'success') {
         setIsSigningIn(false);
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
@@ -569,10 +504,6 @@ export default function TimerScreen() {
         authentication?.idToken ||
         ('params' in response ? (response.params as Record<string, string>)?.id_token : undefined);
 
-      console.log('[AUTH_CALLBACK] source=timer-web hasIdToken=%s hasAccessToken=%s paramKeys=%s',
-        !!idToken, !!accessToken,
-        'params' in response ? Object.keys(response.params ?? {}).join(',') : 'none');
-
       if (!accessToken && !idToken) {
         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
         setIsSigningIn(false);
@@ -583,31 +514,17 @@ export default function TimerScreen() {
 
       try {
         if (idToken) {
-          console.log('[SUPABASE_AUTH] timer nonce_prefix=%s', rawNonceRef.current.slice(0, 8));
-          const { error: supaAuthError } = await supabase.auth.signInWithIdToken({
+          await supabase.auth.signInWithIdToken({
             provider: 'google',
             token: idToken,
             nonce: rawNonceRef.current,
           });
-          if (supaAuthError) console.log('[SUPABASE_AUTH] timer signInWithIdToken error:', supaAuthError.message);
-          else console.log('[SUPABASE_AUTH] timer web session established');
-        } else {
-          console.log('[SUPABASE_AUTH] timer no id_token — session not established');
         }
 
         const session = (await supabase.auth.getSession()).data.session;
         const sessionIsAnonymous =
           !!((session?.user as { is_anonymous?: boolean } | undefined)?.is_anonymous);
-        console.log(
-          '[SUPABASE_AUTH] timer session.user.id=%s session.user.email=%s hasAccessToken=%s tokenLength=%s isAnonymous=%s',
-          session?.user?.id || 'none',
-          session?.user?.email || 'none',
-          !!session?.access_token,
-          session?.access_token?.length || 0,
-          sessionIsAnonymous
-        );
         if (!session?.access_token || sessionIsAnonymous) {
-          console.log('[SUPABASE_AUTH] timer missing non-anonymous Supabase session after Google login');
           setShowUserModal(true);
           showGoogleSignInRequiredAlert();
           return;
@@ -662,7 +579,6 @@ export default function TimerScreen() {
         }
         void loadStats();
       } catch (error) {
-        console.log('Google login error:', error);
         setShowUserModal(true);
         showGoogleSignInRequiredAlert();
       } finally {
@@ -1004,8 +920,6 @@ export default function TimerScreen() {
                   if (Platform.OS !== 'web') {
                     void handleNativeGoogleSignIn();
                   } else {
-                    console.log('SIGNIN PATH:', Platform.OS);
-                    console.log('Using web promptAsync');
                     setIsSigningIn(true);
                     setShowUserModal(false);
                     void (async () => {
@@ -1019,7 +933,6 @@ export default function TimerScreen() {
                           showGoogleSignInRequiredAlert();
                         }
                       } catch (error) {
-                        console.log('Google prompt error:', error);
                         await AsyncStorage.removeItem(AUTH_PENDING_KEY);
                         setIsSigningIn(false);
                         setShowUserModal(true);

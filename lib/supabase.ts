@@ -3,11 +3,14 @@ import { createClient } from '@supabase/supabase-js';
 import { emitJapamAuthUpdated } from './authEvents';
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
+// Prefer Supabase's current client-side key name while keeping the legacy env name compatible
+// with existing EAS environments and local builds.
+const supabasePublishableKey =
+  process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!;
 
 export const supabase = createClient(
   supabaseUrl,
-  supabaseAnonKey,
+  supabasePublishableKey,
   {
     auth: {
       storage: AsyncStorage,
