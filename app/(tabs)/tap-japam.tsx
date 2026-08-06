@@ -1343,7 +1343,20 @@ export default function JapamMain() {
       if (idToken) {
         const { data: authData, error: authError } = await supabase.auth.signInWithIdToken({ provider: 'google', token: idToken });
         if (authError) console.log('Supabase signInWithIdToken error:', authError.message);
-        else supabaseUuid = authData?.user?.id;
+        else {
+          const session = (await supabase.auth.getSession()).data.session;
+          const sessionUserId = session?.user?.id;
+          const returnedUserId = authData?.user?.id;
+          if (
+            session?.access_token &&
+            session.refresh_token &&
+            sessionUserId &&
+            !session.user.is_anonymous &&
+            (!returnedUserId || returnedUserId === sessionUserId)
+          ) {
+            supabaseUuid = sessionUserId;
+          }
+        }
       }
       const googleName = givenName || name || email || 'User';
       const googleEmail = email || '';
@@ -1356,7 +1369,14 @@ export default function JapamMain() {
         return;
       }
 
-      const userId = supabaseUuid ?? googleUserId;
+      if (!supabaseUuid) {
+        console.log('Missing valid Supabase session after native Google login.');
+        setShowUserModal(true);
+        showGoogleSignInRequiredAlert();
+        return;
+      }
+
+      const userId = supabaseUuid;
       setHasRestoredTimer(false);
       setUserName(googleName);
       setIsGuestMode(false);

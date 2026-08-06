@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Session } from '@supabase/supabase-js';
 import { AppState, DeviceEventEmitter, Platform } from 'react-native';
+import { recoverSessionIfNeeded } from './sessionRecovery';
 import { supabase } from './supabase';
 
 const USER_ID_KEY = 'userId';
@@ -77,8 +78,24 @@ export function resolveAuthenticatedSession(): Promise<AuthResolution> {
     let session = data.session;
 
     if (error || !isAuthenticatedSession(session)) {
-      if (!session?.user?.is_anonymous) await clearStaleCachedIdentity();
-      return { kind: 'AUTH_REQUIRED' };
+      if (session?.user?.is_anonymous) return { kind: 'AUTH_REQUIRED' };
+
+      // An earlier native Google login could have written only the legacy Google subject while
+      // the Supabase exchange failed. Give the existing recovery path one chance to recreate the
+      // Supabase session before treating the cached identity as stale.
+      if (await recoverSessionIfNeeded()) {
+        const recovered = await supabase.auth.getSession();
+        session = recovered.data.session;
+        if (!recovered.error && isAuthenticatedSession(session)) {
+          // Continue through the normal expiry check and identity persistence below.
+        } else {
+          await clearStaleCachedIdentity();
+          return { kind: 'AUTH_REQUIRED' };
+        }
+      } else {
+        await clearStaleCachedIdentity();
+        return { kind: 'AUTH_REQUIRED' };
+      }
     }
 
     const expiresAt = session.expires_at ? session.expires_at * 1000 : 0;

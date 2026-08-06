@@ -373,18 +373,31 @@ export default function TimerScreen() {
       googleUserId,
       skipMigration,
     });
+    const session = (await supabase.auth.getSession()).data.session;
+    const sessionUserId = session?.user?.id;
+    const hasValidSession =
+      !!session?.access_token &&
+      !!session.refresh_token &&
+      !!sessionUserId &&
+      (!session.user.is_anonymous || skipMigration);
+
+    if (!hasValidSession) {
+      console.log('Missing valid Supabase session after native Google login.');
+      setShowUserModal(true);
+      showGoogleSignInRequiredAlert();
+      return;
+    }
+
     await AsyncStorage.setItem(USER_NAME_KEY, googleName);
     if (googleEmail) await AsyncStorage.setItem(USER_EMAIL_KEY, googleEmail);
     if (!skipMigration) {
-      // Direct Google sign-in (no prior anonymous session): use the Supabase UUID that
-      // signInWithIdToken / signInOrLinkGoogle just established, falling back to the Google
-      // numeric ID only if the session is unexpectedly unavailable.
-      const session = (await supabase.auth.getSession()).data.session;
-      const userId = session?.user?.id ?? googleUserId;
+      // Direct Google sign-in (no prior anonymous session) uses only the Supabase UUID that
+      // signInWithIdToken / signInOrLinkGoogle established.
+      const userId = sessionUserId!;
       console.log('[GSI_DEBUG] finish sessionUser=%s isAnonymous=%s fallbackToGoogleId=%s',
-        session?.user?.id ?? 'none',
+        sessionUserId,
         String(session?.user?.is_anonymous ?? 'n/a'),
-        String(!session?.user?.id));
+        'false');
       await migrateGuestHistoryToGoogle(userId);
       await AsyncStorage.setItem(USER_ID_KEY, userId);
     }
@@ -471,8 +484,9 @@ export default function TimerScreen() {
 
         if (result.kind === 'error') {
           console.log('signInOrLinkGoogle error:', result.error);
-          // Preserve today's tolerant behavior: a Supabase auth error was always discarded and
-          // never blocked sign-in, so fall through and store the Google identity locally anyway.
+          setShowUserModal(true);
+          showGoogleSignInRequiredAlert();
+          return;
         }
 
         if (result.kind === 'linked') {
