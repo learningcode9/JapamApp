@@ -1440,12 +1440,44 @@ export default function JapamMain() {
       const { idToken } = userInfo.data;
       let supabaseUuid: string | undefined;
       if (idToken) {
+        const configuredSupabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
+        const supabaseAuthUrl = configuredSupabaseUrl
+          ? `${configuredSupabaseUrl.replace(/\/$/, '')}/auth/v1/token?grant_type=id_token`
+          : 'missing';
+        console.log('[SUPABASE_AUTH_DEBUG] index native request', {
+          url: supabaseAuthUrl,
+          provider: 'google',
+          hasIdToken: true,
+          platform: Platform.OS,
+        });
         const { data: authData, error: authError } = await supabase.auth.signInWithIdToken({ provider: 'google', token: idToken });
-        if (authError) console.log('Supabase signInWithIdToken error:', authError.message);
-        else {
+        if (authError) {
+          const details = authError as {
+            name?: string;
+            message?: string;
+            status?: number;
+            code?: string;
+            cause?: unknown;
+          };
+          console.log('[SUPABASE_AUTH_DEBUG] index native failure', {
+            url: supabaseAuthUrl,
+            name: details.name,
+            message: details.message,
+            status: details.status,
+            code: details.code,
+            cause: details.cause instanceof Error ? details.cause.message : String(details.cause || ''),
+          });
+        } else {
           const session = (await supabase.auth.getSession()).data.session;
           const sessionUserId = session?.user?.id;
           const returnedUserId = authData?.user?.id;
+          console.log('[SUPABASE_AUTH_DEBUG] index native response', {
+            url: supabaseAuthUrl,
+            hasSession: !!session,
+            hasAccessToken: !!session?.access_token,
+            hasRefreshToken: !!session?.refresh_token,
+            sessionUserId: sessionUserId || 'none',
+          });
           if (
             session?.access_token &&
             session.refresh_token &&

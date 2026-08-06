@@ -458,11 +458,39 @@ export default function TimerScreen() {
       console.log('[GSI_DEBUG] hasIdToken=%s', String(!!idToken));
       if (idToken) {
         const isAnonymous = await getIsAnonymous();
+        const configuredSupabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
+        const supabaseAuthUrl = configuredSupabaseUrl
+          ? `${configuredSupabaseUrl.replace(/\/$/, '')}/auth/v1/token?grant_type=id_token`
+          : 'missing';
+        console.log('[SUPABASE_AUTH_DEBUG] timer native request', {
+          url: supabaseAuthUrl,
+          provider: 'google',
+          hasIdToken: true,
+          platform: Platform.OS,
+          isAnonymous,
+        });
         console.log('[GSI_DEBUG] before signInOrLinkGoogle', {
           hasIdToken: !!idToken,
           isAnonymous,
         });
         const result = await signInOrLinkGoogle(idToken, isAnonymous);
+        if (result.kind === 'error') {
+          const details = result.error as {
+            name?: string;
+            message?: string;
+            status?: number;
+            code?: string;
+            cause?: unknown;
+          };
+          console.log('[SUPABASE_AUTH_DEBUG] timer native failure', {
+            url: supabaseAuthUrl,
+            name: details?.name,
+            message: details?.message,
+            status: details?.status,
+            code: details?.code,
+            cause: details?.cause instanceof Error ? details.cause.message : String(details?.cause || ''),
+          });
+        }
         console.log('[GSI_DEBUG] after signInOrLinkGoogle');
         console.log('[GSI_DEBUG] signInOrLinkGoogle returned:', result.kind, result);
         console.log('[GSI_DEBUG] result.kind=%s', result.kind);
