@@ -585,6 +585,63 @@ export const createJapam = async (
   return { created, japams: updated };
 };
 
+/**
+ * Deterministic client-side default creation, used by the fail-closed branches of
+ * ensureDefaultJapamInternal ONLY when the user is genuinely empty (no active Japams, no
+ * persisted selection). A brand-new signed-in user must still get a "My Japam" even during a
+ * transient remote/tombstone-fetch failure — otherwise the History gate renders "No Japam
+ * selected" and the Timer has no scoped Japam until a later successful refresh. The id is
+ * deterministic per user (same as the RPC-unavailable fallback), so two devices for the same
+ * user converge on the same id and the server-side duplicate-default trigger still prevents a
+ * second remote "My Japam" row. Users WITH existing local data or a persisted selection are
+ * never routed here — their selection is preserved untouched.
+ */
+const createDefaultLocally = async (
+  userId: string,
+  base: Japam[],
+  tombstones: Set<string>,
+): Promise<{ japams: Japam[]; currentJapamId: string | null; created: Japam | null }> => {
+  const now = new Date().toISOString();
+  const created = createJapamPure(userId, DEFAULT_JAPAM_NAME, {
+    id: deterministicDefaultJapamId(userId),
+    now,
+  });
+  if (created === null || tombstones.has(created.id)) {
+    return { japams: base, currentJapamId: null, created: null };
+  }
+  const updated = [...base, created].sort(sortByCreatedAtThenId);
+  await saveJapamsToStorage(userId, updated);
+  await saveCurrentJapamIdToStorage(userId, created.id);
+  enqueueSync(userId, created);
+  return { japams: updated, currentJapamId: created.id, created };
+};
+
+/**
+ * When a fail-closed branch created a local deterministic default (id derived from userId) whose
+ * upsert never reached the server (syncStatus stays 'pending' because the network was down), a
+ * later refresh may find the server-side canonical "My Japam" under a DIFFERENT id (the
+ * ensure_default_japam RPC inserts with gen_random_uuid). Without reconciliation the merged view
+ * would show two active "My Japam" rows. The deterministic local default is never re-created, so
+ * once remote authority is available we drop the never-synced local copy and let the canonical
+ * remote row win. A default whose syncStatus is 'synced' is authoritative and is never dropped.
+ */
+const reconcileNeverSyncedLocalDefault = (
+  userId: string,
+  local: Japam[],
+  remote: Japam[],
+): Japam[] => {
+  if (remote.length === 0) return local;
+  const expectedDefaultId = deterministicDefaultJapamId(userId);
+  const localDefault = local.find(
+    (j) => j.id === expectedDefaultId && j.syncStatus === 'pending',
+  );
+  const remoteDefault = remote.find(
+    (j) => j.archivedAt === null && normalizeJapamName(j.name) === DEFAULT_JAPAM_NAME,
+  );
+  if (!localDefault || !remoteDefault || localDefault.id === remoteDefault.id) return local;
+  return local.filter((j) => j.id !== localDefault.id);
+};
+
 const ensureDefaultJapamInternal = async (
   userId: string,
 ): Promise<{ japams: Japam[]; currentJapamId: string | null; created: Japam | null }> => {
@@ -608,11 +665,20 @@ const ensureDefaultJapamInternal = async (
     const resolvedCurrentId = persistedStillActive?.id ?? active[0]?.id ?? null;
     if (resolvedCurrentId !== null) {
       await saveCurrentJapamIdToStorage(userId, resolvedCurrentId);
+      return { japams: activeOnly, currentJapamId: resolvedCurrentId, created: null };
     }
-    return { japams: activeOnly, currentJapamId: resolvedCurrentId, created: null };
+    if (persistedCurrentId !== null) {
+      // A persisted pointer exists (even a stale one). Never wipe it or guess during an outage —
+      // the target may exist remotely. Only a genuinely empty user (never had any selection) gets
+      // a default created while tombstone authority is unavailable, so a brand-new signed-in user
+      // is never stuck with no Japam at all.
+      return { japams: activeOnly, currentJapamId: persistedCurrentId, created: null };
+    }
+    return createDefaultLocally(userId, activeOnly, new Set(localTombstones));
   }
   const tombstones = authoritativeTombstones;
-  const mergedBeforeTombstones = remote === null ? local : mergeJapamsById(local, remote);
+  const reconciledLocal = remote === null ? local : reconcileNeverSyncedLocalDefault(userId, local, remote);
+  const mergedBeforeTombstones = remote === null ? local : mergeJapamsById(reconciledLocal, remote);
   const merged = applyJapamTombstones(mergedBeforeTombstones, tombstones);
   await saveJapamsToStorage(userId, merged);
 
@@ -724,7 +790,9 @@ const ensureDefaultJapamInternal = async (
   // never create a default, never wipe a valid persisted pointer, and never return an empty
   // selection when a valid local active Japam exists (the History screen gate would otherwise
   // render an empty list on a transient network blip). The next successful refresh retries from
-  // the top and repairs the selection against authoritative remote state.
+  // the top and repairs the selection against authoritative remote state. The one exception is a
+  // genuinely empty user (no active Japams, no persisted selection): a brand-new signed-in user
+  // must still get a default Japam so History/Timer have something to scope to.
   if (remote === null) {
     if (firstActive) {
       await saveCurrentJapamIdToStorage(userId, firstActive.id);
@@ -733,7 +801,7 @@ const ensureDefaultJapamInternal = async (
     if (persistedCurrentId !== null) {
       return { japams: merged, currentJapamId: persistedCurrentId, created: null };
     }
-    return { japams: merged, currentJapamId: null, created: null };
+    return createDefaultLocally(userId, merged, tombstones);
   }
 
   if (firstActive) {

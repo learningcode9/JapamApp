@@ -476,16 +476,33 @@ describe('ensureDefaultJapam', () => {
     expect((await loadJapams(UID))[0].id).toBe(remote.id);
   });
 
-  it('does not create a default when remote state is unknown', async () => {
+  it('empty new user still gets a deterministic default when remote state is unknown', async () => {
+    mockRemoteJapams([], { code: '401', message: 'Unauthorized' });
+    mockUpsert.mockResolvedValue({ error: null });
+
+    const result = await ensureDefaultJapam(UID);
+    await flushMicrotasks();
+
+    expect(result.created).not.toBeNull();
+    expect(result.created?.name).toBe('My Japam');
+    expect(result.currentJapamId).toBe(result.created?.id);
+    const stored = await loadJapams(UID);
+    expect(stored).toHaveLength(1);
+    expect(stored[0].id).toBe(result.created?.id);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe(result.created?.id);
+    expect(mockUpsert).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves a valid persisted selection when remote state is unknown (fail-closed for users with data)', async () => {
+    await AsyncStorage.setItem(`currentJapamId:${UID}`, 'persisted-valid');
     mockRemoteJapams([], { code: '401', message: 'Unauthorized' });
 
     const result = await ensureDefaultJapam(UID);
 
-    expect(result.japams).toEqual([]);
-    expect(result.currentJapamId).toBeNull();
+    expect(result.currentJapamId).toBe('persisted-valid');
     expect(result.created).toBeNull();
-    expect(mockUpsert).not.toHaveBeenCalled();
-    expect(await loadJapams(UID)).toEqual([]);
+    expect(result.japams).toEqual([]);
+    expect(await AsyncStorage.getItem(`currentJapamId:${UID}`)).toBe('persisted-valid');
   });
 
   it('Sarada regression: restores the archived canonical My Japam and retires only the empty active conflict', async () => {
@@ -538,16 +555,18 @@ describe('ensureDefaultJapam', () => {
     expect(mockRpc).toHaveBeenCalledWith('restore_owned_japam', { p_japam_id: canonical.id });
   });
 
-  it('does not create a default while deleted_japams fetch is unavailable, then still refuses a tombstoned default on retry', async () => {
+  it('creates a deterministic local default while deleted_japams is unavailable, then hides it once the tombstone is visible', async () => {
     const tombstonedDefaultId = uuidV5(`${UID}:default-japam`, DEFAULT_JAPAM_UUID_NAMESPACE);
 
     mockRemoteJapams([]);
     mockRemoteDeletedJapams([], { code: '500', message: 'Temporary outage' });
     const first = await ensureDefaultJapam(UID);
+    await flushMicrotasks();
 
-    expect(first.japams).toEqual([]);
-    expect(first.currentJapamId).toBeNull();
-    expect(first.created).toBeNull();
+    expect(first.japams).toHaveLength(1);
+    expect(first.japams[0].id).toBe(tombstonedDefaultId);
+    expect(first.currentJapamId).toBe(tombstonedDefaultId);
+    expect(first.created?.id).toBe(tombstonedDefaultId);
     expect(mockUpsert).not.toHaveBeenCalled();
 
     mockRemoteJapams([]);
@@ -623,9 +642,11 @@ describe('ensureDefaultJapam', () => {
 
     mockRemoteJapams([], { code: '500', message: 'Temporary outage' });
     const first = await ensureDefaultJapam(UID);
-    expect(first.currentJapamId).toBeNull();
-    expect(first.created).toBeNull();
-    expect(await loadJapams(UID)).toEqual([]);
+    expect(first.currentJapamId).not.toBeNull();
+    expect(first.created).not.toBeNull();
+    const localOnly = await loadJapams(UID);
+    expect(localOnly).toHaveLength(1);
+    expect(localOnly[0].id).toBe(first.created?.id);
 
     mockRemoteJapams([remote]);
     const second = await ensureDefaultJapam(UID);
