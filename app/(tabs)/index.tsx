@@ -6,6 +6,7 @@ import {
   filterByJapam,
   markSynced,
   mergeHistories,
+  resolveLocalFirstTodayTotal,
   todayStatsFor,
   toLocalDayKey,
 } from '../../lib/historyStore';
@@ -748,150 +749,150 @@ export default function JapamMain() {
     if (isRestoringRef.current) return;
     isRestoringRef.current = true;
     try {
-    const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
 
-    if (savedUserId) {
-      const todayKey = getLocalDateKey();
+      if (savedUserId) {
+        const todayKey = getLocalDateKey();
 
-      // Show local data immediately for responsive UI
-      const storedTotalDate = await AsyncStorage.getItem(getUserStorageKey(TOTAL_DATE_KEY, savedUserId));
-      const localStoredTotal =
-        storedTotalDate === todayKey
-          ? Number((await AsyncStorage.getItem(getUserStorageKey(TOTAL_KEY, savedUserId))) || '0')
-          : 0;
-
-      if (localStoredTotal > 0) {
-        await restoreTotal(localStoredTotal, { userId: savedUserId });
-        totalRef.current = localStoredTotal;
-      }
-
-      try {
-        let remoteSessions: Session[] | null = null;
-
-        if (!skipRemote) {
-          const remoteRows = await fetchJapamHistoryRows({
-            select: 'created_at,malas,count,user_name,completion_id,japam_id,japam_name',
-            userId: savedUserId,
-            order: { column: 'created_at', ascending: true },
-            limit: 10000,
-          });
-
-          if (remoteRows !== null) {
-          remoteSessions = remoteRows.map((row: any) => ({
-            date: row.created_at,
-            malas: Number(row.malas) || 0,
-            totalCount: Number(row.count) || 0,
-            duration: 0,
-            manual: false,
-            userId: savedUserId,
-            userName: row.user_name,
-            completionId: row.completion_id,
-            syncStatus: 'synced' as const,
-            japamId: row.japam_id ?? null,
-            japamName: row.japam_name ?? null,
-          }));
-        }
-
-        if (remoteSessions !== null) {
-          // Merge remote history into local without dropping pending offline completions.
-          const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
-          const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
-          // Honor tombstones so a remote row whose Supabase delete is still in-flight does not
-          // resurrect a locally-deleted record and inflate the displayed count.
-          const rawTomb = await AsyncStorage.getItem(DELETED_COMPLETIONS_KEY);
-          const tombSet = new Set<string>(rawTomb ? JSON.parse(rawTomb) : []);
-          const mergedHistory = mergeHistories(localHistory, remoteSessions).filter((s) => {
-            const day = toLocalDayKey(s.date);
-            return (day === 'unknown' || day <= todayKey) && !tombSet.has(s.completionId as string);
-          });
-          // Non-destructive reconcile: mergedHistory is the first-local-wins union of local +
-          // remote (mergeHistories) with tombstones already honored in the filter above. Do NOT
-          // prune synced records merely because a stale fetch omits them — that would erase today's
-          // just-uploaded Timer completion and regress Day Streak until a later consistent fetch.
-          // Cross-device deletes flow exclusively through the explicit DELETED_COMPLETIONS_KEY
-          // tombstone set (already filtered above), so no remote-id-based prune is safe on read
-          // paths. Mirrors Timer's loadStats (PR #53) and History's loadHistory.
-          const reconciledHistory = mergedHistory;
-
-          console.log('[RESTORE_REMOTE_COUNT] screen=main count=%d', remoteSessions.length);
-          console.log(
-            '[MERGE_LOCAL_COUNT_BEFORE] screen=main count=%d pending=%d',
-            localHistory.length,
-            localHistory.filter((s) => s.userId === savedUserId && s.syncStatus === 'pending').length
-          );
-          console.log('[MERGE_LOCAL_COUNT_AFTER] screen=main count=%d', reconciledHistory.length);
-          console.log('[LOCAL_DAY_BUCKET] screen=main todayKey=%s buckets=%o',
-            todayKey,
-            reconciledHistory.map((s) => ({ completionId: s.completionId, day: toLocalDayKey(s.date) }))
-          );
-
-          await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(reconciledHistory));
-
-          const japamId = currentJapamId;
-          const japamName = currentJapamName;
-          const scopedHistory = japamId !== null
-            ? filterByJapam(reconciledHistory, japamId, japamName, { includeBlankLegacy }, japams)
-            : reconciledHistory;
-          const { totalCount: safeTotal } = todayStatsFor(
-            scopedHistory,
-            savedUserId,
-            todayKey,
-            toLocalDayKey
-          );
-          const neverRegress = Math.max(safeTotal, totalRef.current);
+        // Local-first: show the cached/local value immediately — before any network. The counter
+        // derives from local history scoped to the selected Japam (the same selector the stat cards
+        // use), maxed with the persisted per-user "today" snapshot. Without this, a cold start
+        // offline shows 0 while fetchJapamHistoryRows's supabase.auth.getSession() (which triggers
+        // a network token refresh for a near-expiry session) stalls for minutes in the background.
+        const storedTotalDate = await AsyncStorage.getItem(getUserStorageKey(TOTAL_DATE_KEY, savedUserId));
+        const storedTodayTotal = await AsyncStorage.getItem(getUserStorageKey(TOTAL_KEY, savedUserId));
+        const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
+        const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
+        const localFirstTotal = resolveLocalFirstTodayTotal(
+          localHistory,
+          savedUserId,
+          currentJapamId,
+          currentJapamName,
+          todayKey,
+          toLocalDayKey,
+          { includeBlankLegacy, storedTodayDate: storedTotalDate, storedTodayTotal },
+          japams,
+        );
+        const neverRegress = Math.max(localFirstTotal, totalRef.current);
+        if (neverRegress > 0) {
           await restoreTotal(neverRegress, { userId: savedUserId });
           totalRef.current = neverRegress;
-          await refreshDayStreak({ userId: savedUserId, todayTotal: neverRegress });
-        } else {
-          // Supabase unreachable — use locally saved count (never go below what was tapped)
-          const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
-          const neverRegress = Math.max(localHistoryTotal, totalRef.current);
-          await restoreTotal(neverRegress, { userId: savedUserId });
-          totalRef.current = neverRegress;
-          await refreshDayStreak({ userId: savedUserId, todayTotal: neverRegress });
         }
-          } else {
-            // skipRemote — compute from local storage only, never regress
-            const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
-            const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
-            const japamId = currentJapamId;
-            const japamName = currentJapamName;
-            const scopedHistory = japamId !== null
-              ? filterByJapam(localHistory, japamId, japamName, { includeBlankLegacy }, japams)
-              : localHistory;
-            const { totalCount: localTotal } = todayStatsFor(
-              scopedHistory,
-              savedUserId,
-              todayKey,
-              toLocalDayKey
-            );
-            const neverRegress = Math.max(localTotal, totalRef.current);
-            await restoreTotal(neverRegress, { userId: savedUserId });
-            totalRef.current = neverRegress;
-            await refreshDayStreak({ userId: savedUserId, todayTotal: neverRegress });
-          }
-      } catch (error) {
-        console.log('Stats sync error, using local data:', error);
-        const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
-        const neverRegress = Math.max(localHistoryTotal, totalRef.current);
-        await restoreTotal(neverRegress, { userId: savedUserId });
-        totalRef.current = neverRegress;
         await refreshDayStreak({ userId: savedUserId, todayTotal: neverRegress });
+        setHasRestoredTotal(true);
+
+        // Remote reconciliation ONLY in the background — the display is already correct from local
+        // state, so a cold start offline is never gated on the network. Merges remote rows back
+        // into local history and re-restores the counter when it lands (never regressing below
+        // totalRef), exactly as before.
+        if (!skipRemote) {
+          void (async () => {
+            try {
+              let remoteSessions: Session[] | null = null;
+
+              const remoteRows = await fetchJapamHistoryRows({
+                select: 'created_at,malas,count,user_name,completion_id,japam_id,japam_name',
+                userId: savedUserId,
+                order: { column: 'created_at', ascending: true },
+                limit: 10000,
+              });
+
+              if (remoteRows !== null) {
+                remoteSessions = remoteRows.map((row: any) => ({
+                  date: row.created_at,
+                  malas: Number(row.malas) || 0,
+                  totalCount: Number(row.count) || 0,
+                  duration: 0,
+                  manual: false,
+                  userId: savedUserId,
+                  userName: row.user_name,
+                  completionId: row.completion_id,
+                  syncStatus: 'synced' as const,
+                  japamId: row.japam_id ?? null,
+                  japamName: row.japam_name ?? null,
+                }));
+              }
+
+              if (remoteSessions !== null) {
+                // Merge remote history into local without dropping pending offline completions.
+                const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
+                const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
+                // Honor tombstones so a remote row whose Supabase delete is still in-flight does
+                // not resurrect a locally-deleted record and inflate the displayed count.
+                const rawTomb = await AsyncStorage.getItem(DELETED_COMPLETIONS_KEY);
+                const tombSet = new Set<string>(rawTomb ? JSON.parse(rawTomb) : []);
+                const mergedHistory = mergeHistories(localHistory, remoteSessions).filter((s) => {
+                  const day = toLocalDayKey(s.date);
+                  return (day === 'unknown' || day <= todayKey) && !tombSet.has(s.completionId as string);
+                });
+                // Non-destructive reconcile: mergedHistory is the first-local-wins union of local +
+                // remote (mergeHistories) with tombstones already honored in the filter above. Do
+                // NOT prune synced records merely because a stale fetch omits them — that would
+                // erase today's just-uploaded Timer completion and regress Day Streak until a later
+                // consistent fetch. Cross-device deletes flow exclusively through the explicit
+                // DELETED_COMPLETIONS_KEY tombstone set (already filtered above), so no remote-id
+                // based prune is safe on read paths. Mirrors Timer's loadStats (PR #53) and
+                // History's loadHistory.
+                const reconciledHistory = mergedHistory;
+
+                console.log('[RESTORE_REMOTE_COUNT] screen=main count=%d', remoteSessions.length);
+                console.log(
+                  '[MERGE_LOCAL_COUNT_BEFORE] screen=main count=%d pending=%d',
+                  localHistory.length,
+                  localHistory.filter((s) => s.userId === savedUserId && s.syncStatus === 'pending').length
+                );
+                console.log('[MERGE_LOCAL_COUNT_AFTER] screen=main count=%d', reconciledHistory.length);
+                console.log('[LOCAL_DAY_BUCKET] screen=main todayKey=%s buckets=%o',
+                  todayKey,
+                  reconciledHistory.map((s) => ({ completionId: s.completionId, day: toLocalDayKey(s.date) }))
+                );
+
+                await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(reconciledHistory));
+
+                const japamId = currentJapamId;
+                const japamName = currentJapamName;
+                const scopedHistory = japamId !== null
+                  ? filterByJapam(reconciledHistory, japamId, japamName, { includeBlankLegacy }, japams)
+                  : reconciledHistory;
+                const { totalCount: safeTotal } = todayStatsFor(
+                  scopedHistory,
+                  savedUserId,
+                  todayKey,
+                  toLocalDayKey
+                );
+                const neverRegress = Math.max(safeTotal, totalRef.current);
+                await restoreTotal(neverRegress, { userId: savedUserId });
+                totalRef.current = neverRegress;
+                await refreshDayStreak({ userId: savedUserId, todayTotal: neverRegress });
+              } else {
+                // Supabase unreachable — use locally saved count (never go below what was tapped)
+                const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
+                const neverRegress = Math.max(localHistoryTotal, totalRef.current);
+                await restoreTotal(neverRegress, { userId: savedUserId });
+                totalRef.current = neverRegress;
+                await refreshDayStreak({ userId: savedUserId, todayTotal: neverRegress });
+              }
+            } catch (error) {
+              console.log('Stats sync error, using local data:', error);
+              const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
+              const neverRegress = Math.max(localHistoryTotal, totalRef.current);
+              await restoreTotal(neverRegress, { userId: savedUserId });
+              totalRef.current = neverRegress;
+              await refreshDayStreak({ userId: savedUserId, todayTotal: neverRegress });
+            }
+          })();
+        }
+      } else {
+        // Not logged in
+        await restoreTotal(0, { userId: null });
+        totalRef.current = 0;
+        await refreshDayStreak({ userId: null, todayTotal: 0 });
+        setHasRestoredTotal(true);
       }
-
-      setHasRestoredTotal(true);
-      return;
+    } finally {
+      isRestoringRef.current = false;
     }
-
-    // Not logged in
-    await restoreTotal(0, { userId: null });
-    totalRef.current = 0;
-    await refreshDayStreak({ userId: null, todayTotal: 0 });
-    setHasRestoredTotal(true);
-  } finally {
-    isRestoringRef.current = false;
-  }
-  }, [currentJapamId, currentJapamName, getLocalTodayTotalForUser, refreshDayStreak, restoreTotal, includeBlankLegacy]);
+  }, [currentJapamId, currentJapamName, getLocalTodayTotalForUser, refreshDayStreak, restoreTotal, includeBlankLegacy, japams]);
 
   useEffect(() => {
     restoreTodayTotalRef.current = restoreTodayTotal;

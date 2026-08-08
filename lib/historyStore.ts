@@ -498,6 +498,44 @@ export const todayStatsFor = (
 };
 
 /**
+ * Local-first "today" total for Home's counter — the value to display IMMEDIATELY from local state,
+ * before any network. It is the max of:
+ *   (a) today's total from local history scoped to the selected Japam — the exact same selector
+ *       `loadHistoryStats` uses for the stat cards — and
+ *   (b) the persisted per-user counter snapshot, but ONLY when that snapshot is dated TODAY (a
+ *       stale snapshot from a previous day must never cap today's value).
+ *
+ * This function never touches the network. Home's cold-start offline path must resolve from local
+ * storage alone: without it a fresh start offline shows 0 while the remote reconciliation (whose
+ * supabase.auth.getSession() triggers a network token refresh for a near-expiry session) stalls in
+ * the background — the same cold-start blocker History's localFirst hydration addresses.
+ */
+export const resolveLocalFirstTodayTotal = (
+  records: RawHistoryRecord[],
+  userId: string | null | undefined,
+  japamId: string | null | undefined,
+  japamName: string | null | undefined,
+  todayKey: string,
+  toDayKey: (dateISO: string) => string,
+  options: {
+    includeBlankLegacy?: boolean;
+    storedTodayDate?: string | null;
+    storedTodayTotal?: number | string | null;
+  } = {},
+  japams?: JapamAttributionInput[] | null,
+): number => {
+  const scoped = japamId
+    ? filterByJapam(records, japamId, japamName, { includeBlankLegacy: options.includeBlankLegacy }, japams)
+    : records;
+  const { totalCount: historyTodayTotal } = todayStatsFor(scoped, userId, todayKey, toDayKey);
+  const storedTodayTotal =
+    options.storedTodayDate === todayKey
+      ? Math.max(0, Math.floor(Number(options.storedTodayTotal) || 0))
+      : 0;
+  return Math.max(historyTodayTotal, storedTodayTotal);
+};
+
+/**
  * Tombstone support — explicit deletions that propagate to every device and survive sync.
  *
  * A deletion is recorded as a tombstone (the deleted completionId), NOT inferred from "absent
