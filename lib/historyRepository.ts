@@ -254,23 +254,18 @@ const fetchRemoteHydrationSnapshot = async (
   }
 };
 
-export const hydrateHistoryForUserDetails = async (
-  userId: string | null | undefined,
-  legacyUserId?: string | null,
-  options: { force?: boolean } = {},
-): Promise<HydratedHistoryResult> => {
-  if (!userId) {
-    const guestHistory = await loadHistoryForUser(userId);
-    return {
-      records: guestHistory,
-      hydrationSucceeded: true,
-      localRecordCount: guestHistory.length,
-      hadLocalTombstones: false,
-      scopedLocalTombstoneApplied: false,
-      localStateAuthoritativelyChanged: false,
-    };
-  }
-
+const resolveLocalHydration = async (
+  userId: string,
+  legacyUserId: string | null | undefined,
+): Promise<{
+  allLocalHistory: HistoryRecord[];
+  localTombstones: string[];
+  localScoped: HistoryRecord[];
+  localScopedRecords: HistoryRecord[];
+  scopedLocalTombstoneApplied: boolean;
+  cacheKey: string;
+  localStateAuthoritativelyChanged: boolean;
+}> => {
   const allLocalHistory = await loadHistory();
   const localTombstones = await loadDeletedCompletionTombstones();
   const matchesIdentity = (record: HistoryRecord) => (
@@ -291,24 +286,29 @@ export const hydrateHistoryForUserDetails = async (
   if (previousScopedSignature === undefined) {
     hydratedScopedLocalBaselineCache.set(cacheKey, authoritativeScopedHistorySignature(localScopedRecords, scopedLocalTombstoneApplied));
   }
-  const remoteSnapshot = await fetchRemoteHydrationSnapshot(userId, legacyUserId, options.force);
+  return {
+    allLocalHistory,
+    localTombstones,
+    localScoped,
+    localScopedRecords,
+    scopedLocalTombstoneApplied,
+    cacheKey,
+    localStateAuthoritativelyChanged,
+  };
+};
 
-  if (remoteSnapshot === null) {
-    const scopedRecords = localScopedRecords;
-    const mergedLocal = replaceScopedHistory(allLocalHistory, scopedRecords, matchesIdentity);
-    if (JSON.stringify(mergedLocal) !== JSON.stringify(allLocalHistory)) {
-      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedLocal));
-    }
-    return {
-      records: scopedRecords,
-      hydrationSucceeded: false,
-      localRecordCount: scopedRecords.length,
-      hadLocalTombstones: localTombstones.length > 0,
-      scopedLocalTombstoneApplied,
-      localStateAuthoritativelyChanged,
-    };
-  }
-
+const applyRemoteHydration = async (
+  userId: string,
+  legacyUserId: string | null | undefined,
+  local: Awaited<ReturnType<typeof resolveLocalHydration>>,
+  remoteSnapshot: RemoteHydrationSnapshot,
+  allLocalHistory: HistoryRecord[],
+  localTombstones: string[],
+): Promise<HistoryRecord[]> => {
+  const { localScoped, localScopedRecords, scopedLocalTombstoneApplied, cacheKey } = local;
+  const matchesIdentity = (record: HistoryRecord) => (
+    record.userId === userId || (legacyUserId != null && record.userId === legacyUserId)
+  );
   const mergedTombstones = mergeTombstones(localTombstones, remoteSnapshot.tombstones);
   const mergedScoped = canonicalizeUserHistory(
     applyTombstones(
@@ -331,11 +331,132 @@ export const hydrateHistoryForUserDetails = async (
     authoritativeScopedHistorySignature(mergedScoped, scopedLocalTombstoneApplied),
   );
 
+  return mergedScoped;
+};
+
+const emitHistoryUpdated = () => {
+  DeviceEventEmitter.emit('japam-history-updated');
+  DeviceEventEmitter.emit('japam-stats-updated');
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('japam-history-updated'));
+    window.dispatchEvent(new Event('japam-stats-updated'));
+  }
+};
+
+/**
+ * hydrateHistoryForUserDetails, but the remote fetch is NOT awaited: local-only rows are returned
+ * immediately (hydrationSucceeded=false) and the remote merge continues in the background,
+ * emitting japam-history-updated/japam-stats-updated when it lands so already-mounted screens
+ * re-render with the merged rows. Screens that already show local data during a remote outage
+ * (History) use this so a cold start is never gated on the supabase getSession network refresh.
+ */
+const hydrateHistoryForUserDetailsLocalFirst = async (
+  userId: string,
+  legacyUserId?: string | null,
+  options: { force?: boolean } = {},
+): Promise<HydratedHistoryResult> => {
+  const local = await resolveLocalHydration(userId, legacyUserId);
+  const { allLocalHistory, localTombstones, localScopedRecords, scopedLocalTombstoneApplied, localStateAuthoritativelyChanged } = local;
+
+  const continueInBackground = async () => {
+    try {
+      const remoteSnapshot = await fetchRemoteHydrationSnapshot(userId, legacyUserId, options.force);
+      if (remoteSnapshot === null) {
+        const mergedLocal = replaceScopedHistory(
+          allLocalHistory,
+          localScopedRecords,
+          (record) => record.userId === userId || (legacyUserId != null && record.userId === legacyUserId),
+        );
+        if (JSON.stringify(mergedLocal) !== JSON.stringify(allLocalHistory)) {
+          await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedLocal));
+        }
+        return;
+      }
+      await applyRemoteHydration(
+        userId,
+        legacyUserId,
+        local,
+        remoteSnapshot,
+        allLocalHistory,
+        localTombstones,
+      );
+      emitHistoryUpdated();
+    } catch {
+      // Best-effort background hydration; local rows are already shown.
+    }
+  };
+
+  void continueInBackground();
+
+  return {
+    records: localScopedRecords,
+    hydrationSucceeded: false,
+    localRecordCount: localScopedRecords.length,
+    hadLocalTombstones: localTombstones.length > 0,
+    scopedLocalTombstoneApplied,
+    localStateAuthoritativelyChanged,
+  };
+};
+
+export const hydrateHistoryForUserDetails = async (
+  userId: string | null | undefined,
+  legacyUserId?: string | null,
+  options: { force?: boolean; localFirst?: boolean } = {},
+): Promise<HydratedHistoryResult> => {
+  if (options.localFirst && userId) {
+    return hydrateHistoryForUserDetailsLocalFirst(userId, legacyUserId, options);
+  }
+
+  if (!userId) {
+    const guestHistory = await loadHistoryForUser(userId);
+    return {
+      records: guestHistory,
+      hydrationSucceeded: true,
+      localRecordCount: guestHistory.length,
+      hadLocalTombstones: false,
+      scopedLocalTombstoneApplied: false,
+      localStateAuthoritativelyChanged: false,
+    };
+  }
+
+  const local = await resolveLocalHydration(userId, legacyUserId);
+  const { allLocalHistory, localTombstones, localScopedRecords, scopedLocalTombstoneApplied, localStateAuthoritativelyChanged } = local;
+  const remoteSnapshot = await fetchRemoteHydrationSnapshot(userId, legacyUserId, options.force);
+
+  if (remoteSnapshot === null) {
+    const scopedRecords = localScopedRecords;
+    const mergedLocal = replaceScopedHistory(
+      allLocalHistory,
+      scopedRecords,
+      (record) => record.userId === userId || (legacyUserId != null && record.userId === legacyUserId),
+    );
+    if (JSON.stringify(mergedLocal) !== JSON.stringify(allLocalHistory)) {
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedLocal));
+    }
+    return {
+      records: scopedRecords,
+      hydrationSucceeded: false,
+      localRecordCount: scopedRecords.length,
+      hadLocalTombstones: localTombstones.length > 0,
+      scopedLocalTombstoneApplied,
+      localStateAuthoritativelyChanged,
+    };
+  }
+
+  const mergedScoped = await applyRemoteHydration(
+    userId,
+    legacyUserId,
+    local,
+    remoteSnapshot,
+    allLocalHistory,
+    localTombstones,
+  );
+
   return {
     records: mergedScoped,
     hydrationSucceeded: true,
     localRecordCount: mergedScoped.length,
-    hadLocalTombstones: mergedTombstones.length > 0,
+    hadLocalTombstones: localTombstones.length > 0,
     scopedLocalTombstoneApplied,
     localStateAuthoritativelyChanged,
   };
