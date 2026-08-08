@@ -12,7 +12,53 @@
  * user_id is always a plain opaque string (Google numeric ID today — see
  * GUEST_TO_ANON_AUTH_MIGRATION.md for why this isn't guaranteed to stay that way forever).
  */
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
+
+const GROUPS_CACHE_PREFIX = 'japamGroupsCache:';
+
+/**
+ * True only for transport-level failures (no network / request aborted by the OS) — NEVER for a
+ * server-rejected RPC (a real PostgrestError carries an HTTP status, e.g. RLS 403 or 404). Only
+ * transport failures may fall back to the offline cache; a real RLS/authorization/data error must
+ * surface exactly as before, so the user is never shown stale groups while being denied access
+ * server-side.
+ */
+export const isNetworkFailure = (error: unknown): boolean => {
+  if (error instanceof TypeError) return true;
+  if (error !== null && typeof error === 'object' && (error as { status?: unknown }).status === 0) {
+    return true;
+  }
+  const message = String((error as { message?: unknown })?.message ?? '');
+  return /network request failed|fetch failed|networkerror|failed to fetch/i.test(message);
+};
+
+const readCached = async <T,>(scope: string): Promise<T | null> => {
+  try {
+    const raw = await AsyncStorage.getItem(GROUPS_CACHE_PREFIX + scope);
+    if (!raw) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+};
+
+const readCachedArray = async <T,>(scope: string): Promise<T[] | null> => {
+  const parsed = await readCached<T[]>(scope);
+  return Array.isArray(parsed) ? parsed : null;
+};
+
+const writeCached = (scope: string, value: unknown): void => {
+  AsyncStorage.setItem(GROUPS_CACHE_PREFIX + scope, JSON.stringify(value)).catch(() => {});
+};
+
+const getCachedGroupsScopeUserId = async (): Promise<string> => {
+  try {
+    return (await AsyncStorage.getItem('userId')) || 'anon';
+  } catch {
+    return 'anon';
+  }
+};
 
 export type GroupRole = 'admin' | 'member';
 export type GroupAdminActionOutcome =
@@ -55,28 +101,62 @@ export interface GroupDashboardRow {
   lastUpdated: string | null;
 }
 
+/**
+ * Local-first cached reads for the Groups screen — pure AsyncStorage reads that NEVER touch the
+ * network. The screen renders these immediately on mount so an offline cold start opens instantly
+ * (the remote RPCs below stall offline while supabase's getSession() triggers a network token
+ * refresh for a near-expiry session, so waiting on them would hang the list). The screen then
+ * reconciles in the background via getMyGroups / getMyUnassignedGroups, which write these same
+ * scoped caches through on every success.
+ */
+export const getCachedMyGroups = async (userId: string, japamId: string): Promise<MyGroup[] | null> =>
+  readCachedArray<MyGroup>(`groups:${userId}:${japamId}`);
+
+export const getCachedMyUnassignedGroups = async (): Promise<MyGroup[] | null> =>
+  readCachedArray<MyGroup>(`unassigned:${await getCachedGroupsScopeUserId()}`);
+
 export async function getMyGroups(userId: string, japamId: string): Promise<MyGroup[]> {
-  const { data, error } = await supabase.rpc('get_my_groups', { p_user_id: userId, p_japam_id: japamId });
-  if (error) throw error;
-  return ((data ?? []) as any[]).map((row) => ({
-    groupId: row.group_id,
-    name: row.name,
-    role: row.role,
-    isActive: row.is_active,
-    joinedAt: row.joined_at,
-  }));
+  const scope = `groups:${userId}:${japamId}`;
+  try {
+    const { data, error } = await supabase.rpc('get_my_groups', { p_user_id: userId, p_japam_id: japamId });
+    if (error) throw error;
+    const groups = ((data ?? []) as any[]).map((row) => ({
+      groupId: row.group_id,
+      name: row.name,
+      role: row.role,
+      isActive: row.is_active,
+      joinedAt: row.joined_at,
+    }));
+    writeCached(scope, groups);
+    return groups;
+  } catch (err) {
+    if (!isNetworkFailure(err)) throw err;
+    const cached = await readCachedArray<MyGroup>(scope);
+    if (cached !== null) return cached;
+    throw err;
+  }
 }
 
 export async function getMyUnassignedGroups(): Promise<MyGroup[]> {
-  const { data, error } = await supabase.rpc('get_my_unassigned_groups', {});
-  if (error) throw error;
-  return ((data ?? []) as any[]).map((row) => ({
-    groupId: row.group_id,
-    name: row.name,
-    role: row.role,
-    isActive: row.is_active,
-    joinedAt: row.joined_at,
-  }));
+  const scope = `unassigned:${await getCachedGroupsScopeUserId()}`;
+  try {
+    const { data, error } = await supabase.rpc('get_my_unassigned_groups', {});
+    if (error) throw error;
+    const groups = ((data ?? []) as any[]).map((row) => ({
+      groupId: row.group_id,
+      name: row.name,
+      role: row.role,
+      isActive: row.is_active,
+      joinedAt: row.joined_at,
+    }));
+    writeCached(scope, groups);
+    return groups;
+  } catch (err) {
+    if (!isNetworkFailure(err)) throw err;
+    const cached = await readCachedArray<MyGroup>(scope);
+    if (cached !== null) return cached;
+    throw err;
+  }
 }
 
 export async function createGroup(

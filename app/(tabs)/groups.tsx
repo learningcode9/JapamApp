@@ -18,8 +18,11 @@ import {
 import {
   attachGroupMembershipToJapam,
   createGroup,
+  getCachedMyGroups,
+  getCachedMyUnassignedGroups,
   getMyGroups,
   getMyUnassignedGroups,
+  isNetworkFailure,
   joinGroupByInviteCode,
   type CreateGroupResult,
   type MyGroup,
@@ -102,6 +105,25 @@ export default function GroupsScreen() {
       setListError('');
       setAttachError('');
       requestJapamRef.current = currentJapamId;
+
+      // Local-first: render the last-known cached lists immediately (pure AsyncStorage reads that
+      // never hit the network), so an offline cold start opens instantly instead of hanging on the
+      // remote RPCs (whose supabase getSession() triggers a network token refresh for a near-expiry
+      // session that stalls offline). The remote reconciliation below then replaces this with fresh
+      // data in the background.
+      const [cachedGroups, cachedUnassigned] = await Promise.all([
+        getCachedMyGroups(savedUserId, currentJapamId),
+        getCachedMyUnassignedGroups(),
+      ]);
+      const hasCache = cachedGroups !== null || cachedUnassigned !== null;
+      if (hasCache && requestJapamRef.current === currentJapamId) {
+        setGroups(cachedGroups ?? []);
+        setUnassignedGroups(cachedUnassigned ?? []);
+        lastLoadedKeyRef.current = loadKey;
+        settledLoadKeyRef.current = loadKey;
+        setLoading(false);
+      }
+
       try {
         const [result, unassigned] = await Promise.all([
           getMyGroups(savedUserId, currentJapamId),
@@ -113,7 +135,12 @@ export default function GroupsScreen() {
         lastLoadedKeyRef.current = loadKey;
       } catch (error: any) {
         if (requestJapamRef.current !== currentJapamId) return;
-        setListError(error?.message || 'Could not load your groups.');
+        // A server-side (RLS/authorization/data) error must surface even when the cache was shown —
+        // the user is never left looking at stale groups while being denied access server-side. A
+        // pure transport failure keeps the cached list already rendered (offline), with no error.
+        if (!(hasCache && isNetworkFailure(error))) {
+          setListError(error?.message || 'Could not load your groups.');
+        }
       } finally {
         if (requestJapamRef.current === currentJapamId) {
           settledLoadKeyRef.current = loadKey;

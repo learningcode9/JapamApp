@@ -8,12 +8,16 @@
  * find_group_by_invite_code + direct group_members insert, and that snake_case RPC rows map to
  * the camelCase shapes the UI consumes.
  */
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../supabase';
 
 const mockSupabase = supabase as unknown as { from: jest.Mock; rpc: jest.Mock };
 const mockRpc = mockSupabase.rpc;
 const mockFrom = mockSupabase.from;
 
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
 jest.mock('../supabase', () => ({
   supabase: {
     from: jest.fn(),
@@ -25,9 +29,12 @@ jest.mock('../supabase', () => ({
 import {
   attachGroupMembershipToJapam,
   createGroup,
+  getCachedMyGroups,
+  getCachedMyUnassignedGroups,
   getGroupDashboard,
   getMyGroups,
   getMyUnassignedGroups,
+  isNetworkFailure,
   joinGroupByInviteCode,
 } from '../groupsRepository';
 /* eslint-enable import/first */
@@ -40,8 +47,10 @@ const OTHER_JAPAM_ID = '550e8400-e29b-41d4-a716-446655440099';
 const rpcResult = (fn: jest.Mock, data: unknown, error: unknown = null) =>
   fn.mockResolvedValueOnce({ data, error });
 
-beforeEach(() => {
+beforeEach(async () => {
   jest.clearAllMocks();
+  await AsyncStorage.clear();
+  await AsyncStorage.setItem('userId', USER_ID);
 });
 
 describe('getMyGroups', () => {
@@ -68,6 +77,174 @@ describe('getMyUnassignedGroups', () => {
     expect(groups).toEqual([
       { groupId: GROUP_ID, name: 'Legacy Group', role: 'member', isActive: true, joinedAt: '2026-01-01T00:00:00Z' },
     ]);
+  });
+});
+
+describe('getMyGroups offline read-through cache', () => {
+  const SCOPED_GROUPS = [
+    { groupId: GROUP_ID, name: 'Family', role: 'admin' as const, isActive: true, joinedAt: '2026-01-01T00:00:00Z' },
+  ];
+  const SCOPED_KEY = `japamGroupsCache:groups:${USER_ID}:${JAPAM_ID}`;
+  const NETWORK_ERROR = { message: 'TypeError: Network request failed', status: 0 };
+
+  it('serves the last-known groups from cache when the RPC resolves a status-0 network error (offline cold start)', async () => {
+    await AsyncStorage.setItem(SCOPED_KEY, JSON.stringify(SCOPED_GROUPS));
+    rpcResult(mockRpc, null, NETWORK_ERROR);
+    const groups = await getMyGroups(USER_ID, JAPAM_ID);
+    expect(groups).toEqual(SCOPED_GROUPS);
+  });
+
+  it('serves cached groups when the RPC rejects with a raw TypeError (fetch rejection)', async () => {
+    await AsyncStorage.setItem(SCOPED_KEY, JSON.stringify(SCOPED_GROUPS));
+    mockRpc.mockRejectedValueOnce(new TypeError('Network request failed'));
+    const groups = await getMyGroups(USER_ID, JAPAM_ID);
+    expect(groups).toEqual(SCOPED_GROUPS);
+  });
+
+  it('serves a cached empty list instead of surfacing an error', async () => {
+    await AsyncStorage.setItem(SCOPED_KEY, JSON.stringify([]));
+    rpcResult(mockRpc, null, NETWORK_ERROR);
+    const groups = await getMyGroups(USER_ID, JAPAM_ID);
+    expect(groups).toEqual([]);
+  });
+
+  it('rethrows the network error when nothing is cached (first offline cold start)', async () => {
+    rpcResult(mockRpc, null, NETWORK_ERROR);
+    await expect(getMyGroups(USER_ID, JAPAM_ID)).rejects.toMatchObject({
+      message: 'TypeError: Network request failed',
+      status: 0,
+    });
+  });
+
+  it('writes the mapped camelCase rows through to the cache on a successful load (read-through for next offline start)', async () => {
+    rpcResult(mockRpc, [{ group_id: GROUP_ID, name: 'Family', role: 'admin', is_active: true, joined_at: '2026-01-01T00:00:00Z' }]);
+    const groups = await getMyGroups(USER_ID, JAPAM_ID);
+    expect(groups).toEqual(SCOPED_GROUPS);
+    expect(JSON.parse((await AsyncStorage.getItem(SCOPED_KEY)) || 'null')).toEqual(SCOPED_GROUPS);
+  });
+
+  it('NEVER serves the cache for a server-side error (RLS 403) — masks nothing', async () => {
+    await AsyncStorage.setItem(SCOPED_KEY, JSON.stringify(SCOPED_GROUPS));
+    rpcResult(mockRpc, null, { message: 'permission denied', status: 403 });
+    await expect(getMyGroups(USER_ID, JAPAM_ID)).rejects.toMatchObject({ message: 'permission denied', status: 403 });
+  });
+
+  it('keeps rejecting a plain server Error without partial data', async () => {
+    await AsyncStorage.setItem(SCOPED_KEY, JSON.stringify(SCOPED_GROUPS));
+    rpcResult(mockRpc, null, new Error('not a member'));
+    await expect(getMyGroups(USER_ID, JAPAM_ID)).rejects.toThrow('not a member');
+  });
+
+  it('is scoped per workspace — Japam A cache is never served for Japam B', async () => {
+    await AsyncStorage.setItem(SCOPED_KEY, JSON.stringify(SCOPED_GROUPS));
+    rpcResult(mockRpc, null, NETWORK_ERROR);
+    await expect(getMyGroups(USER_ID, OTHER_JAPAM_ID)).rejects.toMatchObject({ status: 0 });
+  });
+
+  it('is scoped per user — another user never sees this cache', async () => {
+    await AsyncStorage.setItem(SCOPED_KEY, JSON.stringify(SCOPED_GROUPS));
+    rpcResult(mockRpc, null, NETWORK_ERROR);
+    await expect(getMyGroups('user-OTHER', JAPAM_ID)).rejects.toMatchObject({ status: 0 });
+  });
+});
+
+describe('getMyUnassignedGroups offline read-through cache', () => {
+  const UNASSIGNED = [
+    { groupId: GROUP_ID, name: 'Legacy Group', role: 'member' as const, isActive: true, joinedAt: '2026-01-01T00:00:00Z' },
+  ];
+  const UNASSIGNED_KEY = `japamGroupsCache:unassigned:${USER_ID}`;
+
+  it('serves cached unassigned groups when the RPC network-fails', async () => {
+    await AsyncStorage.setItem(UNASSIGNED_KEY, JSON.stringify(UNASSIGNED));
+    rpcResult(mockRpc, null, { message: 'Network request failed', status: 0 });
+    const groups = await getMyUnassignedGroups();
+    expect(groups).toEqual(UNASSIGNED);
+  });
+
+  it('rethrows the network error when nothing is cached', async () => {
+    rpcResult(mockRpc, null, { message: 'Network request failed', status: 0 });
+    await expect(getMyUnassignedGroups()).rejects.toMatchObject({ status: 0 });
+  });
+
+  it('writes through on success under the current userId scope', async () => {
+    rpcResult(mockRpc, [{ group_id: GROUP_ID, name: 'Legacy Group', role: 'member', is_active: true, joined_at: '2026-01-01T00:00:00Z' }]);
+    await getMyUnassignedGroups();
+    expect(JSON.parse((await AsyncStorage.getItem(UNASSIGNED_KEY)) || 'null')).toEqual(UNASSIGNED);
+  });
+
+  it('keeps rejecting a server-side error without serving the cache', async () => {
+    await AsyncStorage.setItem(UNASSIGNED_KEY, JSON.stringify(UNASSIGNED));
+    rpcResult(mockRpc, null, { message: 'relation does not exist', status: 500 });
+    await expect(getMyUnassignedGroups()).rejects.toMatchObject({ status: 500 });
+  });
+});
+
+describe('getCachedMyGroups / getCachedMyUnassignedGroups (local-first reads)', () => {
+  const SCOPED_GROUPS = [
+    { groupId: GROUP_ID, name: 'Family', role: 'admin' as const, isActive: true, joinedAt: '2026-01-01T00:00:00Z' },
+  ];
+  const SCOPED_KEY = `japamGroupsCache:groups:${USER_ID}:${JAPAM_ID}`;
+  const UNASSIGNED = [
+    { groupId: GROUP_ID, name: 'Legacy Group', role: 'member' as const, isActive: true, joinedAt: '2026-01-01T00:00:00Z' },
+  ];
+  const UNASSIGNED_KEY = `japamGroupsCache:unassigned:${USER_ID}`;
+
+  it('returns the cached groups for the exact user+japam scope without touching the network', async () => {
+    await AsyncStorage.setItem(SCOPED_KEY, JSON.stringify(SCOPED_GROUPS));
+    const groups = await getCachedMyGroups(USER_ID, JAPAM_ID);
+    expect(groups).toEqual(SCOPED_GROUPS);
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('returns null when no cache exists (first-ever offline open)', async () => {
+    await expect(getCachedMyGroups(USER_ID, JAPAM_ID)).resolves.toBeNull();
+  });
+
+  it('is scoped per workspace — Japam A cache is never served for Japam B', async () => {
+    await AsyncStorage.setItem(SCOPED_KEY, JSON.stringify(SCOPED_GROUPS));
+    await expect(getCachedMyGroups(USER_ID, OTHER_JAPAM_ID)).resolves.toBeNull();
+  });
+
+  it('is scoped per user — another user never sees this cache', async () => {
+    await AsyncStorage.setItem(SCOPED_KEY, JSON.stringify(SCOPED_GROUPS));
+    await expect(getCachedMyGroups('user-OTHER', JAPAM_ID)).resolves.toBeNull();
+  });
+
+  it('returns the cached unassigned groups under the current userId scope without the network', async () => {
+    await AsyncStorage.setItem(UNASSIGNED_KEY, JSON.stringify(UNASSIGNED));
+    const groups = await getCachedMyUnassignedGroups();
+    expect(groups).toEqual(UNASSIGNED);
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('returns null for unassigned when no cache exists', async () => {
+    await expect(getCachedMyUnassignedGroups()).resolves.toBeNull();
+  });
+
+  it('cached readers key exactly like the network readers, so a prior successful load seeds the offline render', async () => {
+    // getMyGroups writes through to `groups:user:japam`; getCachedMyGroups must read that same key.
+    rpcResult(mockRpc, [{ group_id: GROUP_ID, name: 'Family', role: 'admin', is_active: true, joined_at: '2026-01-01T00:00:00Z' }]);
+    await getMyGroups(USER_ID, JAPAM_ID);
+    expect(await getCachedMyGroups(USER_ID, JAPAM_ID)).toEqual(SCOPED_GROUPS);
+    // getMyUnassignedGroups writes through to `unassigned:<userId>`; getCachedMyUnassignedGroups must
+    // read that same key.
+    rpcResult(mockRpc, [{ group_id: GROUP_ID, name: 'Legacy Group', role: 'member', is_active: true, joined_at: '2026-01-01T00:00:00Z' }]);
+    await getMyUnassignedGroups();
+    expect(await getCachedMyUnassignedGroups()).toEqual(UNASSIGNED);
+  });
+});
+
+describe('isNetworkFailure', () => {
+  it('classifies transport failures as network failures', () => {
+    expect(isNetworkFailure(new TypeError('Network request failed'))).toBe(true);
+    expect(isNetworkFailure({ status: 0, message: 'Network request failed' })).toBe(true);
+    expect(isNetworkFailure({ message: 'fetch failed' })).toBe(true);
+    expect(isNetworkFailure(new Error('Failed to fetch'))).toBe(true);
+  });
+
+  it('never classifies server-side (RLS/authorization) errors as network failures', () => {
+    expect(isNetworkFailure({ status: 403, message: 'permission denied' })).toBe(false);
+    expect(isNetworkFailure(new Error('not a member'))).toBe(false);
   });
 });
 
