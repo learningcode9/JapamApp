@@ -564,6 +564,41 @@ export const loadJapams = (userId: string | null | undefined): Promise<Japam[]> 
     applyJapamTombstones(japams, tombstones ?? new Set()),
   );
 
+/**
+ * Resolve the current selection from the LOCAL cache only (pure AsyncStorage reads, never the
+ * network). Used by CurrentJapamContext as the fast-path startup resolution so a signed-in user's
+ * UI is never blocked on the remote reconcile, which can stall for seconds offline.
+ *
+ * Read-only: unlike ensureDefaultJapam it never persists, never creates a default, and never
+ * merges remote state. It mirrors the selection rules of ensureDefaultJapamInternal's
+ * tombstone-authority-down branch — active-only view, archived hidden, persisted pointer
+ * preserved even when stale — so the fast view agrees with what the offline reconcile would
+ * produce. The background reconcile upgrades the view when it lands.
+ */
+export const resolveLocalJapamSelection = async (
+  userId: string | null | undefined,
+): Promise<{ japams: Japam[]; currentJapamId: string | null }> => {
+  const local = await loadJapamsFromStorage(userId);
+  const localTombstones = await loadDeletedJapamsFromStorage(userId);
+  const tombstoneFiltered = applyJapamTombstones(local, localTombstones);
+  const activeOnly = tombstoneFiltered.filter((j) => j.archivedAt === null);
+  const persistedCurrentId = await loadCurrentJapamIdFromStorage(userId);
+  const active = activeByCanonicalOrder(activeOnly);
+  const persistedStillActive = persistedCurrentId
+    ? active.find((j) => j.id === persistedCurrentId)
+    : undefined;
+  const resolvedCurrentId = persistedStillActive?.id ?? active[0]?.id ?? null;
+  if (resolvedCurrentId !== null) {
+    return { japams: activeOnly, currentJapamId: resolvedCurrentId };
+  }
+  if (persistedCurrentId !== null) {
+    // A persisted pointer exists (even a stale one). Never wipe it or guess during the fast
+    // path — the reconcile owns durable selection; keep the pointer visible for now.
+    return { japams: activeOnly, currentJapamId: persistedCurrentId };
+  }
+  return { japams: activeOnly, currentJapamId: null };
+};
+
 export const saveJapams = (userId: string | null | undefined, japams: Japam[]): Promise<void> =>
   saveJapamsToStorage(userId, japams);
 

@@ -68,6 +68,14 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   // again (auth change) while an earlier write is still in flight, so every action re-reads the
   // CURRENT userId from this ref rather than closing over a possibly-stale one from render time.
   const userIdRef = useRef<string | null>(null);
+  // Fast-path startup (see refresh below): the signed-in refresh resolves the selection from the
+  // local cache immediately so an offline cold start never blocks on the remote reconcile, which
+  // can stall for seconds on the network. The in-flight reconcile promise is tracked here so
+  // mutations await it before touching storage (a user action can never race the reconcile's
+  // storage writes), and a selection made while it is in flight is respected — the reconcile's
+  // late result must never revert an explicit user choice.
+  const pendingReconcileRef = useRef<Promise<unknown> | null>(null);
+  const selectionChangedRef = useRef(false);
   // Per-user in-flight creation coordinator. Uses a Map keyed by userId so A→B→A rapid auth
   // switches never overwrite a still-in-flight entry — each user's creation promise and waiter
   // count lives independently and is cleaned up only when that user's last caller exits.
@@ -94,19 +102,33 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // Signed-in startup always reconciles remote/local state through the repository helper and
-    // uses the returned merged list plus canonical selection directly.
-    const result = await coordinator.ensureCreation(userId, () =>
+    // Signed-in startup: resolve the selection from the local cache immediately (pure AsyncStorage
+    // reads, no network) so the UI is never blocked on the remote reconcile below — an offline cold
+    // start opens instantly instead of hanging on the network RPCs. The reconcile then upgrades the
+    // view in the background.
+    const local = await japamsRepository.resolveLocalJapamSelection(userId);
+    selectionChangedRef.current = false;
+    setJapams(local.japams);
+    setCurrentJapamIdState(local.currentJapamId);
+    setIsLoading(false);
+
+    // Background reconcile: merge remote + local through the single-flight coordinator and apply
+    // the authoritative result when it lands. Mutations await `pendingReconcileRef` before touching
+    // storage so a create/rename/archive/restore/delete during this window can never be lost to the
+    // reconcile's own storage writes; `selectionChangedRef` keeps a Japam the user explicitly chose
+    // while it was in flight from being reverted by its late result.
+    const reconcile = coordinator.ensureCreation(userId, () =>
       japamsRepository.ensureDefaultJapam(userId),
     );
-    if (!result) {
-      setIsLoading(false);
-      return;
-    }
-
-    setJapams(result.japams);
-    setCurrentJapamIdState(result.currentJapamId);
-    setIsLoading(false);
+    pendingReconcileRef.current = reconcile;
+    void reconcile.then((result) => {
+      pendingReconcileRef.current = null;
+      if (!result) return;
+      setJapams(result.japams);
+      if (!selectionChangedRef.current) {
+        setCurrentJapamIdState(result.currentJapamId);
+      }
+    });
   }, [coordinator]);
 
   useEffect(() => {
@@ -122,6 +144,9 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
 
   const selectJapam = useCallback((japamId: string | null) => {
     const fromJapamId = currentJapamId;
+    // A selection made while the background startup reconcile is in flight is authoritative — the
+    // reconcile's late result must not revert it (see refresh's `selectionChangedRef` guard).
+    selectionChangedRef.current = true;
     // Emit BEFORE the state change so the timer context can save the current Japam's timer
     // state (including a running timer's position) to the FROM Japam's per-Japam slot.
     DeviceEventEmitter.emit('japam-will-switch', { fromJapamId, toJapamId: japamId });
@@ -132,6 +157,9 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   }, [currentJapamId]);
 
   const createJapam = useCallback(async (rawName: string): Promise<Japam | null> => {
+    // Wait for any in-flight startup reconcile before mutating storage so the reconcile's merge
+    // write can never clobber (or be clobbered by) this create.
+    await pendingReconcileRef.current;
     const result = await japamsRepository.createJapam(userIdRef.current, rawName);
     if (result === null) return null;
     setJapams(result.japams);
@@ -142,11 +170,13 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   }, [selectJapam]);
 
   const renameJapam = useCallback(async (japamId: string, rawName: string): Promise<void> => {
+    await pendingReconcileRef.current;
     const updated = await japamsRepository.renameJapam(userIdRef.current, japamId, rawName);
     setJapams(updated);
   }, []);
 
   const archiveJapam = useCallback(async (japamId: string): Promise<void> => {
+    await pendingReconcileRef.current;
     const updated = await japamsRepository.archiveJapam(userIdRef.current, japamId);
     setJapams(updated);
     // The archived Japam can no longer be "current" -- it's hidden from the default list. Fall
@@ -159,6 +189,7 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   }, [currentJapamId, selectJapam]);
 
   const restoreJapam = useCallback(async (japamId: string): Promise<void> => {
+    await pendingReconcileRef.current;
     const updated = await japamsRepository.restoreJapam(userIdRef.current, japamId);
     setJapams(updated);
     if (updated.find((j) => j.id === japamId)?.archivedAt === null) {
@@ -167,6 +198,7 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   }, [selectJapam]);
 
   const deleteJapam = useCallback(async (japamId: string): Promise<void> => {
+    await pendingReconcileRef.current;
     const updated = await japamsRepository.deleteJapam(userIdRef.current, japamId);
     setJapams(updated);
     // If the deleted Japam was the current selection, fall back to the next active one.
