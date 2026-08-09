@@ -262,7 +262,42 @@ describe('MyJapamsScreen hydration regression', () => {
     await updateTree(tree);
 
     expectShowsStats(tree, '2 malas');
-    expect(mockHydrateHistoryForUser).toHaveBeenCalledWith(UID, null, { force: false });
+    expect(mockHydrateHistoryForUser).toHaveBeenCalledWith(UID, null, { force: false, localFirst: true });
+  });
+
+  it('renders cached Today and Lifetime stats while remote reconciliation remains unresolved', async () => {
+    const remoteReconciliation = createDeferred<ReturnType<typeof makeHydrationResult>>();
+    let remoteResolved = false;
+    void remoteReconciliation.promise.then(() => {
+      remoteResolved = true;
+    });
+    const localRecord = makeRecord({
+      completionId: 'local-1',
+      malas: 5,
+      totalCount: 540,
+      syncStatus: 'pending',
+    });
+
+    mockHydrateHistoryForUser.mockImplementation(async (...args: unknown[]) => {
+      const userId = args[0] as string | null;
+      const options = args[2] as { localFirst?: boolean } | undefined;
+      if (userId !== UID) return makeHydrationResult([], true);
+      if (options?.localFirst) return makeHydrationResult([localRecord], false);
+      return remoteReconciliation.promise;
+    });
+
+    await AsyncStorage.setItem('userId', UID);
+    mockCurrentJapamState = {
+      ...mockCurrentJapamState,
+      isLoading: false,
+    };
+
+    const tree = await renderScreen();
+
+    expect(remoteResolved).toBe(false);
+    expect(getStatBoxTexts(tree).filter((text: string) => text.includes('5 malas'))).toHaveLength(2);
+    expect(countByTestId(tree, 'japam-stat-skeleton')).toBe(0);
+    expect(mockHydrateHistoryForUser).toHaveBeenCalledWith(UID, null, { force: false, localFirst: true });
   });
 
   it('renders a clean incognito first load with skeletons before auth resolves', async () => {
