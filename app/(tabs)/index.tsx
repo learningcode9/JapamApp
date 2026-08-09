@@ -65,6 +65,34 @@ type Session = {
   syncStatus?: 'pending' | 'synced';
 };
 
+type HomeWorkspaceRefreshRequest = {
+  generation: number;
+  workspaceId: string | null;
+  workspaceVersion: number;
+};
+
+export const resolveHomeWorkspaceTotal = (
+  candidate: number,
+  workspaceId: string | null,
+  totalsByWorkspace: Map<string | null, number>,
+): number => {
+  const previousTotal = totalsByWorkspace.get(workspaceId) ?? 0;
+  const nextTotal = Math.max(candidate, previousTotal);
+  totalsByWorkspace.set(workspaceId, nextTotal);
+  return nextTotal;
+};
+
+export const isCurrentHomeWorkspaceRefresh = (
+  request: HomeWorkspaceRefreshRequest,
+  currentRequestGeneration: number,
+  currentWorkspaceVersion: number,
+  activeWorkspaceId: string | null,
+): boolean => (
+  currentRequestGeneration === request.generation
+  && currentWorkspaceVersion === request.workspaceVersion
+  && activeWorkspaceId === request.workspaceId
+);
+
 type TimerStateRow = {
   seconds?: number | string;
   is_running?: boolean;
@@ -265,6 +293,12 @@ export default function JapamMain() {
   const startGoogleSignInRef = useRef<() => void>(() => {});
 
   const totalRef = useRef(0);
+  const activeWorkspaceIdRef = useRef<string | null>(currentJapamId);
+  const workspaceVersionRef = useRef(0);
+  const restoreGenerationRef = useRef(0);
+  const restoringWorkspaceRef = useRef<{ workspaceId: string | null } | null>(null);
+  const displayedTotalsByWorkspaceRef = useRef(new Map<string | null, number>());
+  const suppressCounterPersistenceRef = useRef(false);
   const timerRef = useRef({
     seconds: 0,
     isRunning: false,
@@ -296,8 +330,31 @@ export default function JapamMain() {
   const startTimerIntervalRef = useRef<() => void>(() => {});
   const appStateRef = useRef(AppState.currentState);
   const restoreTodayTotalRef = useRef<(_?: { skipRemoteFetch?: boolean }) => Promise<void>>(async () => {});
-  const isRestoringRef = useRef(false);
   const lastEventProcessedAtRef = useRef(0);
+
+  const invalidateHomeWorkspace = useCallback((nextWorkspaceId: string | null) => {
+    if (activeWorkspaceIdRef.current === nextWorkspaceId) return;
+
+    activeWorkspaceIdRef.current = nextWorkspaceId;
+    workspaceVersionRef.current += 1;
+    const nextTotal = displayedTotalsByWorkspaceRef.current.get(nextWorkspaceId) ?? 0;
+    suppressCounterPersistenceRef.current = true;
+    totalRef.current = nextTotal;
+    setTotal(nextTotal);
+    setMalas(Math.floor(nextTotal / 108));
+    setCount(nextTotal % 108);
+  }, []);
+
+  useEffect(() => {
+    invalidateHomeWorkspace(currentJapamId);
+  }, [currentJapamId, invalidateHomeWorkspace]);
+
+  useEffect(() => {
+    const subscription = DeviceEventEmitter.addListener('japam-did-switch', (payload?: { japamId?: string | null }) => {
+      invalidateHomeWorkspace(payload?.japamId ?? null);
+    });
+    return () => subscription.remove();
+  }, [invalidateHomeWorkspace]);
 
   const glowAnim = useRef(new Animated.Value(0)).current;
 
@@ -734,22 +791,71 @@ export default function JapamMain() {
     if (!response.ok) console.log('Total save error:', await response.text());
   };
 
-  const getLocalTodayTotalForUser = useCallback(async (userId: string) => {
+  const getLocalTodayTotalForUser = useCallback(async (
+    userId: string,
+    japamId: string | null,
+    japamName: string | null,
+    includeBlankLegacyForScope: boolean,
+    japamsForScope: typeof japams,
+  ) => {
     const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
     const sessions = parseHistory(rawHistory);
     const todayKey = getLocalDateKey();
+    const scopedSessions = japamId !== null
+      ? filterByJapam(
+        sessions,
+        japamId,
+        japamName,
+        { includeBlankLegacy: includeBlankLegacyForScope },
+        japamsForScope,
+      )
+      : sessions;
 
-    return sessions
+    return scopedSessions
       .filter((item) => item.userId === userId && toLocalDayKey(item.date) === todayKey)
       .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
   }, []);
 
   const restoreTodayTotal = useCallback(async (options?: { skipRemoteFetch?: boolean }) => {
     const skipRemote = options?.skipRemoteFetch ?? false;
-    if (isRestoringRef.current) return;
-    isRestoringRef.current = true;
+    const workspaceId = currentJapamId;
+    if (restoringWorkspaceRef.current?.workspaceId === workspaceId) return;
+    const request = {
+      generation: ++restoreGenerationRef.current,
+      workspaceId,
+      workspaceVersion: workspaceVersionRef.current,
+    };
+    restoringWorkspaceRef.current = { workspaceId };
+    const isCurrentRequest = () => (
+      isCurrentHomeWorkspaceRefresh(
+        request,
+        restoreGenerationRef.current,
+        workspaceVersionRef.current,
+        activeWorkspaceIdRef.current,
+      )
+    );
+    const applyWorkspaceTotal = async (candidate: number, userId: string | null) => {
+      if (!isCurrentRequest()) return null;
+      const nextTotal = resolveHomeWorkspaceTotal(
+        candidate,
+        workspaceId,
+        displayedTotalsByWorkspaceRef.current,
+      );
+      // A zero in a newly selected workspace must not overwrite the existing shared snapshot:
+      // that snapshot may still represent a partial in-progress total for another workspace.
+      // The in-memory workspace map is the source of truth for switching back during this app
+      // session; persist only a non-zero scoped result, matching the old local-first behavior.
+      if (nextTotal > 0) {
+        await restoreTotal(nextTotal, { userId });
+      }
+      if (!isCurrentRequest()) return null;
+      totalRef.current = nextTotal;
+      return nextTotal;
+    };
+
     try {
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      if (!isCurrentRequest()) return;
 
       if (savedUserId) {
         const todayKey = getLocalDateKey();
@@ -773,12 +879,10 @@ export default function JapamMain() {
           { includeBlankLegacy, storedTodayDate: storedTotalDate, storedTodayTotal },
           japams,
         );
-        const neverRegress = Math.max(localFirstTotal, totalRef.current);
-        if (neverRegress > 0) {
-          await restoreTotal(neverRegress, { userId: savedUserId });
-          totalRef.current = neverRegress;
-        }
+        const neverRegress = await applyWorkspaceTotal(localFirstTotal, savedUserId);
+        if (neverRegress === null || !isCurrentRequest()) return;
         await refreshDayStreak({ userId: savedUserId, todayTotal: neverRegress });
+        if (!isCurrentRequest()) return;
         setHasRestoredTotal(true);
 
         // Remote reconciliation ONLY in the background — the display is already correct from local
@@ -796,6 +900,7 @@ export default function JapamMain() {
                 order: { column: 'created_at', ascending: true },
                 limit: 10000,
               });
+              if (!isCurrentRequest()) return;
 
               if (remoteRows !== null) {
                 remoteSessions = remoteRows.map((row: any) => ({
@@ -848,11 +953,11 @@ export default function JapamMain() {
                 );
 
                 await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(reconciledHistory));
+                if (!isCurrentRequest()) return;
 
-                const japamId = currentJapamId;
                 const japamName = currentJapamName;
-                const scopedHistory = japamId !== null
-                  ? filterByJapam(reconciledHistory, japamId, japamName, { includeBlankLegacy }, japams)
+                const scopedHistory = workspaceId !== null
+                  ? filterByJapam(reconciledHistory, workspaceId, japamName, { includeBlankLegacy }, japams)
                   : reconciledHistory;
                 const { totalCount: safeTotal } = todayStatsFor(
                   scopedHistory,
@@ -860,37 +965,50 @@ export default function JapamMain() {
                   todayKey,
                   toLocalDayKey
                 );
-                const neverRegress = Math.max(safeTotal, totalRef.current);
-                await restoreTotal(neverRegress, { userId: savedUserId });
-                totalRef.current = neverRegress;
+                const neverRegress = await applyWorkspaceTotal(safeTotal, savedUserId);
+                if (neverRegress === null || !isCurrentRequest()) return;
                 await refreshDayStreak({ userId: savedUserId, todayTotal: neverRegress });
               } else {
                 // Supabase unreachable — use locally saved count (never go below what was tapped)
-                const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
-                const neverRegress = Math.max(localHistoryTotal, totalRef.current);
-                await restoreTotal(neverRegress, { userId: savedUserId });
-                totalRef.current = neverRegress;
+                const localHistoryTotal = await getLocalTodayTotalForUser(
+                  savedUserId,
+                  workspaceId,
+                  currentJapamName,
+                  includeBlankLegacy,
+                  japams,
+                );
+                const neverRegress = await applyWorkspaceTotal(localHistoryTotal, savedUserId);
+                if (neverRegress === null || !isCurrentRequest()) return;
                 await refreshDayStreak({ userId: savedUserId, todayTotal: neverRegress });
               }
             } catch (error) {
               console.log('Stats sync error, using local data:', error);
-              const localHistoryTotal = await getLocalTodayTotalForUser(savedUserId);
-              const neverRegress = Math.max(localHistoryTotal, totalRef.current);
-              await restoreTotal(neverRegress, { userId: savedUserId });
-              totalRef.current = neverRegress;
+              if (!isCurrentRequest()) return;
+              const localHistoryTotal = await getLocalTodayTotalForUser(
+                savedUserId,
+                workspaceId,
+                currentJapamName,
+                includeBlankLegacy,
+                japams,
+              );
+              const neverRegress = await applyWorkspaceTotal(localHistoryTotal, savedUserId);
+              if (neverRegress === null || !isCurrentRequest()) return;
               await refreshDayStreak({ userId: savedUserId, todayTotal: neverRegress });
             }
           })();
         }
       } else {
         // Not logged in
-        await restoreTotal(0, { userId: null });
-        totalRef.current = 0;
+        const neverRegress = await applyWorkspaceTotal(0, null);
+        if (neverRegress === null || !isCurrentRequest()) return;
         await refreshDayStreak({ userId: null, todayTotal: 0 });
+        if (!isCurrentRequest()) return;
         setHasRestoredTotal(true);
       }
     } finally {
-      isRestoringRef.current = false;
+      if (restoringWorkspaceRef.current?.workspaceId === workspaceId) {
+        restoringWorkspaceRef.current = null;
+      }
     }
   }, [currentJapamId, currentJapamName, getLocalTodayTotalForUser, refreshDayStreak, restoreTotal, includeBlankLegacy, japams]);
 
@@ -1662,6 +1780,10 @@ export default function JapamMain() {
 
   useEffect(() => {
     totalRef.current = total;
+    if (suppressCounterPersistenceRef.current) {
+      suppressCounterPersistenceRef.current = false;
+      return;
+    }
     if (!hasRestoredTotal || !userName) return;
 
     void (async () => {
@@ -1960,6 +2082,7 @@ export default function JapamMain() {
     const nextCount = safeTotal % 108;
 
     void AsyncStorage.setItem(LAST_TOTAL_KEY, String(safeTotal));
+    displayedTotalsByWorkspaceRef.current.set(activeWorkspaceIdRef.current, safeTotal);
     totalRef.current = safeTotal;
     setTotal(safeTotal);
     setMalas(nextMalas);
