@@ -5,6 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import * as Notifications from 'expo-notifications';
 import { usePathname, useRouter } from 'expo-router';
+import { addEventListener as addNetInfoEventListener } from '@react-native-community/netinfo';
 import { getTimerState, updateTimerState } from '../lib/timerState';
 import { computeColdStartRestoreDecision } from '../lib/timerColdStartRestore';
 import {
@@ -134,6 +135,7 @@ const getCurrentMalaLabel = (completedLoops: number, selectedLoops: number, runn
 };
 
 let syncInFlightPromise: Promise<void> | null = null;
+let syncRequestedWhileInFlight = false;
 
 const clampCompletedLoops = (completed: number, target: number) => {
   const safeTarget = Math.max(1, target);
@@ -967,7 +969,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
     const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
     if (!url || !key) return;
-    if (syncInFlightPromise) return syncInFlightPromise;
+    if (syncInFlightPromise) {
+      syncRequestedWhileInFlight = true;
+      return syncInFlightPromise;
+    }
     syncInFlightPromise = (async () => {
       try {
         let history: any[] = [];
@@ -1162,6 +1167,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     }
       } finally {
         syncInFlightPromise = null;
+        if (syncRequestedWhileInFlight) {
+          syncRequestedWhileInFlight = false;
+          void syncPendingHistory();
+        }
       }
     })();
     return syncInFlightPromise;
@@ -1437,6 +1446,18 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     const pendingSyncSub = DeviceEventEmitter.addListener('japam-history-pending-sync', () => {
       void syncPendingHistory();
     });
+    let wasConnected: boolean | null = null;
+    const networkSub = Platform.OS === 'android'
+      ? addNetInfoEventListener((state) => {
+          const isConnected = state.isConnected === true && state.isInternetReachable !== false;
+          const reconnected = wasConnected === false && isConnected;
+          wasConnected = isConnected;
+          if (!reconnected) return;
+          console.log('[SYNC_TRIGGER_SOURCE] source=native-network-reconnect');
+          void syncPendingHistory();
+          void retryPendingTimerCompletion();
+        })
+      : null;
     const onOnline = () => {
       console.log('[SYNC_TRIGGER_SOURCE] source=browser-online');
       void syncPendingHistory();
@@ -1448,6 +1469,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     return () => {
       sub.remove();
       pendingSyncSub.remove();
+      networkSub?.();
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.removeEventListener('online', onOnline);
       }
@@ -1778,6 +1800,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       vibrationEnabledRef.current = vib !== 'false';
       userIdRef.current = uid || '';
       setUserId(uid || '');
+      if (uid) void syncPendingHistory();
       // Keep singleton in sync with loaded preferences
       updateTimerState({
         soundEnabled: snd !== 'false',

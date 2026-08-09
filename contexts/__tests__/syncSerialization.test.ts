@@ -4,6 +4,7 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 );
 
 const mockListeners = new Map<string, Set<(payload?: any) => void>>();
+let mockNetworkCallback: ((state: { isConnected: boolean | null; isInternetReachable: boolean | null }) => void) | null = null;
 
 jest.mock('@expo/vector-icons', () => ({
   Ionicons: 'Ionicons',
@@ -41,6 +42,10 @@ jest.mock('react-native', () => ({
   View: 'View',
   Vibration: { vibrate: jest.fn() },
 }));
+
+jest.mock('@react-native-community/netinfo', () =>
+  require('@react-native-community/netinfo/jest/netinfo-mock')
+);
 
 jest.mock('expo-av', () => ({
   Audio: {
@@ -139,6 +144,9 @@ const { act } = renderer;
 import { DeviceEventEmitter } from 'react-native';
 import { TimerProvider, useTimer } from '../timer-context';
 import { recoverSessionIfNeeded } from '../../lib/sessionRecovery';
+const mockNetInfoAddEventListener = (jest.requireMock('@react-native-community/netinfo') as {
+  addEventListener: jest.Mock;
+}).addEventListener;
 /* eslint-enable import/first, @typescript-eslint/no-require-imports */
 
 const UID = 'test-user-uuid';
@@ -232,6 +240,13 @@ let fetchUrls: string[] = [];
 beforeEach(async () => {
   await AsyncStorage.clear();
   jest.clearAllMocks();
+  mockNetworkCallback = null;
+  mockNetInfoAddEventListener.mockImplementation(
+    (callback: (state: { isConnected: boolean | null; isInternetReachable: boolean | null }) => void) => {
+      mockNetworkCallback = callback;
+      return jest.fn();
+    },
+  );
   restoreAsyncStorageMockImplementations();
   historyUploadCount = 0;
   fetchUrls = [];
@@ -286,6 +301,48 @@ const triggerAndWaitForSync = async () => {
 };
 
 describe('syncPendingHistory serialization', () => {
+  it('cold-start pending row syncs after persisted userId hydration', async () => {
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([makePendingRecord()]));
+
+    await renderTimerProvider();
+
+    expect(historyUploadCount).toBe(1);
+    expect(JSON.parse((await AsyncStorage.getItem(HISTORY_KEY)) || '[]')[0].syncStatus).toBe('synced');
+  });
+
+  it('native reconnect triggers pending sync', async () => {
+    await renderTimerProvider();
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([makePendingRecord()]));
+
+    mockNetworkCallback?.({ isConnected: false, isInternetReachable: false });
+    mockNetworkCallback?.({ isConnected: true, isInternetReachable: true });
+    await sleep(500);
+    await flush();
+
+    expect(historyUploadCount).toBe(1);
+  });
+
+  it('first native reconnect syncs once and a second reconnect uploads zero times', async () => {
+    await renderTimerProvider();
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([makePendingRecord()]));
+
+    mockNetworkCallback?.({ isConnected: false, isInternetReachable: false });
+    mockNetworkCallback?.({ isConnected: true, isInternetReachable: true });
+    await sleep(500);
+    await flush();
+
+    expect(historyUploadCount).toBe(1);
+    expect(JSON.parse((await AsyncStorage.getItem(HISTORY_KEY)) || '[]')[0].syncStatus).toBe('synced');
+
+    mockNetworkCallback?.({ isConnected: false, isInternetReachable: false });
+    mockNetworkCallback?.({ isConnected: true, isInternetReachable: true });
+    await sleep(500);
+    await flush();
+
+    expect(historyUploadCount).toBe(1);
+    expect(JSON.parse((await AsyncStorage.getItem(HISTORY_KEY)) || '[]')[0].syncStatus).toBe('synced');
+  });
+
   it('pending row + existing session -> syncPendingHistory uploads exactly once', async () => {
     const pending = makePendingRecord();
     await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([pending]));
@@ -311,6 +368,16 @@ describe('syncPendingHistory serialization', () => {
     expect(historyUploadCount).toBe(1);
   });
 
+  it('existing AppState foreground trigger still syncs pending history', async () => {
+    await renderTimerProvider();
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([makePendingRecord()]));
+
+    mockListeners.get('change')?.forEach((callback) => callback('active'));
+    await sleep(500);
+    await flush();
+
+    expect(historyUploadCount).toBe(1);
+  });
 
   it('two concurrent sync triggers -> only one upload', async () => {
     const pending = makePendingRecord();

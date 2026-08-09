@@ -4,6 +4,9 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 );
 
 const mockListeners = new Map<string, Set<(payload?: any) => void>>();
+jest.mock('@react-native-community/netinfo', () =>
+  require('@react-native-community/netinfo/jest/netinfo-mock')
+);
 
 jest.mock('@expo/vector-icons', () => ({
   Ionicons: 'Ionicons',
