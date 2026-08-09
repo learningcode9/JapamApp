@@ -148,7 +148,7 @@ export default function MyJapamsScreen() {
     }
 
     const legacyUserId = await AsyncStorage.getItem(LEGACY_USER_ID_KEY);
-    const hydratedHistory = await hydrateHistoryForUserDetails(userId, legacyUserId, { force });
+    const hydratedHistory = await hydrateHistoryForUserDetails(userId, legacyUserId, { force, localFirst: true });
     const inputs = japams.map((j) => ({ id: j.id, name: j.name }));
     const firstActiveJapamId = activeJapams(japams)[0]?.id ?? null;
     const stats = japams.length > 0
