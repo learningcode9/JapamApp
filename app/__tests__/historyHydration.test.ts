@@ -160,6 +160,7 @@ import { DeviceEventEmitter } from 'react-native';
 import HistoryScreen from '../(tabs)/history';
 import { repairLegacyStoredUserId } from '../../lib/anonymousAuth';
 import { loadLifetimeStats } from '../../lib/historyRepository';
+import { resetFetchCoalesceCache } from '../../lib/supabaseRestHelper';
 
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
@@ -367,6 +368,7 @@ beforeEach(async () => {
   mockRemoteFetch = jest.fn(async () => ({ data: mockRemoteRows, error: null }));
   mockRepairLegacyStoredUserId.mockImplementation(async () => null);
   mockCurrentJapamState = buildCurrentJapamState();
+  resetFetchCoalesceCache();
   await AsyncStorage.clear();
   await seedHistory();
   await AsyncStorage.setItem(USER_ID_KEY, UID);
@@ -519,6 +521,19 @@ describe('HistoryScreen auth/current-Japam hydration regression', () => {
     await flush();
 
     expectStableRowsVisible(tree, 2, 216);
+  });
+
+  it('renders cached rows while remote reconciliation remains unresolved', async () => {
+    mockSessionToken = 'session-token';
+    const remoteFetchDeferred = createDeferred<{ data: Record<string, unknown>[]; error: null }>();
+    mockRemoteFetch = jest.fn(() => remoteFetchDeferred.promise);
+
+    const tree = await renderScreen();
+
+    expectStableRowsVisible(tree, 2, 216);
+    await act(async () => {
+      tree.unmount();
+    });
   });
 
   it('goes from loading to rows without rendering the empty history state in between', async () => {

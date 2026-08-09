@@ -899,7 +899,7 @@ export default function HistoryScreen() {
     const legacyUserId = await AsyncStorage.getItem(LEGACY_USER_ID_KEY);
     if (!isCurrentRequest(requestGeneration, scopeKey)) return;
     const hydratedSessions = currentUserId
-      ? await hydrateHistoryForUserDetails(currentUserId, legacyUserId, { force })
+      ? await hydrateHistoryForUserDetails(currentUserId, legacyUserId, { force, localFirst: true })
       : null;
     if (!isCurrentRequest(requestGeneration, scopeKey)) return;
 
