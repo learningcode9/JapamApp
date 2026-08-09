@@ -5,15 +5,16 @@ const historySource = fs.readFileSync(
   path.join(__dirname, '../../app/(tabs)/history.tsx'),
   'utf8'
 );
+const historyRepositorySource = fs.readFileSync(
+  path.join(__dirname, '../historyRepository.ts'),
+  'utf8'
+);
 
 describe('History PostgREST fetch filter', () => {
   it('disables browser caching on the remote history query', () => {
-    const fetchRemoteSessions = historySource.slice(
-      historySource.indexOf('const fetchRemoteSessions'),
-      historySource.indexOf('const saveToSupabase')
+    expect(historyRepositorySource).toMatch(
+      /rest\/v1\/japam_history[\s\S]{0,800}cache:\s*['"]no-store['"]/,
     );
-
-    expect(fetchRemoteSessions).toMatch(/cache:\s*['"]no-store['"]/);
   });
 
   it('does not request user_email from japam_history', () => {

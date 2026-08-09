@@ -99,6 +99,9 @@ jest.mock('@expo/vector-icons', () => {
 
 const mockGetMyGroups = jest.fn();
 const mockGetMyUnassignedGroups = jest.fn();
+const mockGetCachedMyGroups = jest.fn();
+const mockGetCachedMyUnassignedGroups = jest.fn();
+const mockIsNetworkFailure = jest.fn();
 const mockCreateGroup = jest.fn();
 const mockJoinGroupByInviteCode = jest.fn();
 const mockAttachGroupMembershipToJapam = jest.fn();
@@ -106,6 +109,9 @@ const mockAttachGroupMembershipToJapam = jest.fn();
 jest.mock('../../lib/groupsRepository', () => ({
   getMyGroups: (...args: unknown[]) => mockGetMyGroups(...args),
   getMyUnassignedGroups: (...args: unknown[]) => mockGetMyUnassignedGroups(...args),
+  getCachedMyGroups: (...args: unknown[]) => mockGetCachedMyGroups(...args),
+  getCachedMyUnassignedGroups: (...args: unknown[]) => mockGetCachedMyUnassignedGroups(...args),
+  isNetworkFailure: (...args: unknown[]) => mockIsNetworkFailure(...args),
   createGroup: (...args: unknown[]) => mockCreateGroup(...args),
   joinGroupByInviteCode: (...args: unknown[]) => mockJoinGroupByInviteCode(...args),
   attachGroupMembershipToJapam: (...args: unknown[]) => mockAttachGroupMembershipToJapam(...args),
@@ -210,6 +216,9 @@ beforeEach(async () => {
   };
   mockGetMyGroups.mockResolvedValue([groupRow(GROUP_A, 'Group A', 'admin')]);
   mockGetMyUnassignedGroups.mockResolvedValue([]);
+  mockGetCachedMyGroups.mockResolvedValue(null);
+  mockGetCachedMyUnassignedGroups.mockResolvedValue(null);
+  mockIsNetworkFailure.mockReturnValue(false);
   mockCreateGroup.mockResolvedValue({ groupId: GROUP_A, groupName: 'New Group', inviteCode: 'ABCDEFG' });
   mockJoinGroupByInviteCode.mockResolvedValue({ kind: 'joined', groupId: GROUP_B, groupName: 'Group B' });
   mockAttachGroupMembershipToJapam.mockResolvedValue({ kind: 'success' });
