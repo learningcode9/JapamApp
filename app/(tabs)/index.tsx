@@ -303,6 +303,7 @@ export default function JapamMain() {
   const workspaceVersionRef = useRef(0);
   const restoreGenerationRef = useRef(0);
   const restoringWorkspaceRef = useRef<{ workspaceId: string | null } | null>(null);
+  const historyWriteQueueRef = useRef(Promise.resolve());
   const displayedTotalsByWorkspaceRef = useRef(new Map<string | null, number>());
   const suppressCounterPersistenceRef = useRef(false);
   const timerRef = useRef({
@@ -837,6 +838,27 @@ export default function JapamMain() {
         activeWorkspaceIdRef.current,
       )
     );
+    const commitSharedHistoryIfCurrent = async (
+      buildHistory: () => Promise<Session[]>,
+    ): Promise<Session[] | null> => {
+      const previousWrite = historyWriteQueueRef.current;
+      let releaseWrite!: () => void;
+      const queuedWrite = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+      historyWriteQueueRef.current = previousWrite.then(() => queuedWrite);
+
+      await previousWrite;
+      try {
+        if (!isCurrentRequest()) return null;
+        const nextHistory = await buildHistory();
+        if (!isCurrentRequest()) return null;
+        await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(nextHistory));
+        return isCurrentRequest() ? nextHistory : null;
+      } finally {
+        releaseWrite();
+      }
+    };
     const applyWorkspaceTotal = async (candidate: number, userId: string | null) => {
       if (!isCurrentRequest()) return null;
       const nextTotal = resolveHomeWorkspaceTotal(
@@ -922,42 +944,40 @@ export default function JapamMain() {
               }
 
               if (remoteSessions !== null) {
-                // Merge remote history into local without dropping pending offline completions.
-                const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
-                const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
-                // Honor tombstones so a remote row whose Supabase delete is still in-flight does
-                // not resurrect a locally-deleted record and inflate the displayed count.
-                const rawTomb = await AsyncStorage.getItem(DELETED_COMPLETIONS_KEY);
-                const tombSet = new Set<string>(rawTomb ? JSON.parse(rawTomb) : []);
-                const mergedHistory = mergeHistories(localHistory, remoteSessions).filter((s) => {
-                  const day = toLocalDayKey(s.date);
-                  return (day === 'unknown' || day <= todayKey) && !tombSet.has(s.completionId as string);
+                const reconciledHistory = await commitSharedHistoryIfCurrent(async () => {
+                  // Merge remote history into local without dropping pending offline completions.
+                  const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
+                  const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
+                  // Honor tombstones so a remote row whose Supabase delete is still in-flight does
+                  // not resurrect a locally-deleted record and inflate the displayed count.
+                  const rawTomb = await AsyncStorage.getItem(DELETED_COMPLETIONS_KEY);
+                  const tombSet = new Set<string>(rawTomb ? JSON.parse(rawTomb) : []);
+                  const mergedHistory = mergeHistories(localHistory, remoteSessions).filter((s) => {
+                    const day = toLocalDayKey(s.date);
+                    return (day === 'unknown' || day <= todayKey) && !tombSet.has(s.completionId as string);
+                  });
+                  // Non-destructive reconcile: mergedHistory is the first-local-wins union of local +
+                  // remote (mergeHistories) with tombstones already honored in the filter above. Do
+                  // NOT prune synced records merely because a stale fetch omits them — that would
+                  // erase today's just-uploaded Timer completion and regress Day Streak until a later
+                  // consistent fetch. Cross-device deletes flow exclusively through the explicit
+                  // DELETED_COMPLETIONS_KEY tombstone set (already filtered above), so no remote-id
+                  // based prune is safe on read paths. Mirrors Timer's loadStats (PR #53) and
+                  // History's loadHistory.
+                  console.log('[RESTORE_REMOTE_COUNT] screen=main count=%d', remoteSessions.length);
+                  console.log(
+                    '[MERGE_LOCAL_COUNT_BEFORE] screen=main count=%d pending=%d',
+                    localHistory.length,
+                    localHistory.filter((s) => s.userId === savedUserId && s.syncStatus === 'pending').length
+                  );
+                  console.log('[MERGE_LOCAL_COUNT_AFTER] screen=main count=%d', mergedHistory.length);
+                  console.log('[LOCAL_DAY_BUCKET] screen=main todayKey=%s buckets=%o',
+                    todayKey,
+                    mergedHistory.map((s) => ({ completionId: s.completionId, day: toLocalDayKey(s.date) }))
+                  );
+                  return mergedHistory;
                 });
-                // Non-destructive reconcile: mergedHistory is the first-local-wins union of local +
-                // remote (mergeHistories) with tombstones already honored in the filter above. Do
-                // NOT prune synced records merely because a stale fetch omits them — that would
-                // erase today's just-uploaded Timer completion and regress Day Streak until a later
-                // consistent fetch. Cross-device deletes flow exclusively through the explicit
-                // DELETED_COMPLETIONS_KEY tombstone set (already filtered above), so no remote-id
-                // based prune is safe on read paths. Mirrors Timer's loadStats (PR #53) and
-                // History's loadHistory.
-                const reconciledHistory = mergedHistory;
-
-                console.log('[RESTORE_REMOTE_COUNT] screen=main count=%d', remoteSessions.length);
-                console.log(
-                  '[MERGE_LOCAL_COUNT_BEFORE] screen=main count=%d pending=%d',
-                  localHistory.length,
-                  localHistory.filter((s) => s.userId === savedUserId && s.syncStatus === 'pending').length
-                );
-                console.log('[MERGE_LOCAL_COUNT_AFTER] screen=main count=%d', reconciledHistory.length);
-                console.log('[LOCAL_DAY_BUCKET] screen=main todayKey=%s buckets=%o',
-                  todayKey,
-                  reconciledHistory.map((s) => ({ completionId: s.completionId, day: toLocalDayKey(s.date) }))
-                );
-
-                if (!isCurrentRequest()) return;
-                await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(reconciledHistory));
-                if (!isCurrentRequest()) return;
+                if (reconciledHistory === null || !isCurrentRequest()) return;
 
                 const japamName = currentJapamName;
                 const scopedHistory = workspaceId !== null
@@ -974,6 +994,11 @@ export default function JapamMain() {
                 await refreshDayStreak({ userId: savedUserId, todayTotal: neverRegress });
               } else {
                 // Supabase unreachable — use locally saved count (never go below what was tapped)
+                const ownsHistoryWrite = await commitSharedHistoryIfCurrent(async () => {
+                  const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
+                  return rawLocal ? JSON.parse(rawLocal) : [];
+                });
+                if (ownsHistoryWrite === null || !isCurrentRequest()) return;
                 const localHistoryTotal = await getLocalTodayTotalForUser(
                   savedUserId,
                   workspaceId,
@@ -988,6 +1013,11 @@ export default function JapamMain() {
             } catch (error) {
               console.log('Stats sync error, using local data:', error);
               if (!isCurrentRequest()) return;
+              const ownsHistoryWrite = await commitSharedHistoryIfCurrent(async () => {
+                const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
+                return rawLocal ? JSON.parse(rawLocal) : [];
+              });
+              if (ownsHistoryWrite === null || !isCurrentRequest()) return;
               const localHistoryTotal = await getLocalTodayTotalForUser(
                 savedUserId,
                 workspaceId,
@@ -1790,16 +1820,28 @@ export default function JapamMain() {
     }
     if (!hasRestoredTotal || !userName) return;
 
+    const persistenceWorkspaceId = activeWorkspaceIdRef.current;
+    const persistenceTotal = total;
+    const persistenceCount = count;
+    const persistenceMalas = malas;
+    const persistenceUserName = userName;
+
     void (async () => {
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-      const japamId = activeWorkspaceIdRef.current;
-      await AsyncStorage.setItem(getJapamScopedKey(COUNT_KEY, savedUserId, japamId), String(count));
-      await AsyncStorage.setItem(getJapamScopedKey(MALAS_KEY, savedUserId, japamId), String(malas));
-      await AsyncStorage.setItem(getJapamScopedKey(TOTAL_KEY, savedUserId, japamId), String(total));
-      await AsyncStorage.setItem(getJapamScopedKey(TOTAL_DATE_KEY, savedUserId, japamId), getLocalDateKey());
+      if (activeWorkspaceIdRef.current !== persistenceWorkspaceId) return;
+
+      await AsyncStorage.multiSet([
+        [getJapamScopedKey(COUNT_KEY, savedUserId, persistenceWorkspaceId), String(persistenceCount)],
+        [getJapamScopedKey(MALAS_KEY, savedUserId, persistenceWorkspaceId), String(persistenceMalas)],
+        [getJapamScopedKey(TOTAL_KEY, savedUserId, persistenceWorkspaceId), String(persistenceTotal)],
+        [getJapamScopedKey(TOTAL_DATE_KEY, savedUserId, persistenceWorkspaceId), getLocalDateKey()],
+      ]);
+
+      if (activeWorkspaceIdRef.current !== persistenceWorkspaceId) return;
 
       if (savedUserId) {
-        await refreshDayStreak({ userId: savedUserId, todayTotal: total });
+        await refreshDayStreak({ userId: savedUserId, todayTotal: persistenceTotal });
+        if (activeWorkspaceIdRef.current !== persistenceWorkspaceId) return;
 
         if (dbTotalSaveTimeoutRef.current) {
           clearTimeout(dbTotalSaveTimeoutRef.current);
@@ -1808,9 +1850,11 @@ export default function JapamMain() {
         dbTotalSaveTimeoutRef.current = setTimeout(async () => {
           const activeUserId = await AsyncStorage.getItem(USER_ID_KEY);
           if (!activeUserId || activeUserId !== savedUserId) return;
+          if (activeWorkspaceIdRef.current !== persistenceWorkspaceId) return;
 
           const savedUserName = await AsyncStorage.getItem(USER_NAME_KEY);
-          await saveUserTotalToSupabase(activeUserId, savedUserName || userName || 'User', totalRef.current);
+          if (activeWorkspaceIdRef.current !== persistenceWorkspaceId) return;
+          await saveUserTotalToSupabase(activeUserId, savedUserName || persistenceUserName || 'User', persistenceTotal);
         }, 2000);
       }
     })();

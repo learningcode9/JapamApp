@@ -148,11 +148,17 @@ const flush = async () => {
 
 describe('Home offline workspace total isolation', () => {
   beforeEach(async () => {
+    jest.useFakeTimers();
     mockCurrentJapamId = 'workspace-a';
     mockFetchJapamHistoryRows.mockClear();
     mockFetchResolvers.length = 0;
     mockDeviceListeners.clear();
     await AsyncStorage.clear();
+  });
+
+  afterEach(() => {
+    jest.clearAllTimers();
+    jest.useRealTimers();
   });
 
   it('never carries Workspace A total into Workspace B offline, then restores A when switching back', () => {
@@ -239,5 +245,156 @@ describe('Home offline workspace total isolation', () => {
 
     mockFetchResolvers[1]?.(null);
     await flush();
+  });
+
+  it('does not persist Workspace A totals under Workspace B when the persistence user read resolves after switching', async () => {
+    const today = new Date().toISOString();
+    const localHistory = [{
+      date: today,
+      malas: 2,
+      totalCount: 217,
+      duration: 0,
+      manual: false,
+      userId: 'user-1',
+      userName: 'Test User',
+      completionId: 'a-local',
+      syncStatus: 'synced' as const,
+      japamId: 'workspace-a',
+      japamName: 'Japam A',
+    }];
+    await AsyncStorage.multiSet([
+      ['userId', 'user-1'],
+      ['userName', 'Test User'],
+      ['history', JSON.stringify(localHistory)],
+    ]);
+
+    let tree: any;
+    await act(async () => {
+      tree = renderer.create(React.createElement(JapamMain));
+      await Promise.resolve();
+    });
+    await flush();
+
+    const originalGetItem = (AsyncStorage.getItem as jest.Mock).getMockImplementation();
+    const releaseUserIdRead = jest.fn();
+    let resolveUserIdRead!: (value: string) => void;
+    let holdNextUserIdRead = true;
+    (AsyncStorage.getItem as jest.Mock).mockImplementation((key: string) => {
+      if (key === 'userId' && holdNextUserIdRead) {
+        holdNextUserIdRead = false;
+        return new Promise<string>((resolve) => {
+          resolveUserIdRead = (value: string) => {
+            releaseUserIdRead();
+            resolve(value);
+          };
+        });
+      }
+      return originalGetItem?.(key);
+    });
+
+    const multiSetMock = AsyncStorage.multiSet as jest.Mock;
+    multiSetMock.mockClear();
+    const pressables = tree.root.findAll((node: any) => typeof node.props.onPress === 'function');
+    expect(pressables.length).toBeGreaterThan(1);
+    await act(async () => {
+      pressables[2].props.onPress();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      mockCurrentJapamId = 'workspace-b';
+      mockDeviceEventEmitter.emit('japam-did-switch', { japamId: 'workspace-b' });
+      tree.update(React.createElement(JapamMain));
+      await Promise.resolve();
+      resolveUserIdRead?.('user-1');
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(releaseUserIdRead).toHaveBeenCalledTimes(1);
+    expect(await AsyncStorage.getItem('totalCount:user-1:workspace-a')).toBe('218');
+    expect(await AsyncStorage.getItem('totalCount:user-1:workspace-b')).not.toBe('218');
+    const persistedPairs = multiSetMock.mock.calls.flatMap(([pairs]) => pairs as [string, string][]);
+    expect(persistedPairs).not.toContainEqual(['totalCount:user-1:workspace-b', '218']);
+
+    (AsyncStorage.getItem as jest.Mock).mockImplementation(originalGetItem);
+    mockFetchResolvers.forEach((resolve) => resolve(null));
+    await flush();
+  });
+
+  it('lets the current Workspace B refresh own the final shared history write after A is switched away', async () => {
+    const today = new Date().toISOString();
+    const localHistory = [{
+      date: today,
+      malas: 1,
+      totalCount: 108,
+      duration: 0,
+      manual: false,
+      userId: 'user-1',
+      completionId: 'a-local',
+      syncStatus: 'synced' as const,
+      japamId: 'workspace-a',
+      japamName: 'Japam A',
+    }];
+    await AsyncStorage.multiSet([
+      ['userId', 'user-1'],
+      ['history', JSON.stringify(localHistory)],
+    ]);
+
+    let tree: any;
+    await act(async () => {
+      tree = renderer.create(React.createElement(JapamMain));
+      await Promise.resolve();
+    });
+    await flush();
+    expect(mockFetchResolvers).toHaveLength(1);
+
+    const originalSetItem = (AsyncStorage.setItem as jest.Mock).getMockImplementation();
+    const historyPayloads: string[] = [];
+    let historyWriteStarted = false;
+    let releaseHistoryWrite!: () => void;
+    const historyWriteGate = new Promise<void>((resolve) => {
+      releaseHistoryWrite = resolve;
+    });
+    (AsyncStorage.setItem as jest.Mock).mockImplementation(async (key: string, value: string) => {
+      if (key === 'history') {
+        historyPayloads.push(value);
+        if (!historyWriteStarted) {
+          historyWriteStarted = true;
+          await historyWriteGate;
+        }
+      }
+      return originalSetItem?.(key, value);
+    });
+
+    await act(async () => {
+      mockFetchResolvers[0]([{ created_at: today, malas: 1, count: 108, completion_id: 'a-remote', japam_id: 'workspace-a', japam_name: 'Japam A' }]);
+      await Promise.resolve();
+    });
+    await flush();
+    expect(historyWriteStarted).toBe(true);
+
+    await act(async () => {
+      mockCurrentJapamId = 'workspace-b';
+      mockDeviceEventEmitter.emit('japam-did-switch', { japamId: 'workspace-b' });
+      tree.update(React.createElement(JapamMain));
+      await Promise.resolve();
+    });
+    await flush();
+    expect(mockFetchResolvers).toHaveLength(2);
+
+    releaseHistoryWrite();
+    await act(async () => {
+      mockFetchResolvers[1]([{ created_at: today, malas: 1, count: 108, completion_id: 'b-remote', japam_id: 'workspace-b', japam_name: 'Japam B' }]);
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(historyPayloads.length).toBeGreaterThanOrEqual(2);
+    const finalHistory = JSON.parse(historyPayloads[historyPayloads.length - 1]);
+    expect(finalHistory.some((session: any) => session.completionId === 'b-remote')).toBe(true);
+    expect(await AsyncStorage.getItem('history')).toBe(historyPayloads[historyPayloads.length - 1]);
+
+    (AsyncStorage.setItem as jest.Mock).mockImplementation(originalSetItem);
   });
 });
