@@ -9,6 +9,8 @@ const mockSaveCurrentJapamId = jest.fn();
 const mockEnsureDefaultJapam = jest.fn();
 const mockReconcileAllJapams = jest.fn();
 const mockRestoreJapam = jest.fn();
+const mockLoadLocalJapams = jest.fn();
+const mockLoadLocalCurrentJapamId = jest.fn();
 
 jest.mock('../../lib/japamsRepository', () => ({
   loadJapams: (...args: unknown[]) => mockLoadJapams(...args),
@@ -21,6 +23,11 @@ jest.mock('../../lib/japamsRepository', () => ({
   archiveJapam: jest.fn(),
   restoreJapam: (...args: unknown[]) => mockRestoreJapam(...args),
   deleteJapam: jest.fn(),
+}));
+
+jest.mock('../../lib/japamsStorage', () => ({
+  loadJapams: (...args: unknown[]) => mockLoadLocalJapams(...args),
+  loadCurrentJapamId: (...args: unknown[]) => mockLoadLocalCurrentJapamId(...args),
 }));
 
 jest.mock('react-native', () => ({
@@ -136,6 +143,12 @@ beforeEach(async () => {
   mockEnsureDefaultJapam.mockReset();
   mockReconcileAllJapams.mockReset();
   mockRestoreJapam.mockReset();
+  mockLoadJapams.mockResolvedValue([]);
+  mockLoadCurrentJapamId.mockResolvedValue(null);
+  mockLoadLocalJapams.mockReset();
+  mockLoadLocalCurrentJapamId.mockReset();
+  mockLoadLocalJapams.mockResolvedValue([]);
+  mockLoadLocalCurrentJapamId.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -577,6 +590,218 @@ describe('CurrentJapamProvider refresh', () => {
       currentJapamId: 'guest-local',
       currentJapamName: 'Guest Japam',
       japamIds: ['guest-local'],
+    });
+  });
+
+  it('signed-in offline startup resolves immediately from the local cache while the remote reconcile is pending', async () => {
+    mockLoadLocalJapams.mockResolvedValue([
+      {
+        id: 'cached-japam',
+        userId: 'user-123',
+        name: 'Cached Japam',
+        displayOrder: null,
+        createdAt: '2026-07-20T00:00:00.000Z',
+        updatedAt: '2026-07-20T00:00:00.000Z',
+        archivedAt: null,
+      },
+    ]);
+    mockLoadLocalCurrentJapamId.mockResolvedValue('cached-japam');
+    mockLoadJapams.mockImplementation(() => new Promise(() => {}));
+    mockLoadCurrentJapamId.mockImplementation(() => new Promise(() => {}));
+    mockEnsureDefaultJapam.mockImplementation(() => new Promise(() => {}));
+
+    const { snapshots } = await renderProvider('user-123');
+
+    expect(mockLoadJapams).not.toHaveBeenCalled();
+    expect(mockLoadCurrentJapamId).not.toHaveBeenCalled();
+    expect(mockLoadLocalJapams).toHaveBeenCalledWith('user-123');
+    expect(mockLoadLocalCurrentJapamId).toHaveBeenCalledWith('user-123');
+    expect(mockEnsureDefaultJapam).toHaveBeenCalledTimes(1);
+    expect(snapshots.at(-1)).toMatchObject({
+      isLoading: false,
+      currentJapamId: 'cached-japam',
+      currentJapamName: 'Cached Japam',
+      japamIds: ['cached-japam'],
+    });
+  });
+
+  it('a selection made while the startup reconcile is pending is never reverted by its late result', async () => {
+    let resolveEnsure!: (value: {
+      japams: { id: string; userId: string; name: string; displayOrder: null; createdAt: string; updatedAt: string; archivedAt: null }[];
+      currentJapamId: string | null;
+      created: null;
+    }) => void;
+    const deferred = new Promise<{
+      japams: { id: string; userId: string; name: string; displayOrder: null; createdAt: string; updatedAt: string; archivedAt: null }[];
+      currentJapamId: string | null;
+      created: null;
+    }>((resolve) => {
+      resolveEnsure = resolve;
+    });
+    mockLoadLocalJapams.mockResolvedValue([
+      {
+        id: 'cached-japam',
+        userId: 'user-123',
+        name: 'Cached Japam',
+        displayOrder: null,
+        createdAt: '2026-07-20T00:00:00.000Z',
+        updatedAt: '2026-07-20T00:00:00.000Z',
+        archivedAt: null,
+      },
+    ]);
+    mockLoadLocalCurrentJapamId.mockResolvedValue('cached-japam');
+    mockEnsureDefaultJapam.mockReturnValue(deferred as unknown as Promise<unknown>);
+
+    let api: ReturnType<typeof useCurrentJapam> | null = null;
+    const { snapshots } = await renderProvider('user-123', (value) => {
+      api = value;
+    });
+
+    await act(async () => {
+      api!.selectJapam('user-choice');
+      await Promise.resolve();
+    });
+    expect(snapshots.at(-1)?.currentJapamId).toBe('user-choice');
+
+    resolveEnsure!({
+      japams: [{
+        id: 'reconcile-result',
+        userId: 'user-123',
+        name: 'Reconcile Japam',
+        displayOrder: null,
+        createdAt: '2026-07-20T00:00:00.000Z',
+        updatedAt: '2026-07-20T00:00:00.000Z',
+        archivedAt: null,
+      }],
+      currentJapamId: 'reconcile-result',
+      created: null,
+    });
+    await flush();
+
+    expect(snapshots.at(-1)).toMatchObject({
+      currentJapamId: 'user-choice',
+      japamIds: ['reconcile-result'],
+    });
+  });
+
+  it('an older shared reconciliation cannot overwrite a selection before a newer refresh', async () => {
+    let resolveEnsure!: (value: {
+      japams: { id: string; userId: string; name: string; displayOrder: null; createdAt: string; updatedAt: string; archivedAt: null }[];
+      currentJapamId: string | null;
+      created: null;
+    }) => void;
+    const deferred = new Promise<{
+      japams: { id: string; userId: string; name: string; displayOrder: null; createdAt: string; updatedAt: string; archivedAt: null }[];
+      currentJapamId: string | null;
+      created: null;
+    }>((resolve) => {
+      resolveEnsure = resolve;
+    });
+    mockLoadLocalJapams.mockResolvedValue([
+      {
+        id: 'cached-japam',
+        userId: 'user-123',
+        name: 'Cached Japam',
+        displayOrder: null,
+        createdAt: '2026-07-20T00:00:00.000Z',
+        updatedAt: '2026-07-20T00:00:00.000Z',
+        archivedAt: null,
+      },
+    ]);
+    mockLoadLocalCurrentJapamId.mockResolvedValue('cached-japam');
+    mockEnsureDefaultJapam.mockReturnValue(deferred as unknown as Promise<unknown>);
+
+    let api: ReturnType<typeof useCurrentJapam> | null = null;
+    const { snapshots } = await renderProvider('user-123', (value) => {
+      api = value;
+    });
+    const authListener = (DeviceEventEmitter.addListener as jest.Mock).mock.calls[0]?.[1] as
+      | (() => void)
+      | undefined;
+
+    await act(async () => {
+      api!.selectJapam('user-choice');
+      await Promise.resolve();
+      authListener?.();
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(mockEnsureDefaultJapam).toHaveBeenCalledTimes(1);
+
+    resolveEnsure!({
+      japams: [{
+        id: 'old-reconcile-result',
+        userId: 'user-123',
+        name: 'Old Reconcile Japam',
+        displayOrder: null,
+        createdAt: '2026-07-20T00:00:00.000Z',
+        updatedAt: '2026-07-20T00:00:00.000Z',
+        archivedAt: null,
+      }],
+      currentJapamId: 'old-reconcile-result',
+      created: null,
+    });
+    await flush();
+
+    expect(snapshots.at(-1)).toMatchObject({
+      currentJapamId: 'user-choice',
+      japamIds: ['old-reconcile-result'],
+    });
+  });
+
+  it('a newer account refresh cannot be overwritten by an older reconciliation result', async () => {
+    let resolveOld!: (value: unknown) => void;
+    let resolveNew!: (value: unknown) => void;
+    const oldReconcile = new Promise((resolve) => { resolveOld = resolve; });
+    const newReconcile = new Promise((resolve) => { resolveNew = resolve; });
+    mockEnsureDefaultJapam
+      .mockReturnValueOnce(oldReconcile)
+      .mockReturnValueOnce(newReconcile);
+
+    const { snapshots } = await renderProvider('user-old');
+    const authListener = (DeviceEventEmitter.addListener as jest.Mock).mock.calls[0]?.[1] as
+      | (() => void)
+      | undefined;
+    await AsyncStorage.setItem('userId', 'user-new');
+    await act(async () => {
+      authListener?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    resolveNew!({
+      japams: [{
+        id: 'new-result',
+        userId: 'user-new',
+        name: 'New Japam',
+        displayOrder: null,
+        createdAt: '2026-07-20T00:00:00.000Z',
+        updatedAt: '2026-07-20T00:00:00.000Z',
+        archivedAt: null,
+      }],
+      currentJapamId: 'new-result',
+      created: null,
+    });
+    await flush();
+    resolveOld!({
+      japams: [{
+        id: 'old-result',
+        userId: 'user-old',
+        name: 'Old Japam',
+        displayOrder: null,
+        createdAt: '2026-07-20T00:00:00.000Z',
+        updatedAt: '2026-07-20T00:00:00.000Z',
+        archivedAt: null,
+      }],
+      currentJapamId: 'old-result',
+      created: null,
+    });
+    await flush();
+
+    expect(snapshots.at(-1)).toMatchObject({
+      currentJapamId: 'new-result',
+      japamIds: ['new-result'],
     });
   });
 });
