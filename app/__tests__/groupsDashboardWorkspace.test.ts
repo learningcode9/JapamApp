@@ -16,6 +16,7 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 );
 
 const mockListeners = new Map<string, Set<(...args: unknown[]) => void>>();
+const mockBackHandlers = new Set<() => boolean>();
 const mockReplace = jest.fn();
 let mockIsFocused = true;
 let mockPathname = '/groups-dashboard';
@@ -54,6 +55,12 @@ jest.mock('react-native', () => {
         for (const callback of mockListeners.get(eventName) ?? []) {
           callback(...args);
         }
+      }),
+    },
+    BackHandler: {
+      addEventListener: jest.fn((_eventName: string, callback: () => boolean) => {
+        mockBackHandlers.add(callback);
+        return { remove: () => mockBackHandlers.delete(callback) };
       }),
     },
     Platform: {
@@ -226,6 +233,7 @@ const createDeferred = <T,>() => {
 
 beforeEach(async () => {
   mockListeners.clear();
+  mockBackHandlers.clear();
   mockAuthCallback = null;
   jest.clearAllMocks();
   mockIsFocused = true;
@@ -277,6 +285,16 @@ describe('Groups dashboard leave and delete actions', () => {
 
     expect(mockLeaveGroup).toHaveBeenCalledWith('group-1', UID);
     expect(mockDeleteGroup).not.toHaveBeenCalled();
+    expect(mockReplace).toHaveBeenCalledWith('/groups');
+  });
+
+  it('returns to Groups on Android hardware back', async () => {
+    await renderScreen();
+    mockReplace.mockClear();
+
+    expect(mockBackHandlers.size).toBe(1);
+    const [hardwareBackHandler] = [...mockBackHandlers];
+    expect(hardwareBackHandler()).toBe(true);
     expect(mockReplace).toHaveBeenCalledWith('/groups');
   });
 });
@@ -432,4 +450,17 @@ describe('Groups dashboard auth hydration', () => {
     expect(allText(tree).join(' ')).not.toContain('Old User');
   });
 
+});
+
+describe('Groups dashboard render containment', () => {
+  it('shows a recoverable fallback when dashboard rendering throws', async () => {
+    mockGetGroupDashboard.mockResolvedValueOnce([
+      { ...row(UID, 'Member'), userName: {} },
+    ]);
+
+    const tree = await renderScreen();
+
+    expect(allText(tree).join(' ')).toContain('This group could not be displayed.');
+    expect(allText(tree).join(' ')).toContain('Back to Groups');
+  });
 });

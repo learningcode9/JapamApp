@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import {
   ActivityIndicator,
+  BackHandler,
   DeviceEventEmitter,
   Dimensions,
   Modal,
@@ -83,6 +84,58 @@ function sortDashboardRows(rows: GroupDashboardRow[]): GroupDashboardRow[] {
   });
 }
 
+type GroupsDashboardErrorBoundaryProps = {
+  children: React.ReactNode;
+  onBackToGroups: () => void;
+  groupIdLast4: string;
+};
+
+type GroupsDashboardErrorBoundaryState = {
+  hasError: boolean;
+};
+
+/**
+ * Contains unexpected render-time failures to this route. RPC and transport failures already
+ * use the normal dashboard error state; this boundary prevents a malformed render payload or
+ * native/render exception from leaving the dashboard as a blank route or crashing the app.
+ */
+class GroupsDashboardErrorBoundary extends React.Component<
+  GroupsDashboardErrorBoundaryProps,
+  GroupsDashboardErrorBoundaryState
+> {
+  state: GroupsDashboardErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): GroupsDashboardErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown, errorInfo: React.ErrorInfo) {
+    const err = error as { name?: string; message?: string };
+    console.error('[GROUPS_DIAG] dashboard-render-error', {
+      name: String(err?.name || 'unknown'),
+      message: String(err?.message || error || 'unknown'),
+      groupIdLast4: this.props.groupIdLast4 || 'none',
+      componentStack: String(errorInfo.componentStack || '').trim(),
+    });
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={styles.boundaryFallback}>
+          <Ionicons name="alert-circle-outline" size={42} color={TEAL} />
+          <Text style={styles.boundaryFallbackTitle}>This group could not be displayed.</Text>
+          <Pressable style={styles.boundaryFallbackButton} onPress={this.props.onBackToGroups}>
+            <Text style={styles.boundaryFallbackButtonText}>Back to Groups</Text>
+          </Pressable>
+        </View>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 export default function GroupsDashboardScreen() {
   const insets = useSafeAreaInsets();
   const tabBarSpaceFromBottom = 74 + (tabBarLayoutIsMobile
@@ -90,6 +143,9 @@ export default function GroupsDashboardScreen() {
     : Math.max(22, insets.bottom + 14));
 
   const router = useRouter();
+  const returnToGroups = useCallback(() => {
+    router.replace('/groups');
+  }, [router]);
   const isFocused = useIsFocused();
   const pathname = usePathname();
   const { currentJapamId } = useCurrentJapam();
@@ -155,6 +211,20 @@ export default function GroupsDashboardScreen() {
   const workspaceGenerationRef = useRef(0);
   const previousJapamIdRef = useRef(currentJapamId);
   const workspaceSwitchPendingRef = useRef(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== 'android') return undefined;
+
+      const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+        returnToGroups();
+        return true;
+      });
+
+      return () => subscription.remove();
+    }, [returnToGroups])
+  );
+
   useEffect(() => {
     currentJapamIdRef.current = currentJapamId;
   }, [currentJapamId]);
@@ -514,29 +584,37 @@ export default function GroupsDashboardScreen() {
     );
   }
 
+  const groupIdLast4 = groupId ? groupId.slice(-4) : 'none';
+
   return (
     <View style={styles.container}>
-      <View style={[styles.headerRow, { paddingTop: Math.max(16, insets.top + 8) }]}>
-        <Pressable style={styles.backButton} onPress={() => router.back()}>
-          <Ionicons name="chevron-back" size={24} color={TEAL} />
-        </Pressable>
-        <Text style={styles.header} numberOfLines={1}>{displayGroupName}</Text>
-        {isAdmin ? (
-          <Pressable
-            style={styles.adminMenuButton}
-            onPress={() => setShowAdminMenu((visible) => !visible)}
-            accessibilityRole="button"
-            accessibilityLabel="Open group admin menu"
-          >
-            <Ionicons name="ellipsis-horizontal" size={22} color={TEAL} />
-          </Pressable>
-        ) : null}
-      </View>
-
-      <ScrollView
-        style={Platform.OS !== 'web' ? { marginBottom: tabBarSpaceFromBottom } : undefined}
-        contentContainerStyle={styles.scrollContent}
+      <GroupsDashboardErrorBoundary
+        key={groupId}
+        onBackToGroups={returnToGroups}
+        groupIdLast4={groupIdLast4}
       >
+        <>
+          <View style={[styles.headerRow, { paddingTop: Math.max(16, insets.top + 8) }]}>
+            <Pressable style={styles.backButton} onPress={returnToGroups}>
+              <Ionicons name="chevron-back" size={24} color={TEAL} />
+            </Pressable>
+            <Text style={styles.header} numberOfLines={1}>{displayGroupName}</Text>
+            {isAdmin ? (
+              <Pressable
+                style={styles.adminMenuButton}
+                onPress={() => setShowAdminMenu((visible) => !visible)}
+                accessibilityRole="button"
+                accessibilityLabel="Open group admin menu"
+              >
+                <Ionicons name="ellipsis-horizontal" size={22} color={TEAL} />
+              </Pressable>
+            ) : null}
+          </View>
+
+          <ScrollView
+            style={Platform.OS !== 'web' ? { marginBottom: tabBarSpaceFromBottom } : undefined}
+            contentContainerStyle={styles.scrollContent}
+          >
         {isAdmin && showAdminMenu ? (
           <View style={styles.adminMenuCard}>
             <Pressable style={styles.adminMenuItem} onPress={openRenameModal}>
@@ -637,7 +715,9 @@ export default function GroupsDashboardScreen() {
             </Pressable>
           </>
         )}
-      </ScrollView>
+          </ScrollView>
+        </>
+      </GroupsDashboardErrorBoundary>
 
       <Modal visible={showRenameModal} transparent animationType="fade" onRequestClose={() => setShowRenameModal(false)}>
         <View style={styles.modalOverlay}>
@@ -797,6 +877,35 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(15,118,110,0.16)',
     overflow: 'hidden',
+  },
+  boundaryFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    backgroundColor: '#f5fafa',
+  },
+  boundaryFallbackTitle: {
+    marginTop: 12,
+    color: '#12383c',
+    fontSize: 17,
+    fontWeight: '700',
+    lineHeight: 24,
+    textAlign: 'center',
+  },
+  boundaryFallbackButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 18,
+    minHeight: 44,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+    backgroundColor: TEAL,
+  },
+  boundaryFallbackButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '800',
   },
   tableRow: {
     flexDirection: 'row',
