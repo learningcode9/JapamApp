@@ -1,13 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform, DeviceEventEmitter } from 'react-native';
-import { supabase } from './supabase';
 import {
   appendCompletion,
-  buildSupabaseHistoryPayload,
-  markSynced,
   toLocalDayKey,
 } from './historyStore';
-import { ensureJapamSyncedForHistory } from './japamsRepository';
 import { type TapIdentitySnapshot } from './tapJapamBehavior';
 
 export interface TapSaveSessionRefs {
@@ -137,66 +133,12 @@ export async function tapSaveSession(
       console.log('TAP_STATS_EVENT_DISPATCHED completionId=%s', savedRecord.completionId);
     }
 
-    if (userId) {
-      const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-      const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
-
-      if (url && key) {
-        const payload = buildSupabaseHistoryPayload(savedRecord, userId, historyUserName);
-        console.log(
-          '[SYNC_PAYLOAD_CREATED_AT] source=%s completionId=%s created_at=%s localDay=%s',
-          source,
-          payload.completion_id,
-          payload.created_at,
-          toLocalDayKey(payload.created_at)
-        );
-
-        void (async () => {
-          try {
-            const sessionToken = (await supabase.auth.getSession()).data.session?.access_token;
-            if (!sessionToken) {
-              console.log('[SYNC_FAILED] source=%s completionId=%s reason=no-session', source, payload.completion_id);
-              return;
-            }
-            if (payload.japam_id) {
-              const japamReady = await ensureJapamSyncedForHistory(userId, payload.japam_id);
-              if (!japamReady) {
-                console.log('[SYNC_DEFERRED] source=%s completionId=%s reason=japam-sync-pending', source, payload.completion_id);
-                return;
-              }
-            }
-            const res = await fetch(`${url}/rest/v1/japam_history?on_conflict=completion_id`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                apikey: key,
-                Authorization: `Bearer ${sessionToken}`,
-                Prefer: 'return=minimal,resolution=merge-duplicates',
-              },
-              body: JSON.stringify(payload),
-            });
-
-            if (!res.ok) {
-              console.log('[SYNC_FAILED] source=%s completionId=%s status=%d', source, payload.completion_id, res.status);
-              console.log('Tap Supabase save error:', await res.text());
-              return;
-            }
-            console.log('[SYNC_SUCCESS] source=%s completionId=%s', source, payload.completion_id);
-
-            const latestRaw = await AsyncStorage.getItem(HISTORY_KEY);
-            const latest = latestRaw ? JSON.parse(latestRaw) : [];
-            await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, [savedRecord.completionId])));
-            console.log('[MARK_SYNCED] source=%s completionId=%s', source, savedRecord.completionId);
-            DeviceEventEmitter.emit('japam-history-remote-synced', { userId });
-            if (Platform.OS === 'web' && typeof window !== 'undefined') {
-              window.dispatchEvent(new Event('japam-history-remote-synced'));
-            }
-          } catch (error) {
-            console.log('[SYNC_FAILED] source=%s completionId=%s reason=network', source, payload.completion_id);
-            console.log('Tap Supabase save error:', error);
-          }
-        })();
-      }
+    // TimerProvider owns the single serialized upload path. The event is emitted only after
+    // the local write so online saves are picked up immediately, while offline saves remain
+    // pending for the existing reconnect/startup/AppState triggers.
+    DeviceEventEmitter.emit('japam-history-pending-sync', { userId: userId || 'guest' });
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('japam-history-pending-sync'));
     }
 
     return true;

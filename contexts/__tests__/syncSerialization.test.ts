@@ -300,6 +300,17 @@ describe('syncPendingHistory serialization', () => {
     const history = JSON.parse((await AsyncStorage.getItem(HISTORY_KEY)) || '[]');
     expect(history[0].syncStatus).toBe('synced');
   });
+  it('post-save pending event uses the centralized serialized sync path', async () => {
+    await renderTimerProvider();
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([makePendingRecord()]));
+
+    DeviceEventEmitter.emit('japam-history-pending-sync', { userId: UID });
+    await sleep(500);
+    await flush();
+
+    expect(historyUploadCount).toBe(1);
+  });
+
 
   it('two concurrent sync triggers -> only one upload', async () => {
     const pending = makePendingRecord();

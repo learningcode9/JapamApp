@@ -1434,6 +1434,9 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         void retryPendingTimerCompletion();
       }
     });
+    const pendingSyncSub = DeviceEventEmitter.addListener('japam-history-pending-sync', () => {
+      void syncPendingHistory();
+    });
     const onOnline = () => {
       console.log('[SYNC_TRIGGER_SOURCE] source=browser-online');
       void syncPendingHistory();
@@ -1444,6 +1447,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     }
     return () => {
       sub.remove();
+      pendingSyncSub.remove();
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.removeEventListener('online', onOnline);
       }

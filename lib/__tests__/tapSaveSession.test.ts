@@ -195,7 +195,7 @@ describe('tapSaveSession — real runtime pipeline', () => {
     expect(emitSpy).not.toHaveBeenCalledWith('japam-stats-updated');
   });
 
-  it('uploads the selected Japam UUID/name for signed-in tap completions', async () => {
+  it('queues the selected Japam UUID/name for the centralized sync path', async () => {
     (supabase.auth.getSession as jest.Mock).mockResolvedValue({
       data: { session: { access_token: 'session-token' } },
       error: null,
@@ -206,28 +206,17 @@ describe('tapSaveSession — real runtime pipeline', () => {
 
     const refs = makeRefs();
     const result = await tapSaveSession(0, 1, 108, 108, 'tap', refs, identity, 'Test User');
-    await flushAsync();
-    await flushAsync();
-
     expect(result).toBe(true);
-    expect(global.fetch).toHaveBeenCalledWith(
-      'https://example.supabase.co/rest/v1/japam_history?on_conflict=completion_id',
-      expect.objectContaining({
-        method: 'POST',
-        body: expect.any(String),
-      })
-    );
-    const request = (global.fetch as jest.Mock).mock.calls[0][1];
-    expect(JSON.parse(request.body)).toMatchObject({
-      user_id: UID,
-      japam_id: JAPAM_ID,
-      japam_name: JAPAM_NAME,
-      malas: 1,
-      count: 108,
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(JSON.parse(await AsyncStorage.getItem('history') || '[]')[0]).toMatchObject({
+      userId: UID,
+      japamId: JAPAM_ID,
+      japamName: JAPAM_NAME,
+      syncStatus: 'pending',
     });
   });
 
-  it('keeps a tap completion pending and sends no FK-invalid upload when Japam sync is not confirmed', async () => {
+  it('keeps a tap completion pending when Japam sync is not confirmed', async () => {
     (supabase.auth.getSession as jest.Mock).mockResolvedValue({
       data: { session: { access_token: 'session-token' } },
       error: null,
