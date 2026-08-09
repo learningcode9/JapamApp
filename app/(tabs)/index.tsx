@@ -212,6 +212,12 @@ const parseHistory = (raw: string | null): Session[] => {
 
 const getUserStorageKey = (key: string, userId: string) => `${key}:${userId}`;
 
+const getJapamScopedKey = (
+  key: string,
+  userId: string | null,
+  japamId: string | null,
+) => `${key}:${userId ?? 'guest'}:${japamId ?? 'legacy'}`;
+
 const isAuthPending = async () => {
   const raw = await AsyncStorage.getItem(AUTH_PENDING_KEY);
   const startedAt = Number(raw || 0);
@@ -514,19 +520,17 @@ export default function JapamMain() {
       const currentMalas = Math.floor(currentTotal / 108);
       const currentCount = currentTotal % 108;
       const todayKey = getLocalDateKey();
+      const japamId = activeWorkspaceIdRef.current;
 
       await AsyncStorage.multiSet([
         [getUserStorageKey(TIMER_SECONDS_KEY, savedUserId), String(currentSeconds)],
         [TIMER_SECONDS_KEY, String(currentSeconds)],
         [getUserStorageKey(TIMER_RUNNING_KEY, savedUserId), String(ref.isRunning)],
         [TIMER_RUNNING_KEY, String(ref.isRunning)],
-        [getUserStorageKey(TOTAL_KEY, savedUserId), String(currentTotal)],
-        [getUserStorageKey(COUNT_KEY, savedUserId), String(currentCount)],
-        [getUserStorageKey(MALAS_KEY, savedUserId), String(currentMalas)],
-        [getUserStorageKey(TOTAL_DATE_KEY, savedUserId), todayKey],
-        [TOTAL_KEY, String(currentTotal)],
-        [COUNT_KEY, String(currentCount)],
-        [MALAS_KEY, String(currentMalas)],
+        [getJapamScopedKey(TOTAL_KEY, savedUserId, japamId), String(currentTotal)],
+        [getJapamScopedKey(COUNT_KEY, savedUserId, japamId), String(currentCount)],
+        [getJapamScopedKey(MALAS_KEY, savedUserId, japamId), String(currentMalas)],
+        [getJapamScopedKey(TOTAL_DATE_KEY, savedUserId, japamId), todayKey],
       ]);
 
       const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -649,7 +653,7 @@ export default function JapamMain() {
   );
 
   const restoreTotal = useCallback(
-    async (nextTotal: number, options?: { userId?: string | null }) => {
+    async (nextTotal: number, options?: { userId?: string | null; japamId?: string | null }) => {
       const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
       const nextMalas = Math.floor(safeTotal / 108);
       const nextCount = safeTotal % 108;
@@ -657,21 +661,20 @@ export default function JapamMain() {
         options?.userId === undefined
           ? await AsyncStorage.getItem(USER_ID_KEY)
           : options.userId;
+      const japamId = options?.japamId === undefined
+        ? activeWorkspaceIdRef.current
+        : options.japamId;
 
       totalRef.current = safeTotal;
       setTotal(safeTotal);
       setMalas(nextMalas);
       setCount(nextCount);
 
-      await AsyncStorage.setItem(TOTAL_KEY, String(safeTotal));
-      await AsyncStorage.setItem(MALAS_KEY, String(nextMalas));
-      await AsyncStorage.setItem(COUNT_KEY, String(nextCount));
-
-      if (activeUserId) {
-        await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, activeUserId), String(safeTotal));
-        await AsyncStorage.setItem(getUserStorageKey(MALAS_KEY, activeUserId), String(nextMalas));
-        await AsyncStorage.setItem(getUserStorageKey(COUNT_KEY, activeUserId), String(nextCount));
-      }
+      const todayKey = getLocalDateKey();
+      await AsyncStorage.setItem(getJapamScopedKey(TOTAL_KEY, activeUserId, japamId), String(safeTotal));
+      await AsyncStorage.setItem(getJapamScopedKey(MALAS_KEY, activeUserId, japamId), String(nextMalas));
+      await AsyncStorage.setItem(getJapamScopedKey(COUNT_KEY, activeUserId, japamId), String(nextCount));
+      await AsyncStorage.setItem(getJapamScopedKey(TOTAL_DATE_KEY, activeUserId, japamId), todayKey);
     },
     []
   );
@@ -846,7 +849,7 @@ export default function JapamMain() {
       // The in-memory workspace map is the source of truth for switching back during this app
       // session; persist only a non-zero scoped result, matching the old local-first behavior.
       if (nextTotal > 0) {
-        await restoreTotal(nextTotal, { userId });
+        await restoreTotal(nextTotal, { userId, japamId: workspaceId });
       }
       if (!isCurrentRequest()) return null;
       totalRef.current = nextTotal;
@@ -865,8 +868,8 @@ export default function JapamMain() {
         // use), maxed with the persisted per-user "today" snapshot. Without this, a cold start
         // offline shows 0 while fetchJapamHistoryRows's supabase.auth.getSession() (which triggers
         // a network token refresh for a near-expiry session) stalls for minutes in the background.
-        const storedTotalDate = await AsyncStorage.getItem(getUserStorageKey(TOTAL_DATE_KEY, savedUserId));
-        const storedTodayTotal = await AsyncStorage.getItem(getUserStorageKey(TOTAL_KEY, savedUserId));
+        const storedTotalDate = await AsyncStorage.getItem(getJapamScopedKey(TOTAL_DATE_KEY, savedUserId, workspaceId));
+        const storedTodayTotal = await AsyncStorage.getItem(getJapamScopedKey(TOTAL_KEY, savedUserId, workspaceId));
         const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
         const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
         const localFirstTotal = resolveLocalFirstTodayTotal(
@@ -952,6 +955,7 @@ export default function JapamMain() {
                   reconciledHistory.map((s) => ({ completionId: s.completionId, day: toLocalDayKey(s.date) }))
                 );
 
+                if (!isCurrentRequest()) return;
                 await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(reconciledHistory));
                 if (!isCurrentRequest()) return;
 
@@ -1787,15 +1791,14 @@ export default function JapamMain() {
     if (!hasRestoredTotal || !userName) return;
 
     void (async () => {
-      await AsyncStorage.setItem(COUNT_KEY, String(count));
-      await AsyncStorage.setItem(MALAS_KEY, String(malas));
-      await AsyncStorage.setItem(TOTAL_KEY, String(total));
-
       const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      const japamId = activeWorkspaceIdRef.current;
+      await AsyncStorage.setItem(getJapamScopedKey(COUNT_KEY, savedUserId, japamId), String(count));
+      await AsyncStorage.setItem(getJapamScopedKey(MALAS_KEY, savedUserId, japamId), String(malas));
+      await AsyncStorage.setItem(getJapamScopedKey(TOTAL_KEY, savedUserId, japamId), String(total));
+      await AsyncStorage.setItem(getJapamScopedKey(TOTAL_DATE_KEY, savedUserId, japamId), getLocalDateKey());
+
       if (savedUserId) {
-        await AsyncStorage.setItem(getUserStorageKey(COUNT_KEY, savedUserId), String(count));
-        await AsyncStorage.setItem(getUserStorageKey(MALAS_KEY, savedUserId), String(malas));
-        await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, savedUserId), String(total));
         await refreshDayStreak({ userId: savedUserId, todayTotal: total });
 
         if (dbTotalSaveTimeoutRef.current) {
@@ -2081,7 +2084,6 @@ export default function JapamMain() {
     const nextMalas = Math.floor(safeTotal / 108);
     const nextCount = safeTotal % 108;
 
-    void AsyncStorage.setItem(LAST_TOTAL_KEY, String(safeTotal));
     displayedTotalsByWorkspaceRef.current.set(activeWorkspaceIdRef.current, safeTotal);
     totalRef.current = safeTotal;
     setTotal(safeTotal);
@@ -2089,17 +2091,14 @@ export default function JapamMain() {
     setCount(nextCount);
 
     void (async () => {
-      await AsyncStorage.setItem(TOTAL_KEY, String(safeTotal));
-      await AsyncStorage.setItem(MALAS_KEY, String(nextMalas));
-      await AsyncStorage.setItem(COUNT_KEY, String(nextCount));
       const savedUserId = userIdRef.current;
-      if (savedUserId) {
-        const todayKey = getLocalDateKey();
-        await AsyncStorage.setItem(getUserStorageKey(TOTAL_KEY, savedUserId), String(safeTotal));
-        await AsyncStorage.setItem(getUserStorageKey(MALAS_KEY, savedUserId), String(nextMalas));
-        await AsyncStorage.setItem(getUserStorageKey(COUNT_KEY, savedUserId), String(nextCount));
-        await AsyncStorage.setItem(getUserStorageKey(TOTAL_DATE_KEY, savedUserId), todayKey);
-      }
+      const japamId = activeWorkspaceIdRef.current;
+      const todayKey = getLocalDateKey();
+      await AsyncStorage.setItem(getJapamScopedKey(LAST_TOTAL_KEY, savedUserId, japamId), String(safeTotal));
+      await AsyncStorage.setItem(getJapamScopedKey(TOTAL_KEY, savedUserId, japamId), String(safeTotal));
+      await AsyncStorage.setItem(getJapamScopedKey(MALAS_KEY, savedUserId, japamId), String(nextMalas));
+      await AsyncStorage.setItem(getJapamScopedKey(COUNT_KEY, savedUserId, japamId), String(nextCount));
+      await AsyncStorage.setItem(getJapamScopedKey(TOTAL_DATE_KEY, savedUserId, japamId), todayKey);
     })();
 
     return safeTotal;
@@ -2301,6 +2300,7 @@ export default function JapamMain() {
   const performLogout = async () => {
     const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
     const currentUserName = await AsyncStorage.getItem(USER_NAME_KEY);
+    const currentJapamId = activeWorkspaceIdRef.current;
     const logoutSeconds = timerStartedAtRef.current === null
       ? seconds
       : Math.min(
@@ -2368,6 +2368,11 @@ export default function JapamMain() {
           COUNT_KEY,
           MALAS_KEY,
           LAST_TOTAL_KEY,
+          getJapamScopedKey(TOTAL_KEY, currentUserId, currentJapamId),
+          getJapamScopedKey(COUNT_KEY, currentUserId, currentJapamId),
+          getJapamScopedKey(MALAS_KEY, currentUserId, currentJapamId),
+          getJapamScopedKey(TOTAL_DATE_KEY, currentUserId, currentJapamId),
+          getJapamScopedKey(LAST_TOTAL_KEY, currentUserId, currentJapamId),
         ]);
       },
     });
