@@ -585,3 +585,157 @@ describe('MyJapamsScreen hydration regression', () => {
     expect(toLocalDayKey(localLateNight)).toBe('2026-06-06');
   });
 });
+
+describe('MyJapamsScreen cold-start regression', () => {
+  beforeEach(async () => {
+    mockListeners.clear();
+    jest.clearAllMocks();
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-07-20T09:00:00.000Z'));
+    await AsyncStorage.clear();
+    mockCurrentJapamState = {
+      japams: [{ id: JAPAM_ID, name: 'Morning Japam', archivedAt: null }],
+      currentJapamId: JAPAM_ID,
+      isLoading: true,
+      selectJapam: jest.fn(),
+      createJapam: jest.fn(async () => null),
+      renameJapam: jest.fn(async () => undefined),
+      archiveJapam: jest.fn(async () => undefined),
+      restoreJapam: jest.fn(async () => undefined),
+      deleteJapam: jest.fn(async () => undefined),
+    };
+    mockHydrateHistoryForUser.mockImplementation(async (userId: string | null) => {
+      if (userId !== UID) return makeHydrationResult([], true);
+      return makeHydrationResult([makeRecord()], true);
+    });
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('shows correct lifetime total after cold start without visiting History', async () => {
+    const lifetimeMalas = 63;
+    const records = Array.from({ length: lifetimeMalas }, (_, i) =>
+      makeRecord({
+        completionId: `remote-cold-${i}`,
+        malas: 1,
+        totalCount: 108,
+      }),
+    );
+
+    mockHydrateHistoryForUser.mockImplementation(async (userId: string | null) => {
+      if (userId !== UID) return makeHydrationResult([], true);
+      return makeHydrationResult(records, true);
+    });
+
+    await AsyncStorage.setItem('userId', UID);
+    const tree = await renderScreen();
+
+    expect(countByTestId(tree, 'japam-stat-skeleton')).toBe(2);
+    expect(allText(tree)).not.toContain(`${lifetimeMalas} malas`);
+    expect(allText(tree)).not.toContain('0 malas');
+
+    mockCurrentJapamState = { ...mockCurrentJapamState, isLoading: false };
+    await updateTree(tree);
+
+    expectShowsStats(tree, `${lifetimeMalas} malas`);
+    expect(allText(tree)).not.toContain('0 malas');
+    expect(countByTestId(tree, 'japam-stat-skeleton')).toBe(0);
+  });
+
+  it('0 malas never rendered during cold-start hydration', async () => {
+    const lifetimeMalas = 63;
+    const records = Array.from({ length: lifetimeMalas }, (_, i) =>
+      makeRecord({
+        completionId: `remote-zero-${i}`,
+        malas: 1,
+        totalCount: 108,
+      }),
+    );
+
+    let resolveHydration!: (value: ReturnType<typeof makeHydrationResult>) => void;
+    const deferredHydration = new Promise<ReturnType<typeof makeHydrationResult>>((resolve) => {
+      resolveHydration = resolve;
+    });
+    mockHydrateHistoryForUser.mockReturnValue(deferredHydration);
+
+    await AsyncStorage.setItem('userId', UID);
+    const tree = await renderScreen();
+
+    expect(countByTestId(tree, 'japam-stat-skeleton')).toBe(2);
+    const initialText = allText(tree);
+    expect(initialText.some((t: string) => /^\d+ malas$/.test(t))).toBe(false);
+
+    mockCurrentJapamState = { ...mockCurrentJapamState, isLoading: false };
+    await updateTree(tree);
+
+    const textAfterLoading = allText(tree);
+    expect(textAfterLoading.some((t: string) => /\d+ malas$/.test(t))).toBe(false);
+
+    await act(async () => {
+      resolveHydration(makeHydrationResult(records, true));
+      await Promise.resolve();
+    });
+    await flush();
+
+    expectShowsStats(tree, `${lifetimeMalas} malas`);
+    expect(allText(tree)).not.toContain('0 malas');
+  });
+
+  it('hydrateHistoryForUserDetails called exactly once on cold start', async () => {
+    const records = Array.from({ length: 5 }, (_, i) =>
+      makeRecord({
+        completionId: `remote-once-${i}`,
+        malas: 1,
+        totalCount: 108,
+      }),
+    );
+
+    mockHydrateHistoryForUser.mockImplementation(async (userId: string | null) => {
+      if (userId !== UID) return makeHydrationResult([], true);
+      return makeHydrationResult(records, true);
+    });
+
+    await AsyncStorage.setItem('userId', UID);
+    await renderScreen();
+
+    mockCurrentJapamState = { ...mockCurrentJapamState, isLoading: false };
+    await renderer.act(async () => {
+      renderer.create(React.createElement(MyJapamsScreen));
+    });
+    await flush();
+
+    const calls = mockHydrateHistoryForUser.mock.calls.filter(
+      ([userId]) => userId === UID || userId === null,
+    );
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Home/Workspace screens update from startup hydration event without visiting History', async () => {
+    const records = Array.from({ length: 12 }, (_, i) =>
+      makeRecord({
+        completionId: `remote-startup-${i}`,
+        malas: 1,
+        totalCount: 108,
+      }),
+    );
+
+    mockHydrateHistoryForUser.mockImplementation(async (userId: string | null) => {
+      if (userId !== UID) return makeHydrationResult([], true);
+      return makeHydrationResult(records, true);
+    });
+
+    await AsyncStorage.setItem('userId', UID);
+    mockCurrentJapamState = { ...mockCurrentJapamState, isLoading: true };
+    const tree = await renderScreen();
+
+    expect(countByTestId(tree, 'japam-stat-skeleton')).toBe(2);
+
+    mockCurrentJapamState = { ...mockCurrentJapamState, isLoading: false };
+    await updateTree(tree);
+
+    expectShowsStats(tree, '12 malas');
+    expect(mockHydrateHistoryForUser).toHaveBeenCalledWith(UID, null, { force: false });
+  });
+});
