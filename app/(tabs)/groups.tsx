@@ -116,7 +116,7 @@ export default function GroupsScreen() {
         getCachedMyUnassignedGroups(),
       ]);
       const hasCache = cachedGroups !== null || cachedUnassigned !== null;
-      if (hasCache && requestJapamRef.current === currentJapamId) {
+      if (requestJapamRef.current === currentJapamId) {
         setGroups(cachedGroups ?? []);
         setUnassignedGroups(cachedUnassigned ?? []);
         lastLoadedKeyRef.current = loadKey;

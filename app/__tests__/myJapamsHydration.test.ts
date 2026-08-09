@@ -262,7 +262,19 @@ describe('MyJapamsScreen hydration regression', () => {
     await updateTree(tree);
 
     expectShowsStats(tree, '2 malas');
-    expect(mockHydrateHistoryForUser).toHaveBeenCalledWith(UID, null, { force: false });
+    expect(mockHydrateHistoryForUser).toHaveBeenCalledWith(UID, null, { force: false, localFirst: true });
+  });
+
+  it('requests local-first history hydration so stats do not wait for the network', async () => {
+    await AsyncStorage.setItem('userId', UID);
+    mockCurrentJapamState = {
+      ...mockCurrentJapamState,
+      isLoading: false,
+    };
+    const tree = await renderScreen();
+
+    expectShowsStats(tree, '2 malas');
+    expect(mockHydrateHistoryForUser).toHaveBeenCalledWith(UID, null, { force: false, localFirst: true });
   });
 
   it('renders a clean incognito first load with skeletons before auth resolves', async () => {

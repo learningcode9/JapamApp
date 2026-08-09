@@ -309,7 +309,7 @@ describe('Groups workspace list', () => {
     expect(allText(nextTree).join(' ')).toContain('Groups');
   });
 
-  it('keeps the workspace shell visible during the initial load with no rows yet', async () => {
+  it('opens from an empty cache while the initial RPC refresh remains pending', async () => {
     const pending = createDeferred<ReturnType<typeof groupRow>[]>();
     mockGetMyGroups.mockReturnValueOnce(pending.promise);
     mockCurrentJapamState = {
@@ -324,7 +324,9 @@ describe('Groups workspace list', () => {
     expect(texts).toContain('Showing groups for: Gayatri');
     expect(texts).toContain('Create Group');
     expect(texts).toContain('Join Group');
-    expect(tree.root.findAll((node: any) => node.type === 'ActivityIndicator').length).toBeGreaterThan(0);
+    expect(texts).toContain("You're not in any groups for this Japam yet. Create one or join with an invite code.");
+    expect(tree.root.findAll((node: any) => node.type === 'ActivityIndicator')).toHaveLength(0);
+    expect(mockGetMyGroups).toHaveBeenCalledWith(UID, WORKSPACE_A);
 
     pending.resolve([groupRow(GROUP_A, 'Group A')]);
     await flush();
