@@ -122,7 +122,7 @@ const { act } = renderer;
 import { AppState, DeviceEventEmitter } from 'react-native';
 import { TimerProvider, useTimer } from '../timer-context';
 import { getTimerState, updateTimerState } from '../../lib/timerState';
-import { makeLoopCompletionId } from '../../lib/historyStore';
+import { makeLoopCompletionId, toLocalDayKey } from '../../lib/historyStore';
 import {
   TIMER_PENDING_COMPLETIONS_KEY,
   type PendingTimerCompletion,
@@ -616,6 +616,33 @@ describe('TimerProvider restored/native final-loop retry', () => {
     expect(history[0].japamId).toBe(JAPAM_A_ID);
     expect(history[0].japamName).toBe(JAPAM_A_NAME);
     expect(history[0].japamId).not.toBe(JAPAM_B_ID);
+  });
+
+  it('updates Home today counters from an offline Timer completion', async () => {
+    const sessionId = 'timer-home-local-refresh';
+    await seedPersistedSession({ sessionId, totalLoops: 1, durationSeconds: 180 });
+    mountedTree = await renderTimerProvider();
+
+    await act(async () => {
+      DeviceEventEmitter.emit('japamTimerLoopComplete', {
+        sessionId,
+        completedLoops: 1,
+        isFinal: true,
+        userId: UID,
+        durationMs: 180000,
+        completedAt: new Date().toISOString(),
+      });
+      await Promise.resolve();
+    });
+
+    await waitForCondition(async () => (await readHistory()).length === 1);
+
+    expect(await AsyncStorage.getItem(`totalCount:${UID}`)).toBe('108');
+    expect(await AsyncStorage.getItem(`malas:${UID}`)).toBe('1');
+    expect(await AsyncStorage.getItem(`count:${UID}`)).toBe('0');
+    expect(await AsyncStorage.getItem(`totalDate:${UID}`)).toBe(
+      toLocalDayKey(new Date().toISOString()),
+    );
   });
 
   it('dedupes native and JS duplicate reports for the same session loop', async () => {

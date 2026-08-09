@@ -27,10 +27,12 @@ import {
   applyTombstones,
   buildSupabaseHistoryPayload,
   dedupeByCompletionId,
+  filterByJapam,
   getPending,
   makeLoopCompletionId,
   markSynced,
   mergeTombstones,
+  todayStatsFor,
   toLocalDayKey,
   type HistoryRecord,
 } from '../lib/historyStore';
@@ -84,6 +86,10 @@ const TIMER_SESSION_USER_ID_KEY = 'timerSessionUserId';
 const TIMER_SESSION_JAPAM_ID_KEY = 'timerSessionJapamId';
 const TIMER_SESSION_JAPAM_NAME_KEY = 'timerSessionJapamName';
 const HISTORY_KEY = 'history';
+const COUNT_KEY = 'count';
+const MALAS_KEY = 'malas';
+const TOTAL_KEY = 'totalCount';
+const TOTAL_DATE_KEY = 'totalDate';
 const DELETED_COMPLETIONS_KEY = 'deletedCompletions';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
@@ -106,6 +112,29 @@ const getLocalDateKey = (date = new Date()) => {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+};
+
+const persistHomeTodaySnapshot = async (
+  history: any[],
+  uid: string,
+  japamId: string,
+  japamName: string,
+  completedAt: string,
+) => {
+  const todayKey = getLocalDateKey();
+  if (toLocalDayKey(completedAt) !== todayKey) return;
+
+  const scopedHistory = filterByJapam(history, japamId, japamName);
+  const { totalCount } = todayStatsFor(scopedHistory, uid, todayKey, toLocalDayKey);
+  const malas = Math.floor(totalCount / 108);
+  const count = totalCount % 108;
+
+  await AsyncStorage.multiSet([
+    [getUserKey(TOTAL_KEY, uid), String(totalCount)],
+    [getUserKey(MALAS_KEY, uid), String(malas)],
+    [getUserKey(COUNT_KEY, uid), String(count)],
+    [getUserKey(TOTAL_DATE_KEY, uid), todayKey],
+  ]);
 };
 
 const createTimerSessionId = () =>
@@ -1341,6 +1370,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       lastSavedSessionRef.current = { key: sessionKey, savedAt: Date.now() };
       if (!queuedCompletion || queuedCompletion.sessionId === timerSessionIdRef.current) {
         updateTimerState({ lastSavedCompletedLoops: loopNumber });
+      }
+      if (uid && activeJapamId && activeJapamName) {
+        try {
+          await persistHomeTodaySnapshot(updatedHistory, uid, activeJapamId, activeJapamName, completedAt);
+        } catch (snapshotError) {
+          console.log('[Stats] HOME_SNAPSHOT_SAVE_FAILED', snapshotError);
+        }
       }
       console.log(
         '[OFFLINE_SAVE_ACCEPTED] source=timer completionId=%s created_at=%s localDay=%s syncStatus=%s japamId=%s japamName=%s',
