@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import {
   ActivityIndicator,
+  BackHandler,
   DeviceEventEmitter,
   Dimensions,
   Modal,
@@ -22,8 +23,10 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   deleteGroup,
+  getCachedGroupDashboard,
   getGroupDashboard,
   getGroupInviteCode,
+  isNetworkFailure,
   leaveGroup,
   removeGroupMember,
   renameGroup,
@@ -39,6 +42,9 @@ const AUTO_REFRESH_INTERVAL_MS = 12000;
 
 const USER_ID_KEY = 'userId';
 const TEAL = '#0F8F87';
+
+const isBrowserOffline = (): boolean =>
+  Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.onLine === false;
 
 // Same width-based breakpoint convention as history.tsx — five columns (Name, Today Malas,
 // Today Count, Total Malas, Total Count) need noticeably tighter sizing on small phones than
@@ -83,6 +89,58 @@ function sortDashboardRows(rows: GroupDashboardRow[]): GroupDashboardRow[] {
   });
 }
 
+type GroupsDashboardErrorBoundaryProps = {
+  children: React.ReactNode;
+  onBackToGroups: () => void;
+  groupIdLast4: string;
+};
+
+type GroupsDashboardErrorBoundaryState = {
+  hasError: boolean;
+};
+
+/**
+ * Contains unexpected render-time failures to this route. RPC and transport failures already
+ * use the normal dashboard error state; this boundary prevents a malformed render payload or
+ * native/render exception from leaving the dashboard as a blank route or crashing the app.
+ */
+class GroupsDashboardErrorBoundary extends React.Component<
+  GroupsDashboardErrorBoundaryProps,
+  GroupsDashboardErrorBoundaryState
+> {
+  state: GroupsDashboardErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): GroupsDashboardErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown, errorInfo: React.ErrorInfo) {
+    const err = error as { name?: string; message?: string };
+    console.error('[GROUPS_DIAG] dashboard-render-error', {
+      name: String(err?.name || 'unknown'),
+      message: String(err?.message || error || 'unknown'),
+      groupIdLast4: this.props.groupIdLast4 || 'none',
+      componentStack: String(errorInfo.componentStack || '').trim(),
+    });
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={styles.boundaryFallback}>
+          <Ionicons name="alert-circle-outline" size={42} color={TEAL} />
+          <Text style={styles.boundaryFallbackTitle}>This group could not be displayed.</Text>
+          <Pressable style={styles.boundaryFallbackButton} onPress={this.props.onBackToGroups}>
+            <Text style={styles.boundaryFallbackButtonText}>Back to Groups</Text>
+          </Pressable>
+        </View>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 export default function GroupsDashboardScreen() {
   const insets = useSafeAreaInsets();
   const tabBarSpaceFromBottom = 74 + (tabBarLayoutIsMobile
@@ -90,6 +148,9 @@ export default function GroupsDashboardScreen() {
     : Math.max(22, insets.bottom + 14));
 
   const router = useRouter();
+  const returnToGroups = useCallback(() => {
+    router.replace('/groups');
+  }, [router]);
   const isFocused = useIsFocused();
   const pathname = usePathname();
   const { currentJapamId } = useCurrentJapam();
@@ -104,6 +165,10 @@ export default function GroupsDashboardScreen() {
   const [authSession, setAuthSession] = useState<Session | null | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<GroupDashboardRow[]>([]);
+  const [cacheHydrated, setCacheHydrated] = useState(false);
+  const [hasCachedData, setHasCachedData] = useState(false);
+  const [dashboardReady, setDashboardReady] = useState(false);
+  const [isOffline, setIsOffline] = useState(isBrowserOffline);
   const [error, setError] = useState('');
   const [inviteCode, setInviteCode] = useState<string | null>(null);
   const [copyLabel, setCopyLabel] = useState('Copy');
@@ -155,9 +220,87 @@ export default function GroupsDashboardScreen() {
   const workspaceGenerationRef = useRef(0);
   const previousJapamIdRef = useRef(currentJapamId);
   const workspaceSwitchPendingRef = useRef(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== 'android') return undefined;
+
+      const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+        returnToGroups();
+        return true;
+      });
+
+      return () => subscription.remove();
+    }, [returnToGroups])
+  );
+
   useEffect(() => {
     currentJapamIdRef.current = currentJapamId;
   }, [currentJapamId]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
+      return undefined;
+    }
+    const updateOfflineState = () => {
+      const nextOffline = isBrowserOffline();
+      setIsOffline(nextOffline);
+      if (nextOffline) setLoading(false);
+    };
+    window.addEventListener('offline', updateOfflineState);
+    window.addEventListener('online', updateOfflineState);
+    return () => {
+      window.removeEventListener('offline', updateOfflineState);
+      window.removeEventListener('online', updateOfflineState);
+    };
+  }, []);
+
+  // Hydrate the exact user/group/workspace cache before starting auth restoration. This keeps a
+  // cached dashboard visible even if Supabase session restoration or the remote RPC stalls.
+  useEffect(() => {
+    let cancelled = false;
+    setCacheHydrated(false);
+    setHasCachedData(false);
+    setDashboardReady(false);
+    setRows([]);
+    setError('');
+
+    const hydrateCache = async () => {
+      if (!groupId || !currentJapamId) {
+        if (!cancelled) {
+          setCacheHydrated(true);
+          setLoading(false);
+        }
+        return;
+      }
+
+      const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      if (cancelled) return;
+      setUserId(savedUserId);
+      if (!savedUserId) {
+        setCacheHydrated(true);
+        setLoading(false);
+        return;
+      }
+
+      const cached = await getCachedGroupDashboard(groupId, savedUserId, currentJapamId);
+      if (cancelled) return;
+      const hasCache = cached !== null;
+      setHasCachedData(hasCache);
+      if (cached !== null) {
+        setRows(cached);
+        setDashboardReady(true);
+        setLoading(false);
+        loadedForJapamRef.current = currentJapamId;
+      }
+      setCacheHydrated(true);
+    };
+
+    void hydrateCache();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentJapamId, groupId]);
 
   const clearDashboardForLogout = useCallback(() => {
     authGenerationRef.current += 1;
@@ -169,6 +312,8 @@ export default function GroupsDashboardScreen() {
     setAuthSession(null);
     setUserId(null);
     setRows([]);
+    setHasCachedData(false);
+    setDashboardReady(false);
     setError('');
     setInviteCode(null);
     setLoading(false);
@@ -177,6 +322,10 @@ export default function GroupsDashboardScreen() {
   }, []);
 
   useEffect(() => {
+    if (!cacheHydrated || isOffline) {
+      if (cacheHydrated && isOffline) setLoading(false);
+      return undefined;
+    }
     let mounted = true;
 
     const applySession = (session: Session | null) => {
@@ -204,7 +353,7 @@ export default function GroupsDashboardScreen() {
       mounted = false;
       authListener.subscription.unsubscribe();
     };
-  }, [clearDashboardForLogout]);
+  }, [cacheHydrated, clearDashboardForLogout, isOffline]);
 
   // The dashboard shows this group through the VIEWER's membership, which is tied to the Japam
   // they created/joined the group under (get_group_dashboard scopes by the caller's own
@@ -237,6 +386,8 @@ export default function GroupsDashboardScreen() {
     }
     loadedForJapamRef.current = null;
     requestJapamRef.current = null;
+    setHasCachedData(false);
+    setDashboardReady(false);
     setRows([]);
     setError('');
     setInviteCode(null);
@@ -263,13 +414,18 @@ export default function GroupsDashboardScreen() {
     if (!routeIsFocused || activePathname !== '/groups-dashboard' || workspaceSwitchPendingRef.current) {
       return;
     }
+    if (!cacheHydrated) return;
+    if (isOffline) {
+      if (!options?.silent) setLoading(false);
+      return;
+    }
     if (loadInFlightRef.current) return;
     loadInFlightRef.current = true;
     const requestLoadGeneration = dashboardLoadGenerationRef.current;
     const requestWorkspaceGeneration = workspaceGenerationRef.current;
     const silent = options?.silent ?? false;
     try {
-      const session = authSessionRef.current;
+      const session = authSession;
       if (session === undefined) return;
       if (!session?.access_token || !session.user?.id) {
         return;
@@ -297,7 +453,7 @@ export default function GroupsDashboardScreen() {
         return;
       }
 
-      if (!silent) setLoading(true);
+      if (!silent && !dashboardReady) setLoading(true);
       setError('');
       const requestJapamId = currentJapamId;
       requestJapamRef.current = requestJapamId;
@@ -315,10 +471,17 @@ export default function GroupsDashboardScreen() {
         const result = await getGroupDashboard(groupId, savedUserId, start, end, requestJapamId);
         if (!isRequestCurrent()) return;
         setRows(result);
+        setDashboardReady(true);
+        setIsOffline(false);
         loadedForJapamRef.current = requestJapamId;
       } catch (err: any) {
         if (!isRequestCurrent()) return;
-        if (!silent) setError(err?.message || 'Could not load this group.');
+        if (isNetworkFailure(err)) {
+          setIsOffline(true);
+          setError('');
+        } else if (!silent) {
+          setError(err?.message || 'Could not load this group.');
+        }
       } finally {
         if (!isRequestCurrent()) return;
         if (!silent) setLoading(false);
@@ -329,7 +492,7 @@ export default function GroupsDashboardScreen() {
         loadInFlightRef.current = false;
       }
     }
-  }, [authSession, currentJapamId, groupId, leaveIfWorkspaceMismatch]);
+  }, [authSession, cacheHydrated, clearDashboardForLogout, currentJapamId, dashboardReady, groupId, isOffline, leaveIfWorkspaceMismatch]);
 
   useFocusEffect(
     useCallback(() => {
@@ -347,23 +510,17 @@ export default function GroupsDashboardScreen() {
     }, [load])
   );
 
-  // Immediate refresh when THIS device records a completion. Deliberately NOT scoped to focus —
-  // completing a mala always requires navigating to Timer/Tap Japam first, which blurs this
-  // screen (Expo Router tabs keep it mounted, just unfocused); a focus-gated listener would be
-  // torn down at exactly the moment the event it's waiting for fires. Mount-scoped instead, so the
-  // dashboard is already fresh the instant the viewer switches back to this tab — no manual
-  // refresh, no waiting for the next interval tick.
+  // Refresh immediately only after this device's completion is confirmed in Supabase. Personal
+  // History still receives local-first events, but those events can precede the remote upsert and
+  // must not cause the server-backed dashboard to reload prematurely. Polling above still picks
+  // up completions from other devices.
   useEffect(() => {
-    const historySub = DeviceEventEmitter.addListener('japam-history-updated', () => {
-      void load({ silent: true });
-    });
-    const statsSub = DeviceEventEmitter.addListener('japam-stats-updated', () => {
+    const syncedSub = DeviceEventEmitter.addListener('japam-history-remote-synced', () => {
       void load({ silent: true });
     });
 
     return () => {
-      historySub.remove();
-      statsSub.remove();
+      syncedSub.remove();
     };
   }, [load]);
 
@@ -520,29 +677,37 @@ export default function GroupsDashboardScreen() {
     );
   }
 
+  const groupIdLast4 = groupId ? groupId.slice(-4) : 'none';
+
   return (
     <View style={styles.container}>
-      <View style={[styles.headerRow, { paddingTop: Math.max(16, insets.top + 8) }]}>
-        <Pressable style={styles.backButton} onPress={() => router.back()}>
-          <Ionicons name="chevron-back" size={24} color={TEAL} />
-        </Pressable>
-        <Text style={styles.header} numberOfLines={1}>{displayGroupName}</Text>
-        {isAdmin ? (
-          <Pressable
-            style={styles.adminMenuButton}
-            onPress={() => setShowAdminMenu((visible) => !visible)}
-            accessibilityRole="button"
-            accessibilityLabel="Open group admin menu"
-          >
-            <Ionicons name="ellipsis-horizontal" size={22} color={TEAL} />
-          </Pressable>
-        ) : null}
-      </View>
-
-      <ScrollView
-        style={Platform.OS !== 'web' ? { marginBottom: tabBarSpaceFromBottom } : undefined}
-        contentContainerStyle={styles.scrollContent}
+      <GroupsDashboardErrorBoundary
+        key={groupId}
+        onBackToGroups={returnToGroups}
+        groupIdLast4={groupIdLast4}
       >
+        <>
+          <View style={[styles.headerRow, { paddingTop: Math.max(16, insets.top + 8) }]}>
+            <Pressable style={styles.backButton} onPress={returnToGroups}>
+              <Ionicons name="chevron-back" size={24} color={TEAL} />
+            </Pressable>
+            <Text style={styles.header} numberOfLines={1}>{displayGroupName}</Text>
+            {isAdmin ? (
+              <Pressable
+                style={styles.adminMenuButton}
+                onPress={() => setShowAdminMenu((visible) => !visible)}
+                accessibilityRole="button"
+                accessibilityLabel="Open group admin menu"
+              >
+                <Ionicons name="ellipsis-horizontal" size={22} color={TEAL} />
+              </Pressable>
+            ) : null}
+          </View>
+
+          <ScrollView
+            style={Platform.OS !== 'web' ? { marginBottom: tabBarSpaceFromBottom } : undefined}
+            contentContainerStyle={styles.scrollContent}
+          >
         {isAdmin && showAdminMenu ? (
           <View style={styles.adminMenuCard}>
             <Pressable style={styles.adminMenuItem} onPress={openRenameModal}>
@@ -573,10 +738,15 @@ export default function GroupsDashboardScreen() {
             </Pressable>
           </View>
         ) : null}
-        {loading ? (
+        {isOffline && hasCachedData ? (
+          <Text style={styles.offlineText}>You&apos;re offline. Showing saved group data.</Text>
+        ) : null}
+        {loading && !dashboardReady && !isOffline ? (
           <ActivityIndicator color={TEAL} style={styles.loadingSpinner} />
         ) : error ? (
           <Text style={styles.errorText}>{error}</Text>
+        ) : isOffline && !hasCachedData ? (
+          <Text style={styles.offlineText}>You&apos;re offline. No saved group data is available yet.</Text>
         ) : rows.length === 0 ? (
           <Text style={styles.emptyText}>No members found for this group.</Text>
         ) : (
@@ -643,7 +813,9 @@ export default function GroupsDashboardScreen() {
             </Pressable>
           </>
         )}
-      </ScrollView>
+          </ScrollView>
+        </>
+      </GroupsDashboardErrorBoundary>
 
       <Modal visible={showRenameModal} transparent animationType="fade" onRequestClose={() => setShowRenameModal(false)}>
         <View style={styles.modalOverlay}>
@@ -795,6 +967,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: { padding: 20, paddingBottom: 20 },
   loadingSpinner: { marginTop: 24 },
+  offlineText: { color: '#365f61', fontSize: 14, lineHeight: 20, textAlign: 'center', marginTop: 14 },
   errorText: { color: '#b91c1c', fontSize: 14, textAlign: 'center', marginTop: 24 },
   emptyText: { color: '#365f61', fontSize: 15, lineHeight: 22, textAlign: 'center', marginTop: 24 },
   tableCard: {
@@ -803,6 +976,35 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(15,118,110,0.16)',
     overflow: 'hidden',
+  },
+  boundaryFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    backgroundColor: '#f5fafa',
+  },
+  boundaryFallbackTitle: {
+    marginTop: 12,
+    color: '#12383c',
+    fontSize: 17,
+    fontWeight: '700',
+    lineHeight: 24,
+    textAlign: 'center',
+  },
+  boundaryFallbackButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 18,
+    minHeight: 44,
+    paddingHorizontal: 18,
+    borderRadius: 14,
+    backgroundColor: TEAL,
+  },
+  boundaryFallbackButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '800',
   },
   tableRow: {
     flexDirection: 'row',

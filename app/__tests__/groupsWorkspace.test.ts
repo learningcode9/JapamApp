@@ -19,6 +19,7 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 const mockListeners = new Map<string, Set<(...args: unknown[]) => void>>();
 const mockBack = jest.fn();
 const mockPush = jest.fn();
+let mockPlatformOS = 'android';
 
 jest.mock('react-native', () => {
   const React = require('react');
@@ -55,7 +56,9 @@ jest.mock('react-native', () => {
       }),
     },
     Platform: {
-      OS: 'android',
+      get OS() {
+        return mockPlatformOS;
+      },
       select: (options: Record<string, unknown>) => options.android ?? options.default,
     },
     StyleSheet: {
@@ -99,6 +102,9 @@ jest.mock('@expo/vector-icons', () => {
 
 const mockGetMyGroups = jest.fn();
 const mockGetMyUnassignedGroups = jest.fn();
+const mockGetCachedMyGroups = jest.fn();
+const mockGetCachedMyUnassignedGroups = jest.fn();
+const mockIsNetworkFailure = jest.fn();
 const mockCreateGroup = jest.fn();
 const mockJoinGroupByInviteCode = jest.fn();
 const mockAttachGroupMembershipToJapam = jest.fn();
@@ -106,6 +112,9 @@ const mockAttachGroupMembershipToJapam = jest.fn();
 jest.mock('../../lib/groupsRepository', () => ({
   getMyGroups: (...args: unknown[]) => mockGetMyGroups(...args),
   getMyUnassignedGroups: (...args: unknown[]) => mockGetMyUnassignedGroups(...args),
+  getCachedMyGroups: (...args: unknown[]) => mockGetCachedMyGroups(...args),
+  getCachedMyUnassignedGroups: (...args: unknown[]) => mockGetCachedMyUnassignedGroups(...args),
+  isNetworkFailure: (...args: unknown[]) => mockIsNetworkFailure(...args),
   createGroup: (...args: unknown[]) => mockCreateGroup(...args),
   joinGroupByInviteCode: (...args: unknown[]) => mockJoinGroupByInviteCode(...args),
   attachGroupMembershipToJapam: (...args: unknown[]) => mockAttachGroupMembershipToJapam(...args),
@@ -134,6 +143,13 @@ const WORKSPACE_B = '550e8400-e29b-41d4-a716-446655440002';
 const GROUP_A = '660e8400-e29b-41d4-a716-44665544000a';
 const GROUP_B = '660e8400-e29b-41d4-a716-44665544000b';
 const GROUP_UNASSIGNED = '660e8400-e29b-41d4-a716-44665544000c';
+
+const setBrowserOnline = (online: boolean) => {
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { onLine: online },
+  });
+};
 
 const groupRow = (groupId: string, name: string, role: 'admin' | 'member' = 'member') => ({
   groupId,
@@ -196,6 +212,8 @@ const createDeferred = <T,>() => {
 beforeEach(async () => {
   mockListeners.clear();
   jest.clearAllMocks();
+  mockPlatformOS = 'android';
+  setBrowserOnline(true);
   await AsyncStorage.clear();
   await AsyncStorage.setItem('userId', UID);
   await AsyncStorage.setItem('userName', 'Test User');
@@ -210,6 +228,9 @@ beforeEach(async () => {
   };
   mockGetMyGroups.mockResolvedValue([groupRow(GROUP_A, 'Group A', 'admin')]);
   mockGetMyUnassignedGroups.mockResolvedValue([]);
+  mockGetCachedMyGroups.mockResolvedValue(null);
+  mockGetCachedMyUnassignedGroups.mockResolvedValue(null);
+  mockIsNetworkFailure.mockReturnValue(false);
   mockCreateGroup.mockResolvedValue({ groupId: GROUP_A, groupName: 'New Group', inviteCode: 'ABCDEFG' });
   mockJoinGroupByInviteCode.mockResolvedValue({ kind: 'joined', groupId: GROUP_B, groupName: 'Group B' });
   mockAttachGroupMembershipToJapam.mockResolvedValue({ kind: 'success' });
@@ -300,7 +321,7 @@ describe('Groups workspace list', () => {
     expect(allText(nextTree).join(' ')).toContain('Groups');
   });
 
-  it('keeps the workspace shell visible during the initial load with no rows yet', async () => {
+  it('opens from an empty cache while the initial RPC refresh remains pending', async () => {
     const pending = createDeferred<ReturnType<typeof groupRow>[]>();
     mockGetMyGroups.mockReturnValueOnce(pending.promise);
     mockCurrentJapamState = {
@@ -315,7 +336,9 @@ describe('Groups workspace list', () => {
     expect(texts).toContain('Showing groups for: Gayatri');
     expect(texts).toContain('Create Group');
     expect(texts).toContain('Join Group');
-    expect(tree.root.findAll((node: any) => node.type === 'ActivityIndicator').length).toBeGreaterThan(0);
+    expect(texts).toContain("You're not in any groups for this Japam yet. Create one or join with an invite code.");
+    expect(tree.root.findAll((node: any) => node.type === 'ActivityIndicator')).toHaveLength(0);
+    expect(mockGetMyGroups).toHaveBeenCalledWith(UID, WORKSPACE_A);
 
     pending.resolve([groupRow(GROUP_A, 'Group A')]);
     await flush();
@@ -453,5 +476,33 @@ describe('unassigned attach flow', () => {
     // The reload re-fetches both lists after a successful attach.
     expect(mockGetMyGroups).toHaveBeenCalledTimes(2);
     expect(mockGetMyUnassignedGroups).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Groups offline UX', () => {
+  it('keeps cached Groups visible and labels the screen offline', async () => {
+    mockPlatformOS = 'web';
+    setBrowserOnline(false);
+    mockGetCachedMyGroups.mockResolvedValue([groupRow(GROUP_A, 'Cached Group')]);
+
+    const tree = await renderScreen();
+    const texts = allText(tree).join(' ');
+
+    expect(texts).toContain('Cached Group');
+    expect(texts).toContain("You're offline. Showing saved group data.");
+    expect(texts).not.toContain('Network request failed');
+    expect(mockGetMyGroups).not.toHaveBeenCalled();
+  });
+
+  it('shows the explicit no-cache offline message without raw transport text', async () => {
+    mockPlatformOS = 'web';
+    setBrowserOnline(false);
+
+    const tree = await renderScreen();
+    const texts = allText(tree).join(' ');
+
+    expect(texts).toContain("You're offline. No saved group data is available yet.");
+    expect(texts).not.toContain('Network request failed');
+    expect(tree.root.findAll((node: any) => node.type === 'ActivityIndicator')).toHaveLength(0);
   });
 });
