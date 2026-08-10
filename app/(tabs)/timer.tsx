@@ -62,7 +62,7 @@ const isShortMobile = isMobile && screenHeight < 760;
 const isNativeMobile = isMobile && Platform.OS !== 'web';
 const isWebMobile = Platform.OS === 'web' && isMobile;
 const CIRCLE_SIZE = (isWebMobile && isShortMobile) ? 176 : isShortMobile ? 204 : isMobile ? 224 : 296;
-const TEAL = '#0F8F87';
+const TEAL = '#70885A';
 // Guest Mode is temporarily hidden — Google Sign-In is the only entry point for now. Flip this
 // back to true to restore the "Continue as Guest" button; none of the underlying guest/anonymous
 // auth code is removed, only this UI entry point is gated.
@@ -733,7 +733,10 @@ export default function TimerScreen() {
 
           <View style={styles.topControls}>
             <CurrentJapamHeaderButton variant="timer" />
-            <Text numberOfLines={1} style={styles.welcomeText}>Welcome</Text>
+            <View style={styles.brandBlock}>
+              <Text style={styles.brandMark}>ॐ</Text>
+              <Text numberOfLines={1} style={styles.welcomeText}>Sage Serenity</Text>
+            </View>
             <Pressable
               style={({ pressed }) => [styles.accountButton, pressed && styles.softPressed]}
               onPress={handleAccountPress}
@@ -745,7 +748,7 @@ export default function TimerScreen() {
           </View>
 
           <Text style={styles.dateText}>Today · {todayLabel}</Text>
-          <Text style={styles.subtitle}>Pick a duration, set loops, breathe.</Text>
+          <Text style={styles.subtitle}>Simple. Sacred. Centered.</Text>
 
       {showInstallBanner && !isStandaloneOrInstalledWeb() && (
             <View style={styles.installBanner}>
@@ -779,6 +782,40 @@ export default function TimerScreen() {
             </View>
           </View>
 
+          <View style={styles.repeatCard}>
+            <View style={styles.repeatHeader}>
+              <View style={styles.repeatIconWrap}>
+                <Ionicons name="repeat-outline" size={22} color={TEAL} />
+              </View>
+              <View style={styles.repeatCopy}>
+                <Text style={styles.repeatTitle}>Repeat malas</Text>
+                <Text style={styles.repeatSubtitle}>
+                  {timer.selectedLoops === 1 ? 'One mala' : `${timer.selectedLoops} malas in this session`}
+                </Text>
+              </View>
+              <Text style={styles.repeatValue}>{timer.selectedLoops}</Text>
+            </View>
+            <View style={styles.repeatOptions}>
+              {LOOP_OPTIONS.map((l) => (
+                <Pressable
+                  key={l}
+                  style={[
+                    styles.repeatOption,
+                    timer.selectedLoops === l && styles.repeatOptionActive,
+                    timer.isRunning && styles.chipDisabled,
+                  ]}
+                  onPress={() => timer.selectLoops(l)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: timer.selectedLoops === l, disabled: timer.isRunning }}
+                >
+                  <Text style={[styles.repeatOptionText, timer.selectedLoops === l && styles.repeatOptionTextActive]}>
+                    {l}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+
           <View style={styles.controls}>
             <Pressable
               style={({ pressed }) => [styles.startBtn, pressed && styles.softPressed]}
@@ -804,7 +841,7 @@ export default function TimerScreen() {
           )}
 
           <View style={styles.card}>
-            <Text style={styles.cardLabel}>Select Japam Time (minutes)</Text>
+            <Text style={styles.cardLabel}>Japam time</Text>
             <View style={styles.chips}>
               {STD_DURATIONS.map((d) => (
                 <Pressable
@@ -859,22 +896,6 @@ export default function TimerScreen() {
               </View>
             )}
 
-            <Text style={[styles.cardLabel, { marginTop: (isWebMobile && isShortMobile) ? 8 : isShortMobile ? 12 : isMobile ? 10 : 22 }]}>Auto-Repeat Malas</Text>
-            <View style={styles.chips}>
-              {LOOP_OPTIONS.map((l) => (
-                <Pressable
-                  key={l}
-                  style={[
-                    styles.chip,
-                    timer.selectedLoops === l && styles.chipActive,
-                    timer.isRunning && styles.chipDisabled,
-                  ]}
-                  onPress={() => timer.selectLoops(l)}
-                >
-                  <Text style={[styles.chipText, timer.selectedLoops === l && styles.chipTextActive]}>{l}</Text>
-                </Pressable>
-              ))}
-            </View>
           </View>
 
           <View style={styles.statsGrid}>
@@ -1066,7 +1087,7 @@ const styles = StyleSheet.create({
   },
   backgroundOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(245, 250, 250, 0.28)',
+    backgroundColor: 'rgba(250, 248, 240, 0.62)',
   },
   container: {
     flexGrow: 1,
@@ -1086,8 +1107,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     overflow: 'hidden',
     position: 'relative',
-    backgroundColor: 'rgba(238, 248, 246, 0.94)',
-    borderRadius: isMobile ? 0 : 28,
+    backgroundColor: 'rgba(251, 249, 242, 0.94)',
+    borderRadius: isMobile ? 0 : 34,
     paddingHorizontal: isMobile ? 22 : 28,
     paddingTop: Platform.OS === 'web'
       ? (isMobile
@@ -1097,7 +1118,7 @@ const styles = StyleSheet.create({
           : 58)
       : (isShortMobile ? 24 : isMobile ? 28 : 58),
     paddingBottom: 112,
-    shadowColor: '#0f766e',
+    shadowColor: '#58694B',
     shadowOpacity: isMobile ? 0 : 0.16,
     shadowRadius: 28,
     shadowOffset: { width: 0, height: 16 },
@@ -1109,15 +1130,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: isShortMobile ? 8 : isMobile ? 8 : 18,
+    marginBottom: isShortMobile ? 8 : isMobile ? 10 : 18,
     gap: 10,
   },
-  welcomeText: {
+  brandBlock: {
     flex: 2,
-    color: '#063B3B',
-    fontSize: isShortMobile ? 20 : isMobile ? 22 : 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  brandMark: {
+    color: TEAL,
+    fontSize: isShortMobile ? 18 : 20,
+    lineHeight: isShortMobile ? 20 : 22,
+    marginBottom: 1,
+  },
+  welcomeText: {
+    color: '#34452F',
+    fontSize: isShortMobile ? 16 : isMobile ? 18 : 20,
     fontWeight: '800',
-    letterSpacing: 0,
+    letterSpacing: 0.2,
     textAlign: 'center',
   },
   accountButton: {
@@ -1127,18 +1158,18 @@ const styles = StyleSheet.create({
     maxWidth: 128,
     paddingHorizontal: 14,
     borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.78)',
+    backgroundColor: 'rgba(255,255,250,0.82)',
     borderWidth: 1,
-    borderColor: 'rgba(15,143,135,0.12)',
+    borderColor: 'rgba(112,136,90,0.22)',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#0f8f87',
+    shadowColor: '#70885A',
     shadowOpacity: 0.08,
     shadowRadius: 16,
     elevation: 4,
   },
   accountNameText: {
-    color: '#063B3B',
+    color: '#34452F',
     fontSize: isMobile ? 14 : 15,
     fontWeight: '900',
   },
@@ -1150,29 +1181,29 @@ const styles = StyleSheet.create({
       : {}),
   },
   dateText: {
-    color: '#5F7F80',
+    color: '#7A856F',
     fontSize: isShortMobile ? 13 : isMobile ? 14 : 15,
     fontWeight: '700',
     marginBottom: isShortMobile ? 8 : isMobile ? 10 : 14,
   },
   subtitle: {
     fontSize: isShortMobile ? 14 : isMobile ? 16 : 18,
-    color: '#4a7c80',
+    color: '#68765F',
     textAlign: 'center',
     fontWeight: '700',
     marginBottom: (isWebMobile && isShortMobile) ? 6 : isShortMobile ? 12 : isMobile ? 10 : 26,
   },
-  circleWrap: { marginBottom: (isWebMobile && isShortMobile) ? 8 : isShortMobile ? 14 : isMobile ? 12 : 32 },
+  circleWrap: { marginBottom: (isWebMobile && isShortMobile) ? 8 : isShortMobile ? 14 : isMobile ? 14 : 24 },
   circleOuter: {
     width: CIRCLE_SIZE,
     height: CIRCLE_SIZE,
     borderRadius: CIRCLE_SIZE / 2,
-    backgroundColor: 'rgba(255,255,255,0.80)',
+    backgroundColor: 'rgba(255,255,250,0.88)',
     borderWidth: isMobile ? 12 : 18,
-    borderColor: 'rgba(15,143,135,0.18)',
+    borderColor: 'rgba(112,136,90,0.26)',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#0F8F87',
+    shadowColor: '#70885A',
     shadowOpacity: 0.16,
     shadowRadius: 32,
     shadowOffset: { width: 0, height: 8 },
@@ -1187,17 +1218,21 @@ const styles = StyleSheet.create({
   },
   malaText: {
     fontSize: isMobile ? 13 : 14,
-    color: '#4a7c80',
+    color: '#7A856F',
     marginTop: isMobile ? 6 : 10,
     fontWeight: '500',
   },
   controls: {
+    width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: isMobile ? 10 : 14,
     marginBottom: (isWebMobile && isShortMobile) ? 8 : isShortMobile ? 12 : isMobile ? 10 : 28,
   },
   startBtn: {
+    flex: 1,
+    maxWidth: 340,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: TEAL,
@@ -1228,17 +1263,98 @@ const styles = StyleSheet.create({
   card: {
     width: '100%',
     maxWidth: 460,
-    backgroundColor: 'rgba(255,255,255,0.86)',
-    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,250,0.82)',
+    borderRadius: 26,
     paddingVertical: (isWebMobile && isShortMobile) ? 9 : isShortMobile ? 13 : isMobile ? 11 : 22,
     paddingHorizontal: isShortMobile ? 13 : isMobile ? 15 : 22,
-    shadowColor: '#0a3a3c',
+    shadowColor: '#58694B',
     shadowOpacity: 0.07,
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 4 },
     elevation: 5,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.9)',
+    borderColor: 'rgba(112,136,90,0.18)',
+  },
+  repeatCard: {
+    width: '100%',
+    maxWidth: 460,
+    backgroundColor: 'rgba(255,255,250,0.9)',
+    borderRadius: 26,
+    paddingVertical: isShortMobile ? 13 : isMobile ? 16 : 20,
+    paddingHorizontal: isShortMobile ? 14 : isMobile ? 16 : 22,
+    marginBottom: (isWebMobile && isShortMobile) ? 10 : isShortMobile ? 14 : isMobile ? 16 : 22,
+    borderWidth: 1,
+    borderColor: 'rgba(112,136,90,0.24)',
+    shadowColor: '#58694B',
+    shadowOpacity: 0.1,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 6,
+  },
+  repeatHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: isShortMobile ? 10 : 14,
+  },
+  repeatIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(112,136,90,0.13)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  repeatCopy: {
+    flex: 1,
+  },
+  repeatTitle: {
+    color: '#34452F',
+    fontSize: isMobile ? 16 : 17,
+    fontWeight: '900',
+  },
+  repeatSubtitle: {
+    color: '#7A856F',
+    fontSize: isMobile ? 12 : 13,
+    fontWeight: '600',
+    marginTop: 3,
+  },
+  repeatValue: {
+    color: TEAL,
+    fontSize: isMobile ? 24 : 28,
+    fontWeight: '900',
+  },
+  repeatOptions: {
+    flexDirection: 'row',
+    gap: isMobile ? 8 : 10,
+  },
+  repeatOption: {
+    flex: 1,
+    minWidth: 42,
+    minHeight: isShortMobile ? 38 : 42,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(112,136,90,0.28)',
+    backgroundColor: 'rgba(250,248,240,0.78)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  repeatOptionActive: {
+    backgroundColor: TEAL,
+    borderColor: TEAL,
+    shadowColor: TEAL,
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 4,
+  },
+  repeatOptionText: {
+    color: '#526047',
+    fontSize: isMobile ? 14 : 15,
+    fontWeight: '900',
+  },
+  repeatOptionTextActive: {
+    color: '#FFFDF4',
   },
   statsGrid: {
     width: '100%',
@@ -1253,28 +1369,28 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     flexBasis: '30%',
     minHeight: (isWebMobile && isShortMobile) ? 68 : isShortMobile ? 88 : isMobile ? 96 : 104,
-    backgroundColor: 'rgba(255,255,255,0.94)',
+    backgroundColor: 'rgba(255,255,250,0.88)',
     borderRadius: 18,
     paddingVertical: (isWebMobile && isShortMobile) ? 8 : isShortMobile ? 12 : isMobile ? 14 : 16,
     paddingHorizontal: isShortMobile ? 8 : 10,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(15,143,135,0.24)',
-    shadowColor: '#0a3a3c',
+    borderColor: 'rgba(112,136,90,0.22)',
+    shadowColor: '#58694B',
     shadowOpacity: 0.1,
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 6 },
     elevation: 5,
   },
   statValue: {
-    color: '#063B3B',
+    color: '#34452F',
     fontSize: isShortMobile ? 26 : isMobile ? 29 : 32,
     fontWeight: '900',
     lineHeight: isShortMobile ? 31 : isMobile ? 35 : 38,
   },
   statLabel: {
-    color: '#234E52',
+    color: '#68765F',
     fontSize: isShortMobile ? 12 : isMobile ? 13 : 14,
     fontWeight: '800',
     lineHeight: isShortMobile ? 15 : 17,
@@ -1446,7 +1562,7 @@ const styles = StyleSheet.create({
   cardLabel: {
     fontSize: 13,
     fontWeight: '800',
-    color: '#4a8c90',
+    color: '#7A856F',
     letterSpacing: 1.0,
     textTransform: 'uppercase',
     marginBottom: (isWebMobile && isShortMobile) ? 6 : isMobile ? 8 : 14,
@@ -1462,8 +1578,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: isShortMobile ? 13 : isMobile ? 15 : 18,
     borderRadius: 50,
     borderWidth: 1.5,
-    borderColor: 'rgba(15,143,135,0.36)',
-    backgroundColor: 'rgba(255,255,255,0.94)',
+    borderColor: 'rgba(112,136,90,0.34)',
+    backgroundColor: 'rgba(255,255,250,0.9)',
   },
   chipActive: {
     backgroundColor: TEAL,
@@ -1480,7 +1596,7 @@ const styles = StyleSheet.create({
   chipText: {
     fontSize: isMobile ? 15 : 15,
     fontWeight: '800',
-    color: '#12383c',
+    color: '#526047',
   },
   chipTextActive: {
     color: '#fff',
