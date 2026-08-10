@@ -18,6 +18,7 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 const mockListeners = new Map<string, Set<(...args: unknown[]) => void>>();
 const mockBackHandlers = new Set<() => boolean>();
 const browserListeners = new Map<string, Set<() => void>>();
+const mockAppStateListeners = new Set<(state: string) => void>();
 const mockReplace = jest.fn();
 let mockIsFocused = true;
 let mockPathname = '/groups-dashboard';
@@ -46,6 +47,12 @@ jest.mock('react-native', () => {
       ...props,
       style: typeof props.style === 'function' ? props.style({ pressed: false }) : props.style,
     })),
+    AppState: {
+      addEventListener: jest.fn((_eventName: string, listener: (state: string) => void) => {
+        mockAppStateListeners.add(listener);
+        return { remove: () => mockAppStateListeners.delete(listener) };
+      }),
+    },
     DeviceEventEmitter: {
       addListener: jest.fn((eventName: string, callback: (...args: unknown[]) => void) => {
         const set = mockListeners.get(eventName) ?? new Set<(...args: unknown[]) => void>();
@@ -168,6 +175,10 @@ const dispatchBrowserEvent = (eventName: string) => {
   for (const listener of browserListeners.get(eventName) ?? []) listener();
 };
 
+const emitAndroidAppState = (state: 'active' | 'background') => {
+  for (const listener of mockAppStateListeners) listener(state);
+};
+
 const row = (userId: string, userName: string, role: 'admin' | 'member' = 'member') => ({
   userId,
   userName,
@@ -253,6 +264,7 @@ const createDeferred = <T,>() => {
 beforeEach(async () => {
   mockListeners.clear();
   browserListeners.clear();
+  mockAppStateListeners.clear();
   mockBackHandlers.clear();
   mockAuthCallback = null;
   jest.clearAllMocks();
@@ -576,6 +588,49 @@ describe('Groups dashboard cache-first and offline UX', () => {
     const texts = allText(tree).join(' ');
 
     expect(texts).toContain("You're offline. No saved group data is available yet.");
+    expect(texts).not.toContain('Network request failed');
+  });
+
+  it('shows cached dashboard data offline on Android and reconciles after native reconnect', async () => {
+    mockPlatformOS = 'android';
+    mockIsNetworkFailure.mockImplementation((error: unknown) => error instanceof TypeError);
+    mockGetCachedGroupDashboard.mockResolvedValue([row(UID, 'Offline Android Person')]);
+    mockGetGroupDashboard
+      .mockRejectedValueOnce(new TypeError('Network request failed'))
+      .mockResolvedValue([row(UID, 'Reconciled Android Person')]);
+
+    const tree = await renderScreen();
+    await act(async () => {
+      emitAndroidAppState('background');
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(allText(tree).join(' ')).toContain('Offline Android Person');
+    expect(allText(tree).join(' ')).toContain("You're offline. Changes will sync when you're back online.");
+
+    await act(async () => {
+      emitAndroidAppState('active');
+      await Promise.resolve();
+    });
+    await flush();
+
+    const texts = allText(tree).join(' ');
+    expect(texts).toContain('Reconciled Android Person');
+    expect(texts).not.toContain("You're offline. Changes will sync when you're back online.");
+    expect(texts).not.toContain('Network request failed');
+  });
+
+  it('shows the no-cache message for a Failed to fetch error on Android', async () => {
+    mockPlatformOS = 'android';
+    mockIsNetworkFailure.mockImplementation((error: unknown) => error instanceof TypeError);
+    mockGetGroupDashboard.mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+    const tree = await renderScreen();
+    const texts = allText(tree).join(' ');
+
+    expect(texts).toContain("You're offline. No saved group data is available yet.");
+    expect(texts).not.toContain('Failed to fetch');
     expect(texts).not.toContain('Network request failed');
   });
 });

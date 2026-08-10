@@ -5,6 +5,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   Modal,
   Platform,
   Pressable,
@@ -62,6 +63,12 @@ export default function GroupsScreen() {
   const [joinError, setJoinError] = useState('');
 
   useEffect(() => {
+    if (Platform.OS === 'android') {
+      const subscription = AppState.addEventListener('change', (nextState) => {
+        if (nextState === 'active') setIsOffline(false);
+      });
+      return () => subscription.remove();
+    }
     if (Platform.OS !== 'web' || typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
       return undefined;
     }
