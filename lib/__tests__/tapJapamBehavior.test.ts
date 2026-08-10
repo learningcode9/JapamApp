@@ -2,6 +2,10 @@ import {
   computeTapTransition,
   createTapIdentitySnapshot,
 } from '../tapJapamBehavior';
+import {
+  canRestoreTapWorkspace,
+  createTapWorkspaceRestoreCoordinator,
+} from '../tapJapamWorkspace';
 
 describe('Tap Japam behavior', () => {
   it('counts rapid taps without suppression', () => {
@@ -42,5 +46,29 @@ describe('Tap Japam behavior', () => {
     japamName = 'Japam B';
 
     expect(snapshot).toEqual({ userId: 'user-1', japamId: 'japam-a', japamName: 'Japam A' });
+  });
+
+  it('invalidates stale A restore work across A→B→A', () => {
+    const coordinator = createTapWorkspaceRestoreCoordinator();
+    const applied: string[] = [];
+
+    const restoreA = coordinator.begin('japam-a');
+    const restoreB = coordinator.begin('japam-b');
+    if (coordinator.isCurrent(restoreA)) applied.push(restoreA.japamId);
+    if (coordinator.isCurrent(restoreB)) applied.push(restoreB.japamId);
+
+    const restoreAAgain = coordinator.begin('japam-a');
+    if (coordinator.isCurrent(restoreB)) applied.push(restoreB.japamId);
+    if (coordinator.isCurrent(restoreAAgain)) applied.push(restoreAAgain.japamId);
+
+    expect(applied).toEqual(['japam-b', 'japam-a']);
+    expect(coordinator.isCurrent(restoreA)).toBe(false);
+    expect(coordinator.isCurrent(restoreB)).toBe(false);
+  });
+
+  it('does not allow a signed-in restore without a concrete Japam scope', () => {
+    expect(canRestoreTapWorkspace('user-1', null)).toBe(false);
+    expect(canRestoreTapWorkspace('user-1', 'japam-a')).toBe(true);
+    expect(canRestoreTapWorkspace(null, 'japam-a')).toBe(true);
   });
 });

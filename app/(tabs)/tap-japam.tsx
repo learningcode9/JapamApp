@@ -15,6 +15,11 @@ import {
   type TapIdentitySnapshot,
 } from '../../lib/tapJapamBehavior';
 import { tapSaveSession } from '../../lib/tapSaveSession';
+import {
+  canRestoreTapWorkspace,
+  createTapWorkspaceRestoreCoordinator,
+  type TapWorkspaceRestoreToken,
+} from '../../lib/tapJapamWorkspace';
 import { useCurrentJapam } from '../../contexts/current-japam-context';
 import CurrentJapamHeaderButton from '../../components/CurrentJapamHeaderButton';
 import { CircularProgressArc } from '../../components/CircularProgressArc';
@@ -69,6 +74,12 @@ type Session = {
   source?: string;
   completionId?: string;
   syncStatus?: 'pending' | 'synced';
+};
+
+type TapRestoreOptions = {
+  preserveManualCount?: boolean;
+  workspaceId?: string | null;
+  token?: TapWorkspaceRestoreToken | null;
 };
 
 type TimerStateRow = {
@@ -208,21 +219,10 @@ const isAuthPending = async () => {
 
 export default function JapamMain() {
   const { currentJapam, isLoading: isJapamContextLoading } = useCurrentJapam();
-  // The Japam this screen's completions belong to. Tap Japam has no discrete "Start" button (see
-  // handleStart below, which is not wired to any visible control on this screen) -- tapping the
-  // circle is the actual interaction, with no clear start/stop boundary of its own. Treating
-  // "arriving at this screen to tap" as the practical equivalent of pressing Start: captured once
-  // per focus (not on every tap), so switching the app's current Japam elsewhere while the user
-  // keeps tapping here never retroactively changes what those taps are attributed to. Refs, not
-  // state, matching the same discipline as Timer/Home's equivalent wiring.
+  const currentJapamId = currentJapam?.id ?? null;
+  const currentJapamName = currentJapam?.name ?? null;
   const activeJapamIdRef = useRef<string | null>(null);
   const activeJapamNameRef = useRef<string | null>(null);
-  useFocusEffect(
-    useCallback(() => {
-      activeJapamIdRef.current = currentJapam?.id ?? null;
-      activeJapamNameRef.current = currentJapam?.name ?? null;
-    }, [currentJapam])
-  );
 
   const insets = useSafeAreaInsets();
   const tabBarSpaceFromBottom = 74 + (isMobile
@@ -237,6 +237,7 @@ export default function JapamMain() {
   const [, setDayStreak] = useState(0);
   const [seconds, setSeconds] = useState(0);
   const [hasRestoredTotal, setHasRestoredTotal] = useState(false);
+  const [restoredWorkspaceId, setRestoredWorkspaceId] = useState<string | null>(null);
   const [hasRestoredTimer, setHasRestoredTimer] = useState(false);
   const [minutesInput, setMinutesInput] = useState(String(DEFAULT_TIMER_MINUTES));
   const [targetSeconds, setTargetSeconds] = useState(DEFAULT_TIMER_MINUTES * 60);
@@ -292,8 +293,16 @@ export default function JapamMain() {
   const tapMalaCompletionGuardRef = useRef(createMalaCompletionGuard());
   const startTimerIntervalRef = useRef<() => void>(() => {});
   const appStateRef = useRef(AppState.currentState);
-  const restoreTodayTotalRef = useRef<() => Promise<void>>(async () => {});
-  const isRestoringRef = useRef(false);
+  const restoreTodayTotalRef = useRef<(options?: TapRestoreOptions) => Promise<void>>(async () => {});
+  const currentJapamIdRef = useRef<string | null>(null);
+  const workspaceRestoreCoordinatorRef = useRef(createTapWorkspaceRestoreCoordinator());
+  const restoreInFlightRef = useRef(new Set<number>());
+
+  useEffect(() => {
+    currentJapamIdRef.current = currentJapamId;
+    activeJapamIdRef.current = currentJapamId;
+    activeJapamNameRef.current = currentJapamName;
+  }, [currentJapamId, currentJapamName]);
 
   const glowAnim = useRef(new Animated.Value(0)).current;
 
@@ -681,7 +690,11 @@ export default function JapamMain() {
   );
 
   const refreshDayStreak = useCallback(
-    async (options?: { userId?: string | null; japamId?: string | null }) => {
+    async (options?: {
+      userId?: string | null;
+      japamId?: string | null;
+      isCurrentWorkspace?: () => boolean;
+    }) => {
       const activeUserId =
         options?.userId === undefined
           ? await AsyncStorage.getItem(USER_ID_KEY)
@@ -706,6 +719,7 @@ export default function JapamMain() {
         getPreviousDateKey
       );
 
+      if (options?.isCurrentWorkspace?.() === false) return;
       setDayStreak(nextStreak);
     },
     []
@@ -782,128 +796,174 @@ export default function JapamMain() {
     if (!response.ok) console.log('Total save error:', await response.text());
   };
 
-  const restoreTodayTotal = useCallback(async (options?: { preserveManualCount?: boolean }) => {
-    if (isRestoringRef.current) return;
-    isRestoringRef.current = true;
+  const restoreTodayTotal = useCallback(async (options: TapRestoreOptions = {}) => {
+    const preserveManualCount = Boolean(options.preserveManualCount);
+    const japamId = options.workspaceId ?? currentJapamIdRef.current;
+    const token = options.token ?? workspaceRestoreCoordinatorRef.current.current();
+
+    // There is no valid Tap restore until the provider has selected a concrete Japam. In
+    // particular, a signed-in user must never fall through to the legacy/null scope.
+    if (!japamId || !token || !workspaceRestoreCoordinatorRef.current.isCurrent(token)) return;
+    if (restoreInFlightRef.current.has(token.generation)) return;
+    restoreInFlightRef.current.add(token.generation);
+
+    const isCurrentWorkspace = () =>
+      currentJapamIdRef.current === japamId && workspaceRestoreCoordinatorRef.current.isCurrent(token);
+
     try {
-    const preserveManualCount = Boolean(options?.preserveManualCount);
-    const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
-    const todayKey = getLocalDateKey();
-    // Captured once per focus by the ref above (see its own comment) -- every read/write below
-    // uses this SAME value, so a Japam switch elsewhere never retroactively repaints this restore
-    // pass with a mix of two different Japams' cached numbers.
-    const japamId = activeJapamIdRef.current;
+      const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      const todayKey = getLocalDateKey();
+      if (!canRestoreTapWorkspace(savedUserId, japamId) || !isCurrentWorkspace()) return;
 
-    const getManualStoredTotal = async (userId: string | null) => {
-      const manualDate = await AsyncStorage.getItem(getJapamScopedKey(MANUAL_TOTAL_DATE_KEY, userId, japamId));
-      if (manualDate === todayKey) {
-        return Number((await AsyncStorage.getItem(getJapamScopedKey(MANUAL_TOTAL_KEY, userId, japamId))) || '0');
-      }
-
-      // Backward compatibility for users who already had manual progress saved
-      // before the dedicated manual storage keys existed.
-      const legacyDate = await AsyncStorage.getItem(getJapamScopedKey(TOTAL_DATE_KEY, userId, japamId));
-      if (manualDate === null && legacyDate === todayKey) {
-        return Number((await AsyncStorage.getItem(getJapamScopedKey(TOTAL_KEY, userId, japamId))) || '0');
-      }
-
-      return 0;
-    };
-
-    if (savedUserId) {
-      const localStoredTotal = await getManualStoredTotal(savedUserId);
-
-      if (localStoredTotal > 0 && !preserveManualCount) {
-        await restoreTotal(localStoredTotal, { userId: savedUserId, japamId });
-        totalRef.current = localStoredTotal;
-      }
-
-      try {
-        let remoteSessions: Session[] | null = null;
-
-        const remoteRows = await fetchJapamHistoryRows({
-          select: 'created_at,malas,count,user_name,completion_id,japam_id,japam_name',
-          userId: savedUserId,
-          order: { column: 'created_at', ascending: true },
-        });
-
-        if (remoteRows !== null) {
-          remoteSessions = remoteRows.map((row: any) => ({
-            date: row.created_at,
-            malas: Number(row.malas) || 0,
-            totalCount: Number(row.count) || 0,
-            duration: 0,
-            manual: false,
-            userId: savedUserId,
-            userName: row.user_name,
-            completionId: row.completion_id,
-            syncStatus: 'synced' as const,
-            japamId: row.japam_id ?? null,
-            japamName: row.japam_name ?? null,
-            }));
+      const getManualStoredTotal = async (userId: string | null) => {
+        const manualDate = await AsyncStorage.getItem(getJapamScopedKey(MANUAL_TOTAL_DATE_KEY, userId, japamId));
+        if (manualDate === todayKey) {
+          return Number((await AsyncStorage.getItem(getJapamScopedKey(MANUAL_TOTAL_KEY, userId, japamId))) || '0');
         }
 
-        if (remoteSessions !== null) {
-          const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
-          const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
-          const rawTomb = await AsyncStorage.getItem('deletedCompletions');
-          const tombSet = new Set<string>(rawTomb ? JSON.parse(rawTomb) : []);
-          const mergedHistory = mergeHistories(localHistory, remoteSessions).filter((s) => {
-            const day = toLocalDayKey(s.date);
-            return (day === 'unknown' || day <= todayKey) && !tombSet.has(s.completionId as string);
-          });
-
-          await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
-
-          if (!preserveManualCount) {
-            await restoreTotal(localStoredTotal, { userId: savedUserId, japamId });
-            totalRef.current = localStoredTotal;
-          }
-          await refreshDayStreak({ userId: savedUserId, japamId });
-        } else {
-          if (!preserveManualCount) {
-            await restoreTotal(localStoredTotal, { userId: savedUserId, japamId });
-            totalRef.current = localStoredTotal;
-          }
-          await refreshDayStreak({ userId: savedUserId, japamId });
+        // Backward compatibility for users who already had manual progress saved
+        // before the dedicated manual storage keys existed.
+        const legacyDate = await AsyncStorage.getItem(getJapamScopedKey(TOTAL_DATE_KEY, userId, japamId));
+        if (manualDate === null && legacyDate === todayKey) {
+          return Number((await AsyncStorage.getItem(getJapamScopedKey(TOTAL_KEY, userId, japamId))) || '0');
         }
-      } catch (error) {
-        console.log('Stats sync error, using local data:', error);
-        if (!preserveManualCount) {
+
+        return 0;
+      };
+
+      if (savedUserId) {
+        const localStoredTotal = await getManualStoredTotal(savedUserId);
+        if (!isCurrentWorkspace()) return;
+
+        if (localStoredTotal > 0 && !preserveManualCount) {
           await restoreTotal(localStoredTotal, { userId: savedUserId, japamId });
+          if (!isCurrentWorkspace()) return;
           totalRef.current = localStoredTotal;
         }
-        await refreshDayStreak({ userId: savedUserId, japamId });
+
+        // Local workspace restore is the tap-readiness boundary. Remote history hydration below
+        // is best-effort and must not make offline taps wait indefinitely.
+        if (!isCurrentWorkspace()) return;
+        setRestoredWorkspaceId(japamId);
+        setHasRestoredTotal(true);
+
+        try {
+          let remoteSessions: Session[] | null = null;
+
+          const remoteRows = await fetchJapamHistoryRows({
+            select: 'created_at,malas,count,user_name,completion_id,japam_id,japam_name',
+            userId: savedUserId,
+            order: { column: 'created_at', ascending: true },
+          });
+          if (!isCurrentWorkspace()) return;
+
+          if (remoteRows !== null) {
+            remoteSessions = remoteRows.map((row: any) => ({
+              date: row.created_at,
+              malas: Number(row.malas) || 0,
+              totalCount: Number(row.count) || 0,
+              duration: 0,
+              manual: false,
+              userId: savedUserId,
+              userName: row.user_name,
+              completionId: row.completion_id,
+              syncStatus: 'synced' as const,
+              japamId: row.japam_id ?? null,
+              japamName: row.japam_name ?? null,
+            }));
+          }
+
+          if (remoteSessions !== null) {
+            const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
+            if (!isCurrentWorkspace()) return;
+            const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
+            const rawTomb = await AsyncStorage.getItem('deletedCompletions');
+            if (!isCurrentWorkspace()) return;
+            const tombSet = new Set<string>(rawTomb ? JSON.parse(rawTomb) : []);
+            const mergedHistory = mergeHistories(localHistory, remoteSessions).filter((s) => {
+              const day = toLocalDayKey(s.date);
+              return (day === 'unknown' || day <= todayKey) && !tombSet.has(s.completionId as string);
+            });
+
+            await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
+            if (!isCurrentWorkspace()) return;
+
+            if (!preserveManualCount) {
+              await restoreTotal(localStoredTotal, { userId: savedUserId, japamId });
+              if (!isCurrentWorkspace()) return;
+              totalRef.current = localStoredTotal;
+            }
+            await refreshDayStreak({ userId: savedUserId, japamId, isCurrentWorkspace });
+          } else {
+            if (!preserveManualCount) {
+              await restoreTotal(localStoredTotal, { userId: savedUserId, japamId });
+              if (!isCurrentWorkspace()) return;
+              totalRef.current = localStoredTotal;
+            }
+            await refreshDayStreak({ userId: savedUserId, japamId, isCurrentWorkspace });
+          }
+        } catch (error) {
+          console.log('Stats sync error, using local data:', error);
+          if (!isCurrentWorkspace()) return;
+          if (!preserveManualCount) {
+            await restoreTotal(localStoredTotal, { userId: savedUserId, japamId });
+            if (!isCurrentWorkspace()) return;
+            totalRef.current = localStoredTotal;
+          }
+          await refreshDayStreak({ userId: savedUserId, japamId, isCurrentWorkspace });
+        }
+
+        if (!isCurrentWorkspace()) return;
+        setRestoredWorkspaceId(japamId);
+        setHasRestoredTotal(true);
+        return;
       }
 
+      if (!preserveManualCount) {
+        const manualDate = await AsyncStorage.getItem(getJapamScopedKey(MANUAL_TOTAL_DATE_KEY, null, japamId));
+        if (!isCurrentWorkspace()) return;
+        const guestTotal = manualDate === todayKey
+          ? Number((await AsyncStorage.getItem(getJapamScopedKey(MANUAL_TOTAL_KEY, null, japamId))) || '0')
+          : 0;
+        if (!isCurrentWorkspace()) return;
+        await restoreTotal(guestTotal, { userId: null, japamId });
+        if (!isCurrentWorkspace()) return;
+        totalRef.current = guestTotal;
+      } else {
+        setMalas(0);
+        setTotal(0);
+      }
+      await refreshDayStreak({ userId: null, japamId, isCurrentWorkspace });
+      if (!isCurrentWorkspace()) return;
+      setRestoredWorkspaceId(japamId);
       setHasRestoredTotal(true);
-      return;
+    } finally {
+      restoreInFlightRef.current.delete(token.generation);
     }
-
-    // Not logged in (guest) — restore today's in-progress count from this Japam's own guest-scoped
-    // keys (previously unkeyed/global, which is exactly what let a different Japam's cached total
-    // flash on screen after switching).
-    if (!preserveManualCount) {
-      const manualDate = await AsyncStorage.getItem(getJapamScopedKey(MANUAL_TOTAL_DATE_KEY, null, japamId));
-      const guestTotal = manualDate === todayKey
-        ? Number((await AsyncStorage.getItem(getJapamScopedKey(MANUAL_TOTAL_KEY, null, japamId))) || '0')
-        : 0;
-      await restoreTotal(guestTotal, { userId: null, japamId });
-      totalRef.current = guestTotal;
-    } else {
-      setMalas(0);
-      setTotal(0);
-    }
-    await refreshDayStreak({ userId: null, japamId });
-    setHasRestoredTotal(true);
-  } finally {
-    isRestoringRef.current = false;
-  }
   }, [refreshDayStreak, restoreTotal]);
 
   useEffect(() => {
     restoreTodayTotalRef.current = restoreTodayTotal;
   }, [restoreTodayTotal]);
+
+  useEffect(() => {
+    const coordinator = workspaceRestoreCoordinatorRef.current;
+    setHasRestoredTotal(false);
+    setRestoredWorkspaceId(null);
+    totalRef.current = 0;
+    setTotal(0);
+    setMalas(0);
+    setDayStreak(0);
+    setCount(0);
+
+    if (isJapamContextLoading || !currentJapamId) {
+      coordinator.invalidate();
+      return;
+    }
+
+    const token = coordinator.begin(currentJapamId);
+    void restoreTodayTotal({ workspaceId: currentJapamId, token });
+  }, [currentJapamId, isJapamContextLoading, restoreTodayTotal]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1136,7 +1196,9 @@ export default function JapamMain() {
         setUserName('');
         setShowUserModal(false);
         setDayStreak(0);
-        await restoreTotal(0, { userId: null });
+        if (!savedUserId) {
+          await restoreTotal(0, { userId: null });
+        }
       }
 
       if (savedUserId) {
@@ -1761,16 +1823,16 @@ export default function JapamMain() {
     const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
     const nextMalas = Math.floor(safeTotal / 108);
     const nextCount = safeTotal % 108;
+    const japamId = currentJapamIdRef.current;
+    const savedUserId = userIdRef.current;
 
-    void AsyncStorage.setItem(LAST_TOTAL_KEY, String(safeTotal));
     totalRef.current = safeTotal;
     setTotal(safeTotal);
     setMalas(nextMalas);
     setCount(nextCount);
 
     void (async () => {
-      const japamId = activeJapamIdRef.current;
-      const savedUserId = userIdRef.current;
+      if (!japamId) return;
       const todayKey = getLocalDateKey();
       await AsyncStorage.setItem(getJapamScopedKey(TOTAL_KEY, savedUserId, japamId), String(safeTotal));
       await AsyncStorage.setItem(getJapamScopedKey(MALAS_KEY, savedUserId, japamId), String(nextMalas));
@@ -1792,6 +1854,12 @@ export default function JapamMain() {
     if (!userName) { setShowUserModal(true); return false; }
     return true;
   };
+
+  const isTapWorkspaceReady =
+    !isJapamContextLoading &&
+    Boolean(currentJapamId) &&
+    hasRestoredTotal &&
+    restoredWorkspaceId === currentJapamId;
 
   const handleResetCount = () => {
     if (count === 0) return;
@@ -1818,14 +1886,12 @@ export default function JapamMain() {
 
   const handleTap = async () => {
     if (!requireLogin()) return;
-    if (isJapamContextLoading || !currentJapam?.id || !currentJapam?.name) {
-      Alert.alert('Please wait', 'Your current Japam is still loading. Please try again in a moment.');
-      return;
-    }
+    if (!isTapWorkspaceReady || !currentJapamId || !currentJapamName) return;
+    triggerDeepHardwarePulse(55);
     const tapIdentity = createTapIdentitySnapshot(
       userIdRef.current,
-      activeJapamIdRef.current,
-      activeJapamNameRef.current
+      currentJapamId,
+      currentJapamName
     );
     void primeWebCompletionAudio();
 
@@ -1856,10 +1922,7 @@ export default function JapamMain() {
 
   const handleStart = () => {
     if (!requireLogin()) return;
-    if (isJapamContextLoading || !currentJapam?.id || !currentJapam?.name) {
-      Alert.alert('Please wait', 'Your current Japam is still loading. Please try again in a moment.');
-      return;
-    }
+    if (!isTapWorkspaceReady || !currentJapamId || !currentJapamName) return;
     void primeWebCompletionAudio();
     const mins = Math.max(1, Math.floor(Number(minutesInput) || 1));
     const nextTargetSeconds = mins * 60;
@@ -1876,8 +1939,8 @@ export default function JapamMain() {
       // path isn't currently wired to any visible control on this screen (tapping the circle is
       // the real interaction, captured on focus above), but re-capturing here too keeps this
       // function correct on its own terms if it's ever reached.
-      activeJapamIdRef.current = currentJapam?.id ?? null;
-      activeJapamNameRef.current = currentJapam?.name ?? null;
+      activeJapamIdRef.current = currentJapamId;
+      activeJapamNameRef.current = currentJapamName;
     }
     timerStartedAtRef.current = Date.now() - nextSeconds * 1000;
     timerRef.current = { seconds: nextSeconds, isRunning: true, targetSeconds: nextTargetSeconds, minutesInput: String(mins), loopTimer };
@@ -2125,7 +2188,8 @@ export default function JapamMain() {
   };
 
   const todayLabel = new Date().toLocaleDateString();
-  const progressPercent = Math.min(100, Math.max(0, (count / 108) * 100));
+  const displayedCount = isTapWorkspaceReady ? count : 0;
+  const progressPercent = Math.min(100, Math.max(0, (displayedCount / 108) * 100));
   const progressRingBackground =
     Platform.OS === 'web'
       ? ({
@@ -2192,13 +2256,11 @@ export default function JapamMain() {
             <Pressable
               hitSlop={{ top: 40, bottom: 40, left: 40, right: 40 }}
               pressRetentionOffset={{ top: 45, bottom: 45, left: 45, right: 45 }}
-              onPress={() => {
-                triggerDeepHardwarePulse(55);
-                handleTap();
-              }}
+              onPress={handleTap}
+              disabled={!isTapWorkspaceReady}
               style={({ pressed }) => [
                 styles.progressPressable,
-                pressed && styles.progressPressed,
+                pressed && isTapWorkspaceReady && styles.progressPressed,
               ]}
             >
               <View style={{ width: progressRingSize, height: progressRingSize }}>
@@ -2220,7 +2282,7 @@ export default function JapamMain() {
                   ]}
                 >
                   <View style={styles.progressInner}>
-                    <Text style={styles.progressCount}>{count}</Text>
+                    <Text style={styles.progressCount}>{displayedCount}</Text>
                     <Text style={styles.progressGoal}>/ 108 malas</Text>
                   </View>
                 </View>
@@ -2232,10 +2294,10 @@ export default function JapamMain() {
             <View style={styles.tapProgressTrack}>
               <View style={[styles.tapProgressFill, { width: `${progressPercent}%` }]} />
             </View>
-            <Text style={styles.tapProgressText}>{count} / 108</Text>
+            <Text style={styles.tapProgressText}>{displayedCount} / 108</Text>
           </View>
 
-          {count > 0 && (
+          {isTapWorkspaceReady && count > 0 && (
             <Pressable style={styles.resetCountBtn} onPress={handleResetCount}>
               <Text style={styles.resetCountBtnText}>Reset Count</Text>
             </Pressable>
