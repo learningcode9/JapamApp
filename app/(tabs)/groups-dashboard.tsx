@@ -242,16 +242,16 @@ export default function GroupsDashboardScreen() {
     if (Platform.OS !== 'web' || typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
       return undefined;
     }
-    const updateOfflineState = () => {
-      const nextOffline = isBrowserOffline();
-      setIsOffline(nextOffline);
-      if (nextOffline) setLoading(false);
+    const handleOffline = () => {
+      setIsOffline(true);
+      setLoading(false);
     };
-    window.addEventListener('offline', updateOfflineState);
-    window.addEventListener('online', updateOfflineState);
+    const handleOnline = () => setIsOffline(false);
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('online', handleOnline);
     return () => {
-      window.removeEventListener('offline', updateOfflineState);
-      window.removeEventListener('online', updateOfflineState);
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
     };
   }, []);
 
@@ -739,7 +739,7 @@ export default function GroupsDashboardScreen() {
           </View>
         ) : null}
         {isOffline && hasCachedData ? (
-          <Text style={styles.offlineText}>You&apos;re offline. Showing saved group data.</Text>
+          <Text style={styles.offlineText}>You&apos;re offline. Changes will sync when you&apos;re back online.</Text>
         ) : null}
         {loading && !dashboardReady && !isOffline ? (
           <ActivityIndicator color={TEAL} style={styles.loadingSpinner} />

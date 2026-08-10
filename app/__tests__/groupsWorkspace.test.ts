@@ -17,6 +17,7 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 );
 
 const mockListeners = new Map<string, Set<(...args: unknown[]) => void>>();
+const browserListeners = new Map<string, Set<() => void>>();
 const mockBack = jest.fn();
 const mockPush = jest.fn();
 let mockPlatformOS = 'android';
@@ -151,6 +152,10 @@ const setBrowserOnline = (online: boolean) => {
   });
 };
 
+const dispatchBrowserEvent = (eventName: string) => {
+  for (const listener of browserListeners.get(eventName) ?? []) listener();
+};
+
 const groupRow = (groupId: string, name: string, role: 'admin' | 'member' = 'member') => ({
   groupId,
   name,
@@ -211,9 +216,23 @@ const createDeferred = <T,>() => {
 
 beforeEach(async () => {
   mockListeners.clear();
+  browserListeners.clear();
   jest.clearAllMocks();
   mockPlatformOS = 'android';
   setBrowserOnline(true);
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: {
+      addEventListener: (eventName: string, listener: () => void) => {
+        const listeners = browserListeners.get(eventName) ?? new Set<() => void>();
+        listeners.add(listener);
+        browserListeners.set(eventName, listeners);
+      },
+      removeEventListener: (eventName: string, listener: () => void) => {
+        browserListeners.get(eventName)?.delete(listener);
+      },
+    },
+  });
   await AsyncStorage.clear();
   await AsyncStorage.setItem('userId', UID);
   await AsyncStorage.setItem('userName', 'Test User');
@@ -489,7 +508,7 @@ describe('Groups offline UX', () => {
     const texts = allText(tree).join(' ');
 
     expect(texts).toContain('Cached Group');
-    expect(texts).toContain("You're offline. Showing saved group data.");
+    expect(texts).toContain("You're offline. Changes will sync when you're back online.");
     expect(texts).not.toContain('Network request failed');
     expect(mockGetMyGroups).not.toHaveBeenCalled();
   });
@@ -504,5 +523,26 @@ describe('Groups offline UX', () => {
     expect(texts).toContain("You're offline. No saved group data is available yet.");
     expect(texts).not.toContain('Network request failed');
     expect(tree.root.findAll((node: any) => node.type === 'ActivityIndicator')).toHaveLength(0);
+  });
+
+  it('clears the offline message and reconciles when the browser comes online', async () => {
+    mockPlatformOS = 'web';
+    setBrowserOnline(false);
+    mockGetCachedMyGroups.mockResolvedValue([groupRow(GROUP_A, 'Offline Group')]);
+    mockGetMyGroups.mockResolvedValue([groupRow(GROUP_A, 'Reconciled Group')]);
+
+    const tree = await renderScreen();
+    expect(allText(tree).join(' ')).toContain("You're offline. Changes will sync when you're back online.");
+
+    await act(async () => {
+      dispatchBrowserEvent('online');
+      await Promise.resolve();
+    });
+    await flush();
+
+    const texts = allText(tree).join(' ');
+    expect(texts).toContain('Reconciled Group');
+    expect(texts).not.toContain("You're offline. Changes will sync when you're back online.");
+    expect(mockGetMyGroups).toHaveBeenCalled();
   });
 });
