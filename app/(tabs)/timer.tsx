@@ -7,7 +7,7 @@ import {
   mergeHistories,
   toLocalDayKey,
 } from '../../lib/historyStore';
-import { activeJapams } from '../../lib/japams';
+import { activeJapams, type Japam } from '../../lib/japams';
 import { ZEN_BACKGROUND } from '../../constants/assets';
 import * as Google from 'expo-auth-session/providers/google';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -87,6 +87,17 @@ type Session = {
   syncStatus?: 'pending' | 'synced';
 };
 
+export type TimerWorkspaceStatsRequest = {
+  generation: number;
+  workspaceId: string | null;
+};
+
+export const isCurrentTimerWorkspaceStatsRequest = (
+  request: TimerWorkspaceStatsRequest,
+  currentGeneration: number,
+  activeWorkspaceId: string | null,
+) => request.generation === currentGeneration && request.workspaceId === activeWorkspaceId;
+
 const getLocalDateKey = (date = new Date()) => {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -116,6 +127,32 @@ const dedupeHistoryForStats = (history: Session[]): Session[] =>
   dedupeByCompletionId(history).filter(
     (item) => item.totalCount > 0 && toLocalDayKey(item.date) !== 'unknown'
   );
+
+export const resolveTimerWorkspaceStats = (
+  records: Session[],
+  userId: string | null,
+  workspaceId: string | null,
+  workspaceName: string | null,
+  japams: Japam[],
+  todayKey: string,
+) => {
+  const history = dedupeHistoryForStats(records).filter((item) => {
+    if (!userId) return !item.userId;
+    return item.userId === userId;
+  });
+  const includeBlankLegacy = workspaceId === activeJapams(japams)[0]?.id;
+  return japamScopedStatsFor(
+    history,
+    userId,
+    workspaceId,
+    workspaceName,
+    todayKey,
+    toLocalDayKey,
+    getPreviousDateKey,
+    { includeBlankLegacy },
+    japams,
+  );
+};
 
 // With Guest Mode hidden, a failed Google Sign-In leaves the user with no fallback into the app
 // — silently re-showing the same sign-in modal gives no explanation. Alert.alert is not
@@ -164,10 +201,25 @@ export default function TimerScreen() {
   const [todayCount, setTodayCount] = useState(0);
   const [dayStreak, setDayStreak] = useState(0);
   const deferredInstallPromptRef = useRef<any>(null);
+  const currentJapamIdRef = useRef<string | null>(currentJapam?.id ?? null);
+  const statsGenerationRef = useRef(0);
   const isIosDeviceWeb = isIOSDeviceWeb();
 
+  useEffect(() => {
+    currentJapamIdRef.current = currentJapam?.id ?? null;
+  }, [currentJapam?.id]);
+
+  useEffect(() => {
+    const subscription = DeviceEventEmitter.addListener(
+      'japam-did-switch',
+      ({ japamId }: { japamId?: string | null } = {}) => {
+        currentJapamIdRef.current = japamId ?? null;
+      },
+    );
+    return () => subscription.remove();
+  }, []);
+
   const rawNonceRef = useRef<string>('');
-  const isRestoringRef = useRef(false);
   const [hashedNonce, setHashedNonce] = useState<string>('');
   useEffect(() => {
     if (Platform.OS !== 'web') return;
@@ -230,91 +282,79 @@ export default function TimerScreen() {
   }, [guestNameInput]);
 
   const loadStats = useCallback(async () => {
-    if (isRestoringRef.current) return;
-    isRestoringRef.current = true;
-    try {
+    const request: TimerWorkspaceStatsRequest = {
+      generation: ++statsGenerationRef.current,
+      workspaceId: currentJapam?.id ?? null,
+    };
+    const isCurrentRequest = () => isCurrentTimerWorkspaceStatsRequest(
+      request,
+      statsGenerationRef.current,
+      currentJapamIdRef.current,
+    );
+
+    const applyStats = (records: Session[], userId: string | null) => {
+      const scopedStats = resolveTimerWorkspaceStats(
+        records,
+        userId,
+        request.workspaceId,
+        currentJapam?.name ?? null,
+        japams,
+        getLocalDateKey(),
+      );
+
+      setTodayCount(scopedStats.todayTotalCount);
+      setMalasToday(scopedStats.todayMalas);
+      setDayStreak(scopedStats.dayStreak);
+    };
+
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
-    const todayKey = getLocalDateKey();
     const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
     const localHistory = parseHistory(rawHistory);
-    let mergedHistory = localHistory;
+    if (!isCurrentRequest()) return;
 
-    // Option A: anonymous guest data syncs to Supabase immediately, same as a signed-in user —
-    // no anonymous-specific suppression here.
-    if (userId) {
-        try {
-          const remoteRows = await fetchJapamHistoryRows({
-            select: 'id,created_at,malas,count,user_name,completion_id,japam_id,japam_name',
-            userId,
-            order: { column: 'created_at', ascending: true },
-            limit: 10000,
-          });
+    // Local-first: the active Japam's cached records are displayed before any remote
+    // reconciliation can block or complete.
+    applyStats(localHistory, userId);
 
-          if (remoteRows !== null) {
-            const remoteHistory: Session[] = remoteRows.map((row: any) => ({
-              date: row.created_at,
-              malas: Number(row.malas) || Math.floor((Number(row.count) || 0) / 108),
-              totalCount: Number(row.count) || (Number(row.malas) || 0) * 108,
-              duration: 0,
-              manual: false,
-              userId,
-              userName: row.user_name,
-              completionId: row.completion_id,
-              syncStatus: 'synced' as const,
-              japamId: row.japam_id ?? null,
-              japamName: row.japam_name ?? null,
-            }));
-            mergedHistory = mergeHistories(localHistory, remoteHistory);
-            const rawTombData = await AsyncStorage.getItem('deletedCompletions');
-            if (rawTombData) {
-              const tombIds = new Set<string>(JSON.parse(rawTombData) as string[]);
-              if (tombIds.size > 0) {
-                mergedHistory = mergedHistory.filter(
-                  (item) => !tombIds.has(item.completionId ?? '')
-                );
-              }
-            }
-          }
-        } catch {
-          console.log('[SYNC_FAILED] source=timer-stats-restore reason=network');
+    if (!userId) return;
+
+    try {
+      const remoteRows = await fetchJapamHistoryRows({
+        select: 'id,created_at,malas,count,user_name,completion_id,japam_id,japam_name',
+        userId,
+        order: { column: 'created_at', ascending: true },
+        limit: 10000,
+      });
+      if (!isCurrentRequest() || remoteRows === null) return;
+
+      const remoteHistory: Session[] = remoteRows.map((row: any) => ({
+        date: row.created_at,
+        malas: Number(row.malas) || Math.floor((Number(row.count) || 0) / 108),
+        totalCount: Number(row.count) || (Number(row.malas) || 0) * 108,
+        duration: 0,
+        manual: false,
+        userId,
+        userName: row.user_name,
+        completionId: row.completion_id,
+        syncStatus: 'synced' as const,
+        japamId: row.japam_id ?? null,
+        japamName: row.japam_name ?? null,
+      }));
+      let mergedHistory = mergeHistories(localHistory, remoteHistory);
+      const rawTombData = await AsyncStorage.getItem('deletedCompletions');
+      if (!isCurrentRequest()) return;
+      if (rawTombData) {
+        const tombIds = new Set<string>(JSON.parse(rawTombData) as string[]);
+        if (tombIds.size > 0) {
+          mergedHistory = mergedHistory.filter(
+            (item) => !tombIds.has(item.completionId ?? '')
+          );
         }
       }
-
-    const history = dedupeHistoryForStats(mergedHistory).filter((item) => {
-      if (!userId) return !item.userId;
-      return item.userId === userId;
-    });
-
-    // Scoped to the currently selected Japam only -- Home/Timer must never show a combined total
-    // across every Japam (product requirement: Home/Timer/Tap Japam always reflect the selected
-    // Japam, matching History/My Japams). Routed through japamScopedStatsFor, which uses the SAME
-    // filterByJapam selector History uses (dedupe + strict japamId match + legacy null/name
-    // fallback) so Timer and History can never disagree on which records belong to the selected
-    // Japam -- including null-japamId legacy records that match the selected Japam's name.
-    const japamId = currentJapam?.id ?? null;
-    const includeBlankLegacy = japamId === activeJapams(japams)[0]?.id;
-    const scopedStats = japamScopedStatsFor(
-      history,
-      userId,
-      japamId,
-      currentJapam?.name ?? null,
-      todayKey,
-      toLocalDayKey,
-      getPreviousDateKey,
-      { includeBlankLegacy },
-      // Pass the live Japam list so legacy-name attribution is ambiguity-safe and identical to
-      // My Japams' statsByJapamWithAttribution (shared rule).
-      japams,
-    );
-    const safeTodayTotal = scopedStats.todayTotalCount;
-    const nextStreak = scopedStats.dayStreak;
-
-    setTodayCount(safeTodayTotal);
-    setMalasToday(scopedStats.todayMalas);
-    setDayStreak(nextStreak);
-  } finally {
-    isRestoringRef.current = false;
-  }
+      if (isCurrentRequest()) applyStats(mergedHistory, userId);
+    } catch {
+      console.log('[SYNC_FAILED] source=timer-stats-restore reason=network');
+    }
   }, [currentJapam, japams]);
 
   useFocusEffect(

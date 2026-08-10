@@ -419,4 +419,94 @@ describe('Home offline workspace total isolation', () => {
 
     (AsyncStorage.setItem as jest.Mock).mockImplementation(originalSetItem);
   });
+
+  it('recomputes the active workspace day streak on A→B→A using local History', async () => {
+    const today = new Date();
+    const todayIso = today.toISOString();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const localHistory = [
+      {
+        date: todayIso,
+        malas: 1,
+        totalCount: 108,
+        duration: 0,
+        manual: false,
+        userId: 'user-1',
+        completionId: 'a-today',
+        syncStatus: 'synced' as const,
+        japamId: 'workspace-a',
+        japamName: 'Japam A',
+      },
+      {
+        date: yesterday.toISOString(),
+        malas: 1,
+        totalCount: 108,
+        duration: 0,
+        manual: false,
+        userId: 'user-1',
+        completionId: 'a-yesterday',
+        syncStatus: 'synced' as const,
+        japamId: 'workspace-a',
+        japamName: 'Japam A',
+      },
+      {
+        date: todayIso,
+        malas: 1,
+        totalCount: 108,
+        duration: 0,
+        manual: false,
+        userId: 'user-1',
+        completionId: 'b-today',
+        syncStatus: 'synced' as const,
+        japamId: 'workspace-b',
+        japamName: 'Japam B',
+      },
+    ];
+    await AsyncStorage.multiSet([
+      ['userId', 'user-1'],
+      ['userName', 'Test User'],
+      ['history', JSON.stringify(localHistory)],
+    ]);
+
+    let tree: any;
+    await act(async () => {
+      tree = renderer.create(React.createElement(JapamMain));
+      await Promise.resolve();
+    });
+    await flush();
+
+    const readDayStreak = () => {
+      const label = tree.root.findAll(
+        (node: any) => node.type === 'Text' && node.children?.[0] === 'Day streak'
+      )[0];
+      const statColumn = label.parent?.parent;
+      return statColumn
+        .findAll((node: any) => node.type === 'Text')
+        .map((node: any) => node.children?.[0])
+        .find((value: unknown) => value !== 'Day streak');
+    };
+    expect(readDayStreak()).toBe('2');
+
+    await act(async () => {
+      mockCurrentJapamId = 'workspace-b';
+      mockDeviceEventEmitter.emit('japam-did-switch', { japamId: 'workspace-b' });
+      tree.update(React.createElement(JapamMain));
+      await Promise.resolve();
+    });
+    await flush();
+    expect(readDayStreak()).toBe('1');
+
+    await act(async () => {
+      mockCurrentJapamId = 'workspace-a';
+      mockDeviceEventEmitter.emit('japam-did-switch', { japamId: 'workspace-a' });
+      tree.update(React.createElement(JapamMain));
+      await Promise.resolve();
+    });
+    await flush();
+    expect(readDayStreak()).toBe('2');
+
+    mockFetchResolvers.forEach((resolve) => resolve(null));
+    await flush();
+  });
 });
