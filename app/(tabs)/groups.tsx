@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -18,8 +18,11 @@ import {
 import {
   attachGroupMembershipToJapam,
   createGroup,
+  getCachedMyGroups,
+  getCachedMyUnassignedGroups,
   getMyGroups,
   getMyUnassignedGroups,
+  isNetworkFailure,
   joinGroupByInviteCode,
   type CreateGroupResult,
   type MyGroup,
@@ -30,6 +33,9 @@ const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
 const TEAL = '#0F8F87';
 
+const isBrowserOffline = (): boolean =>
+  Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.onLine === false;
+
 export default function GroupsScreen() {
   const router = useRouter();
   const { currentJapamId, currentJapam, isLoading: japamLoading } = useCurrentJapam();
@@ -39,6 +45,8 @@ export default function GroupsScreen() {
   const [loading, setLoading] = useState(true);
   const [groups, setGroups] = useState<MyGroup[]>([]);
   const [unassignedGroups, setUnassignedGroups] = useState<MyGroup[]>([]);
+  const [hasCachedData, setHasCachedData] = useState(false);
+  const [isOffline, setIsOffline] = useState(isBrowserOffline);
   const [listError, setListError] = useState('');
   const [attachError, setAttachError] = useState('');
 
@@ -52,6 +60,19 @@ export default function GroupsScreen() {
   const [joinCode, setJoinCode] = useState('');
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState('');
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
+      return undefined;
+    }
+    const updateOfflineState = () => setIsOffline(isBrowserOffline());
+    window.addEventListener('offline', updateOfflineState);
+    window.addEventListener('online', updateOfflineState);
+    return () => {
+      window.removeEventListener('offline', updateOfflineState);
+      window.removeEventListener('online', updateOfflineState);
+    };
+  }, []);
 
   // Stale-response guard: only the response for the CURRENTLY selected workspace may populate
   // the list, so a slow Workspace-A response can never overwrite Workspace-B state after a
@@ -89,6 +110,7 @@ export default function GroupsScreen() {
       if (!savedUserId || !currentJapamId) {
         setGroups([]);
         setUnassignedGroups([]);
+        setHasCachedData(false);
         // Clear the in-flight marker too, so a slow response from a previously selected workspace
         // can never repopulate the list after the user deselects/leaves the workspace.
         requestJapamRef.current = null;
@@ -102,6 +124,31 @@ export default function GroupsScreen() {
       setListError('');
       setAttachError('');
       requestJapamRef.current = currentJapamId;
+
+      // Local-first: render the last-known cached lists immediately (pure AsyncStorage reads that
+      // never hit the network), so an offline cold start opens instantly instead of hanging on the
+      // remote RPCs (whose supabase getSession() triggers a network token refresh for a near-expiry
+      // session that stalls offline). The remote reconciliation below then replaces this with fresh
+      // data in the background.
+      const [cachedGroups, cachedUnassigned] = await Promise.all([
+        getCachedMyGroups(savedUserId, currentJapamId),
+        getCachedMyUnassignedGroups(),
+      ]);
+      const hasCache = cachedGroups !== null || cachedUnassigned !== null;
+      setHasCachedData(hasCache);
+      if (requestJapamRef.current === currentJapamId) {
+        setGroups(cachedGroups ?? []);
+        setUnassignedGroups(cachedUnassigned ?? []);
+        lastLoadedKeyRef.current = loadKey;
+        settledLoadKeyRef.current = loadKey;
+        setLoading(false);
+      }
+
+      if (isOffline) {
+        setLoading(false);
+        return;
+      }
+
       try {
         const [result, unassigned] = await Promise.all([
           getMyGroups(savedUserId, currentJapamId),
@@ -110,10 +157,19 @@ export default function GroupsScreen() {
         if (requestJapamRef.current !== currentJapamId) return;
         setGroups(result);
         setUnassignedGroups(unassigned);
+        setIsOffline(false);
         lastLoadedKeyRef.current = loadKey;
       } catch (error: any) {
         if (requestJapamRef.current !== currentJapamId) return;
-        setListError(error?.message || 'Could not load your groups.');
+        // A server-side (RLS/authorization/data) error must surface even when the cache was shown —
+        // the user is never left looking at stale groups while being denied access server-side. A
+        // pure transport failure keeps the cached list already rendered (offline), with no error.
+        if (isNetworkFailure(error)) {
+          setIsOffline(true);
+          setListError('');
+        } else {
+          setListError(error?.message || 'Could not load your groups.');
+        }
       } finally {
         if (requestJapamRef.current === currentJapamId) {
           settledLoadKeyRef.current = loadKey;
@@ -131,7 +187,7 @@ export default function GroupsScreen() {
       }
     });
     return promise;
-  }, [currentJapamId]);
+  }, [currentJapamId, isOffline]);
 
   useFocusEffect(
     useCallback(() => {
@@ -291,6 +347,10 @@ export default function GroupsScreen() {
           </Pressable>
         </View>
 
+        {isOffline && hasCachedData ? (
+          <Text style={styles.offlineText}>You&apos;re offline. Showing saved group data.</Text>
+        ) : null}
+
         {initialLoading ? (
           <ActivityIndicator color={TEAL} style={styles.loadingSpinner} />
         ) : listError ? (
@@ -299,6 +359,10 @@ export default function GroupsScreen() {
           <Text style={styles.emptyText}>
             Groups are tied to the Japam you&apos;ve selected. Open the My Japams tab and pick a Japam to
             see its groups.
+          </Text>
+        ) : isOffline && !hasCachedData && groups.length === 0 && unassignedGroups.length === 0 ? (
+          <Text style={styles.offlineText}>
+            You&apos;re offline. No saved group data is available yet.
           </Text>
         ) : groups.length === 0 && unassignedGroups.length === 0 ? (
           <Text style={styles.emptyText}>
@@ -499,6 +563,7 @@ const styles = StyleSheet.create({
   attachButtonText: { color: '#fff', fontWeight: '800', fontSize: 14 },
   loadingSpinner: { marginTop: 24 },
   emptyText: { color: '#365f61', fontSize: 15, lineHeight: 22, textAlign: 'center', marginTop: 24 },
+  offlineText: { color: '#365f61', fontSize: 14, lineHeight: 20, textAlign: 'center', marginTop: 14 },
   errorText: { color: '#b91c1c', fontSize: 14, marginBottom: 12, textAlign: 'center' },
   groupRow: {
     flexDirection: 'row',
