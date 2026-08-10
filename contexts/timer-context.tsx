@@ -1373,14 +1373,23 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     retryPendingTimerCompletionInFlightRef.current = true;
     try {
       const pending = await loadPendingTimerCompletions();
+      // Snapshot the active/restored session before any save can finalize it and clear the live
+      // ref. This keeps all queued loops from the same session consistent while protecting a
+      // newer active session from replaying an older session's queue.
+      const restoredSession = await readPersistedSessionIdentity();
+      const activeSessionId = timerSessionIdRef.current || restoredSession.sessionId;
       for (const item of pending) {
+        if (activeSessionId && item.sessionId !== activeSessionId) {
+          processedCompletionLoopsRef.current.delete(item.loopNumber);
+          continue;
+        }
         const saveResult = await saveSession(item);
         if (saveResult === 'retryable-skip') {
           processedCompletionLoopsRef.current.delete(item.loopNumber);
           continue;
         }
         await removePendingTimerCompletion(item.completionId);
-        if (item.sessionId === timerSessionIdRef.current) {
+        if (item.sessionId === activeSessionId) {
           completedLoopsRef.current = Math.max(completedLoopsRef.current, item.loopNumber);
           setCompletedLoops(completedLoopsRef.current);
           updateTimerState({ completedLoops: completedLoopsRef.current });
@@ -1392,7 +1401,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     } finally {
       retryPendingTimerCompletionInFlightRef.current = false;
     }
-  }, [finalizeCompletedTimerSession, saveSession]);
+  }, [finalizeCompletedTimerSession, readPersistedSessionIdentity, saveSession]);
 
   const hydratePersistedSessionJapamIdentity = useCallback(async () => {
     if (activeJapamIdRef.current && activeJapamNameRef.current) {

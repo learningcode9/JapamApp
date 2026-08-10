@@ -494,6 +494,87 @@ describe('TimerProvider restored/native final-loop retry', () => {
     expect(getTimerState().sessionId).toBe(newSessionId);
   });
 
+  it('replays current-session loops into History and completedLoops UI', async () => {
+    const sessionId = 'timer-current-session-replay';
+    await seedPersistedSession({
+      sessionId,
+      totalLoops: 5,
+      completedLoops: 3,
+      running: 'false',
+      seconds: 0,
+    });
+    mountedTree = await renderTimerProvider();
+    await waitForCondition(async () => currentTimer!.completedLoops === 3);
+
+    await AsyncStorage.setItem(TIMER_PENDING_COMPLETIONS_KEY, JSON.stringify([4, 5].map((loopNumber) => ({
+      version: 1,
+      userId: UID,
+      sessionId,
+      loopNumber,
+      totalLoops: 5,
+      japamId: JAPAM_A_ID,
+      japamName: JAPAM_A_NAME,
+      durationSeconds: 180,
+      completedAt: `2026-07-29T07:0${loopNumber}:00.000Z`,
+      completionId: makeLoopCompletionId(UID, sessionId, loopNumber),
+    }))));
+
+    await act(async () => {
+      mockListeners.get('change')?.forEach((cb) => cb('active'));
+      await Promise.resolve();
+    });
+    await waitForCondition(async () => (await readHistory()).length === 2 && (await readQueue()).length === 0);
+
+    expect(currentTimer!.completedLoops).toBe(5);
+    expect(getTimerState().completedLoops).toBe(5);
+    expect((await readHistory()).map((item: any) => item.completionId).sort()).toEqual([
+      makeLoopCompletionId(UID, sessionId, 4),
+      makeLoopCompletionId(UID, sessionId, 5),
+    ]);
+  });
+
+  it('defers foreign-session queued loops without changing current UI or History', async () => {
+    const activeSessionId = 'timer-active-session';
+    const foreignSessionId = 'timer-foreign-session';
+    await seedPersistedSession({
+      sessionId: activeSessionId,
+      totalLoops: 5,
+      completedLoops: 3,
+      running: 'false',
+      seconds: 0,
+    });
+    mountedTree = await renderTimerProvider();
+    await waitForCondition(async () => currentTimer!.completedLoops === 3);
+    const completedLoopsBeforeForeignRetry = getTimerState().completedLoops;
+
+    await AsyncStorage.setItem(TIMER_PENDING_COMPLETIONS_KEY, JSON.stringify([4, 5].map((loopNumber) => ({
+      version: 1,
+      userId: UID,
+      sessionId: foreignSessionId,
+      loopNumber,
+      totalLoops: 5,
+      japamId: JAPAM_A_ID,
+      japamName: JAPAM_A_NAME,
+      durationSeconds: 180,
+      completedAt: `2026-07-29T08:0${loopNumber}:00.000Z`,
+      completionId: makeLoopCompletionId(UID, foreignSessionId, loopNumber),
+    }))));
+
+    await act(async () => {
+      mockListeners.get('change')?.forEach((cb) => cb('active'));
+      await Promise.resolve();
+    });
+    await waitForCondition(async () => (await readQueue()).length === 2);
+
+    expect(await readHistory()).toHaveLength(0);
+    expect(currentTimer!.completedLoops).toBe(3);
+    expect(getTimerState().completedLoops).toBe(completedLoopsBeforeForeignRetry);
+    expect((await readQueue()).map((item) => item.sessionId)).toEqual([
+      foreignSessionId,
+      foreignSessionId,
+    ]);
+  });
+
   it('preserves original completion day across midnight retry', async () => {
     const sessionId = 'timer-cross-midnight';
     await AsyncStorage.setItem(TIMER_PENDING_COMPLETIONS_KEY, JSON.stringify([{
