@@ -17,6 +17,7 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 
 const mockListeners = new Map<string, Set<(...args: unknown[]) => void>>();
 const mockBackHandlers = new Set<() => boolean>();
+const browserListeners = new Map<string, Set<() => void>>();
 const mockReplace = jest.fn();
 let mockIsFocused = true;
 let mockPathname = '/groups-dashboard';
@@ -163,6 +164,10 @@ const setBrowserOnline = (online: boolean) => {
   });
 };
 
+const dispatchBrowserEvent = (eventName: string) => {
+  for (const listener of browserListeners.get(eventName) ?? []) listener();
+};
+
 const row = (userId: string, userName: string, role: 'admin' | 'member' = 'member') => ({
   userId,
   userName,
@@ -247,11 +252,25 @@ const createDeferred = <T,>() => {
 
 beforeEach(async () => {
   mockListeners.clear();
+  browserListeners.clear();
   mockBackHandlers.clear();
   mockAuthCallback = null;
   jest.clearAllMocks();
   mockPlatformOS = 'android';
   setBrowserOnline(true);
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: {
+      addEventListener: (eventName: string, listener: () => void) => {
+        const listeners = browserListeners.get(eventName) ?? new Set<() => void>();
+        listeners.add(listener);
+        browserListeners.set(eventName, listeners);
+      },
+      removeEventListener: (eventName: string, listener: () => void) => {
+        browserListeners.get(eventName)?.delete(listener);
+      },
+    },
+  });
   mockIsFocused = true;
   mockPathname = '/groups-dashboard';
   // The dashboard's 12s polling interval would otherwise keep the Node event loop alive.
@@ -509,10 +528,31 @@ describe('Groups dashboard cache-first and offline UX', () => {
     const texts = allText(tree).join(' ');
 
     expect(texts).toContain('Offline Person');
-    expect(texts).toContain("You're offline. Showing saved group data.");
+    expect(texts).toContain("You're offline. Changes will sync when you're back online.");
     expect(texts).not.toContain('Network request failed');
     expect(tree.root.findAll((node: any) => node.type === 'ActivityIndicator')).toHaveLength(0);
     expect(mockGetSession).not.toHaveBeenCalled();
+  });
+
+  it('clears the offline message and reconciles when the browser comes online', async () => {
+    mockPlatformOS = 'web';
+    setBrowserOnline(false);
+    mockGetCachedGroupDashboard.mockResolvedValue([row(UID, 'Offline Person')]);
+    mockGetGroupDashboard.mockResolvedValue([row(UID, 'Reconciled Person')]);
+
+    const tree = await renderScreen();
+    expect(allText(tree).join(' ')).toContain("You're offline. Changes will sync when you're back online.");
+
+    await act(async () => {
+      dispatchBrowserEvent('online');
+      await Promise.resolve();
+    });
+    await flush();
+
+    const texts = allText(tree).join(' ');
+    expect(texts).toContain('Reconciled Person');
+    expect(texts).not.toContain("You're offline. Changes will sync when you're back online.");
+    expect(mockGetGroupDashboard).toHaveBeenCalled();
   });
 
   it('shows the explicit no-cache offline message', async () => {

@@ -65,12 +65,13 @@ export default function GroupsScreen() {
     if (Platform.OS !== 'web' || typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
       return undefined;
     }
-    const updateOfflineState = () => setIsOffline(isBrowserOffline());
-    window.addEventListener('offline', updateOfflineState);
-    window.addEventListener('online', updateOfflineState);
+    const handleOffline = () => setIsOffline(true);
+    const handleOnline = () => setIsOffline(false);
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('online', handleOnline);
     return () => {
-      window.removeEventListener('offline', updateOfflineState);
-      window.removeEventListener('online', updateOfflineState);
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
     };
   }, []);
 
@@ -348,7 +349,7 @@ export default function GroupsScreen() {
         </View>
 
         {isOffline && hasCachedData ? (
-          <Text style={styles.offlineText}>You&apos;re offline. Showing saved group data.</Text>
+          <Text style={styles.offlineText}>You&apos;re offline. Changes will sync when you&apos;re back online.</Text>
         ) : null}
 
         {initialLoading ? (
