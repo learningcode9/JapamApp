@@ -29,7 +29,9 @@ export const isNetworkFailure = (error: unknown): boolean => {
   if (error !== null && typeof error === 'object' && (error as { status?: unknown }).status === 0) {
     return true;
   }
-  const message = String((error as { message?: unknown })?.message ?? '');
+  const message = typeof error === 'string'
+    ? error
+    : String((error as { message?: unknown })?.message ?? error ?? '');
   return /network request failed|fetch failed|networkerror|failed to fetch/i.test(message);
 };
 
