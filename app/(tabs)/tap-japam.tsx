@@ -1736,15 +1736,16 @@ export default function JapamMain() {
     }
 
     if (Platform.OS === 'android') {
-      // Double-pulse (35ms buzz, 15ms gap, 40ms buzz = 90ms total) at default amplitude
+      // Double-pulse (60ms buzz, 20ms gap, 60ms buzz = 140ms total) at default amplitude
       // (~255/255 max on Android 8+, still the strongest JS-reachable option — see prior note
       // on expo-haptics Heavy capping at 70/255). A single flat pulse of similar total length
       // reads as a smear/buzz on modern Samsung LRA motors; a short buzz-gap-buzz reads as a
       // firmer, more distinct "thump-thump" at the same perceived intensity budget.
-      // Total duration (90ms) is kept short so the pattern stays crisp.
+      // Total duration (140ms) is kept short enough that the pattern stays crisp under rapid
+      // tapping while each pulse is long enough to be clearly noticeable.
       // Each new Vibration.vibrate() call cancels the previous one, so rapid tapping never
       // accumulates overlapping buzzes — each tap gets its own clean pulse.
-      Vibration.vibrate([0, 35, 15, 40]);
+      Vibration.vibrate([0, 60, 20, 60]);
       return;
     }
 
@@ -1811,8 +1812,10 @@ export default function JapamMain() {
       }
 
       // Android: [0, 200, 80, 200] = start immediately, 200ms on, 80ms off, 200ms on
+      // The strong Vibration pattern runs alone: Haptics.notificationAsync() on Android issues
+      // a NEW Vibrator call via expo-haptics that cancels this pattern and plays only a weak
+      // amplitude-50/60 buzz, so it must not be layered after Vibration.vibrate().
       Vibration.vibrate(variant === 'final' ? [0, 300, 120, 300, 120, 500] : [0, 200, 80, 200]);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     } catch (error) {
       console.log('Completion vibration error:', error);
       try { Vibration.vibrate(variant === 'final' ? [0, 300, 120, 300, 120, 500] : [0, 200, 80, 200]); } catch {}
