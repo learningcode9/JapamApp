@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import {
   ActivityIndicator,
+  AppState,
   BackHandler,
   DeviceEventEmitter,
   Dimensions,
@@ -239,6 +240,12 @@ export default function GroupsDashboardScreen() {
   }, [currentJapamId]);
 
   useEffect(() => {
+    if (Platform.OS === 'android') {
+      const subscription = AppState.addEventListener('change', (nextState) => {
+        if (nextState === 'active') setIsOffline(false);
+      });
+      return () => subscription.remove();
+    }
     if (Platform.OS !== 'web' || typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
       return undefined;
     }
