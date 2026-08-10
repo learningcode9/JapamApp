@@ -1167,7 +1167,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     return syncInFlightPromise;
   }, []);
 
-  const finalizeCompletedTimerSession = useCallback(async () => {
+  const finalizeCompletedTimerSession = useCallback(async (ownedSessionId: string) => {
+    if (!ownedSessionId || timerSessionIdRef.current !== ownedSessionId) return;
     const targetSec = selectedDurationRef.current * 60;
     timerSessionIdRef.current = '';
     activeJapamIdRef.current = null;
@@ -1394,7 +1395,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           setCompletedLoops(completedLoopsRef.current);
           updateTimerState({ completedLoops: completedLoopsRef.current });
           if (item.loopNumber >= selectedLoopsRef.current) {
-            await finalizeCompletedTimerSession();
+            await finalizeCompletedTimerSession(activeSessionId);
           }
         }
       }
@@ -1550,6 +1551,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       return;
     }
     const nextLoop = currentDone + 1;
+    const ownedSessionId = timerSessionIdRef.current;
     const remainingBeforeCompletion = getCurrentRemainingSeconds();
     if (!claimCompletionLoop('JS', nextLoop, remainingBeforeCompletion)) {
       updateTimerState({ isCompleting: false });
@@ -1681,7 +1683,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       processedCompletionLoopsRef.current.delete(newDone);
       void hydratePersistedSessionJapamIdentity();
       if (pendingCompletion && isFinal) {
-        await finalizeCompletedTimerSession();
+        await finalizeCompletedTimerSession(ownedSessionId);
         return;
       }
       updateTimerState({ isCompleting: false });
@@ -1696,7 +1698,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     }
 
     if (isFinal) {
-      await finalizeCompletedTimerSession();
+      await finalizeCompletedTimerSession(ownedSessionId);
       return;
     }
 
@@ -1856,13 +1858,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
           processedCompletionLoopsRef.current.delete(clamped);
           void hydratePersistedSessionJapamIdentity();
           if (pendingCompletion && (event.isFinal || clamped >= pendingCompletion.totalLoops)) {
-            await finalizeCompletedTimerSession();
+            await finalizeCompletedTimerSession(event.sessionId);
           }
         } else if (event.isFinal || clamped >= selectedLoopsRef.current) {
           if (pendingCompletion) {
             await removePendingTimerCompletion(pendingCompletion.completionId);
           }
-          await finalizeCompletedTimerSession();
+          await finalizeCompletedTimerSession(event.sessionId);
         } else if (pendingCompletion) {
           await removePendingTimerCompletion(pendingCompletion.completionId);
         }
@@ -2181,6 +2183,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   const reconcileNativeLoops = useCallback(async () => {
     if (Platform.OS !== 'android') return;
     try {
+      const ownedSessionId = timerSessionIdRef.current;
       // [TIMER_DIAG] JS-side state immediately before consulting native, for comparison.
       logDiagM('reconcile_before', {
         jsStartedAt: timerStartedAtRef.current,
@@ -2194,7 +2197,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         nativeRunning: native?.isRunning ?? null,
         sessionMatch: Boolean(native && native.sessionId === timerSessionIdRef.current),
       });
-      if (!native || !native.sessionId || native.sessionId !== timerSessionIdRef.current) return;
+      if (!native || !native.sessionId || native.sessionId !== ownedSessionId) return;
 
       const jsDone = completedLoopsRef.current;
       const nativeDone = native.completedLoops;
@@ -2223,7 +2226,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
             await removePendingTimerCompletion(pendingCompletion.completionId);
           }
           if (clamped >= selectedLoopsRef.current) {
-            await finalizeCompletedTimerSession();
+            await finalizeCompletedTimerSession(ownedSessionId);
             return;
           }
         }
@@ -2254,7 +2257,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       // called stopSelf() yet (that can lag up to ~6s behind completedLoops being final,
       // during which native.isRunning still reads true — see
       // docs/BUGFIX_TIMER_RESTORE_STALE_SESSION.md for the full root-cause writeup).
-      if (!moreToGo && !isCompletingRef.current) {
+      if (!moreToGo && !isCompletingRef.current && timerSessionIdRef.current === ownedSessionId) {
         void retryPendingTimerCompletion();
         const targetSec = selectedDurationRef.current * 60;
         setSeconds(targetSec);

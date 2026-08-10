@@ -575,6 +575,73 @@ describe('TimerProvider restored/native final-loop retry', () => {
     ]);
   });
 
+  it('does not let old-session replay finalization clobber a newer session identity', async () => {
+    const oldSessionId = 'timer-old-replay-session';
+    await seedPersistedSession({
+      sessionId: oldSessionId,
+      totalLoops: 1,
+      completedLoops: 0,
+      running: 'false',
+      seconds: 0,
+    });
+    mountedTree = await renderTimerProvider();
+    await waitForCondition(async () => currentTimer!.completedLoops === 0);
+    await AsyncStorage.setItem(TIMER_PENDING_COMPLETIONS_KEY, JSON.stringify([{
+      version: 1,
+      userId: UID,
+      sessionId: oldSessionId,
+      loopNumber: 1,
+      totalLoops: 1,
+      japamId: JAPAM_A_ID,
+      japamName: JAPAM_A_NAME,
+      durationSeconds: 180,
+      completedAt: '2026-07-29T09:00:00.000Z',
+      completionId: makeLoopCompletionId(UID, oldSessionId, 1),
+    }]));
+
+    let releaseRemoval!: () => void;
+    let signalRemovalStarted!: () => void;
+    const removalStarted = new Promise<void>((resolve) => {
+      signalRemovalStarted = resolve;
+    });
+    const storage = (AsyncStorage as any).__INTERNAL_MOCK_STORAGE__;
+    const setItemSpy = jest.spyOn(AsyncStorage, 'setItem').mockImplementation(async (key: string, value: string) => {
+      if (key === TIMER_PENDING_COMPLETIONS_KEY && JSON.parse(value).length === 0) {
+        signalRemovalStarted();
+        await new Promise<void>((resolve) => { releaseRemoval = resolve; });
+      }
+      storage[key] = value;
+    });
+
+    try {
+      await act(async () => {
+        mockListeners.get('change')?.forEach((cb) => cb('active'));
+        await Promise.resolve();
+      });
+      await removalStarted;
+
+      await act(async () => {
+        currentTimer!.reset();
+        currentTimer!.setActiveJapamSelection(JAPAM_B_ID, JAPAM_B_NAME);
+        await currentTimer!.start();
+      });
+      const newerSessionId = getTimerState().sessionId;
+      expect(newerSessionId).toBeTruthy();
+      expect(newerSessionId).not.toBe(oldSessionId);
+      expect(await AsyncStorage.getItem(SESSION_USER_ID_KEY)).toBe(UID);
+
+      releaseRemoval();
+      await waitForCondition(async () => (await readQueue()).length === 0);
+
+      expect(getTimerState().sessionId).toBe(newerSessionId);
+      expect(await AsyncStorage.getItem(SESSION_ID_KEY)).toBe(newerSessionId);
+      expect(await AsyncStorage.getItem(SESSION_USER_ID_KEY)).toBe(UID);
+    } finally {
+      releaseRemoval?.();
+      setItemSpy.mockRestore();
+    }
+  });
+
   it('preserves original completion day across midnight retry', async () => {
     const sessionId = 'timer-cross-midnight';
     await AsyncStorage.setItem(TIMER_PENDING_COMPLETIONS_KEY, JSON.stringify([{
