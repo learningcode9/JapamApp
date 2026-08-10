@@ -23,8 +23,10 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   deleteGroup,
+  getCachedGroupDashboard,
   getGroupDashboard,
   getGroupInviteCode,
+  isNetworkFailure,
   leaveGroup,
   removeGroupMember,
   renameGroup,
@@ -40,6 +42,9 @@ const AUTO_REFRESH_INTERVAL_MS = 12000;
 
 const USER_ID_KEY = 'userId';
 const TEAL = '#0F8F87';
+
+const isBrowserOffline = (): boolean =>
+  Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.onLine === false;
 
 // Same width-based breakpoint convention as history.tsx — five columns (Name, Today Malas,
 // Today Count, Total Malas, Total Count) need noticeably tighter sizing on small phones than
@@ -160,6 +165,10 @@ export default function GroupsDashboardScreen() {
   const [authSession, setAuthSession] = useState<Session | null | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<GroupDashboardRow[]>([]);
+  const [cacheHydrated, setCacheHydrated] = useState(false);
+  const [hasCachedData, setHasCachedData] = useState(false);
+  const [dashboardReady, setDashboardReady] = useState(false);
+  const [isOffline, setIsOffline] = useState(isBrowserOffline);
   const [error, setError] = useState('');
   const [inviteCode, setInviteCode] = useState<string | null>(null);
   const [copyLabel, setCopyLabel] = useState('Copy');
@@ -229,6 +238,70 @@ export default function GroupsDashboardScreen() {
     currentJapamIdRef.current = currentJapamId;
   }, [currentJapamId]);
 
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
+      return undefined;
+    }
+    const updateOfflineState = () => {
+      const nextOffline = isBrowserOffline();
+      setIsOffline(nextOffline);
+      if (nextOffline) setLoading(false);
+    };
+    window.addEventListener('offline', updateOfflineState);
+    window.addEventListener('online', updateOfflineState);
+    return () => {
+      window.removeEventListener('offline', updateOfflineState);
+      window.removeEventListener('online', updateOfflineState);
+    };
+  }, []);
+
+  // Hydrate the exact user/group/workspace cache before starting auth restoration. This keeps a
+  // cached dashboard visible even if Supabase session restoration or the remote RPC stalls.
+  useEffect(() => {
+    let cancelled = false;
+    setCacheHydrated(false);
+    setHasCachedData(false);
+    setDashboardReady(false);
+    setRows([]);
+    setError('');
+
+    const hydrateCache = async () => {
+      if (!groupId || !currentJapamId) {
+        if (!cancelled) {
+          setCacheHydrated(true);
+          setLoading(false);
+        }
+        return;
+      }
+
+      const savedUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      if (cancelled) return;
+      setUserId(savedUserId);
+      if (!savedUserId) {
+        setCacheHydrated(true);
+        setLoading(false);
+        return;
+      }
+
+      const cached = await getCachedGroupDashboard(groupId, savedUserId, currentJapamId);
+      if (cancelled) return;
+      const hasCache = cached !== null;
+      setHasCachedData(hasCache);
+      if (cached !== null) {
+        setRows(cached);
+        setDashboardReady(true);
+        setLoading(false);
+        loadedForJapamRef.current = currentJapamId;
+      }
+      setCacheHydrated(true);
+    };
+
+    void hydrateCache();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentJapamId, groupId]);
+
   const clearDashboardForLogout = useCallback(() => {
     authGenerationRef.current += 1;
     dashboardLoadGenerationRef.current += 1;
@@ -239,6 +312,8 @@ export default function GroupsDashboardScreen() {
     setAuthSession(null);
     setUserId(null);
     setRows([]);
+    setHasCachedData(false);
+    setDashboardReady(false);
     setError('');
     setInviteCode(null);
     setLoading(false);
@@ -247,6 +322,10 @@ export default function GroupsDashboardScreen() {
   }, []);
 
   useEffect(() => {
+    if (!cacheHydrated || isOffline) {
+      if (cacheHydrated && isOffline) setLoading(false);
+      return undefined;
+    }
     let mounted = true;
 
     const applySession = (session: Session | null) => {
@@ -274,7 +353,7 @@ export default function GroupsDashboardScreen() {
       mounted = false;
       authListener.subscription.unsubscribe();
     };
-  }, [clearDashboardForLogout]);
+  }, [cacheHydrated, clearDashboardForLogout, isOffline]);
 
   // The dashboard shows this group through the VIEWER's membership, which is tied to the Japam
   // they created/joined the group under (get_group_dashboard scopes by the caller's own
@@ -307,6 +386,8 @@ export default function GroupsDashboardScreen() {
     }
     loadedForJapamRef.current = null;
     requestJapamRef.current = null;
+    setHasCachedData(false);
+    setDashboardReady(false);
     setRows([]);
     setError('');
     setInviteCode(null);
@@ -333,13 +414,18 @@ export default function GroupsDashboardScreen() {
     if (!routeIsFocused || activePathname !== '/groups-dashboard' || workspaceSwitchPendingRef.current) {
       return;
     }
+    if (!cacheHydrated) return;
+    if (isOffline) {
+      if (!options?.silent) setLoading(false);
+      return;
+    }
     if (loadInFlightRef.current) return;
     loadInFlightRef.current = true;
     const requestLoadGeneration = dashboardLoadGenerationRef.current;
     const requestWorkspaceGeneration = workspaceGenerationRef.current;
     const silent = options?.silent ?? false;
     try {
-      const session = authSessionRef.current;
+      const session = authSession;
       if (session === undefined) return;
       if (!session?.access_token || !session.user?.id) {
         return;
@@ -367,7 +453,7 @@ export default function GroupsDashboardScreen() {
         return;
       }
 
-      if (!silent) setLoading(true);
+      if (!silent && !dashboardReady) setLoading(true);
       setError('');
       const requestJapamId = currentJapamId;
       requestJapamRef.current = requestJapamId;
@@ -385,10 +471,17 @@ export default function GroupsDashboardScreen() {
         const result = await getGroupDashboard(groupId, savedUserId, start, end, requestJapamId);
         if (!isRequestCurrent()) return;
         setRows(result);
+        setDashboardReady(true);
+        setIsOffline(false);
         loadedForJapamRef.current = requestJapamId;
       } catch (err: any) {
         if (!isRequestCurrent()) return;
-        if (!silent) setError(err?.message || 'Could not load this group.');
+        if (isNetworkFailure(err)) {
+          setIsOffline(true);
+          setError('');
+        } else if (!silent) {
+          setError(err?.message || 'Could not load this group.');
+        }
       } finally {
         if (!isRequestCurrent()) return;
         if (!silent) setLoading(false);
@@ -399,7 +492,7 @@ export default function GroupsDashboardScreen() {
         loadInFlightRef.current = false;
       }
     }
-  }, [authSession, currentJapamId, groupId, leaveIfWorkspaceMismatch]);
+  }, [authSession, cacheHydrated, clearDashboardForLogout, currentJapamId, dashboardReady, groupId, isOffline, leaveIfWorkspaceMismatch]);
 
   useFocusEffect(
     useCallback(() => {
@@ -645,10 +738,15 @@ export default function GroupsDashboardScreen() {
             </Pressable>
           </View>
         ) : null}
-        {loading ? (
+        {isOffline && hasCachedData ? (
+          <Text style={styles.offlineText}>You&apos;re offline. Showing saved group data.</Text>
+        ) : null}
+        {loading && !dashboardReady && !isOffline ? (
           <ActivityIndicator color={TEAL} style={styles.loadingSpinner} />
         ) : error ? (
           <Text style={styles.errorText}>{error}</Text>
+        ) : isOffline && !hasCachedData ? (
+          <Text style={styles.offlineText}>You&apos;re offline. No saved group data is available yet.</Text>
         ) : rows.length === 0 ? (
           <Text style={styles.emptyText}>No members found for this group.</Text>
         ) : (
@@ -869,6 +967,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: { padding: 20, paddingBottom: 20 },
   loadingSpinner: { marginTop: 24 },
+  offlineText: { color: '#365f61', fontSize: 14, lineHeight: 20, textAlign: 'center', marginTop: 14 },
   errorText: { color: '#b91c1c', fontSize: 14, textAlign: 'center', marginTop: 24 },
   emptyText: { color: '#365f61', fontSize: 15, lineHeight: 22, textAlign: 'center', marginTop: 24 },
   tableCard: {

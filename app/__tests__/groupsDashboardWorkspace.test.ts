@@ -21,6 +21,7 @@ const mockReplace = jest.fn();
 let mockIsFocused = true;
 let mockPathname = '/groups-dashboard';
 let mockAuthCallback: ((event: string, session: unknown) => void) | null = null;
+let mockPlatformOS = 'android';
 
 jest.mock('react-native', () => {
   const React = require('react');
@@ -64,7 +65,9 @@ jest.mock('react-native', () => {
       }),
     },
     Platform: {
-      OS: 'android',
+      get OS() {
+        return mockPlatformOS;
+      },
       select: (options: Record<string, unknown>) => options.android ?? options.default,
     },
     StyleSheet: {
@@ -105,12 +108,14 @@ jest.mock('@expo/vector-icons', () => {
 });
 
 const mockGetGroupDashboard = jest.fn();
+const mockGetCachedGroupDashboard = jest.fn();
 const mockGetGroupInviteCode = jest.fn();
 const mockRenameGroup = jest.fn();
 const mockRemoveGroupMember = jest.fn();
 const mockDeleteGroup = jest.fn();
 const mockLeaveGroup = jest.fn();
 const mockGetSession = jest.fn();
+const mockIsNetworkFailure = jest.fn();
 
 jest.mock('../../lib/supabase', () => ({
   supabase: {
@@ -125,8 +130,10 @@ jest.mock('../../lib/supabase', () => ({
 }));
 
 jest.mock('../../lib/groupsRepository', () => ({
+  getCachedGroupDashboard: (...args: unknown[]) => mockGetCachedGroupDashboard(...args),
   getGroupDashboard: (...args: unknown[]) => mockGetGroupDashboard(...args),
   getGroupInviteCode: (...args: unknown[]) => mockGetGroupInviteCode(...args),
+  isNetworkFailure: (...args: unknown[]) => mockIsNetworkFailure(...args),
   renameGroup: (...args: unknown[]) => mockRenameGroup(...args),
   removeGroupMember: (...args: unknown[]) => mockRemoveGroupMember(...args),
   deleteGroup: (...args: unknown[]) => mockDeleteGroup(...args),
@@ -148,6 +155,13 @@ import GroupsDashboardScreen from '../(tabs)/groups-dashboard';
 const UID = 'user-a';
 const WORKSPACE_A = '550e8400-e29b-41d4-a716-446655440001';
 const WORKSPACE_B = '550e8400-e29b-41d4-a716-446655440002';
+
+const setBrowserOnline = (online: boolean) => {
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { onLine: online },
+  });
+};
 
 const row = (userId: string, userName: string, role: 'admin' | 'member' = 'member') => ({
   userId,
@@ -236,6 +250,8 @@ beforeEach(async () => {
   mockBackHandlers.clear();
   mockAuthCallback = null;
   jest.clearAllMocks();
+  mockPlatformOS = 'android';
+  setBrowserOnline(true);
   mockIsFocused = true;
   mockPathname = '/groups-dashboard';
   // The dashboard's 12s polling interval would otherwise keep the Node event loop alive.
@@ -247,10 +263,12 @@ beforeEach(async () => {
     data: { session: { access_token: 'fresh-session-token', user: { id: UID } } },
   });
   mockCurrentJapamState = { currentJapamId: WORKSPACE_A };
+  mockGetCachedGroupDashboard.mockResolvedValue(null);
   mockGetGroupDashboard.mockResolvedValue([row(`${UID}-b`, 'Person B')]);
   mockGetGroupInviteCode.mockResolvedValue('ABCDEFG');
   mockDeleteGroup.mockResolvedValue({ kind: 'success' });
   mockLeaveGroup.mockResolvedValue({ kind: 'success' });
+  mockIsNetworkFailure.mockImplementation((error: unknown) => error instanceof TypeError);
 });
 
 describe('Groups dashboard leave and delete actions', () => {
@@ -462,5 +480,62 @@ describe('Groups dashboard render containment', () => {
 
     expect(allText(tree).join(' ')).toContain('This group could not be displayed.');
     expect(allText(tree).join(' ')).toContain('Back to Groups');
+  });
+});
+
+describe('Groups dashboard cache-first and offline UX', () => {
+  it('renders the scoped cached dashboard before unresolved auth or network', async () => {
+    const pendingSession = createDeferred<any>();
+    mockGetSession.mockReturnValueOnce(pendingSession.promise);
+    mockGetCachedGroupDashboard.mockResolvedValue([row(UID, 'Cached Person')]);
+    mockGetGroupDashboard.mockImplementation(() => new Promise(() => {}));
+
+    const tree = await renderScreen();
+    const texts = allText(tree).join(' ');
+
+    expect(texts).toContain('Cached Person');
+    expect(tree.root.findAll((node: any) => node.type === 'ActivityIndicator')).toHaveLength(0);
+    expect(mockGetCachedGroupDashboard).toHaveBeenCalledWith('group-1', UID, WORKSPACE_A);
+    expect(mockGetGroupDashboard).not.toHaveBeenCalled();
+  });
+
+  it('keeps cached dashboard data visible while offline', async () => {
+    mockPlatformOS = 'web';
+    setBrowserOnline(false);
+    mockGetCachedGroupDashboard.mockResolvedValue([row(UID, 'Offline Person')]);
+    mockGetGroupDashboard.mockRejectedValue(new TypeError('Network request failed'));
+
+    const tree = await renderScreen();
+    const texts = allText(tree).join(' ');
+
+    expect(texts).toContain('Offline Person');
+    expect(texts).toContain("You're offline. Showing saved group data.");
+    expect(texts).not.toContain('Network request failed');
+    expect(tree.root.findAll((node: any) => node.type === 'ActivityIndicator')).toHaveLength(0);
+    expect(mockGetSession).not.toHaveBeenCalled();
+  });
+
+  it('shows the explicit no-cache offline message', async () => {
+    mockPlatformOS = 'web';
+    setBrowserOnline(false);
+    mockGetGroupDashboard.mockRejectedValue(new TypeError('Network request failed'));
+
+    const tree = await renderScreen();
+    const texts = allText(tree).join(' ');
+
+    expect(texts).toContain("You're offline. No saved group data is available yet.");
+    expect(texts).not.toContain('Network request failed');
+    expect(tree.root.findAll((node: any) => node.type === 'ActivityIndicator')).toHaveLength(0);
+    expect(mockGetSession).not.toHaveBeenCalled();
+  });
+
+  it('does not render raw network errors from a failed reconciliation', async () => {
+    mockGetGroupDashboard.mockRejectedValueOnce(new TypeError('Network request failed'));
+
+    const tree = await renderScreen();
+    const texts = allText(tree).join(' ');
+
+    expect(texts).toContain("You're offline. No saved group data is available yet.");
+    expect(texts).not.toContain('Network request failed');
   });
 });

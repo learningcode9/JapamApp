@@ -19,6 +19,7 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 const mockListeners = new Map<string, Set<(...args: unknown[]) => void>>();
 const mockBack = jest.fn();
 const mockPush = jest.fn();
+let mockPlatformOS = 'android';
 
 jest.mock('react-native', () => {
   const React = require('react');
@@ -55,7 +56,9 @@ jest.mock('react-native', () => {
       }),
     },
     Platform: {
-      OS: 'android',
+      get OS() {
+        return mockPlatformOS;
+      },
       select: (options: Record<string, unknown>) => options.android ?? options.default,
     },
     StyleSheet: {
@@ -141,6 +144,13 @@ const GROUP_A = '660e8400-e29b-41d4-a716-44665544000a';
 const GROUP_B = '660e8400-e29b-41d4-a716-44665544000b';
 const GROUP_UNASSIGNED = '660e8400-e29b-41d4-a716-44665544000c';
 
+const setBrowserOnline = (online: boolean) => {
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { onLine: online },
+  });
+};
+
 const groupRow = (groupId: string, name: string, role: 'admin' | 'member' = 'member') => ({
   groupId,
   name,
@@ -202,6 +212,8 @@ const createDeferred = <T,>() => {
 beforeEach(async () => {
   mockListeners.clear();
   jest.clearAllMocks();
+  mockPlatformOS = 'android';
+  setBrowserOnline(true);
   await AsyncStorage.clear();
   await AsyncStorage.setItem('userId', UID);
   await AsyncStorage.setItem('userName', 'Test User');
@@ -464,5 +476,33 @@ describe('unassigned attach flow', () => {
     // The reload re-fetches both lists after a successful attach.
     expect(mockGetMyGroups).toHaveBeenCalledTimes(2);
     expect(mockGetMyUnassignedGroups).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Groups offline UX', () => {
+  it('keeps cached Groups visible and labels the screen offline', async () => {
+    mockPlatformOS = 'web';
+    setBrowserOnline(false);
+    mockGetCachedMyGroups.mockResolvedValue([groupRow(GROUP_A, 'Cached Group')]);
+
+    const tree = await renderScreen();
+    const texts = allText(tree).join(' ');
+
+    expect(texts).toContain('Cached Group');
+    expect(texts).toContain("You're offline. Showing saved group data.");
+    expect(texts).not.toContain('Network request failed');
+    expect(mockGetMyGroups).not.toHaveBeenCalled();
+  });
+
+  it('shows the explicit no-cache offline message without raw transport text', async () => {
+    mockPlatformOS = 'web';
+    setBrowserOnline(false);
+
+    const tree = await renderScreen();
+    const texts = allText(tree).join(' ');
+
+    expect(texts).toContain("You're offline. No saved group data is available yet.");
+    expect(texts).not.toContain('Network request failed');
+    expect(tree.root.findAll((node: any) => node.type === 'ActivityIndicator')).toHaveLength(0);
   });
 });

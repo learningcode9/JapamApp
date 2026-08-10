@@ -221,26 +221,43 @@ export async function getGroupDashboard(
   todayEndIso: string,
   japamId: string
 ): Promise<GroupDashboardRow[]> {
-  const { data, error } = await supabase.rpc('get_group_dashboard', {
-    p_group_id: groupId,
-    p_current_user_id: currentUserId,
-    p_today_start: todayStartIso,
-    p_today_end: todayEndIso,
-    p_japam_id: japamId,
-  });
-  if (error) throw error;
-  return ((data ?? []) as any[]).map((row) => ({
-    userId: row.user_id,
-    userName: row.user_name,
-    role: row.role,
-    joinedAt: row.joined_at,
-    todayMalas: Number(row.today_malas) || 0,
-    todayCount: Number(row.today_count) || 0,
-    totalMalas: Number(row.total_malas) || 0,
-    totalCount: Number(row.total_count) || 0,
-    lastUpdated: row.last_updated,
-  }));
+  const scope = `dashboard:${groupId}:${currentUserId}:${japamId}`;
+  try {
+    const { data, error } = await supabase.rpc('get_group_dashboard', {
+      p_group_id: groupId,
+      p_current_user_id: currentUserId,
+      p_today_start: todayStartIso,
+      p_today_end: todayEndIso,
+      p_japam_id: japamId,
+    });
+    if (error) throw error;
+    const rows = ((data ?? []) as any[]).map((row) => ({
+      userId: row.user_id,
+      userName: row.user_name,
+      role: row.role,
+      joinedAt: row.joined_at,
+      todayMalas: Number(row.today_malas) || 0,
+      todayCount: Number(row.today_count) || 0,
+      totalMalas: Number(row.total_malas) || 0,
+      totalCount: Number(row.total_count) || 0,
+      lastUpdated: row.last_updated,
+    }));
+    writeCached(scope, rows);
+    return rows;
+  } catch (err) {
+    if (!isNetworkFailure(err)) throw err;
+    const cached = await readCachedArray<GroupDashboardRow>(scope);
+    if (cached !== null) return cached;
+    throw err;
+  }
 }
+
+export const getCachedGroupDashboard = async (
+  groupId: string,
+  currentUserId: string,
+  japamId: string,
+): Promise<GroupDashboardRow[] | null> =>
+  readCachedArray<GroupDashboardRow>(`dashboard:${groupId}:${currentUserId}:${japamId}`);
 
 // Admin-only — reads back the invite_code already stored on the group at creation time (never
 // generates a new one). get_group_invite_code raises if the caller isn't an admin member of this
@@ -251,19 +268,31 @@ export async function getGroupInviteCode(
   groupId: string,
   requestingUserId: string
 ): Promise<string | null> {
-  const { data, error } = await supabase.rpc('get_group_invite_code', {
-    p_group_id: groupId,
-    p_current_user_id: requestingUserId,
-  });
-  if (error) throw error;
-  // The deployed function returns its result as [{ invite_code: "..." }] (a one-row/one-column
-  // result set), not a bare scalar string — confirmed live via direct REST call. Unwrap that
-  // shape; fall back to treating `data` as a bare string defensively, in case this ever changes.
-  if (Array.isArray(data)) {
-    const row = data[0] as { invite_code?: string } | undefined;
-    return row?.invite_code ?? null;
+  const scope = `inviteCode:${groupId}:${requestingUserId}`;
+  try {
+    const { data, error } = await supabase.rpc('get_group_invite_code', {
+      p_group_id: groupId,
+      p_current_user_id: requestingUserId,
+    });
+    if (error) throw error;
+    // The deployed function returns its result as [{ invite_code: "..." }] (a one-row/one-column
+    // result set), not a bare scalar string — confirmed live via direct REST call. Unwrap that
+    // shape; fall back to treating `data` as a bare string defensively, in case this ever changes.
+    let code: string | null;
+    if (Array.isArray(data)) {
+      const row = data[0] as { invite_code?: string } | undefined;
+      code = row?.invite_code ?? null;
+    } else {
+      code = (data as string | null) ?? null;
+    }
+    if (code !== null) writeCached(scope, code);
+    return code;
+  } catch (err) {
+    if (!isNetworkFailure(err)) throw err;
+    const cached = await readCached<string>(scope);
+    if (cached !== null) return cached;
+    throw err;
   }
-  return (data as string | null) ?? null;
 }
 
 function mapGroupAdminError(error: any): Exclude<GroupAdminActionOutcome, { kind: 'success' }> {
