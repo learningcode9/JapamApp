@@ -329,6 +329,35 @@ describe('tapSaveSession — real runtime pipeline', () => {
     expect(result).toBe(false);
   });
 
+  it('dedupe signature is japamId-scoped — A mala 1 then B mala 1 both save via shared refs', async () => {
+    const refs = makeRefs();
+
+    const aResult = await tapSaveSession(0, 1, 108, 108, 'tap', refs, {
+      userId: UID,
+      japamId: 'japam-a',
+      japamName: 'Japam A',
+    }, 'Test User');
+    expect(aResult).toBe(true);
+
+    // Distinct timestamps so stable completionIds don't collide (A/B saves are far apart in reality).
+    await new Promise(r => setTimeout(r, 1));
+
+    const bResult = await tapSaveSession(0, 1, 108, 108, 'tap', refs, {
+      userId: UID,
+      japamId: 'japam-b',
+      japamName: 'Japam B',
+    }, 'Test User');
+    expect(bResult).toBe(true);
+
+    const records = await historyRepository.loadHistoryForJapam(UID, 'japam-a');
+    expect(records).toHaveLength(1);
+    expect(records[0].japamId).toBe('japam-a');
+
+    const bRecords = await historyRepository.loadHistoryForJapam(UID, 'japam-b');
+    expect(bRecords).toHaveLength(1);
+    expect(bRecords[0].japamId).toBe('japam-b');
+  });
+
   it('DeviceEventEmitter fires after local save', async () => {
     const emitSpy = jest.spyOn(DeviceEventEmitter, 'emit');
     const refs = makeRefs();

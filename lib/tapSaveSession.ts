@@ -60,7 +60,7 @@ export async function tapSaveSession(
     return false;
   }
 
-  const sessionSignature = `${currentUserId || 'guest'}-${getLocalDateKey()}-${duration}-${sessionMalas}-${sessionTotal}-${accumulatedTotal}`;
+  const sessionSignature = `${currentUserId || 'guest'}-${japamId || 'no-japam'}-${getLocalDateKey()}-${duration}-${sessionMalas}-${sessionTotal}-${accumulatedTotal}`;
 
   if (refs.lastSavedSession.current === sessionSignature) {
     if (source === 'tap') console.log('TAP_HISTORY_SAVE_SKIPPED reason=duplicate signature=%s', sessionSignature);

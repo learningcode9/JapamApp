@@ -1911,6 +1911,7 @@ export default function JapamMain() {
       await runMalaCompletion({
         boundaryKey: crossing.nextMala,
         guard: tapMalaCompletionGuardRef.current,
+        workspaceId: currentJapamId,
         save: () => saveSession(0, 1, 108, newTotal, 'tap', tapIdentity),
         playFeedback: () => completeFeedback('final'),
         onError: (stage, error) => console.log('TAP_MALA_COMPLETION_ERROR stage=%s', stage, error),

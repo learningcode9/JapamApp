@@ -136,4 +136,93 @@ describe('runMalaCompletion', () => {
     expect(save).toHaveBeenCalledTimes(2);
     expect(playFeedback).toHaveBeenCalledTimes(2);
   });
+
+  it('a completion in Workspace A never blocks the same mala boundary in B (A mala 1 and B mala 1 both save)', async () => {
+    const save = jest.fn().mockResolvedValue(true);
+    const playFeedback = jest.fn().mockResolvedValue(undefined);
+    const guard = okGuard();
+
+    const aResult = await runMalaCompletion({
+      boundaryKey: 1,
+      guard,
+      workspaceId: 'japam-a',
+      save,
+      playFeedback,
+    });
+    const bResult = await runMalaCompletion({
+      boundaryKey: 1,
+      guard,
+      workspaceId: 'japam-b',
+      save,
+      playFeedback,
+    });
+
+    expect(aResult.saved).toBe(true);
+    expect(aResult.duplicate).toBe(false);
+    expect(bResult.saved).toBe(true);
+    expect(bResult.duplicate).toBe(false);
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(playFeedback).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not mark a boundary completed until the local save succeeds — a failed save stays retryable', async () => {
+    const save = jest
+      .fn()
+      .mockRejectedValueOnce(new Error('storage write failed'))
+      .mockResolvedValue(true);
+    const playFeedback = jest.fn().mockResolvedValue(undefined);
+    const onError = jest.fn();
+    const guard = okGuard();
+
+    const failed = await runMalaCompletion({
+      boundaryKey: 2,
+      guard,
+      workspaceId: 'japam-a',
+      save,
+      playFeedback,
+      onError,
+    });
+    expect(failed.saved).toBe(false);
+    expect(failed.duplicate).toBe(false);
+    expect(onError).toHaveBeenCalledWith('save', expect.any(Error));
+
+    const retried = await runMalaCompletion({
+      boundaryKey: 2,
+      guard,
+      workspaceId: 'japam-a',
+      save,
+      playFeedback,
+    });
+    expect(retried.saved).toBe(true);
+    expect(retried.duplicate).toBe(false);
+    expect(save).toHaveBeenCalledTimes(2);
+  });
+
+  it('duplicate completion in the same workspace still saves only once', async () => {
+    const save = jest.fn().mockResolvedValue(true);
+    const playFeedback = jest.fn().mockResolvedValue(undefined);
+    const guard = okGuard();
+
+    const first = await runMalaCompletion({
+      boundaryKey: 3,
+      guard,
+      workspaceId: 'japam-a',
+      save,
+      playFeedback,
+    });
+    const second = await runMalaCompletion({
+      boundaryKey: 3,
+      guard,
+      workspaceId: 'japam-a',
+      save,
+      playFeedback,
+    });
+
+    expect(first.saved).toBe(true);
+    expect(first.duplicate).toBe(false);
+    expect(second.saved).toBe(false);
+    expect(second.duplicate).toBe(true);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(playFeedback).toHaveBeenCalledTimes(1);
+  });
 });

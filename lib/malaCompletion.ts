@@ -37,17 +37,27 @@ export function detectMalaCrossing(
 }
 
 export interface MalaCompletionGuard {
-  alreadyCompleted(boundaryKey: number): boolean;
-  markCompleted(boundaryKey: number): void;
+  alreadyCompleted(boundaryKey: number, workspaceId?: string): boolean;
+  markCompleted(boundaryKey: number, workspaceId?: string): void;
 }
 
-/** One guard per screen/session. Tracks the highest mala boundary already completed. */
+/**
+ * One guard per screen/session. Tracks the highest mala boundary already completed,
+ * scoped per workspace/japam so a completion in one Japam never blocks the same
+ * boundary key in another (each Japam's first mala is boundary 1).
+ */
 export function createMalaCompletionGuard(): MalaCompletionGuard {
-  let lastCompletedBoundary = -1;
+  const lastCompletedBoundaryByWorkspace = new Map<string, number>();
+  const workspaceKey = (workspaceId?: string) => workspaceId ?? '';
   return {
-    alreadyCompleted: (boundaryKey: number) => boundaryKey <= lastCompletedBoundary,
-    markCompleted: (boundaryKey: number) => {
-      if (boundaryKey > lastCompletedBoundary) lastCompletedBoundary = boundaryKey;
+    alreadyCompleted: (boundaryKey, workspaceId) => {
+      const last = lastCompletedBoundaryByWorkspace.get(workspaceKey(workspaceId)) ?? -1;
+      return boundaryKey <= last;
+    },
+    markCompleted: (boundaryKey, workspaceId) => {
+      const key = workspaceKey(workspaceId);
+      const last = lastCompletedBoundaryByWorkspace.get(key) ?? -1;
+      if (boundaryKey > last) lastCompletedBoundaryByWorkspace.set(key, boundaryKey);
     },
   };
 }
@@ -56,6 +66,8 @@ export interface RunMalaCompletionOptions {
   /** Identifies the boundary just crossed — use MalaCrossing.nextMala. */
   boundaryKey: number;
   guard: MalaCompletionGuard;
+  /** Scope the guard per workspace/japam so identical boundary keys never collide across Japams. */
+  workspaceId?: string;
   /** Persist the mala/history record. Must resolve to whether it was saved. */
   save: () => Promise<boolean>;
   /** Play Om sound + haptics/notification. Its outcome never affects `save`. */
@@ -67,19 +79,19 @@ export interface RunMalaCompletionOptions {
  * Runs save + feedback for a single completion, guaranteeing:
  *  - both are attempted once a crossing is detected (feedback is not gated on save succeeding),
  *  - a failure in one never prevents or blocks the other,
- *  - the same boundary is never completed twice (guard checked + marked synchronously up front,
- *    before either async call starts, so a duplicate/concurrent call for the same boundary
- *    is rejected immediately instead of racing).
+ *  - a duplicate/concurrent call for the same boundary is rejected before either async call
+ *    starts (guard checked synchronously up front, before save/feedback start),
+ *  - a boundary is only marked completed AFTER the local save succeeds, so a failed save stays
+ *    retryable (the same boundary can be re-attempted and will not be treated as a duplicate).
  */
 export async function runMalaCompletion(
   options: RunMalaCompletionOptions
 ): Promise<{ saved: boolean; duplicate: boolean }> {
-  const { boundaryKey, guard, save, playFeedback, onError } = options;
+  const { boundaryKey, guard, workspaceId, save, playFeedback, onError } = options;
 
-  if (guard.alreadyCompleted(boundaryKey)) {
+  if (guard.alreadyCompleted(boundaryKey, workspaceId)) {
     return { saved: false, duplicate: true };
   }
-  guard.markCompleted(boundaryKey);
 
   const [saveResult, feedbackResult] = await Promise.allSettled([save(), playFeedback()]);
 
@@ -91,6 +103,10 @@ export async function runMalaCompletion(
   }
   if (feedbackResult.status === 'rejected') {
     onError?.('feedback', feedbackResult.reason);
+  }
+
+  if (saved) {
+    guard.markCompleted(boundaryKey, workspaceId);
   }
 
   return { saved, duplicate: false };
