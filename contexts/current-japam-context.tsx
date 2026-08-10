@@ -37,6 +37,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DeviceEventEmitter, Platform } from 'react-native';
 import { createDefaultJapamCreationCoordinator } from '../lib/defaultJapamCreationCoordinator';
 import { activeJapams, type Japam } from '../lib/japams';
+import {
+  loadCurrentJapamId as loadLocalCurrentJapamId,
+  loadJapams as loadLocalJapams,
+} from '../lib/japamsStorage';
 import * as japamsRepository from '../lib/japamsRepository';
 
 const USER_ID_KEY = 'userId';
@@ -68,17 +72,34 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   // again (auth change) while an earlier write is still in flight, so every action re-reads the
   // CURRENT userId from this ref rather than closing over a possibly-stale one from render time.
   const userIdRef = useRef<string | null>(null);
+  // Signed-in startup resolves the user-scoped selection from local storage before the remote
+  // reconcile. Refresh generations and selection versions prevent an older async refresh or
+  // reconciliation from reverting a newer explicit user choice.
+  const pendingReconcileRef = useRef<Promise<unknown> | null>(null);
+  const refreshGenerationRef = useRef(0);
+  const selectionVersionRef = useRef(0);
+  const reconcileSelectionVersionRef = useRef(new WeakMap<Promise<unknown>, number>());
+  const explicitSelectionRef = useRef<{ userId: string | null; version: number; japamId: string | null } | null>(null);
   // Per-user in-flight creation coordinator. Uses a Map keyed by userId so A→B→A rapid auth
   // switches never overwrite a still-in-flight entry — each user's creation promise and waiter
   // count lives independently and is cleaned up only when that user's last caller exits.
   const coordinator = useMemo(() => createDefaultJapamCreationCoordinator(), []);
   const refresh = useCallback(async () => {
+    const refreshGeneration = ++refreshGenerationRef.current;
+    const selectionVersionAtRefreshStart = selectionVersionRef.current;
+    const isCurrentRefresh = () => refreshGenerationRef.current === refreshGeneration;
+
     setIsLoading(true);
     const userId = await AsyncStorage.getItem(USER_ID_KEY);
+    if (!isCurrentRefresh()) return;
+    if (userIdRef.current !== userId) {
+      explicitSelectionRef.current = null;
+    }
     userIdRef.current = userId;
     if (!userId) {
       const loadedJapams = await japamsRepository.loadJapams(userId);
       const persistedCurrentId = await japamsRepository.loadCurrentJapamId(userId);
+      if (!isCurrentRefresh()) return;
       setJapams(loadedJapams);
       // Guest/local-only behavior stays unchanged: select from the local cache only.
       const active = activeJapams(loadedJapams);
@@ -86,7 +107,9 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
         ? active.find((j) => j.id === persistedCurrentId)
         : undefined;
       const resolvedCurrentId = persistedStillActive?.id ?? active[0]?.id ?? null;
-      setCurrentJapamIdState(resolvedCurrentId);
+      if (selectionVersionRef.current === selectionVersionAtRefreshStart) {
+        setCurrentJapamIdState(resolvedCurrentId);
+      }
       if (resolvedCurrentId !== persistedCurrentId) {
         await japamsRepository.saveCurrentJapamId(userId, resolvedCurrentId);
       }
@@ -94,19 +117,66 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // Signed-in startup always reconciles remote/local state through the repository helper and
-    // uses the returned merged list plus canonical selection directly.
-    const result = await coordinator.ensureCreation(userId, () =>
+    // Signed-in startup: resolve the selection from the user-scoped local cache immediately, so an
+    // offline cold start never exposes the null/legacy scope while remote reconciliation is pending.
+    const [loadedJapams, persistedCurrentId] = await Promise.all([
+      loadLocalJapams(userId),
+      loadLocalCurrentJapamId(userId),
+    ]);
+    if (!isCurrentRefresh()) return;
+    setJapams(loadedJapams);
+    const active = activeJapams(loadedJapams);
+    const persistedStillActive = persistedCurrentId
+      ? active.find((j) => j.id === persistedCurrentId)
+      : undefined;
+    const localCurrentId = persistedStillActive?.id ?? active[0]?.id ?? null;
+    const explicitSelection = explicitSelectionRef.current;
+    const explicitSelectionForUser = explicitSelection?.userId === userId;
+    const localMatchesExplicitSelection = explicitSelection?.japamId === localCurrentId;
+    if (
+      selectionVersionRef.current === selectionVersionAtRefreshStart
+      && (!explicitSelectionForUser || localMatchesExplicitSelection)
+    ) {
+      setCurrentJapamIdState(localCurrentId);
+    }
+    setIsLoading(false);
+
+    // Reconcile in the background. Mutations await this promise before touching storage, and the
+    // refresh/selection guards keep a newer explicit user choice from being reverted by its result.
+    const reconcile = coordinator.ensureCreation(userId, () =>
       japamsRepository.ensureDefaultJapam(userId),
     );
-    if (!result) {
-      setIsLoading(false);
-      return;
+    const priorReconcile = pendingReconcileRef.current;
+    const priorReconcileSelectionVersion = priorReconcile
+      ? reconcileSelectionVersionRef.current.get(priorReconcile)
+      : undefined;
+    if (!reconcileSelectionVersionRef.current.has(reconcile)) {
+      reconcileSelectionVersionRef.current.set(
+        reconcile,
+        priorReconcileSelectionVersion ?? selectionVersionAtRefreshStart,
+      );
     }
-
-    setJapams(result.japams);
-    setCurrentJapamIdState(result.currentJapamId);
-    setIsLoading(false);
+    const reconcileSelectionVersion = reconcileSelectionVersionRef.current.get(reconcile)
+      ?? selectionVersionAtRefreshStart;
+    pendingReconcileRef.current = reconcile;
+    void reconcile.then((result) => {
+      if (pendingReconcileRef.current === reconcile) {
+        pendingReconcileRef.current = null;
+      }
+      reconcileSelectionVersionRef.current.delete(reconcile);
+      if (!isCurrentRefresh() || !result) return;
+      setJapams(result.japams);
+      const latestExplicitSelection = explicitSelectionRef.current;
+      const explicitSelectionForUser = latestExplicitSelection?.userId === userId;
+      const selectionStartedAfterReconcile = explicitSelectionForUser
+        && latestExplicitSelection.version > reconcileSelectionVersion;
+      if (
+        selectionVersionRef.current === reconcileSelectionVersion
+        && !selectionStartedAfterReconcile
+      ) {
+        setCurrentJapamIdState(result.currentJapamId);
+      }
+    });
   }, [coordinator]);
 
   useEffect(() => {
@@ -122,6 +192,12 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
 
   const selectJapam = useCallback((japamId: string | null) => {
     const fromJapamId = currentJapamId;
+    const selectionVersion = ++selectionVersionRef.current;
+    explicitSelectionRef.current = {
+      userId: userIdRef.current,
+      version: selectionVersion,
+      japamId,
+    };
     // Emit BEFORE the state change so the timer context can save the current Japam's timer
     // state (including a running timer's position) to the FROM Japam's per-Japam slot.
     DeviceEventEmitter.emit('japam-will-switch', { fromJapamId, toJapamId: japamId });

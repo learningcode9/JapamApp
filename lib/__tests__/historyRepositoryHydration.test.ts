@@ -273,6 +273,135 @@ describe('historyRepository hydration', () => {
     expect(forced.map((row) => row.completionId)).toEqual(expect.arrayContaining(['remote-a', 'local-new']));
   });
 
+  it('localFirst returns local rows immediately without awaiting the remote fetch, then reconciles the local cache in the background', async () => {
+    await AsyncStorage.setItem('history', JSON.stringify([
+      makeRecord({ completionId: 'local-1', date: '2026-07-20T09:00:00.000Z' }),
+    ]));
+    let resolveRemote!: (value: unknown) => void;
+    mockFetchJapamHistoryRows.mockImplementation(() => new Promise((resolve) => {
+      resolveRemote = resolve;
+    }));
+
+    const hydrated = await hydrateHistoryForUserDetails(UID, undefined, { localFirst: true });
+
+    // Local rows are returned immediately, before the (still-hanging) remote fetch resolves.
+    expect(hydrated.hydrationSucceeded).toBe(false);
+    expect(hydrated.records.map((row) => row.completionId)).toEqual(['local-1']);
+
+    // Resolve the remote fetch: merged rows are persisted back into the local cache.
+    resolveRemote([
+      {
+        id: 'remote-a',
+        created_at: '2026-07-20T10:00:00.000Z',
+        malas: 2,
+        count: 216,
+        user_name: 'User A',
+        completion_id: 'remote-a',
+        japam_id: JAPAM_ID,
+        japam_name: 'My Japam',
+      },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const persisted = JSON.parse((await AsyncStorage.getItem('history')) || '[]') as { completionId?: string }[];
+    expect(persisted.map((row) => row.completionId)).toEqual(expect.arrayContaining(['local-1', 'remote-a']));
+
+    // A subsequent normal hydration serves the merged snapshot from the in-memory cache and
+    // surfaces the remote rows without a second network fetch.
+    const merged = await hydrateHistoryForUser(UID);
+    expect(merged.map((row) => row.completionId)).toEqual(expect.arrayContaining(['remote-a', 'local-1']));
+    expect(mockFetchJapamHistoryRows).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves a newer local addition and dedupes it against the remote result', async () => {
+    await AsyncStorage.setItem('history', JSON.stringify([
+      makeRecord({ completionId: 'local-1', date: '2026-07-20T09:00:00.000Z' }),
+    ]));
+    let resolveRemote!: (value: unknown) => void;
+    mockFetchJapamHistoryRows.mockImplementation(() => new Promise((resolve) => {
+      resolveRemote = resolve;
+    }));
+
+    await hydrateHistoryForUserDetails(UID, undefined, { localFirst: true });
+    await AsyncStorage.setItem('history', JSON.stringify([
+      makeRecord({ completionId: 'local-new', date: '2026-07-20T11:00:00.000Z', syncStatus: 'pending' }),
+      makeRecord({ completionId: 'local-1', date: '2026-07-20T09:00:00.000Z' }),
+    ]));
+
+    resolveRemote([
+      {
+        id: 'remote-a',
+        created_at: '2026-07-20T10:00:00.000Z',
+        malas: 1,
+        count: 108,
+        user_name: 'User A',
+        completion_id: 'remote-a',
+        japam_id: JAPAM_ID,
+        japam_name: 'My Japam',
+      },
+      {
+        id: 'remote-local-1',
+        created_at: '2026-07-20T09:00:00.000Z',
+        malas: 2,
+        count: 216,
+        user_name: 'User A',
+        completion_id: 'local-1',
+        japam_id: JAPAM_ID,
+        japam_name: 'My Japam',
+      },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const persisted = JSON.parse((await AsyncStorage.getItem('history')) || '[]') as { completionId?: string }[];
+    expect(persisted.map((row) => row.completionId)).toEqual(['local-new', 'remote-a', 'local-1']);
+    expect(persisted.filter((row) => row.completionId === 'local-new')).toHaveLength(1);
+  });
+
+  it('preserves a newer local deletion and does not resurrect its remote row', async () => {
+    await AsyncStorage.setItem('history', JSON.stringify([
+      makeRecord({ completionId: 'local-1', date: '2026-07-20T09:00:00.000Z' }),
+    ]));
+    let resolveRemote!: (value: unknown) => void;
+    mockFetchJapamHistoryRows.mockImplementation(() => new Promise((resolve) => {
+      resolveRemote = resolve;
+    }));
+
+    await hydrateHistoryForUserDetails(UID, undefined, { localFirst: true });
+    await AsyncStorage.setItem('history', JSON.stringify([
+      makeRecord({ completionId: 'local-new', date: '2026-07-20T11:00:00.000Z', syncStatus: 'pending' }),
+    ]));
+    await AsyncStorage.setItem('deletedCompletions', JSON.stringify(['local-1']));
+
+    resolveRemote([
+      {
+        id: 'remote-a',
+        created_at: '2026-07-20T10:00:00.000Z',
+        malas: 1,
+        count: 108,
+        user_name: 'User A',
+        completion_id: 'remote-a',
+        japam_id: JAPAM_ID,
+        japam_name: 'My Japam',
+      },
+      {
+        id: 'remote-local-1',
+        created_at: '2026-07-20T09:00:00.000Z',
+        malas: 2,
+        count: 216,
+        user_name: 'User A',
+        completion_id: 'local-1',
+        japam_id: JAPAM_ID,
+        japam_name: 'My Japam',
+      },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const persisted = JSON.parse((await AsyncStorage.getItem('history')) || '[]') as { completionId?: string }[];
+    expect(persisted.map((row) => row.completionId)).toEqual(['local-new', 'remote-a']);
+    expect(persisted.filter((row) => row.completionId === 'local-1')).toHaveLength(0);
+    expect(JSON.parse((await AsyncStorage.getItem('deletedCompletions')) || '[]')).toContain('local-1');
+  });
+
   it('does not reuse another user cache after logout or user change', async () => {
     mockFetchJapamHistoryRows.mockResolvedValue([
       {
