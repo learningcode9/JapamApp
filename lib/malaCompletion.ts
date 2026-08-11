@@ -37,17 +37,23 @@ export function detectMalaCrossing(
 }
 
 export interface MalaCompletionGuard {
-  alreadyCompleted(boundaryKey: number): boolean;
-  markCompleted(boundaryKey: number): void;
+  alreadyCompleted(boundaryKey: number, scopeKey?: string | null): boolean;
+  markCompleted(boundaryKey: number, scopeKey?: string | null): void;
 }
 
-/** One guard per screen/session. Tracks the highest mala boundary already completed. */
+/** One guard per screen/session. Tracks the highest mala boundary per workspace/session scope. */
 export function createMalaCompletionGuard(): MalaCompletionGuard {
-  let lastCompletedBoundary = -1;
+  const lastCompletedBoundaryByScope = new Map<string, number>();
+  const normalizeScopeKey = (scopeKey?: string | null) => scopeKey ?? '__default__';
+
   return {
-    alreadyCompleted: (boundaryKey: number) => boundaryKey <= lastCompletedBoundary,
-    markCompleted: (boundaryKey: number) => {
-      if (boundaryKey > lastCompletedBoundary) lastCompletedBoundary = boundaryKey;
+    alreadyCompleted: (boundaryKey: number, scopeKey?: string | null) => {
+      return boundaryKey <= (lastCompletedBoundaryByScope.get(normalizeScopeKey(scopeKey)) ?? -1);
+    },
+    markCompleted: (boundaryKey: number, scopeKey?: string | null) => {
+      const key = normalizeScopeKey(scopeKey);
+      const lastCompletedBoundary = lastCompletedBoundaryByScope.get(key) ?? -1;
+      if (boundaryKey > lastCompletedBoundary) lastCompletedBoundaryByScope.set(key, boundaryKey);
     },
   };
 }
@@ -55,6 +61,8 @@ export function createMalaCompletionGuard(): MalaCompletionGuard {
 export interface RunMalaCompletionOptions {
   /** Identifies the boundary just crossed — use MalaCrossing.nextMala. */
   boundaryKey: number;
+  /** Separates workspace/session-local boundary numbers (for example, A:1 and B:1). */
+  scopeKey?: string | null;
   guard: MalaCompletionGuard;
   /** Persist the mala/history record. Must resolve to whether it was saved. */
   save: () => Promise<boolean>;
@@ -74,12 +82,12 @@ export interface RunMalaCompletionOptions {
 export async function runMalaCompletion(
   options: RunMalaCompletionOptions
 ): Promise<{ saved: boolean; duplicate: boolean }> {
-  const { boundaryKey, guard, save, playFeedback, onError } = options;
+  const { boundaryKey, scopeKey, guard, save, playFeedback, onError } = options;
 
-  if (guard.alreadyCompleted(boundaryKey)) {
+  if (guard.alreadyCompleted(boundaryKey, scopeKey)) {
     return { saved: false, duplicate: true };
   }
-  guard.markCompleted(boundaryKey);
+  guard.markCompleted(boundaryKey, scopeKey);
 
   const [saveResult, feedbackResult] = await Promise.allSettled([save(), playFeedback()]);
 
