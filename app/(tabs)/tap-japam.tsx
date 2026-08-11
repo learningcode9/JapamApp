@@ -11,6 +11,7 @@ import {
 } from '../../lib/malaCompletion';
 import {
   computeTapTransition,
+  createTapCompletionScopeKey,
   createTapIdentitySnapshot,
   type TapIdentitySnapshot,
 } from '../../lib/tapJapamBehavior';
@@ -1844,6 +1845,7 @@ export default function JapamMain() {
       console.log('TAP_MALA_COMPLETE_REACHED total=%d count=%d', newTotal, newTotal % 108);
       await runMalaCompletion({
         boundaryKey: crossing.nextMala,
+        scopeKey: createTapCompletionScopeKey(tapIdentity),
         guard: tapMalaCompletionGuardRef.current,
         save: () => saveSession(0, 1, 108, newTotal, 'tap', tapIdentity),
         playFeedback: () => completeFeedback('final'),

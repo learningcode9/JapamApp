@@ -6,6 +6,7 @@ import {
   createMalaCompletionGuard,
   runMalaCompletion,
 } from '../malaCompletion';
+import { createTapCompletionScopeKey } from '../tapJapamBehavior';
 import {
   todayStatsFor,
   toLocalDayKey,
@@ -275,6 +276,42 @@ describe('tapSaveSession — real runtime pipeline', () => {
       expect(r.japamId).toBe(JAPAM_ID);
       expect(r.source).toBe('tap');
     }
+  });
+
+  it('A → B workspace switch lets B complete its first 108 taps and save', async () => {
+    const guard = createMalaCompletionGuard();
+    const identityA = { userId: UID, japamId: 'japam-a', japamName: 'Japam A' };
+    const identityB = { userId: UID, japamId: 'japam-b', japamName: 'Japam B' };
+    const refsA = { ...makeRefs(), activeJapamId: { current: identityA.japamId }, activeJapamName: { current: identityA.japamName } };
+    const refsB = { ...makeRefs(), activeJapamId: { current: identityB.japamId }, activeJapamName: { current: identityB.japamName } };
+    const feedback = jest.fn().mockResolvedValue(undefined);
+
+    for (const [boundaryKey, accumulatedTotal] of [[1, 108], [2, 216], [3, 324]] as const) {
+      const result = await runMalaCompletion({
+        boundaryKey,
+        scopeKey: createTapCompletionScopeKey(identityA),
+        guard,
+        save: () => tapSaveSession(0, 1, 108, accumulatedTotal, 'tap', refsA, identityA, 'Test User'),
+        playFeedback: async () => {},
+      });
+      expect(result.saved).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+
+    const resultB = await runMalaCompletion({
+      boundaryKey: 1,
+      scopeKey: createTapCompletionScopeKey(identityB),
+      guard,
+      save: () => tapSaveSession(0, 1, 108, 108, 'tap', refsB, identityB, 'Test User'),
+      playFeedback: feedback,
+    });
+
+    expect(resultB).toEqual({ saved: true, duplicate: false });
+    expect(feedback).toHaveBeenCalledTimes(1);
+    const saved = JSON.parse(await AsyncStorage.getItem('history') || '[]');
+    expect(saved).toHaveLength(4);
+    expect(saved[0]).toMatchObject({ japamId: 'japam-b', japamName: 'Japam B', totalCount: 108, malas: 1 });
+    expect(saved.slice(1).every((record: any) => record.japamId === 'japam-a')).toBe(true);
   });
 
   it('duplicate guard prevents double-saving the same mala', async () => {
