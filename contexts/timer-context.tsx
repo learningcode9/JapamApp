@@ -5,6 +5,7 @@ import * as Haptics from 'expo-haptics';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import * as Notifications from 'expo-notifications';
 import { usePathname, useRouter } from 'expo-router';
+import { addEventListener as addNetInfoEventListener } from '@react-native-community/netinfo';
 import { getTimerState, updateTimerState } from '../lib/timerState';
 import { computeColdStartRestoreDecision } from '../lib/timerColdStartRestore';
 import {
@@ -26,10 +27,12 @@ import {
   applyTombstones,
   buildSupabaseHistoryPayload,
   dedupeByCompletionId,
+  filterByJapam,
   getPending,
   makeLoopCompletionId,
   markSynced,
   mergeTombstones,
+  todayStatsFor,
   toLocalDayKey,
   type HistoryRecord,
 } from '../lib/historyStore';
@@ -83,6 +86,10 @@ const TIMER_SESSION_USER_ID_KEY = 'timerSessionUserId';
 const TIMER_SESSION_JAPAM_ID_KEY = 'timerSessionJapamId';
 const TIMER_SESSION_JAPAM_NAME_KEY = 'timerSessionJapamName';
 const HISTORY_KEY = 'history';
+const COUNT_KEY = 'count';
+const MALAS_KEY = 'malas';
+const TOTAL_KEY = 'totalCount';
+const TOTAL_DATE_KEY = 'totalDate';
 const DELETED_COMPLETIONS_KEY = 'deletedCompletions';
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
@@ -105,6 +112,29 @@ const getLocalDateKey = (date = new Date()) => {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+};
+
+const persistHomeTodaySnapshot = async (
+  history: any[],
+  uid: string,
+  japamId: string,
+  japamName: string,
+  completedAt: string,
+) => {
+  const todayKey = getLocalDateKey();
+  if (toLocalDayKey(completedAt) !== todayKey) return;
+
+  const scopedHistory = filterByJapam(history, japamId, japamName);
+  const { totalCount } = todayStatsFor(scopedHistory, uid, todayKey, toLocalDayKey);
+  const malas = Math.floor(totalCount / 108);
+  const count = totalCount % 108;
+
+  await AsyncStorage.multiSet([
+    [getUserKey(TOTAL_KEY, uid), String(totalCount)],
+    [getUserKey(MALAS_KEY, uid), String(malas)],
+    [getUserKey(COUNT_KEY, uid), String(count)],
+    [getUserKey(TOTAL_DATE_KEY, uid), todayKey],
+  ]);
 };
 
 const createTimerSessionId = () =>
@@ -134,6 +164,7 @@ const getCurrentMalaLabel = (completedLoops: number, selectedLoops: number, runn
 };
 
 let syncInFlightPromise: Promise<void> | null = null;
+let syncRequestedWhileInFlight = false;
 
 const clampCompletedLoops = (completed: number, target: number) => {
   const safeTarget = Math.max(1, target);
@@ -965,9 +996,12 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     let uid = userIdRef.current;
     if (!uid) return;
     const url = process.env.EXPO_PUBLIC_SUPABASE_URL;
-    const key = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+    const key = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
     if (!url || !key) return;
-    if (syncInFlightPromise) return syncInFlightPromise;
+    if (syncInFlightPromise) {
+      syncRequestedWhileInFlight = true;
+      return syncInFlightPromise;
+    }
     syncInFlightPromise = (async () => {
       try {
         let history: any[] = [];
@@ -1148,6 +1182,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         const latest = latestRaw ? JSON.parse(latestRaw) : [];
         await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(markSynced(latest, syncedIds)));
         console.log('[MARK_SYNCED] count=%d ids=%s', syncedIds.length, syncedIds.join(','));
+        DeviceEventEmitter.emit('japam-history-remote-synced', { userId: uid });
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('japam-history-remote-synced'));
+        }
         DeviceEventEmitter.emit('japam-stats-updated');
         DeviceEventEmitter.emit('japam-history-updated', { userId: uid || 'guest' });
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -1158,6 +1196,10 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     }
       } finally {
         syncInFlightPromise = null;
+        if (syncRequestedWhileInFlight) {
+          syncRequestedWhileInFlight = false;
+          void syncPendingHistory();
+        }
       }
     })();
     return syncInFlightPromise;
@@ -1329,6 +1371,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       if (!queuedCompletion || queuedCompletion.sessionId === timerSessionIdRef.current) {
         updateTimerState({ lastSavedCompletedLoops: loopNumber });
       }
+      if (uid && activeJapamId && activeJapamName) {
+        try {
+          await persistHomeTodaySnapshot(updatedHistory, uid, activeJapamId, activeJapamName, completedAt);
+        } catch (snapshotError) {
+          console.log('[Stats] HOME_SNAPSHOT_SAVE_FAILED', snapshotError);
+        }
+      }
       console.log(
         '[OFFLINE_SAVE_ACCEPTED] source=timer completionId=%s created_at=%s localDay=%s syncStatus=%s japamId=%s japamName=%s',
         updatedHistory[0]?.completionId,
@@ -1369,14 +1418,21 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     retryPendingTimerCompletionInFlightRef.current = true;
     try {
       const pending = await loadPendingTimerCompletions();
+      const activeSessionId = timerSessionIdRef.current;
       for (const item of pending) {
+        const isActiveSessionItem =
+          item.sessionId === activeSessionId || !activeSessionId;
+        if (!isActiveSessionItem) {
+          processedCompletionLoopsRef.current.delete(item.loopNumber);
+          continue;
+        }
         const saveResult = await saveSession(item);
         if (saveResult === 'retryable-skip') {
           processedCompletionLoopsRef.current.delete(item.loopNumber);
           continue;
         }
         await removePendingTimerCompletion(item.completionId);
-        if (item.sessionId === timerSessionIdRef.current) {
+        if (item.sessionId === activeSessionId) {
           completedLoopsRef.current = Math.max(completedLoopsRef.current, item.loopNumber);
           setCompletedLoops(completedLoopsRef.current);
           updateTimerState({ completedLoops: completedLoopsRef.current });
@@ -1430,6 +1486,21 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         void retryPendingTimerCompletion();
       }
     });
+    const pendingSyncSub = DeviceEventEmitter.addListener('japam-history-pending-sync', () => {
+      void syncPendingHistory();
+    });
+    let wasConnected: boolean | null = null;
+    const networkSub = Platform.OS === 'android'
+      ? addNetInfoEventListener((state) => {
+          const isConnected = state.isConnected === true && state.isInternetReachable !== false;
+          const reconnected = wasConnected === false && isConnected;
+          wasConnected = isConnected;
+          if (!reconnected) return;
+          console.log('[SYNC_TRIGGER_SOURCE] source=native-network-reconnect');
+          void syncPendingHistory();
+          void retryPendingTimerCompletion();
+        })
+      : null;
     const onOnline = () => {
       console.log('[SYNC_TRIGGER_SOURCE] source=browser-online');
       void syncPendingHistory();
@@ -1440,6 +1511,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     }
     return () => {
       sub.remove();
+      pendingSyncSub.remove();
+      networkSub?.();
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.removeEventListener('online', onOnline);
       }
@@ -1770,6 +1843,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
       vibrationEnabledRef.current = vib !== 'false';
       userIdRef.current = uid || '';
       setUserId(uid || '');
+      if (uid) void syncPendingHistory();
       // Keep singleton in sync with loaded preferences
       updateTimerState({
         soundEnabled: snd !== 'false',
@@ -2174,7 +2248,7 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         jsSelectedDuration: selectedDurationRef.current,
         jsRemainingSeconds: Math.max(0, selectedDurationRef.current * 60 - secondsRef.current),
       });
-      const native = await getNativeTimerState();
+      let native = await getNativeTimerState();
       logDiagM('reconcile_native_state', {
         nativeStartedAt: native?.startedAt ?? null,
         nativeDurationMs: native?.durationMs ?? null,
@@ -2214,6 +2288,37 @@ export function TimerProvider({ children }: { children: ReactNode }) {
             return;
           }
         }
+      }
+
+      // Kotlin records completedLoops before the completion sound finishes and before it
+      // re-anchors startedAt for the next mala. If JS resumes in that handoff (most commonly
+      // by tapping the "Mala completed" notification), the old startedAt is already expired;
+      // re-anchoring to it would immediately complete the next mala. Wait for native to publish
+      // the fresh next-loop anchor before restarting the JS ticker.
+      const latestCompletionAt = native.completionTimes?.[String(native.completedLoops)] ?? 0;
+      const nextLoopStartPending =
+        native.completedLoops < native.totalLoops &&
+        native.isRunning &&
+        !native.isPaused &&
+        latestCompletionAt > 0 &&
+        (native.isCompleting || native.startedAt <= latestCompletionAt);
+      if (nextLoopStartPending) {
+        for (let attempt = 0; attempt < 25; attempt += 1) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 250));
+          const refreshed = await getNativeTimerState();
+          if (!refreshed || refreshed.sessionId !== timerSessionIdRef.current) break;
+          native = refreshed;
+          const refreshedCompletionAt = native.completionTimes?.[String(native.completedLoops)] ?? 0;
+          const stillPending =
+            native.completedLoops < native.totalLoops &&
+            native.isRunning &&
+            !native.isPaused &&
+            refreshedCompletionAt > 0 &&
+            (native.isCompleting || native.startedAt <= refreshedCompletionAt);
+          if (!stillPending) break;
+        }
+        console.log('[TimerBG] reconcileNativeLoops: waited for native next-loop anchor sessionId=%s completedLoops=%d/%d startedAt=%d isCompleting=%s',
+          native.sessionId, native.completedLoops, native.totalLoops, native.startedAt, native.isCompleting);
       }
 
       // Kotlin still has a mala in flight — re-anchor JS ticker to its startedAt

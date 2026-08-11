@@ -22,6 +22,7 @@ export const getNativeTimerState = async (): Promise<{
   durationMs: number;
   completedLoops: number;
   totalLoops: number;
+  isCompleting: boolean;
   userId: string;
   completionTimes?: Record<string, number>;
 } | null> => null;
