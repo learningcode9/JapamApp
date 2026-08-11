@@ -50,6 +50,9 @@ class JapamTimerService : Service() {
         const val EXTRA_SESSION_ID = "sessionId"
 
         @Volatile var isRunning = false
+        private val isCompleting = AtomicBoolean(false)
+        internal val isCompletingNow: Boolean
+            get() = isCompleting.get()
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -66,7 +69,6 @@ class JapamTimerService : Service() {
     private var vibrationEnabled: Boolean = true
     private var userId: String = ""
     private var isPaused: Boolean = false
-    private val isCompleting = AtomicBoolean(false)
     private var lastSaveTime: Long = 0L
     private var startHeadsUpPosted: Boolean = false
     private val completionTimes = mutableMapOf<Int, Long>()

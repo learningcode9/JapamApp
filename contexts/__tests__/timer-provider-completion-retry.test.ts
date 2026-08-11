@@ -3,6 +3,10 @@ jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock')
 );
 
+jest.mock('@react-native-community/netinfo', () => ({
+  addEventListener: jest.fn(() => () => {}),
+}));
+
 const mockListeners = new Map<string, Set<(payload?: any) => void>>();
 
 jest.mock('@expo/vector-icons', () => ({
@@ -783,5 +787,107 @@ describe('TimerProvider restored/native final-loop retry', () => {
       '2026-07-29T11:00:00.000Z',
       '2026-07-29T11:03:00.000Z',
     ]);
+  });
+
+  it('does not replay the next mala when foreground reconciliation sees the native completion handoff', async () => {
+    const sessionId = 'timer-native-handoff-foreground';
+    const completionAt = Date.now() - 100;
+    await seedPersistedSession({ sessionId, totalLoops: 3, durationSeconds: 180, completedLoops: 0 });
+    (getNativeTimerState as jest.Mock)
+      .mockResolvedValueOnce({
+        sessionId,
+        isRunning: true,
+        isPaused: false,
+        isCompleting: true,
+        startedAt: completionAt - 180000,
+        pausedElapsedMs: 0,
+        durationMs: 180000,
+        completedLoops: 1,
+        totalLoops: 3,
+        userId: UID,
+        completionTimes: { '1': completionAt },
+      })
+      .mockResolvedValue({
+        sessionId,
+        isRunning: true,
+        isPaused: false,
+        isCompleting: false,
+        startedAt: completionAt + 1000,
+        pausedElapsedMs: 0,
+        durationMs: 180000,
+        completedLoops: 1,
+        totalLoops: 3,
+        userId: UID,
+        completionTimes: { '1': completionAt },
+      });
+
+    mountedTree = await renderTimerProvider();
+    await act(async () => {
+      mockListeners.get('change')?.forEach((cb) => cb('active'));
+      await Promise.resolve();
+    });
+    await waitForCondition(async () => (await readHistory()).length === 1 && currentTimer!.isRunning === true);
+
+    expect(await readHistory()).toHaveLength(1);
+    expect(currentTimer!.completedLoops).toBe(1);
+    expect(currentTimer!.isRunning).toBe(true);
+    expect(currentTimer!.seconds).toBeLessThan(5);
+  });
+
+  it('does not replay a completion when tapping the completion notification during the native handoff', async () => {
+    const sessionId = 'timer-native-handoff-notification';
+    const completionAt = Date.now() - 100;
+    await seedPersistedSession({ sessionId, totalLoops: 3, durationSeconds: 180, completedLoops: 0 });
+    (getNativeTimerState as jest.Mock)
+      .mockResolvedValueOnce({
+        sessionId,
+        isRunning: true,
+        isPaused: false,
+        isCompleting: true,
+        startedAt: completionAt - 180000,
+        pausedElapsedMs: 0,
+        durationMs: 180000,
+        completedLoops: 1,
+        totalLoops: 3,
+        userId: UID,
+        completionTimes: { '1': completionAt },
+      })
+      .mockResolvedValue({
+        sessionId,
+        isRunning: true,
+        isPaused: false,
+        isCompleting: false,
+        startedAt: completionAt + 1000,
+        pausedElapsedMs: 0,
+        durationMs: 180000,
+        completedLoops: 1,
+        totalLoops: 3,
+        userId: UID,
+        completionTimes: { '1': completionAt },
+      });
+
+    mountedTree = await renderTimerProvider();
+    await act(async () => {
+      DeviceEventEmitter.emit('japamTimerLoopComplete', {
+        sessionId,
+        completedLoops: 1,
+        isFinal: false,
+        userId: UID,
+        durationMs: 180000,
+        completedAt: completionAt,
+      });
+      await Promise.resolve();
+    });
+    await waitForCondition(async () => (await readHistory()).length === 1);
+
+    await act(async () => {
+      mockListeners.get('change')?.forEach((cb) => cb('active'));
+      await Promise.resolve();
+    });
+    await waitForCondition(async () => currentTimer!.isRunning === true);
+
+    expect(await readHistory()).toHaveLength(1);
+    expect(currentTimer!.completedLoops).toBe(1);
+    expect(currentTimer!.seconds).toBeLessThan(5);
   });
 });

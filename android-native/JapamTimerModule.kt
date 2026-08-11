@@ -163,6 +163,7 @@ class JapamTimerModule(private val reactContext: ReactApplicationContext) :
                 putDouble("durationMs", prefs.getLong("durationMs", 0L).toDouble())
                 putInt("completedLoops", prefs.getInt("completedLoops", 0))
                 putInt("totalLoops", prefs.getInt("totalLoops", 1))
+                putBoolean("isCompleting", JapamTimerService.isCompletingNow)
                 putString("userId", prefs.getString("userId", "") ?: "")
                 putMap("completionTimes", completionTimes)
             }
