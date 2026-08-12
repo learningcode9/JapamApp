@@ -702,8 +702,6 @@ export default function TimerScreen() {
     }
   };
 
-  const todayLabel = new Date().toLocaleDateString();
-
   return (
     <View style={styles.root}>
       <ScrollView
@@ -754,8 +752,7 @@ export default function TimerScreen() {
             </Pressable>
           </View>
 
-          <Text style={styles.dateText}>Today · {todayLabel}</Text>
-          <Text style={styles.subtitle}>Pick a duration, set loops, breathe.</Text>
+          <Text style={styles.subtitle}>Choose your time · Set your malas · Begin your practice</Text>
 
       {showInstallBanner && !isStandaloneOrInstalledWeb() && (
             <View style={styles.installBanner}>

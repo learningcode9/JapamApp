@@ -316,7 +316,7 @@ export default function MyJapamsScreen() {
       >
         {!isLoading && visibleJapams.length === 0 && (
           <Text style={styles.emptyText}>
-            You haven&apos;t created a Japam yet. Tap + Add Japam below to get started.
+            You haven&apos;t created a Japam yet. Tap + Create Japam below to get started.
           </Text>
         )}
 
@@ -371,9 +371,9 @@ export default function MyJapamsScreen() {
           );
         })}
 
-        <Pressable style={styles.addButton} onPress={openCreateDialog} accessibilityRole="button" accessibilityLabel="Add Japam">
+        <Pressable style={styles.addButton} onPress={openCreateDialog} accessibilityRole="button" accessibilityLabel="Create Japam">
           <Ionicons name="add" size={22} color="#ffffff" />
-          <Text style={styles.addButtonText}>Add Japam</Text>
+          <Text style={styles.addButtonText}>Create Japam</Text>
         </Pressable>
 
         {visibleJapams.length > 0 && (
@@ -445,11 +445,11 @@ export default function MyJapamsScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>
-              {nameDialogMode === 'create' ? 'Add Japam' : 'Rename Japam'}
+              {nameDialogMode === 'create' ? 'Create Japam' : 'Rename Japam'}
             </Text>
             <Text style={styles.modalSubtitle}>
               {nameDialogMode === 'create'
-                ? 'Type a name for this Japam, like a mantra you chant.'
+                ? 'Create a separate space for a mantra or practice. Each Japam keeps its own Timer, Tap, History, and stats.'
                 : 'Type the new name for this Japam.'}
             </Text>
             <TextInput
