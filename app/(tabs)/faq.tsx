@@ -22,6 +22,14 @@ const FAQ_ITEMS = [
     a: 'The timer automatically starts the next mala until the selected number of malas is completed.',
   },
   {
+    q: 'What are My Japams?',
+    a: 'My Japams lets you keep different mantras or practices separate. Each Japam has its own Timer and Tap progress, History, and statistics.',
+  },
+  {
+    q: 'What happens when I switch Japams?',
+    a: 'When you switch to another Japam, the app shows that Japam’s own progress and statistics. Your progress in the previous Japam is kept separately and is not mixed with the new one.',
+  },
+  {
     q: 'What does Export do?',
     a: 'Export creates a CSV file of your japam history. You can save it as a personal backup or open it in Excel, Google Sheets, or Apple Numbers.',
   },
