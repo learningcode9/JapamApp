@@ -49,6 +49,20 @@ describe('per-Japam timer key helpers', () => {
 });
 
 describe('timer state isolation: A and B restore independently', () => {
+  it('preserves completed-loop progress when the next mala has not started yet', () => {
+    const decision = computeColdStartRestoreDecision({
+      savedRunning: false,
+      savedPaused: false,
+      savedSec: 0,
+      savedTarget: 60,
+      savedCompletedLoops: 1,
+      activeLoopLimit: 2,
+    });
+
+    expect(decision.outcome).toBe('progress');
+    expect(decision.restoredSeconds).toBe(0);
+  });
+
   it('Japam A paused at 120s restores correctly regardless of B state', () => {
     // This simulates: A has paused state, B has different paused state.
     // The cold-start restore decision for A should be based ONLY on A's values.

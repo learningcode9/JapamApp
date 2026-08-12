@@ -8,6 +8,7 @@ jest.mock('@react-native-community/netinfo', () => ({
 }));
 
 const mockListeners = new Map<string, Set<(payload?: any) => void>>();
+let mockPlaybackStatusHandler: ((status: { isLoaded: boolean; didJustFinish?: boolean }) => void) | null = null;
 
 jest.mock('@expo/vector-icons', () => ({
   Ionicons: 'Ionicons',
@@ -54,7 +55,9 @@ jest.mock('expo-av', () => ({
           stopAsync: jest.fn(async () => {}),
           playAsync: jest.fn(async () => {}),
           unloadAsync: jest.fn(async () => {}),
-          setOnPlaybackStatusUpdate: jest.fn(),
+          setOnPlaybackStatusUpdate: jest.fn((handler: (status: { isLoaded: boolean; didJustFinish?: boolean }) => void) => {
+            mockPlaybackStatusHandler = handler;
+          }),
         },
       })),
     },
@@ -122,7 +125,12 @@ const { act } = renderer;
 import { AppState, DeviceEventEmitter } from 'react-native';
 import { TimerProvider, useTimer } from '../timer-context';
 import { getTimerState, updateTimerState } from '../../lib/timerState';
-import { makeLoopCompletionId } from '../../lib/historyStore';
+import {
+  filterByJapam,
+  makeLoopCompletionId,
+  todayStatsFor,
+  toLocalDayKey,
+} from '../../lib/historyStore';
 import {
   TIMER_PENDING_COMPLETIONS_KEY,
   type PendingTimerCompletion,
@@ -131,6 +139,7 @@ import {
   getNativeTimerState,
   startForegroundService,
 } from '../../lib/timerForegroundService';
+import { registerTimerNotificationResponseListener } from '../../lib/timerNotificationRouting';
 /* eslint-enable import/first, @typescript-eslint/no-require-imports */
 
 const UID = 'user-123';
@@ -338,6 +347,8 @@ describe('TimerProvider restored/native final-loop retry', () => {
       mockListeners.get(event)?.forEach((cb) => cb(payload));
     });
     currentTimer = null;
+    mockPlaybackStatusHandler = null;
+    (AppState as any).currentState = 'background';
     mountedTree = null;
     updateTimerState({
       sessionId: '',
@@ -406,6 +417,309 @@ describe('TimerProvider restored/native final-loop retry', () => {
     expect(failedMultiSetSpy).toHaveBeenCalled();
     expect(getTimerState().sessionId).toBe('');
     failedMultiSetSpy.mockRestore();
+  });
+
+  it('writes the first foreground mala before completion audio can finish', async () => {
+    (AppState as any).currentState = 'active';
+    mountedTree = await renderTimerProvider();
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-07-29T12:00:00.000Z'));
+
+    await act(async () => {
+      currentTimer!.selectDuration(1);
+      currentTimer!.selectLoops(2);
+      currentTimer!.setActiveJapamSelection(JAPAM_A_ID, JAPAM_A_NAME);
+      await currentTimer!.start();
+    });
+
+    jest.advanceTimersByTime(60_000);
+    await act(async () => { await Promise.resolve(); });
+
+    expect(mockPlaybackStatusHandler).toBeTruthy();
+    expect(await readHistory()).toHaveLength(1);
+    expect((await readHistory())[0]).toMatchObject({ japamId: JAPAM_A_ID, malas: 1, totalCount: 108 });
+    jest.useRealTimers();
+  });
+
+  it('preserves a completed mala when switching A→B→A before the next mala starts', async () => {
+    mountedTree = await renderTimerProvider();
+
+    await act(async () => {
+      currentTimer!.selectDuration(1);
+      currentTimer!.selectLoops(2);
+      currentTimer!.setActiveJapamSelection(JAPAM_A_ID, JAPAM_A_NAME);
+      await currentTimer!.start();
+    });
+
+    const sessionId = getTimerState().sessionId;
+    await act(async () => {
+      DeviceEventEmitter.emit('japamTimerLoopComplete', {
+        sessionId,
+        completedLoops: 1,
+        isFinal: false,
+        userId: UID,
+        durationMs: 60_000,
+        completedAt: Date.parse('2026-07-29T12:01:00.000Z'),
+      });
+      await Promise.resolve();
+    });
+    await waitForCondition(async () => (await readHistory()).length === 1);
+
+    await act(async () => {
+      DeviceEventEmitter.emit('japam-will-switch', { fromJapamId: JAPAM_A_ID, toJapamId: JAPAM_B_ID });
+      DeviceEventEmitter.emit('japam-did-switch', { japamId: JAPAM_B_ID });
+      await Promise.resolve();
+    });
+    await flush();
+    await act(async () => {
+      DeviceEventEmitter.emit('japam-will-switch', { fromJapamId: JAPAM_B_ID, toJapamId: JAPAM_A_ID });
+      DeviceEventEmitter.emit('japam-did-switch', { japamId: JAPAM_A_ID });
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(currentTimer!.completedLoops).toBe(1);
+    expect(currentTimer!.selectedLoops).toBe(2);
+    expect(await readHistory()).toHaveLength(1);
+    expect((await readHistory())[0].japamId).toBe(JAPAM_A_ID);
+  });
+
+  it('saves exactly two malas to A with immediate events while B stays empty', async () => {
+    mountedTree = await renderTimerProvider();
+    await act(async () => {
+      currentTimer!.selectDuration(1);
+      currentTimer!.selectLoops(2);
+      await Promise.resolve();
+    });
+    await flush();
+    const historyEvents = jest.fn();
+    const historySub = (DeviceEventEmitter.addListener as jest.Mock)('japam-history-updated', historyEvents);
+    await act(async () => {
+      currentTimer!.setActiveJapamSelection(JAPAM_A_ID, JAPAM_A_NAME);
+      await currentTimer!.start();
+    });
+    const sessionId = getTimerState().sessionId;
+
+    await act(async () => {
+      DeviceEventEmitter.emit('japamTimerLoopComplete', {
+        sessionId, completedLoops: 1, isFinal: false, userId: UID,
+        durationMs: 60_000, completedAt: Date.parse('2026-07-29T13:01:00.000Z'),
+      });
+      await Promise.resolve();
+    });
+    await waitForCondition(async () => (await readHistory()).length === 1);
+    expect(historyEvents).toHaveBeenCalledTimes(1);
+    expect((await readHistory()).filter((record: any) => record.japamId === JAPAM_A_ID)).toHaveLength(1);
+    expect((await readHistory()).filter((record: any) => record.japamId === JAPAM_B_ID)).toHaveLength(0);
+
+    await act(async () => {
+      DeviceEventEmitter.emit('japamTimerLoopComplete', {
+        sessionId, completedLoops: 2, isFinal: true, userId: UID,
+        durationMs: 60_000, completedAt: Date.parse('2026-07-29T13:02:00.000Z'),
+      });
+      await Promise.resolve();
+    });
+    await waitForCondition(async () => (await readHistory()).length === 2);
+    expect(historyEvents).toHaveBeenCalledTimes(2);
+    expect((await readHistory()).filter((record: any) => record.japamId === JAPAM_A_ID)).toHaveLength(2);
+    expect((await readHistory()).filter((record: any) => record.japamId === JAPAM_B_ID)).toHaveLength(0);
+    historySub.remove();
+  });
+
+  it('pause and resume keeps the same timer session and does not create a completion', async () => {
+    mountedTree = await renderTimerProvider();
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-07-29T14:00:00.000Z'));
+    await act(async () => {
+      currentTimer!.selectDuration(1);
+      currentTimer!.selectLoops(1);
+      currentTimer!.setActiveJapamSelection(JAPAM_A_ID, JAPAM_A_NAME);
+      await Promise.resolve();
+    });
+    await act(async () => { await currentTimer!.start(); });
+    const sessionId = getTimerState().sessionId;
+    act(() => { jest.advanceTimersByTime(1_000); });
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { currentTimer!.pause(); await Promise.resolve(); });
+    expect(currentTimer!.isRunning).toBe(false);
+    expect(currentTimer!.isPaused).toBe(true);
+    expect(currentTimer!.seconds).toBe(1);
+    await act(async () => { await currentTimer!.start(); });
+    expect(currentTimer!.isRunning).toBe(true);
+    expect(getTimerState().sessionId).toBe(sessionId);
+    expect(await readHistory()).toHaveLength(0);
+    jest.useRealTimers();
+  });
+
+  it('runs five real malas in A with live notification routing and Home workspace isolation', async () => {
+    (AppState as any).currentState = 'active';
+
+    const settle = async () => {
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    };
+    const homeState = new Map([
+      [JAPAM_A_ID, { malas: 0, totalCount: 0 }],
+      [JAPAM_B_ID, { malas: 0, totalCount: 0 }],
+    ]);
+    const refreshHomeState = async () => {
+      const history = await readHistory();
+      for (const [japamId, japamName] of [[JAPAM_A_ID, JAPAM_A_NAME], [JAPAM_B_ID, JAPAM_B_NAME]]) {
+        const scoped = filterByJapam(history, japamId, japamName);
+        homeState.set(
+          japamId,
+          todayStatsFor(scoped, UID, toLocalDayKey(new Date().toISOString()), toLocalDayKey),
+        );
+      }
+    };
+    const historyEvents = jest.fn();
+    const historySub = (DeviceEventEmitter.addListener as jest.Mock)('japam-history-updated', historyEvents);
+    const homeSub = (DeviceEventEmitter.addListener as jest.Mock)('japam-history-updated', refreshHomeState);
+    let notificationResponseListener: ((response: any) => void) | null = null;
+    let lastNotificationResponse: any = null;
+    const clearLastNotificationResponseAsync = jest.fn(async () => {
+      lastNotificationResponse = null;
+    });
+    const router = { push: jest.fn() };
+    const notificationRegistration = registerTimerNotificationResponseListener({
+      addNotificationResponseReceivedListener: jest.fn((listener: (response: any) => void) => {
+        notificationResponseListener = listener;
+        return { remove: jest.fn() };
+      }),
+      getLastNotificationResponseAsync: jest.fn(async () => lastNotificationResponse),
+      clearLastNotificationResponseAsync,
+    }, router);
+
+    const makeCompletionResponse = (loop: number) => ({
+      notification: {
+        request: {
+          identifier: `completion-${loop}`,
+          content: { channelId: 'japam-complete', title: 'Mala completed' },
+        },
+      },
+    });
+
+    try {
+      mountedTree = await renderTimerProvider();
+      jest.useFakeTimers();
+      jest.setSystemTime(new Date('2026-07-29T15:00:00.000Z'));
+      await act(async () => {
+        currentTimer!.selectDuration(1);
+        currentTimer!.selectLoops(5);
+        currentTimer!.setActiveJapamSelection(JAPAM_A_ID, JAPAM_A_NAME);
+        await currentTimer!.start();
+      });
+      await settle();
+      const sessionId = getTimerState().sessionId;
+      expect(sessionId).toBeTruthy();
+
+      for (let loop = 1; loop <= 5; loop += 1) {
+        const secondsBeforeBoundary = currentTimer!.seconds;
+        await act(async () => {
+          jest.advanceTimersByTime(Math.max(1, 60 - secondsBeforeBoundary) * 1000);
+          await Promise.resolve();
+        });
+        await settle();
+
+        const historyAfterCompletion = await readHistory();
+        expect(historyAfterCompletion).toHaveLength(loop);
+        expect(historyAfterCompletion.filter((record: any) => record.japamId === JAPAM_A_ID)).toHaveLength(loop);
+        expect(historyAfterCompletion.filter((record: any) => record.japamId === JAPAM_B_ID)).toHaveLength(0);
+        expect(new Set(historyAfterCompletion.map((record: any) => record.completionId)).size).toBe(loop);
+        expect(historyEvents.mock.calls.length).toBeGreaterThanOrEqual(loop);
+        await settle();
+        expect(homeState.get(JAPAM_A_ID)).toEqual({ malas: loop, totalCount: loop * 108 });
+        expect(homeState.get(JAPAM_B_ID)).toEqual({ malas: 0, totalCount: 0 });
+
+        const historyBeforeNotificationTap = await readHistory();
+        const eventCountBeforeNotificationTap = historyEvents.mock.calls.length;
+        (AppState as any).currentState = 'background';
+        mockListeners.get('change')?.forEach((listener) => listener('background'));
+        lastNotificationResponse = makeCompletionResponse(loop);
+        const liveNotificationResponseListener = notificationResponseListener as ((response: any) => void) | null;
+        if (liveNotificationResponseListener) liveNotificationResponseListener(lastNotificationResponse);
+        await settle();
+        expect(router.push).toHaveBeenCalledTimes(loop);
+        expect(clearLastNotificationResponseAsync).toHaveBeenCalledTimes(loop);
+        expect(await readHistory()).toEqual(historyBeforeNotificationTap);
+        expect(historyEvents).toHaveBeenCalledTimes(eventCountBeforeNotificationTap);
+        expect(homeState.get(JAPAM_A_ID)).toEqual({ malas: loop, totalCount: loop * 108 });
+        expect(homeState.get(JAPAM_B_ID)).toEqual({ malas: 0, totalCount: 0 });
+
+        (AppState as any).currentState = 'active';
+        mockListeners.get('change')?.forEach((listener) => listener('active'));
+        await settle();
+
+        if (loop === 2) {
+          await act(async () => {
+            DeviceEventEmitter.emit('japam-will-switch', { fromJapamId: JAPAM_A_ID, toJapamId: JAPAM_B_ID });
+            DeviceEventEmitter.emit('japam-did-switch', { japamId: JAPAM_B_ID });
+            await Promise.resolve();
+          });
+          await settle();
+          await act(async () => {
+            DeviceEventEmitter.emit('japam-will-switch', { fromJapamId: JAPAM_B_ID, toJapamId: JAPAM_A_ID });
+            DeviceEventEmitter.emit('japam-did-switch', { japamId: JAPAM_A_ID });
+            await Promise.resolve();
+          });
+          await settle();
+          expect(currentTimer!.completedLoops).toBe(2);
+        }
+
+        const completionAudioHandler = mockPlaybackStatusHandler;
+        expect(completionAudioHandler).toBeTruthy();
+        await act(async () => {
+          completionAudioHandler?.({ isLoaded: true, didJustFinish: true });
+          await Promise.resolve();
+        });
+        await settle();
+
+        if (loop < 5) {
+          await act(async () => {
+            jest.advanceTimersByTime(1_000);
+            await Promise.resolve();
+          });
+          await settle();
+          if (loop === 3) {
+            await act(async () => {
+              jest.advanceTimersByTime(1_000);
+              await Promise.resolve();
+            });
+            await settle();
+            const sessionBeforePause = getTimerState().sessionId;
+            const secondsBeforePause = currentTimer!.seconds;
+            await act(async () => {
+              currentTimer!.pause();
+              await Promise.resolve();
+            });
+            await settle();
+            expect(currentTimer!.isPaused).toBe(true);
+            expect(await readHistory()).toHaveLength(3);
+            await act(async () => {
+              await currentTimer!.start();
+              await Promise.resolve();
+            });
+            await settle();
+            expect(currentTimer!.isRunning).toBe(true);
+            expect(getTimerState().sessionId).toBe(sessionBeforePause);
+            expect(currentTimer!.seconds).toBe(secondsBeforePause);
+          }
+        }
+      }
+
+      expect(await readHistory()).toHaveLength(5);
+      expect(homeState.get(JAPAM_A_ID)).toEqual({ malas: 5, totalCount: 5 * 108 });
+      expect(homeState.get(JAPAM_B_ID)).toEqual({ malas: 0, totalCount: 0 });
+      expect(historyEvents.mock.calls.length).toBeGreaterThanOrEqual(5);
+    } finally {
+      notificationRegistration.remove();
+      historySub.remove();
+      homeSub.remove();
+      jest.useRealTimers();
+    }
   });
 
   it('queues multiple native loops and later saves each exactly once after restart', async () => {

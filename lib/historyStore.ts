@@ -194,10 +194,18 @@ export const appendCompletion = (
     japamName?: string | null;
   }
 ): HistoryRecord[] => {
-  const completionId = completion.completionId || makeCompletionId(completion.userId, completion.date);
   const normalized = normalizeAll(history);
+  const baseCompletionId = completion.completionId || makeCompletionId(completion.userId, completion.date);
+  let completionId = baseCompletionId;
   if (normalized.some((r) => r.completionId === completionId)) {
-    return normalized;
+    // Deterministic timer IDs identify the same physical loop and must remain idempotent. Tap and
+    // manual records have only a wall-clock fallback ID, so a same-millisecond completion can be
+    // a distinct event (including across workspaces); allocate a local suffix instead of dropping
+    // the legitimate second record.
+    if (completion.completionId) return normalized;
+    let suffix = 1;
+    while (normalized.some((r) => r.completionId === `${baseCompletionId}:${suffix}`)) suffix += 1;
+    completionId = `${baseCompletionId}:${suffix}`;
   }
   const record: HistoryRecord = {
     date: completion.date,

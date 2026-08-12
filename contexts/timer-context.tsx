@@ -1671,6 +1671,16 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     const shouldPlaySound = soundEnabledRef.current && !suppressNextCompletionSoundRef.current;
     suppressNextCompletionSoundRef.current = false;
 
+    const pendingCompletion = await buildPendingCompletionForLoop(newDone, completedAt);
+    if (pendingCompletion) {
+      await enqueuePendingTimerCompletion(pendingCompletion);
+    }
+    // Save before completion audio so Home and History update at mala completion even if the
+    // platform delays or never delivers the audio completion callback.
+    const saveResult = pendingCompletion
+      ? await saveSession(pendingCompletion)
+      : await saveSession(undefined, completedAt);
+
     if (shouldPlaySound) {
       try {
         if (Platform.OS === 'web') {
@@ -1727,16 +1737,6 @@ export function TimerProvider({ children }: { children: ReactNode }) {
     if (Platform.OS === 'web') {
       stopWebTimerAudio();
     }
-    // Durably queue before the local History write. If the app crashes after this point, retry
-    // replays the same deterministic completionId; if the History append succeeds, we remove it.
-    const pendingCompletion = await buildPendingCompletionForLoop(newDone, completedAt);
-    if (pendingCompletion) {
-      await enqueuePendingTimerCompletion(pendingCompletion);
-    }
-    // Save session after Om: local write + stats events fire after sound completes.
-    const saveResult = pendingCompletion
-      ? await saveSession(pendingCompletion)
-      : await saveSession(undefined, completedAt);
     if (shouldReleaseTimerCompletionClaim(saveResult)) {
       processedCompletionLoopsRef.current.delete(newDone);
       void hydratePersistedSessionJapamIdentity();
@@ -2520,7 +2520,8 @@ export function TimerProvider({ children }: { children: ReactNode }) {
   }, [clearCompletionNotification, clearTimerInterval, releaseWakeLock, stopWebTimerAudio]);
 
   const start = useCallback(async () => {
-    const resume = seconds > 0 && seconds < targetSeconds;
+    const resume = (seconds > 0 && seconds < targetSeconds)
+      || (completedLoopsRef.current > 0 && Boolean(timerSessionIdRef.current));
     console.log('[TimerBG] TIMER_START_REQUEST resume=%s seconds=%d targetSeconds=%d isRunning=%s hasUser=%s',
       resume, seconds, targetSeconds, isRunning, Boolean(userIdRef.current));
     if ((!userIdRef.current && !isGuestRef.current) || isRunning) {
@@ -2823,6 +2824,13 @@ export function TimerProvider({ children }: { children: ReactNode }) {
         if (outcome === 'paused') {
           setSeconds(restoredSeconds);
           secondsRef.current = restoredSeconds;
+          setIsRunning(false);
+          isRunningRef.current = false;
+          timerStartedAtRef.current = null;
+          updateTimerState({ sessionId: savedSessionId });
+        } else if (outcome === 'progress') {
+          setSeconds(0);
+          secondsRef.current = 0;
           setIsRunning(false);
           isRunningRef.current = false;
           timerStartedAtRef.current = null;

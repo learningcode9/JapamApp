@@ -87,6 +87,16 @@ describe('makeCompletionId', () => {
       makeCompletionId('b', '2026-06-03T10:00:00.000Z')
     );
   });
+
+  it('keeps distinct same-millisecond completions instead of treating the second as a duplicate', () => {
+    const date = '2026-06-03T10:00:00.000Z';
+    const first = appendCompletion([], session(date, { japamId: 'japam-a' }));
+    const second = appendCompletion(first, session(date, { japamId: 'japam-b' }));
+
+    expect(second).toHaveLength(2);
+    expect(second.map((record) => record.japamId)).toEqual(['japam-b', 'japam-a']);
+    expect(second[0].completionId).not.toBe(second[1].completionId);
+  });
 });
 
 describe('makeLoopCompletionId', () => {

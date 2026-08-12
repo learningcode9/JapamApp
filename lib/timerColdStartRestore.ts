@@ -25,7 +25,7 @@ export interface ColdStartRestoreInput {
 }
 
 export interface ColdStartRestoreDecision {
-  outcome: 'paused' | 'none';
+  outcome: 'paused' | 'progress' | 'none';
   /** Clamped, valid restored elapsed seconds. Only meaningful when outcome === 'paused'. */
   restoredSeconds: number;
 }
@@ -40,9 +40,11 @@ export function computeColdStartRestoreDecision(
     savedTarget > 0 && (savedCompletedLoops >= activeLoopLimit || savedSec >= savedTarget);
   const hasRestorableProgress =
     (savedPaused || savedRunning) && restoredSeconds > 0 && savedTarget > 0 && !savedTimerCompleted;
+  const hasPartialLoopProgress =
+    savedCompletedLoops > 0 && savedCompletedLoops < activeLoopLimit && savedTarget > 0;
 
   return {
-    outcome: hasRestorableProgress ? 'paused' : 'none',
+    outcome: hasRestorableProgress ? 'paused' : hasPartialLoopProgress ? 'progress' : 'none',
     restoredSeconds,
   };
 }

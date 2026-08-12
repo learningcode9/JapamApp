@@ -166,6 +166,22 @@ describe('tapSaveSession — real runtime pipeline', () => {
     expect(failures).toHaveLength(0);
   });
 
+  it('does not suppress an identical mala saved after switching from Japam A to Japam B', async () => {
+    const refs = makeRefs();
+    const identityA = { userId: UID, japamId: 'japam-a', japamName: 'Japam A' };
+    const identityB = { userId: UID, japamId: 'japam-b', japamName: 'Japam B' };
+
+    expect(await tapSaveSession(0, 1, 108, 108, 'tap', refs, identityA, 'Test User')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    refs.activeJapamId.current = identityB.japamId;
+    refs.activeJapamName.current = identityB.japamName;
+    expect(await tapSaveSession(0, 1, 108, 108, 'tap', refs, identityB, 'Test User')).toBe(true);
+
+    const saved = JSON.parse(await AsyncStorage.getItem('history') || '[]');
+    expect(saved).toHaveLength(2);
+    expect(saved.map((record: { japamId: string }) => record.japamId).sort()).toEqual(['japam-a', 'japam-b']);
+  });
+
   it('empty userIdRef falls back to AsyncStorage', async () => {
     const refs = makeRefs();
     const identityNoUserId = { userId: null, japamId: JAPAM_ID, japamName: JAPAM_NAME };

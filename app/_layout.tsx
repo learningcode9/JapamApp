@@ -3,7 +3,7 @@ import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import * as Updates from 'expo-updates';
 import { Asset } from 'expo-asset';
-import { Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 import { AppState, Platform, View } from 'react-native';
@@ -16,12 +16,14 @@ import { TimerProvider } from '../contexts/timer-context';
 import { CurrentJapamProvider } from '../contexts/current-japam-context';
 import LegacyHistoryBackfillRunner from '../components/LegacyHistoryBackfillRunner';
 import { startAuthLifecycle } from '../lib/authLifecycle';
+import { registerTimerNotificationResponseListener } from '../lib/timerNotificationRouting';
 
 export const unstable_settings = {
   anchor: '(tabs)',
 };
 
 export default function RootLayout() {
+  const router = useRouter();
   const colorScheme = useColorScheme();
   const [authReady, setAuthReady] = useState(false);
 
@@ -64,6 +66,15 @@ export default function RootLayout() {
       },
     });
   }, []);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+
+    const responseSub = registerTimerNotificationResponseListener(Notifications, {
+      push: (href) => router.push(href as never),
+    });
+    return () => responseSub.remove();
+  }, [router]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return;
