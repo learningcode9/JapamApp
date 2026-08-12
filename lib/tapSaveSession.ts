@@ -60,7 +60,9 @@ export async function tapSaveSession(
     return false;
   }
 
-  const sessionSignature = `${currentUserId || 'guest'}-${getLocalDateKey()}-${duration}-${sessionMalas}-${sessionTotal}-${accumulatedTotal}`;
+  // The same tap payload is valid in multiple workspaces. Include the resolved Japam identity so
+  // the in-memory duplicate guard cannot suppress B after an identical completion in A.
+  const sessionSignature = `${currentUserId || 'guest'}-${japamId || 'legacy'}-${getLocalDateKey()}-${duration}-${sessionMalas}-${sessionTotal}-${accumulatedTotal}`;
 
   if (refs.lastSavedSession.current === sessionSignature) {
     if (source === 'tap') console.log('TAP_HISTORY_SAVE_SKIPPED reason=duplicate signature=%s', sessionSignature);
