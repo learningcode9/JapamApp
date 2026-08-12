@@ -182,6 +182,46 @@ describe('tapSaveSession — real runtime pipeline', () => {
     expect(saved.map((record: { japamId: string }) => record.japamId).sort()).toEqual(['japam-a', 'japam-b']);
   });
 
+  it('saves exactly one 108-tap mala only to Workspace A', async () => {
+    const refs = makeRefs();
+    const guard = createMalaCompletionGuard();
+    const identityA = { userId: UID, japamId: 'japam-a', japamName: 'Japam A' };
+
+    const crossing = detectMalaCrossing(107, 108);
+    const result = await runMalaCompletion({
+      boundaryKey: crossing.nextMala,
+      scopeKey: createTapCompletionScopeKey(identityA),
+      guard,
+      save: () => tapSaveSession(0, 1, 108, 108, 'tap', refs, identityA, 'Test User'),
+      playFeedback: async () => {},
+    });
+
+    expect(result.saved).toBe(true);
+    expect(JSON.parse(await AsyncStorage.getItem('history') || '[]')).toEqual([
+      expect.objectContaining({ japamId: 'japam-a', malas: 1, totalCount: 108 }),
+    ]);
+  });
+
+  it('saves exactly one 108-tap mala only to Workspace B', async () => {
+    const refs = makeRefs();
+    const guard = createMalaCompletionGuard();
+    const identityB = { userId: UID, japamId: 'japam-b', japamName: 'Japam B' };
+
+    const crossing = detectMalaCrossing(107, 108);
+    const result = await runMalaCompletion({
+      boundaryKey: crossing.nextMala,
+      scopeKey: createTapCompletionScopeKey(identityB),
+      guard,
+      save: () => tapSaveSession(0, 1, 108, 108, 'tap', refs, identityB, 'Test User'),
+      playFeedback: async () => {},
+    });
+
+    expect(result.saved).toBe(true);
+    expect(JSON.parse(await AsyncStorage.getItem('history') || '[]')).toEqual([
+      expect.objectContaining({ japamId: 'japam-b', malas: 1, totalCount: 108 }),
+    ]);
+  });
+
   it('empty userIdRef falls back to AsyncStorage', async () => {
     const refs = makeRefs();
     const identityNoUserId = { userId: null, japamId: JAPAM_ID, japamName: JAPAM_NAME };
