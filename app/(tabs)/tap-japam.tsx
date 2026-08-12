@@ -16,6 +16,7 @@ import {
   type TapIdentitySnapshot,
 } from '../../lib/tapJapamBehavior';
 import {
+  createTapWorkspaceSwitchCoordinator,
   rememberTapWorkspaceProgress,
   type TapWorkspaceProgress,
 } from '../../lib/tapJapamWorkspace';
@@ -34,7 +35,7 @@ import * as Updates from 'expo-updates';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { fetchJapamHistoryRows } from '../../lib/supabaseRestHelper';
 import { runSharedLogoutFlow } from '../../lib/sharedLogout';
@@ -224,8 +225,6 @@ export default function JapamMain() {
   const activeJapamNameRef = useRef<string | null>(null);
   const tapProgressByWorkspaceRef = useRef(new Map<string | null, TapWorkspaceProgress>());
   const tapWorkspaceWritePromiseRef = useRef(Promise.resolve());
-  const tapWorkspaceSwitchSavePromiseRef = useRef<Promise<void> | null>(null);
-  const tapWorkspaceSwitchGenerationRef = useRef(0);
   useFocusEffect(
     useCallback(() => {
       activeJapamIdRef.current = currentJapam?.id ?? null;
@@ -688,6 +687,28 @@ export default function JapamMain() {
     []
   );
 
+  const readTapWorkspaceTotal = useCallback(async (japamId: string | null) => {
+    const userId = userIdRef.current ?? await AsyncStorage.getItem(USER_ID_KEY);
+    const todayKey = getLocalDateKey();
+    const storedDate = await AsyncStorage.getItem(
+      getJapamScopedKey(MANUAL_TOTAL_DATE_KEY, userId, japamId),
+    );
+    if (storedDate !== todayKey) return 0;
+    return Number((await AsyncStorage.getItem(getJapamScopedKey(MANUAL_TOTAL_KEY, userId, japamId))) || '0');
+  }, []);
+
+  const tapWorkspaceSwitchCoordinator = useMemo(
+    () => createTapWorkspaceSwitchCoordinator(tapProgressByWorkspaceRef.current, {
+      readTotal: readTapWorkspaceTotal,
+      writeTotal: (japamId, total) => enqueueTapWorkspaceWrite(
+        userIdRef.current,
+        japamId,
+        total,
+      ),
+    }),
+    [enqueueTapWorkspaceWrite, readTapWorkspaceTotal]
+  );
+
   const restoreTotal = useCallback(
     async (nextTotal: number, options?: { userId?: string | null; japamId?: string | null }) => {
       const safeTotal = Math.max(0, Math.floor(Number(nextTotal) || 0));
@@ -712,30 +733,17 @@ export default function JapamMain() {
   );
 
   const restoreTapWorkspaceFromStorage = useCallback(
-    async (japamId: string | null, generation: number) => {
-      const userId = userIdRef.current ?? await AsyncStorage.getItem(USER_ID_KEY);
-      const todayKey = getLocalDateKey();
-      const storedDate = await AsyncStorage.getItem(
-        getJapamScopedKey(MANUAL_TOTAL_DATE_KEY, userId, japamId),
-      );
-      const storedTotal = storedDate === todayKey
-        ? Number((await AsyncStorage.getItem(getJapamScopedKey(MANUAL_TOTAL_KEY, userId, japamId))) || '0')
-        : 0;
+    async (japamId: string | null) => {
+      const restored = await tapWorkspaceSwitchCoordinator.didSwitch(japamId);
+      if (!restored) return;
 
-      if (generation !== tapWorkspaceSwitchGenerationRef.current) return;
-
-      const progress = rememberTapWorkspaceProgress(
-        tapProgressByWorkspaceRef.current,
-        japamId,
-        storedTotal,
-      );
-      activeJapamIdRef.current = japamId;
-      totalRef.current = progress.total;
-      setTotal(progress.total);
-      setCount(progress.count);
-      setMalas(progress.malas);
+      activeJapamIdRef.current = restored.japamId;
+      totalRef.current = restored.progress.total;
+      setTotal(restored.progress.total);
+      setCount(restored.progress.count);
+      setMalas(restored.progress.malas);
     },
-    []
+    [tapWorkspaceSwitchCoordinator]
   );
 
   const refreshDayStreak = useCallback(
@@ -967,25 +975,13 @@ export default function JapamMain() {
     const willSwitchSubscription = DeviceEventEmitter.addListener(
       'japam-will-switch',
       ({ fromJapamId }: { fromJapamId: string | null }) => {
-        const savePromise = enqueueTapWorkspaceWrite(
-          userIdRef.current,
-          fromJapamId,
-          totalRef.current,
-        );
-        tapWorkspaceSwitchSavePromiseRef.current = savePromise;
+        void tapWorkspaceSwitchCoordinator.willSwitch(fromJapamId);
       },
     );
     const didSwitchSubscription = DeviceEventEmitter.addListener(
       'japam-did-switch',
       ({ japamId }: { japamId: string | null }) => {
-        const generation = ++tapWorkspaceSwitchGenerationRef.current;
-        const saveBarrier = tapWorkspaceSwitchSavePromiseRef.current;
-        void (async () => {
-          if (saveBarrier) {
-            try { await saveBarrier; } catch {}
-          }
-          await restoreTapWorkspaceFromStorage(japamId, generation);
-        })();
+        void restoreTapWorkspaceFromStorage(japamId);
         activeJapamNameRef.current = japams.find((japam) => japam.id === japamId)?.name ?? null;
       },
     );
@@ -994,7 +990,7 @@ export default function JapamMain() {
       willSwitchSubscription.remove();
       didSwitchSubscription.remove();
     };
-  }, [enqueueTapWorkspaceWrite, japams, restoreTapWorkspaceFromStorage]);
+  }, [japams, restoreTapWorkspaceFromStorage, tapWorkspaceSwitchCoordinator]);
 
   useFocusEffect(
     useCallback(() => {
