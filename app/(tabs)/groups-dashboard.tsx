@@ -90,6 +90,19 @@ function sortDashboardRows(rows: GroupDashboardRow[]): GroupDashboardRow[] {
   });
 }
 
+export function calculateGroupTotal(rows: GroupDashboardRow[]): {
+  totalMalas: number;
+  totalCount: number;
+} {
+  return rows.reduce(
+    (totals, row) => ({
+      totalMalas: totals.totalMalas + row.totalMalas,
+      totalCount: totals.totalCount + row.totalCount,
+    }),
+    { totalMalas: 0, totalCount: 0 }
+  );
+}
+
 type GroupsDashboardErrorBoundaryProps = {
   children: React.ReactNode;
   onBackToGroups: () => void;
@@ -534,6 +547,7 @@ export default function GroupsDashboardScreen() {
   // The dashboard rows already tell us the current viewer's own role in this group (no separate
   // "am I admin" call needed) — find their own row by userId.
   const isAdmin = rows.some((row) => row.userId === userId && row.role === 'admin');
+  const groupTotal = calculateGroupTotal(rows);
 
   // Lazy, one-time fetch — the invite code never changes once a group is created, so there's no
   // need to re-fetch it on every 12s refresh tick the way the roster/stats are. Only admins ever
@@ -758,6 +772,19 @@ export default function GroupsDashboardScreen() {
           <Text style={styles.emptyText}>No members found for this group.</Text>
         ) : (
           <>
+            <View style={styles.groupTotalCard}>
+              <Text style={styles.groupTotalTitle}>Group Total</Text>
+              <View style={styles.groupTotalStats}>
+                <View style={styles.groupTotalStat}>
+                  <Text style={styles.groupTotalLabel}>Total Malas</Text>
+                  <Text style={styles.groupTotalValue}>{groupTotal.totalMalas}</Text>
+                </View>
+                <View style={styles.groupTotalStat}>
+                  <Text style={styles.groupTotalLabel}>Total Count</Text>
+                  <Text style={styles.groupTotalValue}>{groupTotal.totalCount}</Text>
+                </View>
+              </View>
+            </View>
             <View style={styles.tableCard}>
               <View style={[styles.tableRow, styles.tableHeader]}>
                 <Text
@@ -977,6 +1004,19 @@ const styles = StyleSheet.create({
   offlineText: { color: '#365f61', fontSize: 14, lineHeight: 20, textAlign: 'center', marginTop: 14 },
   errorText: { color: '#b91c1c', fontSize: 14, textAlign: 'center', marginTop: 24 },
   emptyText: { color: '#365f61', fontSize: 15, lineHeight: 22, textAlign: 'center', marginTop: 24 },
+  groupTotalCard: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(15,118,110,0.16)',
+    padding: 16,
+    marginBottom: 16,
+  },
+  groupTotalTitle: { fontSize: 16, fontWeight: '900', color: '#12383c', marginBottom: 12 },
+  groupTotalStats: { flexDirection: 'row', gap: 16 },
+  groupTotalStat: { flex: 1 },
+  groupTotalLabel: { fontSize: 13, fontWeight: '700', color: '#365f61' },
+  groupTotalValue: { fontSize: 22, fontWeight: '900', color: TEAL, marginTop: 4 },
   tableCard: {
     backgroundColor: '#fff',
     borderRadius: 16,
