@@ -158,7 +158,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import React from 'react';
 const renderer = require('react-test-renderer');
 const { act } = renderer;
-import GroupsDashboardScreen from '../(tabs)/groups-dashboard';
+import GroupsDashboardScreen, { calculateGroupTotal } from '../(tabs)/groups-dashboard';
 
 const UID = 'user-a';
 const WORKSPACE_A = '550e8400-e29b-41d4-a716-446655440001';
@@ -422,6 +422,23 @@ describe('Groups dashboard workspace scope', () => {
     staleA.resolve([row(`${UID}-a`, 'Person A')]);
     await flush();
     expect(allText(tree).join(' ')).not.toContain('Person A');
+  });
+});
+
+describe('Groups dashboard total', () => {
+  it('sums totalMalas and totalCount from the dashboard rows and displays both values', async () => {
+    expect(calculateGroupTotal([
+      row('member-a', 'Person A'),
+      { ...row('member-b', 'Person B'), totalMalas: 5, totalCount: 7 },
+    ])).toEqual({ totalMalas: 17, totalCount: 15 });
+
+    mockGetGroupDashboard.mockResolvedValue([
+      row(UID, 'Person A'),
+      { ...row(`${UID}-b`, 'Person B'), totalMalas: 5, totalCount: 7 },
+    ]);
+    const tree = await renderScreen();
+
+    expect(allText(tree)).toEqual(expect.arrayContaining(['Group Total', 'Total Malas', '17', 'Total Count', '15']));
   });
 });
 
