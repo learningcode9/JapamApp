@@ -297,6 +297,24 @@ export async function getGroupInviteCode(
   }
 }
 
+export async function rotateGroupInviteCode(
+  groupId: string,
+  actingAdminUserId: string,
+): Promise<{ kind: 'success'; inviteCode: string } | Exclude<GroupAdminActionOutcome, { kind: 'success' }>> {
+  const { data, error } = await supabase.rpc('rotate_group_invite_code', {
+    p_group_id: groupId,
+    p_acting_admin_user_id: actingAdminUserId,
+  });
+  if (error) return mapGroupAdminError(error);
+
+  const row = Array.isArray(data) ? data[0] as { invite_code?: string } | undefined : data as { invite_code?: string } | null;
+  if (!row?.invite_code) {
+    return { kind: 'error', message: 'The group invite code could not be rotated.' };
+  }
+  writeCached(`inviteCode:${groupId}:${actingAdminUserId}`, row.invite_code);
+  return { kind: 'success', inviteCode: row.invite_code };
+}
+
 function mapGroupAdminError(error: any): Exclude<GroupAdminActionOutcome, { kind: 'success' }> {
   const message = error?.message || 'Something went wrong. Please try again.';
   const normalized = String(message).toLowerCase();

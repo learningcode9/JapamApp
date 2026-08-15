@@ -8,6 +8,10 @@
  * find_group_by_invite_code + direct group_members insert, and that snake_case RPC rows map to
  * the camelCase shapes the UI consumes.
  */
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
+
 import { supabase } from '../supabase';
 
 const mockSupabase = supabase as unknown as { from: jest.Mock; rpc: jest.Mock };
@@ -26,9 +30,11 @@ import {
   attachGroupMembershipToJapam,
   createGroup,
   getGroupDashboard,
+  getGroupInviteCode,
   getMyGroups,
   getMyUnassignedGroups,
   joinGroupByInviteCode,
+  rotateGroupInviteCode,
 } from '../groupsRepository';
 /* eslint-enable import/first */
 
@@ -129,6 +135,50 @@ describe('joinGroupByInviteCode', () => {
       kind: 'error',
       message: 'already a member of this group under a different Japam',
     });
+  });
+});
+
+describe('group invite-code rotation', () => {
+  it('rotates through the admin-only RPC and returns the new code', async () => {
+    rpcResult(mockRpc, [{ invite_code: 'HIJKLMN' }]);
+
+    const outcome = await rotateGroupInviteCode(GROUP_ID, USER_ID);
+
+    expect(mockRpc).toHaveBeenCalledWith('rotate_group_invite_code', {
+      p_group_id: GROUP_ID,
+      p_acting_admin_user_id: USER_ID,
+    });
+    expect(outcome).toEqual({ kind: 'success', inviteCode: 'HIJKLMN' });
+  });
+
+  it('rejects a non-admin rotation without reporting success', async () => {
+    rpcResult(mockRpc, null, new Error('not a group admin'));
+
+    await expect(rotateGroupInviteCode(GROUP_ID, USER_ID)).resolves.toEqual({
+      kind: 'notAdmin',
+      message: 'not a group admin',
+    });
+  });
+
+  it('uses the freshly returned code for subsequent admin reads', async () => {
+    rpcResult(mockRpc, [{ invite_code: 'NEWCODE' }]);
+    await rotateGroupInviteCode(GROUP_ID, USER_ID);
+    rpcResult(mockRpc, [{ invite_code: 'NEWCODE' }]);
+
+    await expect(getGroupInviteCode(GROUP_ID, USER_ID)).resolves.toBe('NEWCODE');
+    expect(mockRpc).toHaveBeenLastCalledWith('get_group_invite_code', {
+      p_group_id: GROUP_ID,
+      p_current_user_id: USER_ID,
+    });
+  });
+
+  it('refreshes the cached code so offline reads do not resurrect the old code', async () => {
+    rpcResult(mockRpc, [{ invite_code: 'NEWCODE' }]);
+    await rotateGroupInviteCode(GROUP_ID, USER_ID);
+    await Promise.resolve();
+    mockRpc.mockRejectedValueOnce(new TypeError('fetch failed'));
+
+    await expect(getGroupInviteCode(GROUP_ID, USER_ID)).resolves.toBe('NEWCODE');
   });
 });
 

@@ -15,6 +15,10 @@ jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock')
 );
 
+jest.mock('expo-clipboard', () => ({
+  setStringAsync: jest.fn(),
+}));
+
 const mockListeners = new Map<string, Set<(...args: unknown[]) => void>>();
 const mockBackHandlers = new Set<() => boolean>();
 const browserListeners = new Map<string, Set<() => void>>();
@@ -118,6 +122,7 @@ jest.mock('@expo/vector-icons', () => {
 const mockGetGroupDashboard = jest.fn();
 const mockGetCachedGroupDashboard = jest.fn();
 const mockGetGroupInviteCode = jest.fn();
+const mockRotateGroupInviteCode = jest.fn();
 const mockRenameGroup = jest.fn();
 const mockRemoveGroupMember = jest.fn();
 const mockDeleteGroup = jest.fn();
@@ -141,6 +146,7 @@ jest.mock('../../lib/groupsRepository', () => ({
   getCachedGroupDashboard: (...args: unknown[]) => mockGetCachedGroupDashboard(...args),
   getGroupDashboard: (...args: unknown[]) => mockGetGroupDashboard(...args),
   getGroupInviteCode: (...args: unknown[]) => mockGetGroupInviteCode(...args),
+  rotateGroupInviteCode: (...args: unknown[]) => mockRotateGroupInviteCode(...args),
   isNetworkFailure: (...args: unknown[]) => mockIsNetworkFailure(...args),
   renameGroup: (...args: unknown[]) => mockRenameGroup(...args),
   removeGroupMember: (...args: unknown[]) => mockRemoveGroupMember(...args),
@@ -158,6 +164,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import React from 'react';
 const renderer = require('react-test-renderer');
 const { act } = renderer;
+const mockSetClipboard = require('expo-clipboard').setStringAsync as jest.Mock;
+const mockShare = require('react-native').Share.share as jest.Mock;
 import GroupsDashboardScreen, { calculateGroupTotal } from '../(tabs)/groups-dashboard';
 
 const UID = 'user-a';
@@ -297,6 +305,7 @@ beforeEach(async () => {
   mockGetCachedGroupDashboard.mockResolvedValue(null);
   mockGetGroupDashboard.mockResolvedValue([row(`${UID}-b`, 'Person B')]);
   mockGetGroupInviteCode.mockResolvedValue('ABCDEFG');
+  mockRotateGroupInviteCode.mockResolvedValue({ kind: 'success', inviteCode: 'HIJKLMN' });
   mockDeleteGroup.mockResolvedValue({ kind: 'success' });
   mockLeaveGroup.mockResolvedValue({ kind: 'success' });
   mockIsNetworkFailure.mockImplementation((error: unknown) => error instanceof TypeError);
@@ -345,6 +354,40 @@ describe('Groups dashboard leave and delete actions', () => {
     const [hardwareBackHandler] = [...mockBackHandlers];
     expect(hardwareBackHandler()).toBe(true);
     expect(mockReplace).toHaveBeenCalledWith('/groups');
+  });
+});
+
+describe('Groups dashboard invite-code rotation', () => {
+  it('lets an admin rotate the code and immediately renders the new code', async () => {
+    mockGetGroupDashboard.mockResolvedValue([row(UID, 'Admin', 'admin')]);
+    const tree = await renderScreen();
+
+    await pressByAccessibilityLabel(tree, 'Open group admin menu');
+    await press(tree, 'Rotate Invite Code');
+    expect(allText(tree).join(' ')).toContain('The current code will stop working immediately.');
+
+    await press(tree, 'Rotate');
+
+    expect(mockRotateGroupInviteCode).toHaveBeenCalledWith('group-1', UID);
+    expect(allText(tree).join(' ')).toContain('HIJKLMN');
+
+    const copyResetTimer = jest.spyOn(global, 'setTimeout').mockImplementation((callback: any) => {
+      callback();
+      return 0 as any;
+    });
+    await press(tree, 'Copy');
+    copyResetTimer.mockRestore();
+    expect(mockSetClipboard).toHaveBeenCalledWith('HIJKLMN');
+    await press(tree, 'Share');
+    expect(mockShare).toHaveBeenCalledWith({ message: 'Join my Japam group.\nInvite code: HIJKLMN' });
+  });
+
+  it('does not expose rotation controls to a non-admin', async () => {
+    mockGetGroupDashboard.mockResolvedValue([row(UID, 'Member')]);
+    const tree = await renderScreen();
+
+    expect(tree.root.findAll((node: any) => node.props.accessibilityLabel === 'Open group admin menu')).toHaveLength(0);
+    expect(allText(tree).join(' ')).not.toContain('Rotate Invite Code');
   });
 });
 
