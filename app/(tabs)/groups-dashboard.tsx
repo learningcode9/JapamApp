@@ -31,6 +31,7 @@ import {
   leaveGroup,
   removeGroupMember,
   renameGroup,
+  rotateGroupInviteCode,
   type GroupDashboardRow,
 } from '../../lib/groupsRepository';
 import { useCurrentJapam } from '../../contexts/current-japam-context';
@@ -192,6 +193,10 @@ export default function GroupsDashboardScreen() {
   const [renameInput, setRenameInput] = useState(groupName);
   const [renameError, setRenameError] = useState('');
   const [renaming, setRenaming] = useState(false);
+
+  const [showRotateInviteCodeModal, setShowRotateInviteCodeModal] = useState(false);
+  const [rotateInviteCodeError, setRotateInviteCodeError] = useState('');
+  const [rotatingInviteCode, setRotatingInviteCode] = useState(false);
 
   const [showRemoveMembersModal, setShowRemoveMembersModal] = useState(false);
   const [memberToRemove, setMemberToRemove] = useState<GroupDashboardRow | null>(null);
@@ -549,10 +554,8 @@ export default function GroupsDashboardScreen() {
   const isAdmin = rows.some((row) => row.userId === userId && row.role === 'admin');
   const groupTotal = calculateGroupTotal(rows);
 
-  // Lazy, one-time fetch — the invite code never changes once a group is created, so there's no
-  // need to re-fetch it on every 12s refresh tick the way the roster/stats are. Only admins ever
-  // call this (get_group_invite_code itself also enforces that server-side); re-fetches only if
-  // the viewer becomes admin or switches to a different group while this screen stays mounted.
+  // Lazy fetch — only admins ever call this (get_group_invite_code itself also enforces that
+  // server-side). The rotation handler updates inviteCode immediately with the RPC response.
   useEffect(() => {
     if (!isAdmin || !userId || !groupId) {
       setInviteCode(null);
@@ -588,6 +591,27 @@ export default function GroupsDashboardScreen() {
     } catch {
       // User dismissed the share sheet or it failed — no error state needed, they can retry.
     }
+  };
+
+  const openRotateInviteCodeModal = () => {
+    setRotateInviteCodeError('');
+    setShowAdminMenu(false);
+    setShowRotateInviteCodeModal(true);
+  };
+
+  const handleRotateInviteCode = async () => {
+    if (!userId) return;
+    setRotatingInviteCode(true);
+    setRotateInviteCodeError('');
+    const outcome = await rotateGroupInviteCode(groupId, userId);
+    setRotatingInviteCode(false);
+    if (outcome.kind !== 'success') {
+      setRotateInviteCodeError(outcome.message || 'Could not rotate this invite code.');
+      return;
+    }
+    setInviteCode(outcome.inviteCode);
+    setCopyLabel('Copy');
+    setShowRotateInviteCodeModal(false);
   };
 
   const openRenameModal = () => {
@@ -739,6 +763,10 @@ export default function GroupsDashboardScreen() {
               <Ionicons name="person-remove-outline" size={20} color={TEAL} />
               <Text style={styles.adminMenuItemText}>Remove Members</Text>
             </Pressable>
+            <Pressable style={styles.adminMenuItem} onPress={openRotateInviteCodeModal}>
+              <Ionicons name="refresh-outline" size={20} color={TEAL} />
+              <Text style={styles.adminMenuItemText}>Rotate Invite Code</Text>
+            </Pressable>
             <Pressable style={styles.adminMenuItem} onPress={openDeleteModal}>
               <Ionicons name="trash-outline" size={20} color="#b42318" />
               <Text style={styles.deleteMenuItemText}>Delete Group</Text>
@@ -875,6 +903,39 @@ export default function GroupsDashboardScreen() {
                 disabled={renaming || !renameInput.trim()}
               >
                 <Text style={styles.modalPrimaryText}>{renaming ? 'Saving...' : 'Save'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showRotateInviteCodeModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowRotateInviteCodeModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Rotate invite code?</Text>
+            <Text style={styles.modalBody}>
+              The current code will stop working immediately. Existing members, roles, totals, and workspace mappings will stay unchanged.
+            </Text>
+            {rotateInviteCodeError ? <Text style={styles.modalError}>{rotateInviteCodeError}</Text> : null}
+            <View style={styles.modalActions}>
+              <Pressable
+                style={styles.modalSecondaryButton}
+                onPress={() => setShowRotateInviteCodeModal(false)}
+                disabled={rotatingInviteCode}
+              >
+                <Text style={styles.modalSecondaryText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.modalPrimaryButton, rotatingInviteCode && styles.disabledButton]}
+                onPress={handleRotateInviteCode}
+                disabled={rotatingInviteCode}
+              >
+                <Text style={styles.modalPrimaryText}>{rotatingInviteCode ? 'Rotating...' : 'Rotate'}</Text>
               </Pressable>
             </View>
           </View>
