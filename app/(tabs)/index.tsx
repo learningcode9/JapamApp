@@ -21,6 +21,7 @@ import * as Notifications from 'expo-notifications';
 import { useFocusEffect } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { openAndroidPlayStoreListing, shouldShowAndroidUpdateBanner } from '../../lib/androidUpdate';
 import { isIOSDeviceWeb, isStandaloneOrInstalledWeb } from '../../lib/pwaInstall';
 import { runSharedLogoutFlow } from '../../lib/sharedLogout';
 import { supabase } from '../../lib/supabase';
@@ -314,6 +315,7 @@ export default function JapamMain() {
   const [vibrationEnabled, setVibrationEnabled] = useState(true);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [installBannerDismissed, setInstallBannerDismissed] = useState(false);
+  const [showAndroidUpdateBanner, setShowAndroidUpdateBanner] = useState(false);
   const [showGuestNameModal, setShowGuestNameModal] = useState(false);
   const [showGuestWarningModal, setShowGuestWarningModal] = useState(false);
   const [guestNameInput, setGuestNameInput] = useState('');
@@ -435,6 +437,19 @@ export default function JapamMain() {
       enableVibrate: true,
       showBadge: false,
     });
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    if (Platform.OS !== 'android') return undefined;
+
+    void shouldShowAndroidUpdateBanner().then((available) => {
+      if (isMounted) setShowAndroidUpdateBanner(available);
+    });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const showTimerNotification = useCallback(async () => {
@@ -2562,6 +2577,21 @@ export default function JapamMain() {
             </View>
           )}
 
+          {showAndroidUpdateBanner && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Update available"
+              style={({ pressed }) => [styles.androidUpdateBanner, pressed && styles.softPressed]}
+              onPress={() => void openAndroidPlayStoreListing()}
+            >
+              <View style={styles.androidUpdateCopy}>
+                <Text style={styles.androidUpdateTitle}>Update available</Text>
+                <Text style={styles.androidUpdateSubtitle}>Get the latest version from Google Play.</Text>
+              </View>
+              <Text style={styles.androidUpdateAction}>Update</Text>
+            </Pressable>
+          )}
+
           <Text style={styles.dateText}>Today · {todayLabel}</Text>
 
           <Animated.View style={styles.progressShell}>
@@ -3670,6 +3700,39 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 14,
     fontWeight: '800',
+  },
+  androidUpdateBanner: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.78)',
+    borderWidth: 1,
+    borderColor: 'rgba(15,143,135,0.18)',
+  },
+  androidUpdateCopy: {
+    flex: 1,
+  },
+  androidUpdateTitle: {
+    color: '#063B3B',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  androidUpdateSubtitle: {
+    color: '#517579',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  androidUpdateAction: {
+    color: '#0F766E',
+    fontSize: 13,
+    fontWeight: '900',
   },
   statColumn: {
     flex: 1,
