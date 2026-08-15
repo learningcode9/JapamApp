@@ -72,6 +72,7 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   // again (auth change) while an earlier write is still in flight, so every action re-reads the
   // CURRENT userId from this ref rather than closing over a possibly-stale one from render time.
   const userIdRef = useRef<string | null>(null);
+  const currentJapamIdRef = useRef<string | null>(null);
   // Signed-in startup resolves the user-scoped selection from local storage before the remote
   // reconcile. Refresh generations and selection versions prevent an older async refresh or
   // reconciliation from reverting a newer explicit user choice.
@@ -87,6 +88,8 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     const refreshGeneration = ++refreshGenerationRef.current;
     const selectionVersionAtRefreshStart = selectionVersionRef.current;
+    const previousUserId = userIdRef.current;
+    const previousCurrentJapamId = currentJapamIdRef.current;
     const isCurrentRefresh = () => refreshGenerationRef.current === refreshGeneration;
 
     setIsLoading(true);
@@ -132,12 +135,19 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
     const localCurrentId = persistedStillActive?.id ?? active[0]?.id ?? null;
     const explicitSelection = explicitSelectionRef.current;
     const explicitSelectionForUser = explicitSelection?.userId === userId;
-    const localMatchesExplicitSelection = explicitSelection?.japamId === localCurrentId;
+    const preservePreviousSelection = previousUserId === userId
+      && previousCurrentJapamId !== null
+      && localCurrentId === null
+      && !explicitSelectionForUser;
+    const resolvedLocalCurrentId = preservePreviousSelection
+      ? previousCurrentJapamId
+      : localCurrentId;
+    const localMatchesExplicitSelection = explicitSelection?.japamId === resolvedLocalCurrentId;
     if (
       selectionVersionRef.current === selectionVersionAtRefreshStart
       && (!explicitSelectionForUser || localMatchesExplicitSelection)
     ) {
-      setCurrentJapamIdState(localCurrentId);
+      setCurrentJapamIdState(resolvedLocalCurrentId);
     }
     setIsLoading(false);
 
@@ -178,6 +188,10 @@ export function CurrentJapamProvider({ children }: { children: ReactNode }) {
       }
     });
   }, [coordinator]);
+
+  useEffect(() => {
+    currentJapamIdRef.current = currentJapamId;
+  }, [currentJapamId]);
 
   useEffect(() => {
     void refresh();
