@@ -133,6 +133,21 @@ const renderProvider = async (
   return { snapshots };
 };
 
+const makeJapam = (id: string, userId = 'user-123') => ({
+  id,
+  userId,
+  name: `Japam ${id}`,
+  displayOrder: null,
+  createdAt: '2026-07-20T00:00:00.000Z',
+  updatedAt: '2026-07-20T00:00:00.000Z',
+  archivedAt: null,
+});
+
+const makeReconcileResult = (
+  japams: ReturnType<typeof makeJapam>[],
+  currentJapamId: string | null,
+) => ({ japams, currentJapamId, created: null });
+
 beforeEach(async () => {
   jest.clearAllMocks();
   (Platform as { OS: string }).OS = 'android';
@@ -623,6 +638,143 @@ describe('CurrentJapamProvider refresh', () => {
       currentJapamName: 'Cached Japam',
       japamIds: ['cached-japam'],
     });
+  });
+
+  it('does not expose null when a same-user local selection misses before reconciliation confirms it', async () => {
+    const workspaceA = makeJapam('workspace-a');
+    const reconcileResult = makeReconcileResult([workspaceA], 'workspace-a');
+    mockLoadLocalJapams.mockResolvedValue([workspaceA]);
+    mockLoadLocalCurrentJapamId.mockResolvedValue('workspace-a');
+    mockEnsureDefaultJapam.mockResolvedValue(reconcileResult);
+
+    const { snapshots } = await renderProvider('user-123');
+    const snapshotsBeforeRefresh = snapshots.length;
+    const authListener = (DeviceEventEmitter.addListener as jest.Mock).mock.calls[0]?.[1] as
+      | (() => void)
+      | undefined;
+
+    mockLoadLocalJapams.mockResolvedValue([]);
+    mockLoadLocalCurrentJapamId.mockResolvedValue(null);
+    mockEnsureDefaultJapam.mockResolvedValue(reconcileResult);
+    await act(async () => {
+      authListener?.();
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(snapshots.slice(snapshotsBeforeRefresh).map((snapshot) => snapshot.currentJapamId))
+      .not.toContain(null);
+    expect(snapshots.at(-1)?.currentJapamId).toBe('workspace-a');
+  });
+
+  it('allows null after reconciliation confirms there are no active Japams', async () => {
+    const workspaceA = makeJapam('workspace-a');
+    mockLoadLocalJapams.mockResolvedValue([workspaceA]);
+    mockLoadLocalCurrentJapamId.mockResolvedValue('workspace-a');
+    mockEnsureDefaultJapam.mockResolvedValue(makeReconcileResult([workspaceA], 'workspace-a'));
+
+    const { snapshots } = await renderProvider('user-123');
+    const snapshotsBeforeRefresh = snapshots.length;
+    const authListener = (DeviceEventEmitter.addListener as jest.Mock).mock.calls[0]?.[1] as
+      | (() => void)
+      | undefined;
+
+    mockLoadLocalJapams.mockResolvedValue([]);
+    mockLoadLocalCurrentJapamId.mockResolvedValue(null);
+    mockEnsureDefaultJapam.mockResolvedValue(makeReconcileResult([], null));
+    await act(async () => {
+      authListener?.();
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(snapshots.slice(snapshotsBeforeRefresh).map((snapshot) => snapshot.currentJapamId))
+      .toContain(null);
+    expect(snapshots.at(-1)?.currentJapamId).toBeNull();
+  });
+
+  it('clears the selection on logout', async () => {
+    const workspaceA = makeJapam('workspace-a');
+    mockLoadLocalJapams.mockResolvedValue([workspaceA]);
+    mockLoadLocalCurrentJapamId.mockResolvedValue('workspace-a');
+    mockEnsureDefaultJapam.mockResolvedValue(makeReconcileResult([workspaceA], 'workspace-a'));
+
+    const { snapshots } = await renderProvider('user-123');
+    const authListener = (DeviceEventEmitter.addListener as jest.Mock).mock.calls[0]?.[1] as
+      | (() => void)
+      | undefined;
+    await AsyncStorage.removeItem('userId');
+
+    await act(async () => {
+      authListener?.();
+      await Promise.resolve();
+    });
+    await flush();
+
+    expect(snapshots.at(-1)?.currentJapamId).toBeNull();
+    expect(mockEnsureDefaultJapam).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not inherit a previous selection for a different user', async () => {
+    const workspaceA = makeJapam('workspace-a', 'user-a');
+    const workspaceB = makeJapam('workspace-b', 'user-b');
+    mockLoadLocalJapams.mockResolvedValue([workspaceA]);
+    mockLoadLocalCurrentJapamId.mockResolvedValue('workspace-a');
+    mockEnsureDefaultJapam.mockResolvedValue(makeReconcileResult([workspaceA], 'workspace-a'));
+
+    const { snapshots } = await renderProvider('user-a');
+    const snapshotsBeforeRefresh = snapshots.length;
+    const authListener = (DeviceEventEmitter.addListener as jest.Mock).mock.calls[0]?.[1] as
+      | (() => void)
+      | undefined;
+    await AsyncStorage.setItem('userId', 'user-b');
+    mockLoadLocalJapams.mockResolvedValue([]);
+    mockLoadLocalCurrentJapamId.mockResolvedValue(null);
+    mockEnsureDefaultJapam.mockResolvedValue(makeReconcileResult([workspaceB], 'workspace-b'));
+
+    await act(async () => {
+      authListener?.();
+      await Promise.resolve();
+    });
+    await flush();
+
+    const settledSnapshots = snapshots.slice(snapshotsBeforeRefresh)
+      .filter((snapshot) => !snapshot.isLoading);
+    expect(settledSnapshots.map((snapshot) => snapshot.currentJapamId))
+      .not.toContain('workspace-a');
+    expect(snapshots.at(-1)?.currentJapamId).toBe('workspace-b');
+  });
+
+  it('keeps an explicit selection made during reconciliation', async () => {
+    const workspaceA = makeJapam('workspace-a');
+    let resolveEnsure!: (value: ReturnType<typeof makeReconcileResult>) => void;
+    const deferred = new Promise<ReturnType<typeof makeReconcileResult>>((resolve) => {
+      resolveEnsure = resolve;
+    });
+    mockLoadLocalJapams.mockResolvedValue([workspaceA]);
+    mockLoadLocalCurrentJapamId.mockResolvedValue('workspace-a');
+    mockEnsureDefaultJapam.mockReturnValue(deferred);
+
+    let api: ReturnType<typeof useCurrentJapam> | null = null;
+    const { snapshots } = await renderProvider('user-123', (value) => {
+      api = value;
+    });
+    const authListener = (DeviceEventEmitter.addListener as jest.Mock).mock.calls[0]?.[1] as
+      | (() => void)
+      | undefined;
+    mockLoadLocalJapams.mockResolvedValue([]);
+    mockLoadLocalCurrentJapamId.mockResolvedValue(null);
+
+    await act(async () => {
+      authListener?.();
+      await Promise.resolve();
+      api!.selectJapam('explicit-choice');
+      await Promise.resolve();
+    });
+    resolveEnsure!(makeReconcileResult([workspaceA], 'workspace-a'));
+    await flush();
+
+    expect(snapshots.at(-1)?.currentJapamId).toBe('explicit-choice');
   });
 
   it('a selection made while the startup reconcile is pending is never reverted by its late result', async () => {
