@@ -469,7 +469,7 @@ describe('Groups dashboard workspace scope', () => {
 });
 
 describe('Groups dashboard total', () => {
-  it('sums totalMalas and totalCount from the dashboard rows and displays both values', async () => {
+  it('sums dashboard rows and displays only totalCount in the compact summary', async () => {
     expect(calculateGroupTotal([
       row('member-a', 'Person A'),
       { ...row('member-b', 'Person B'), totalMalas: 5, totalCount: 7 },
@@ -481,7 +481,18 @@ describe('Groups dashboard total', () => {
     ]);
     const tree = await renderScreen();
 
-    expect(allText(tree)).toEqual(expect.arrayContaining(['Group Total', 'Total Malas', '17', 'Total Count', '15']));
+    expect(allText(tree)).toEqual(expect.arrayContaining(['Group Total', 'Total', 'Malas', 'Count', '12', '8', '5', '7']));
+    expect(allText(tree)).not.toContain('17');
+    const groupTotalTitle = tree.root.findAll(
+      (node: any) => node.type === 'Text' && extractText(node) === 'Group Total'
+    )[0];
+    const groupTotalValue = tree.root.findAll(
+      (node: any) => node.type === 'Text' && extractText(node) === '15'
+    )[0];
+    expect(groupTotalTitle).toBeDefined();
+    expect(groupTotalTitle.props.style).toEqual(expect.objectContaining({ fontWeight: '900' }));
+    expect(groupTotalValue).toBeDefined();
+    expect(groupTotalValue.props.style).toEqual(expect.objectContaining({ marginLeft: 14 }));
   });
 });
 

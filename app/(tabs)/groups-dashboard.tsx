@@ -802,16 +802,7 @@ export default function GroupsDashboardScreen() {
           <>
             <View style={styles.groupTotalCard}>
               <Text style={styles.groupTotalTitle}>Group Total</Text>
-              <View style={styles.groupTotalStats}>
-                <View style={styles.groupTotalStat}>
-                  <Text style={styles.groupTotalLabel}>Total Malas</Text>
-                  <Text style={styles.groupTotalValue}>{groupTotal.totalMalas}</Text>
-                </View>
-                <View style={styles.groupTotalStat}>
-                  <Text style={styles.groupTotalLabel}>Total Count</Text>
-                  <Text style={styles.groupTotalValue}>{groupTotal.totalCount}</Text>
-                </View>
-              </View>
+              <Text style={styles.groupTotalValue}>{groupTotal.totalCount}</Text>
             </View>
             <View style={styles.tableCard}>
               <View style={[styles.tableRow, styles.tableHeader]}>
@@ -1070,14 +1061,14 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: 'rgba(15,118,110,0.16)',
-    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     marginBottom: 16,
   },
-  groupTotalTitle: { fontSize: 16, fontWeight: '900', color: '#12383c', marginBottom: 12 },
-  groupTotalStats: { flexDirection: 'row', gap: 16 },
-  groupTotalStat: { flex: 1 },
-  groupTotalLabel: { fontSize: 13, fontWeight: '700', color: '#365f61' },
-  groupTotalValue: { fontSize: 22, fontWeight: '900', color: TEAL, marginTop: 4 },
+  groupTotalTitle: { fontSize: 16, fontWeight: '900', color: '#12383c' },
+  groupTotalValue: { fontSize: 22, fontWeight: '900', color: TEAL, marginLeft: 14 },
   tableCard: {
     backgroundColor: '#fff',
     borderRadius: 16,
