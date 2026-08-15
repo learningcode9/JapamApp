@@ -2,7 +2,7 @@
   "expo": {
     "name": "Mantra Japam",
     "slug": "JapamApp",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "portrait",
     "description": "A mindful mantra counting app for daily Japam practice. Track your malas, set timers, and build a consistent spiritual practice.",
     "icon": "./assets/images/icon.png",
@@ -35,7 +35,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "package": "com.japamapp.mantrajapam",
-      "versionCode": 15,
+      "versionCode": 16,
       "permissions": [
         "android.permission.VIBRATE",
         "android.permission.POST_NOTIFICATIONS",
