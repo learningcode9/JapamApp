@@ -3,6 +3,7 @@ import type { EmailProvider } from '../email/emailProvider';
 import type { JapamHistoryRow, AuthUser, EmailSummaryRecord } from '../email/types';
 import type { CampaignDefinition, CampaignContext } from '../email/campaigns/types';
 import { loadEmailConfig } from '../email/config';
+import { verifyUnsubscribeToken } from '../email/unsubscribeToken';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -160,6 +161,36 @@ describe('CampaignEmailService duplicate prevention', () => {
 // ─── Real sending ─────────────────────────────────────────────────────────────
 
 describe('CampaignEmailService real sending', () => {
+  it('passes a signed per-user unsubscribe URL to campaign builders', async () => {
+    const originalUrl = process.env.EMAIL_UNSUBSCRIBE_URL;
+    const originalSecret = process.env.EMAIL_UNSUBSCRIBE_SECRET;
+    process.env.EMAIL_UNSUBSCRIBE_URL = 'http://127.0.0.1:54321/functions/v1/unsubscribe-email';
+    process.env.EMAIL_UNSUBSCRIBE_SECRET = 'test-unsubscribe-secret';
+
+    try {
+      const provider: EmailProvider = {
+        sendEmail: jest.fn().mockResolvedValue({ messageId: 'msg-unsubscribe' }),
+      };
+      const campaign: CampaignDefinition = {
+        ...FAKE_CAMPAIGN,
+        buildHtml: (ctx: CampaignContext) => ctx.config.unsubscribeUrl,
+        buildText: (ctx: CampaignContext) => ctx.config.unsubscribeUrl,
+      };
+      const service = new TestService([USER], [makeRow()], false, 42, provider, campaign);
+
+      await service.run({ dryRun: false });
+
+      const sent = (provider.sendEmail as jest.Mock).mock.calls[0][0] as { html: string };
+      const url = new URL(sent.html);
+      expect(await verifyUnsubscribeToken(url.searchParams.get('token')!, 'test-unsubscribe-secret')).toBe('u1');
+    } finally {
+      if (originalUrl === undefined) delete process.env.EMAIL_UNSUBSCRIBE_URL;
+      else process.env.EMAIL_UNSUBSCRIBE_URL = originalUrl;
+      if (originalSecret === undefined) delete process.env.EMAIL_UNSUBSCRIBE_SECRET;
+      else process.env.EMAIL_UNSUBSCRIBE_SECRET = originalSecret;
+    }
+  });
+
   it('passes lifetimeTotalMalas + stats into the campaign builders', async () => {
     const provider: EmailProvider = {
       sendEmail: jest.fn().mockResolvedValue({ messageId: 'msg-abc' }),

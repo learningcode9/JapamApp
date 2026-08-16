@@ -5,6 +5,7 @@ import type { CampaignDefinition } from './campaigns/types';
 import type { EmailConfig } from './config';
 import { calculateSummaryStats, getPeriodDates } from './calculator';
 import { loadEmailConfig } from './config';
+import { buildUnsubscribeUrl } from './unsubscribeToken';
 import * as dataAccess from './dataAccess';
 
 export interface CampaignRunOptions {
@@ -139,8 +140,6 @@ export class CampaignEmailService {
         }
       }
 
-      const ctx = { stats, lifetimeTotalMalas, config: this.config };
-
       if (dryRun) {
         console.log(`[Campaign:${emailType}] DRY RUN would send to:`, user.email);
         await this.recordSummary({
@@ -159,6 +158,19 @@ export class CampaignEmailService {
       if (!this.emailProvider) {
         throw new Error('emailProvider is null — pass dryRun:true or provide a provider');
       }
+
+      const campaignConfig =
+        this.config.unsubscribeUrl && this.config.unsubscribeSecret
+          ? {
+              ...this.config,
+              unsubscribeUrl: await buildUnsubscribeUrl(
+                this.config.unsubscribeUrl,
+                user.id,
+                this.config.unsubscribeSecret,
+              ),
+            }
+          : this.config;
+      const ctx = { stats, lifetimeTotalMalas, config: campaignConfig };
 
       // Mark pending before attempting send to prevent races.
       await this.recordSummary({

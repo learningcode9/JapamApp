@@ -32,6 +32,8 @@ export interface EmailConfig {
   heroImageUrl: string;
   /** Destination for a footer "unsubscribe" link. Required before any real production send. */
   unsubscribeUrl: string;
+  /** Secret used to sign per-user unsubscribe tokens. Never included in email content. */
+  unsubscribeSecret: string;
   colors: BrandColors;
   socialLinks: SocialLink[];
   /** Default interval (days) for campaigns that don't specify their own. */
@@ -114,6 +116,7 @@ export function loadEmailConfig(): EmailConfig {
     logoUrl: process.env.EMAIL_LOGO_URL ?? '',
     heroImageUrl: process.env.EMAIL_HERO_IMAGE_URL ?? '',
     unsubscribeUrl: process.env.EMAIL_UNSUBSCRIBE_URL ?? '',
+    unsubscribeSecret: process.env.EMAIL_UNSUBSCRIBE_SECRET ?? '',
     colors: {
       primary: process.env.EMAIL_COLOR_PRIMARY ?? DEFAULT_COLORS.primary,
       primaryDark: process.env.EMAIL_COLOR_PRIMARY_DARK ?? DEFAULT_COLORS.primaryDark,
@@ -191,6 +194,16 @@ export function assertProductionReady(): void {
     throw new Error(
       `Refusing to send real emails — ${problems.length} production-readiness check(s) failed:\n` +
         problems.map(p => `  - ${p}`).join('\n'),
+    );
+  }
+}
+
+/** FIRST campaign guard: real sends must use a signed, user-specific link. */
+export function assertCampaignUnsubscribeReady(): void {
+  if (!process.env.EMAIL_UNSUBSCRIBE_SECRET) {
+    throw new Error(
+      'Refusing to send the campaign — EMAIL_UNSUBSCRIBE_SECRET is not set; ' +
+        'a signed per-user unsubscribe link is required.',
     );
   }
 }
