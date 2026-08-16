@@ -50,3 +50,9 @@ CREATE INDEX IF NOT EXISTS idx_uep_unsubscribed
 -- operators/service-role only, which is the safest possible posture for a
 -- compliance-relevant flag.
 ALTER TABLE public.user_email_preferences ENABLE ROW LEVEL SECURITY;
+
+-- RLS bypass does not replace table privileges. The shared email data-access
+-- path reads this table for every campaign, and service-role operators may
+-- write opt-out state, so grant only the required DML and sequence access.
+GRANT SELECT, INSERT, UPDATE ON TABLE public.user_email_preferences TO service_role;
+GRANT USAGE, SELECT ON SEQUENCE public.user_email_preferences_id_seq TO service_role;

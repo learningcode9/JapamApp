@@ -33,3 +33,9 @@ CREATE INDEX IF NOT EXISTS idx_ues_period
 -- RLS: enable but grant no public policies.
 -- The script uses the service role key which bypasses RLS automatically.
 ALTER TABLE public.user_email_summaries ENABLE ROW LEVEL SECURITY;
+
+-- The email services run with service_role. RLS bypass does not replace table
+-- privileges, so grant only the DML and sequence access needed for reading
+-- dedupe state and recording send outcomes.
+GRANT SELECT, INSERT, UPDATE ON TABLE public.user_email_summaries TO service_role;
+GRANT USAGE, SELECT ON SEQUENCE public.user_email_summaries_id_seq TO service_role;
