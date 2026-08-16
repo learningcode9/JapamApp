@@ -25,6 +25,7 @@ jest.mock('../supabase', () => ({
 }));
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { DeviceEventEmitter } from 'react-native';
 import { __resetHistoryHydrationState, hydrateHistoryForUser, hydrateHistoryForUserDetails } from '../historyRepository';
 import { japamStatsFor, statsByJapamWithAttribution, toLocalDayKey } from '../historyStore';
 
@@ -311,6 +312,45 @@ describe('historyRepository hydration', () => {
     const merged = await hydrateHistoryForUser(UID);
     expect(merged.map((row) => row.completionId)).toEqual(expect.arrayContaining(['remote-a', 'local-1']));
     expect(mockFetchJapamHistoryRows).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not emit or retrigger hydration when the remote merge is unchanged', async () => {
+    await AsyncStorage.setItem('history', JSON.stringify([
+      makeRecord({
+        completionId: 'same-row',
+        userName: 'User A',
+        remoteId: 'same-row',
+      }),
+    ]));
+    mockFetchJapamHistoryRows.mockResolvedValue([
+      {
+        id: 'same-row',
+        created_at: '2026-07-20T09:00:00.000Z',
+        malas: 2,
+        count: 216,
+        user_name: 'User A',
+        completion_id: 'same-row',
+        japam_id: JAPAM_ID,
+        japam_name: 'My Japam',
+      },
+    ]);
+
+    const emitSpy = jest.spyOn(DeviceEventEmitter, 'emit');
+    const historyUpdatedListener = jest.fn();
+    const subscription = DeviceEventEmitter.addListener('japam-history-updated', historyUpdatedListener);
+    try {
+      const hydrated = await hydrateHistoryForUserDetails(UID, undefined, { localFirst: true });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(hydrated.records.map((row) => row.completionId)).toEqual(['same-row']);
+      expect(mockFetchJapamHistoryRows).toHaveBeenCalledTimes(1);
+      expect(historyUpdatedListener).not.toHaveBeenCalled();
+      expect(emitSpy).not.toHaveBeenCalledWith('japam-history-updated');
+      expect(emitSpy).not.toHaveBeenCalledWith('japam-stats-updated');
+    } finally {
+      subscription.remove();
+      emitSpy.mockRestore();
+    }
   });
 
   it('preserves a newer local addition and dedupes it against the remote result', async () => {

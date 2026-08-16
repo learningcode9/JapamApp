@@ -59,6 +59,13 @@ type RemoteHydrationSnapshot = {
   tombstones: string[];
 };
 
+type RemoteHydrationApplyResult = {
+  records: HistoryRecord[];
+  hadLocalTombstones: boolean;
+  historyChanged: boolean;
+  tombstonesChanged: boolean;
+};
+
 export type HydratedHistoryResult = {
   records: HistoryRecord[];
   hydrationSucceeded: boolean;
@@ -304,7 +311,7 @@ const applyRemoteHydration = async (
   remoteSnapshot: RemoteHydrationSnapshot,
   allLocalHistory: HistoryRecord[],
   localTombstones: string[],
-): Promise<{ records: HistoryRecord[]; hadLocalTombstones: boolean }> => {
+): Promise<RemoteHydrationApplyResult> => {
   const { localScoped, scopedLocalTombstoneApplied, cacheKey } = local;
   const matchesIdentity = (record: HistoryRecord) => (
     record.userId === userId || (legacyUserId != null && record.userId === legacyUserId)
@@ -318,11 +325,13 @@ const applyRemoteHydration = async (
     userId,
   );
   const mergedHistory = replaceScopedHistory(allLocalHistory, mergedScoped, matchesIdentity);
+  const historyChanged = JSON.stringify(mergedHistory) !== JSON.stringify(allLocalHistory);
+  const tombstonesChanged = JSON.stringify(mergedTombstones) !== JSON.stringify(localTombstones);
 
-  if (JSON.stringify(mergedHistory) !== JSON.stringify(allLocalHistory)) {
+  if (historyChanged) {
     await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedHistory));
   }
-  if (JSON.stringify(mergedTombstones) !== JSON.stringify(localTombstones)) {
+  if (tombstonesChanged) {
     await AsyncStorage.setItem(DELETED_COMPLETIONS_KEY, JSON.stringify(mergedTombstones));
   }
 
@@ -334,6 +343,8 @@ const applyRemoteHydration = async (
   return {
     records: mergedScoped,
     hadLocalTombstones: mergedTombstones.length > 0,
+    historyChanged,
+    tombstonesChanged,
   };
 };
 
@@ -378,7 +389,7 @@ const hydrateHistoryForUserDetailsLocalFirst = async (
         }
         return;
       }
-      await applyRemoteHydration(
+      const applied = await applyRemoteHydration(
         userId,
         legacyUserId,
         latestLocal,
@@ -386,7 +397,9 @@ const hydrateHistoryForUserDetailsLocalFirst = async (
         latestLocal.allLocalHistory,
         latestLocal.localTombstones,
       );
-      emitHistoryUpdated();
+      if (applied.historyChanged || applied.tombstonesChanged) {
+        emitHistoryUpdated();
+      }
     } catch {
       // Best-effort background hydration; local rows are already shown.
     }

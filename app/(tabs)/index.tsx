@@ -1479,7 +1479,7 @@ export default function JapamMain() {
   const restoreHistoryFromSupabase = useCallback(async (googleUserId: string) => {
     try {
       const remoteRows = await fetchJapamHistoryRows({
-        select: '*',
+        select: 'created_at,malas,count,user_name,user_email,completion_id,japam_id,japam_name',
         userId: googleUserId,
         order: { column: 'created_at', ascending: true },
         limit: 10000,
