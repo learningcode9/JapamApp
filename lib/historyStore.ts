@@ -294,7 +294,10 @@ export const mergeHistories = (
   }
 
   return [...byId.values()].sort(
-    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+    (a, b) => {
+      const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+      return dateDiff || b.completionId.localeCompare(a.completionId);
+    }
   );
 };
 

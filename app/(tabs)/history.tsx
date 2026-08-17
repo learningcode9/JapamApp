@@ -16,7 +16,11 @@ import { useCurrentJapam } from '../../contexts/current-japam-context';
 import CurrentJapamHeaderButton from '../../components/CurrentJapamHeaderButton';
 import { activeJapams } from '../../lib/japams';
 import { ensureJapamSyncedForHistory } from '../../lib/japamsRepository';
-import { hydrateHistoryForUserDetails } from '../../lib/historyRepository';
+import {
+  drainHistoryForUser,
+  hydrateHistoryForUserDetails,
+  loadMoreHistoryForUser,
+} from '../../lib/historyRepository';
 import { repairLegacyStoredUserId, LEGACY_USER_ID_KEY } from '../../lib/anonymousAuth';
 import { supabase } from '../../lib/supabase';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -72,6 +76,7 @@ const COUNT_CELL_FLEX = isNarrowPhone ? 0.95 : isTablet ? 1.15 : 1.05;
 const TOTAL_CELL_FLEX = isNarrowPhone ? 0.9 : isTablet ? 1.1 : 1.0;
 const DATE_MIN_WIDTH = isNarrowPhone ? 84 : isTablet ? 156 : 98;
 const HISTORY_LOADING_PLACEHOLDER_ROWS = 4;
+const HISTORY_REMOTE_PAGE_SIZE = 50;
 // Android-only fixed widths (dp). Date is sized just for "30 Jun 2026" (tight, not huge, per
 // request). Malas gets the single largest numeric-column allowance — deliberately more than
 // Count/Total — because it's the one that's repeatedly truncated in practice.
@@ -635,6 +640,7 @@ export default function HistoryScreen() {
   const historyScopeStateRef = useRef<HistoryScopeState>('loading');
   const latestAppliedScopeKeyRef = useRef<string | null>(null);
   const latestRequestRef = useRef({ generation: 0, scopeKey: 'initial' });
+  const hasMoreRemoteHistoryRef = useRef(false);
 
   const getYesterdayDateKey = () => {
     const yesterday = new Date();
@@ -899,9 +905,14 @@ export default function HistoryScreen() {
     const legacyUserId = await AsyncStorage.getItem(LEGACY_USER_ID_KEY);
     if (!isCurrentRequest(requestGeneration, scopeKey)) return;
     const hydratedSessions = currentUserId
-      ? await hydrateHistoryForUserDetails(currentUserId, legacyUserId, { force, localFirst: true })
+      ? await hydrateHistoryForUserDetails(currentUserId, legacyUserId, {
+        force,
+        localFirst: true,
+        remotePageSize: HISTORY_REMOTE_PAGE_SIZE,
+      })
       : null;
     if (!isCurrentRequest(requestGeneration, scopeKey)) return;
+    hasMoreRemoteHistoryRef.current = hydratedSessions?.hasMoreRemote ?? false;
 
     const localSessions = dedupeSessions(cleanedSessions.filter(matchesUser));
     const sessions = hydratedSessions
@@ -941,6 +952,30 @@ export default function HistoryScreen() {
     setHistoryScopeState('ready');
     latestAppliedScopeKeyRef.current = scopeKey;
   }, [buildScopedRows, currentJapam?.id, currentJapam?.name, currentJapamId, getDisplayedUserKey, isAuthHydrationPending, isCurrentRequest, isJapamContextLoading]);
+
+  const loadOlderHistory = useCallback(async () => {
+    if (!hasMoreRemoteHistoryRef.current) return;
+    const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+    if (!currentUserId) {
+      hasMoreRemoteHistoryRef.current = false;
+      return;
+    }
+    const legacyUserId = await AsyncStorage.getItem(LEGACY_USER_ID_KEY);
+    const page = await loadMoreHistoryForUser(currentUserId, legacyUserId, {
+      pageSize: HISTORY_REMOTE_PAGE_SIZE,
+    });
+    hasMoreRemoteHistoryRef.current = page.hasMoreRemote;
+  }, []);
+
+  const maybeLoadOlderHistory = useCallback((event: { nativeEvent: {
+    layoutMeasurement: { height: number };
+    contentOffset: { y: number };
+    contentSize: { height: number };
+  } }) => {
+    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+    const distanceFromBottom = contentSize.height - (layoutMeasurement.height + contentOffset.y);
+    if (distanceFromBottom < 400) void loadOlderHistory();
+  }, [loadOlderHistory]);
 
   // Tombstone-based delete: remove the records locally, record a tombstone (so self-heal never
   // re-uploads them and other devices delete their copy on sync), and best-effort delete remote
@@ -1170,7 +1205,9 @@ export default function HistoryScreen() {
 
   useEffect(() => {
     const onHistoryUpdated = () => {
-      void loadHistory({ force: true });
+      // Page merges already updated the cache. Re-read it without resetting the cursor stream;
+      // auth/focus refreshes remain the explicit force-refresh paths.
+      void loadHistory();
     };
 
     const onAuthUpdated = () => {
@@ -1229,14 +1266,28 @@ export default function HistoryScreen() {
 
   const exportHistory = async () => {
     try {
-      if (dailyRows.length === 0) {
+      let rowsToExport = dailyRows;
+      const exportUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      if (exportUserId && currentJapamId && currentJapam?.name) {
+        const legacyUserId = await AsyncStorage.getItem(LEGACY_USER_ID_KEY);
+        const drained = await drainHistoryForUser(exportUserId, legacyUserId, {
+          pageSize: HISTORY_REMOTE_PAGE_SIZE,
+        });
+        if (!drained.complete) {
+          Alert.alert('Export failed', 'History could not be fully loaded. No partial export was created.');
+          return;
+        }
+        rowsToExport = buildScopedRows(drained.records, currentJapamId, currentJapam.name);
+      }
+
+      if (rowsToExport.length === 0) {
         Alert.alert('No history', 'There is no history to export yet.');
         return;
       }
 
       const lines = ['Date,Malas,Count,Accumulated'];
 
-      dailyRows.forEach((row) => {
+      rowsToExport.forEach((row) => {
         lines.push(
           `${row.dateKey},${row.malas},${row.totalCount},${row.accumulated}`
         );
@@ -1312,6 +1363,8 @@ export default function HistoryScreen() {
         styles.content,
         { paddingBottom: 16 },
       ]}
+      onScroll={maybeLoadOlderHistory}
+      scrollEventThrottle={250}
       bounces={Platform.OS !== 'ios'}
       refreshControl={
         <RefreshControl

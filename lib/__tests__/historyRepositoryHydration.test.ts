@@ -26,7 +26,13 @@ jest.mock('../supabase', () => ({
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DeviceEventEmitter } from 'react-native';
-import { __resetHistoryHydrationState, hydrateHistoryForUser, hydrateHistoryForUserDetails } from '../historyRepository';
+import {
+  __resetHistoryHydrationState,
+  drainHistoryForUser,
+  hydrateHistoryForUser,
+  hydrateHistoryForUserDetails,
+  loadMoreHistoryForUser,
+} from '../historyRepository';
 import { japamStatsFor, statsByJapamWithAttribution, toLocalDayKey } from '../historyStore';
 
 const UID = 'user-123';
@@ -581,5 +587,143 @@ describe('historyRepository hydration', () => {
     expect(japamStatsFor(statsMap, JAPAM_ID).lifetimeMalas).toBe(5);
     // Remote rows were persisted back into the stale empty local cache.
     expect(JSON.parse((await AsyncStorage.getItem('history')) || '[]')).toHaveLength(2);
+  });
+
+  it('loads a bounded newest-first combined page and drains canonical plus legacy streams without gaps', async () => {
+    const legacyUserId = 'legacy-user-123';
+    const timestamp = '2026-07-20T09:00:00.000Z';
+    const rowsFor = (prefix: string) => Array.from({ length: 30 }, (_, index) => ({
+      id: `${prefix}-row-${index + 1}`,
+      created_at: timestamp,
+      malas: 1,
+      count: 108,
+      user_name: 'User A',
+      completion_id: `${prefix}-${String(30 - index).padStart(2, '0')}`,
+      japam_id: JAPAM_ID,
+      japam_name: 'My Japam',
+    }));
+    const canonicalRows = rowsFor('canonical');
+    const legacyRows = rowsFor('legacy');
+    // The same completion can be visible through the canonical and legacy identity during an
+    // identity transition. It must remain one local record after both streams are drained.
+    legacyRows[legacyRows.length - 1].completion_id = canonicalRows[0].completion_id;
+    const rowsByUser = new Map([
+      [UID, canonicalRows],
+      [legacyUserId, legacyRows],
+    ]);
+    mockFetchJapamHistoryRows.mockImplementation((options: {
+      userId: string;
+      limit?: number;
+      before?: { createdAt: string; completionId: string };
+    }) => {
+      const allRows = [...(rowsByUser.get(options.userId) || [])].sort((a, b) =>
+        b.completion_id.localeCompare(a.completion_id)
+      );
+      const start = options.before
+        ? allRows.findIndex((row) => row.completion_id < options.before!.completionId)
+        : 0;
+      const first = start < 0 ? allRows.length : start;
+      return Promise.resolve(allRows.slice(first, first + (options.limit ?? allRows.length)));
+    });
+
+    const initial = await hydrateHistoryForUserDetails(UID, legacyUserId, { remotePageSize: 50 });
+
+    expect(initial.hydrationSucceeded).toBe(true);
+    expect(initial.records).toHaveLength(50);
+    expect(initial.hasMoreRemote).toBe(true);
+    expect(new Set(initial.records.map((row) => row.completionId)).size).toBe(50);
+    const firstRequests = mockFetchJapamHistoryRows.mock.calls.map(([options]) => options as {
+      userId: string;
+      limit?: number;
+      order?: unknown;
+      secondaryOrder?: unknown;
+      before?: unknown;
+    });
+    expect(firstRequests).toHaveLength(2);
+    expect(firstRequests.every((request) => request.limit === 25)).toBe(true);
+    expect(firstRequests.every((request) => (request.order as { column: string; ascending: boolean }).column === 'created_at')).toBe(true);
+    expect(firstRequests.every((request) => (request.order as { column: string; ascending: boolean }).ascending === false)).toBe(true);
+    expect(firstRequests.every((request) => (request.secondaryOrder as { column: string }).column === 'completion_id')).toBe(true);
+
+    const older = await loadMoreHistoryForUser(UID, legacyUserId, { pageSize: 50 });
+    expect(older.pageLoaded).toBe(true);
+    expect(older.hasMoreRemote).toBe(false);
+    expect(older.records).toHaveLength(59);
+    expect(new Set(older.records.map((row) => row.completionId)).size).toBe(59);
+    expect(older.records.map((row) => row.completionId)).toEqual(
+      [...older.records].sort((a, b) => {
+        const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+        return dateDiff || b.completionId.localeCompare(a.completionId);
+      }).map((row) => row.completionId),
+    );
+    expect(older.records.map((row) => row.completionId).sort()).toEqual(
+      [...canonicalRows, ...legacyRows].map((row) => row.completion_id).filter((id, index, all) => all.indexOf(id) === index).sort(),
+    );
+  });
+
+  it('keeps old pending/tombstoned local state and leaves it untouched when an older page fails', async () => {
+    const localPending = makeRecord({ completionId: 'local-pending-old', syncStatus: 'pending', date: '2025-01-01T09:00:00.000Z' });
+    const localDeleted = makeRecord({ completionId: 'local-deleted-old', date: '2025-01-02T09:00:00.000Z' });
+    await AsyncStorage.setItem('history', JSON.stringify([localPending, localDeleted]));
+    await AsyncStorage.setItem('deletedCompletions', JSON.stringify(['local-deleted-old']));
+    const remotePage = Array.from({ length: 50 }, (_, index) => ({
+      id: `remote-${index}`,
+      created_at: '2026-07-20T09:00:00.000Z',
+      malas: 1,
+      count: 108,
+      user_name: 'User A',
+      completion_id: index === 0 ? 'remote-new' : `remote-${String(index).padStart(2, '0')}`,
+      japam_id: JAPAM_ID,
+      japam_name: 'My Japam',
+    }));
+    mockFetchJapamHistoryRows.mockResolvedValueOnce(remotePage).mockResolvedValueOnce(null);
+
+    const initial = await hydrateHistoryForUserDetails(UID, undefined, { remotePageSize: 50 });
+    expect(initial.records.map((row) => row.completionId)).toEqual(expect.arrayContaining(['local-pending-old']));
+    expect(initial.records).toHaveLength(51);
+    expect(initial.records.map((row) => row.completionId)).not.toContain('local-deleted-old');
+    const beforeFailedPage = await AsyncStorage.getItem('history');
+
+    const failed = await loadMoreHistoryForUser(UID, undefined, { pageSize: 50 });
+    expect(failed.pageLoaded).toBe(false);
+    expect(await AsyncStorage.getItem('history')).toBe(beforeFailedPage);
+    expect(JSON.parse((await AsyncStorage.getItem('deletedCompletions')) || '[]')).toEqual(['local-deleted-old']);
+  });
+
+  it('drains only for complete operations and preserves the full record/completionId set and totals', async () => {
+    const rows = Array.from({ length: 55 }, (_, index) => ({
+      id: `row-${index}`,
+      created_at: `2026-07-${String(20 - Math.floor(index / 10)).padStart(2, '0')}T09:00:00.000Z`,
+      malas: index % 3 + 1,
+      count: (index % 3 + 1) * 108,
+      user_name: 'User A',
+      completion_id: `drain-${String(index).padStart(3, '0')}`,
+      japam_id: JAPAM_ID,
+      japam_name: 'My Japam',
+    }));
+    mockFetchJapamHistoryRows.mockImplementation((options: { limit?: number; before?: { createdAt: string; completionId: string } }) => {
+      const ordered = [...rows].sort((a, b) => {
+        const dateDiff = new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        return dateDiff || b.completion_id.localeCompare(a.completion_id);
+      });
+      const start = options.before
+        ? ordered.findIndex((row) => (
+          row.created_at < options.before!.createdAt
+          || (row.created_at === options.before!.createdAt && row.completion_id < options.before!.completionId)
+        ))
+        : 0;
+      const first = start < 0 ? ordered.length : start;
+      return Promise.resolve(ordered.slice(first, first + (options.limit ?? ordered.length)));
+    });
+
+    const totalCount = rows.reduce((sum, row) => sum + row.count, 0);
+    const drained = await drainHistoryForUser(UID, undefined, { pageSize: 50 });
+
+    expect(drained.complete).toBe(true);
+    expect(drained.records).toHaveLength(rows.length);
+    expect(new Set(drained.records.map((row) => row.completionId))).toEqual(
+      new Set(rows.map((row) => row.completion_id)),
+    );
+    expect(drained.records.reduce((sum, row) => sum + row.totalCount, 0)).toBe(totalCount);
   });
 });

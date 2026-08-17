@@ -20,16 +20,23 @@ export function resetFetchCoalesceCache() {
   inFlightPromise = null;
 }
 
+export type HistoryKeysetCursor = {
+  createdAt: string;
+  completionId: string;
+};
+
 export async function fetchJapamHistoryRows(options: {
   select: string;
   userId: string;
   order?: { column: string; ascending: boolean };
+  secondaryOrder?: { column: string; ascending: boolean };
+  before?: HistoryKeysetCursor;
   limit?: number;
   sessionRequired?: boolean;
 }): Promise<Record<string, unknown>[] | null> {
-  const { select, userId, order, limit, sessionRequired = true } = options;
+  const { select, userId, order, secondaryOrder, before, limit, sessionRequired = true } = options;
 
-  const fetchKey = `${select}|${userId}|${order?.column ?? ''}|${order?.ascending ?? ''}|${limit ?? ''}`;
+  const fetchKey = JSON.stringify({ select, userId, order, secondaryOrder, before, limit, sessionRequired });
   const now = Date.now();
 
   if (fetchKey === lastFetchKey && now - lastFetchResolvedAt < COALESCE_WINDOW_MS) {
@@ -55,6 +62,14 @@ export async function fetchJapamHistoryRows(options: {
 
     if (order) {
       query = query.order(order.column, { ascending: order.ascending });
+    }
+    if (secondaryOrder) {
+      query = query.order(secondaryOrder.column, { ascending: secondaryOrder.ascending });
+    }
+    if (before) {
+      query = query.or(
+        `created_at.lt.${before.createdAt},and(created_at.eq.${before.createdAt},completion_id.lt.${before.completionId})`,
+      );
     }
     if (limit) {
       query = query.limit(limit);
