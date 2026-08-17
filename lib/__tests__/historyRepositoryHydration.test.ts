@@ -640,7 +640,7 @@ describe('historyRepository hydration', () => {
       before?: unknown;
     });
     expect(firstRequests).toHaveLength(2);
-    expect(firstRequests.every((request) => request.limit === 25)).toBe(true);
+    expect(firstRequests.every((request) => request.limit === 50)).toBe(true);
     expect(firstRequests.every((request) => (request.order as { column: string; ascending: boolean }).column === 'created_at')).toBe(true);
     expect(firstRequests.every((request) => (request.order as { column: string; ascending: boolean }).ascending === false)).toBe(true);
     expect(firstRequests.every((request) => (request.secondaryOrder as { column: string }).column === 'completion_id')).toBe(true);
@@ -658,6 +658,72 @@ describe('historyRepository hydration', () => {
     );
     expect(older.records.map((row) => row.completionId).sort()).toEqual(
       [...canonicalRows, ...legacyRows].map((row) => row.completion_id).filter((id, index, all) => all.indexOf(id) === index).sort(),
+    );
+  });
+
+  it('chooses the globally newest initial page when canonical and legacy volumes are asymmetric', async () => {
+    const legacyUserId = 'legacy-user-123';
+    const canonicalRows = Array.from({ length: 60 }, (_, index) => ({
+      id: `canonical-row-${index}`,
+      created_at: new Date(Date.UTC(2026, 7, 20, 12, -index)).toISOString(),
+      malas: 1,
+      count: 108,
+      user_name: 'User A',
+      completion_id: `canonical-${String(60 - index).padStart(3, '0')}`,
+      japam_id: JAPAM_ID,
+      japam_name: 'My Japam',
+    }));
+    const legacyRows = Array.from({ length: 2 }, (_, index) => ({
+      id: `legacy-row-${index}`,
+      created_at: new Date(Date.UTC(2026, 7, 1, 12, -index)).toISOString(),
+      malas: 1,
+      count: 108,
+      user_name: 'User A',
+      completion_id: `legacy-${String(2 - index).padStart(3, '0')}`,
+      japam_id: JAPAM_ID,
+      japam_name: 'My Japam',
+    }));
+    const rowsByUser = new Map([
+      [UID, canonicalRows],
+      [legacyUserId, legacyRows],
+    ]);
+    mockFetchJapamHistoryRows.mockImplementation((options: {
+      userId: string;
+      limit?: number;
+      before?: { createdAt: string; completionId: string };
+    }) => {
+      const ordered = [...(rowsByUser.get(options.userId) || [])].sort((a, b) => {
+        const dateDiff = new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        return dateDiff || b.completion_id.localeCompare(a.completion_id);
+      });
+      const start = options.before
+        ? ordered.findIndex((row) => (
+          row.created_at < options.before!.createdAt
+          || (row.created_at === options.before!.createdAt && row.completion_id < options.before!.completionId)
+        ))
+        : 0;
+      const first = start < 0 ? ordered.length : start;
+      return Promise.resolve(ordered.slice(first, first + (options.limit ?? ordered.length)));
+    });
+
+    const initial = await hydrateHistoryForUserDetails(UID, legacyUserId, { remotePageSize: 50 });
+
+    expect(initial.records).toHaveLength(50);
+    expect(initial.records.map((row) => row.completionId)).toEqual(
+      canonicalRows.slice(0, 50).map((row) => row.completion_id),
+    );
+    expect(mockFetchJapamHistoryRows.mock.calls.map(([options]) => (options as { limit?: number }).limit)).toEqual([50, 50]);
+
+    const older = await loadMoreHistoryForUser(UID, legacyUserId, { pageSize: 50 });
+    expect(older.pageLoaded).toBe(true);
+    expect(older.hasMoreRemote).toBe(false);
+    expect(older.records).toHaveLength(62);
+    expect(new Set(older.records.map((row) => row.completionId)).size).toBe(62);
+    expect(older.records.map((row) => row.completionId)).toEqual(
+      [...older.records].sort((a, b) => {
+        const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
+        return dateDiff || b.completionId.localeCompare(a.completionId);
+      }).map((row) => row.completionId),
     );
   });
 
@@ -725,5 +791,19 @@ describe('historyRepository hydration', () => {
       new Set(rows.map((row) => row.completion_id)),
     );
     expect(drained.records.reduce((sum, row) => sum + row.totalCount, 0)).toBe(totalCount);
+  });
+
+  it('keeps offline export on the complete scoped local cache when remote history is unavailable', async () => {
+    const cached = [
+      makeRecord({ completionId: 'cached-1', date: '2026-07-20T09:00:00.000Z' }),
+      makeRecord({ completionId: 'cached-2', date: '2026-07-19T09:00:00.000Z' }),
+    ];
+    await AsyncStorage.setItem('history', JSON.stringify(cached));
+    mockFetchJapamHistoryRows.mockResolvedValue(null);
+
+    const drained = await drainHistoryForUser(UID, undefined, { pageSize: 50 });
+
+    expect(drained.complete).toBe(true);
+    expect(drained.records.map((row) => row.completionId)).toEqual(['cached-1', 'cached-2']);
   });
 });
