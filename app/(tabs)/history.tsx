@@ -641,6 +641,8 @@ export default function HistoryScreen() {
   const latestAppliedScopeKeyRef = useRef<string | null>(null);
   const latestRequestRef = useRef({ generation: 0, scopeKey: 'initial' });
   const hasMoreRemoteHistoryRef = useRef(false);
+  const isLoadingOlderHistoryRef = useRef(false);
+  const scrollContentHeightRef = useRef(0);
 
   const getYesterdayDateKey = () => {
     const yesterday = new Date();
@@ -660,6 +662,8 @@ export default function HistoryScreen() {
     const generation = latestRequestRef.current.generation + 1;
     latestRequestRef.current = { generation, scopeKey: `invalid:${generation}` };
     latestAppliedScopeKeyRef.current = null;
+    hasMoreRemoteHistoryRef.current = false;
+    scrollContentHeightRef.current = 0;
     setDailyRows([]);
     setHistoryScopeState(nextState);
   }, []);
@@ -847,6 +851,7 @@ export default function HistoryScreen() {
     if (isAuthHydrationPending || isJapamContextLoading) {
       const loadingScopeKey = `loading:${currentUserKey}`;
       latestRequestRef.current = { generation: requestGeneration, scopeKey: loadingScopeKey };
+      hasMoreRemoteHistoryRef.current = false;
       if (!isCurrentRequest(requestGeneration, loadingScopeKey)) return;
       if (!shouldPreserveVisibleRows) {
         setHistoryScopeState('loading');
@@ -857,6 +862,8 @@ export default function HistoryScreen() {
     if (!currentJapamId || currentJapamIdentityId !== currentJapamId || !currentJapamName) {
       const emptyScopeKey = `empty:${currentUserId || 'guest'}`;
       latestRequestRef.current = { generation: requestGeneration, scopeKey: emptyScopeKey };
+      hasMoreRemoteHistoryRef.current = false;
+      scrollContentHeightRef.current = 0;
       if (!isCurrentRequest(requestGeneration, emptyScopeKey)) return;
       latestAppliedScopeKeyRef.current = null;
       setDailyRows([]);
@@ -869,6 +876,8 @@ export default function HistoryScreen() {
     const scopeChanged = latestAppliedScopeKeyRef.current !== scopeKey;
     if (scopeChanged) {
       if (!isCurrentRequest(requestGeneration, scopeKey)) return;
+      hasMoreRemoteHistoryRef.current = false;
+      scrollContentHeightRef.current = 0;
       setDailyRows([]);
       setHistoryScopeState('loading');
     }
@@ -954,26 +963,38 @@ export default function HistoryScreen() {
   }, [buildScopedRows, currentJapam?.id, currentJapam?.name, currentJapamId, getDisplayedUserKey, isAuthHydrationPending, isCurrentRequest, isJapamContextLoading]);
 
   const loadOlderHistory = useCallback(async () => {
-    if (!hasMoreRemoteHistoryRef.current) return;
-    const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
-    if (!currentUserId) {
-      hasMoreRemoteHistoryRef.current = false;
-      return;
+    if (!hasMoreRemoteHistoryRef.current || isLoadingOlderHistoryRef.current) return;
+    isLoadingOlderHistoryRef.current = true;
+    try {
+      const currentUserId = await AsyncStorage.getItem(USER_ID_KEY);
+      if (!currentUserId) {
+        hasMoreRemoteHistoryRef.current = false;
+        return;
+      }
+      const legacyUserId = await AsyncStorage.getItem(LEGACY_USER_ID_KEY);
+      const page = await loadMoreHistoryForUser(currentUserId, legacyUserId, {
+        pageSize: HISTORY_REMOTE_PAGE_SIZE,
+      });
+      hasMoreRemoteHistoryRef.current = page.hasMoreRemote;
+      // Do not rely only on DeviceEventEmitter for the web refresh. Some web ScrollView paths
+      // can deliver the page merge without delivering the paired history-updated event.
+      if (page.pageLoaded) await loadHistory();
+    } finally {
+      isLoadingOlderHistoryRef.current = false;
     }
-    const legacyUserId = await AsyncStorage.getItem(LEGACY_USER_ID_KEY);
-    const page = await loadMoreHistoryForUser(currentUserId, legacyUserId, {
-      pageSize: HISTORY_REMOTE_PAGE_SIZE,
-    });
-    hasMoreRemoteHistoryRef.current = page.hasMoreRemote;
-  }, []);
+  }, [loadHistory]);
 
   const maybeLoadOlderHistory = useCallback((event: { nativeEvent: {
-    layoutMeasurement: { height: number };
-    contentOffset: { y: number };
-    contentSize: { height: number };
+    layoutMeasurement?: { height: number };
+    contentOffset?: { y: number };
+    contentSize?: { height: number };
   } }) => {
     const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
-    const distanceFromBottom = contentSize.height - (layoutMeasurement.height + contentOffset.y);
+    const contentHeight = contentSize?.height ?? scrollContentHeightRef.current;
+    const layoutHeight = layoutMeasurement?.height ?? 0;
+    const contentOffsetY = contentOffset?.y ?? 0;
+    if (!Number.isFinite(contentHeight) || contentHeight <= 0) return;
+    const distanceFromBottom = contentHeight - (layoutHeight + contentOffsetY);
     if (distanceFromBottom < 400) void loadOlderHistory();
   }, [loadOlderHistory]);
 
@@ -1363,6 +1384,9 @@ export default function HistoryScreen() {
         styles.content,
         { paddingBottom: 16 },
       ]}
+      onContentSizeChange={(_width, height) => {
+        scrollContentHeightRef.current = height;
+      }}
       onScroll={maybeLoadOlderHistory}
       scrollEventThrottle={250}
       bounces={Platform.OS !== 'ios'}
