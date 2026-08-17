@@ -727,6 +727,68 @@ describe('historyRepository hydration', () => {
     );
   });
 
+  it('fetches active-stream head coverage before selecting each next page', async () => {
+    const legacyUserId = 'legacy-user-123';
+    const makeRows = (prefix: string, baseTime: number) => Array.from({ length: 100 }, (_, index) => ({
+      id: `${prefix}-row-${index}`,
+      created_at: new Date(baseTime - index * 60_000).toISOString(),
+      malas: 1,
+      count: 108,
+      user_name: 'User A',
+      completion_id: `${prefix}-${String(index + 1).padStart(3, '0')}`,
+      japam_id: JAPAM_ID,
+      japam_name: 'My Japam',
+    }));
+    const canonicalRows = makeRows('canonical', Date.UTC(2026, 7, 20, 12));
+    const legacyRows = makeRows('legacy', Date.UTC(2026, 7, 1, 12));
+    const rowsByUser = new Map([
+      [UID, canonicalRows],
+      [legacyUserId, legacyRows],
+    ]);
+    mockFetchJapamHistoryRows.mockImplementation((options: {
+      userId: string;
+      limit?: number;
+      before?: { createdAt: string; completionId: string };
+    }) => {
+      const ordered = [...(rowsByUser.get(options.userId) || [])].sort((a, b) => {
+        const dateDiff = new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        return dateDiff || b.completion_id.localeCompare(a.completion_id);
+      });
+      const start = options.before
+        ? ordered.findIndex((row) => (
+          row.created_at < options.before!.createdAt
+          || (row.created_at === options.before!.createdAt && row.completion_id < options.before!.completionId)
+        ))
+        : 0;
+      const first = start < 0 ? ordered.length : start;
+      return Promise.resolve(ordered.slice(first, first + (options.limit ?? ordered.length)));
+    });
+
+    const first = await hydrateHistoryForUserDetails(UID, legacyUserId, { remotePageSize: 50 });
+    expect(first.records.map((row) => row.completionId)).toEqual(
+      canonicalRows.slice(0, 50).map((row) => row.completion_id),
+    );
+
+    const second = await loadMoreHistoryForUser(UID, legacyUserId, { pageSize: 50 });
+    expect(second.records).toHaveLength(100);
+    expect(second.records.map((row) => row.completionId)).toEqual(
+      canonicalRows.map((row) => row.completion_id),
+    );
+
+    const third = await loadMoreHistoryForUser(UID, legacyUserId, { pageSize: 50 });
+    expect(third.records).toHaveLength(150);
+    expect(third.records.slice(100).map((row) => row.completionId)).toEqual(
+      legacyRows.slice(0, 50).map((row) => row.completion_id),
+    );
+
+    const fourth = await loadMoreHistoryForUser(UID, legacyUserId, { pageSize: 50 });
+    expect(fourth.records).toHaveLength(200);
+    expect(new Set(fourth.records.map((row) => row.completionId)).size).toBe(200);
+    expect(fourth.records.slice(150).map((row) => row.completionId)).toEqual(
+      legacyRows.slice(50).map((row) => row.completion_id),
+    );
+  });
+
   it('keeps old pending/tombstoned local state and leaves it untouched when an older page fails', async () => {
     const localPending = makeRecord({ completionId: 'local-pending-old', syncStatus: 'pending', date: '2025-01-01T09:00:00.000Z' });
     const localDeleted = makeRecord({ completionId: 'local-deleted-old', date: '2025-01-02T09:00:00.000Z' });
@@ -798,12 +860,32 @@ describe('historyRepository hydration', () => {
       makeRecord({ completionId: 'cached-1', date: '2026-07-20T09:00:00.000Z' }),
       makeRecord({ completionId: 'cached-2', date: '2026-07-19T09:00:00.000Z' }),
     ];
-    await AsyncStorage.setItem('history', JSON.stringify(cached));
+    const originalRaw = JSON.stringify(cached);
+    await AsyncStorage.setItem('history', originalRaw);
     mockFetchJapamHistoryRows.mockResolvedValue(null);
 
     const drained = await drainHistoryForUser(UID, undefined, { pageSize: 50 });
 
-    expect(drained.complete).toBe(true);
+    expect(drained.complete).toBe(false);
+    expect(drained.remoteUnavailable).toBe(true);
     expect(drained.records.map((row) => row.completionId)).toEqual(['cached-1', 'cached-2']);
+    expect(await AsyncStorage.getItem('history')).toBe(originalRaw);
+  });
+
+  it('keeps a partial paginated cache exportable offline without claiming remote completeness', async () => {
+    const cached = Array.from({ length: 50 }, (_, index) => makeRecord({
+      completionId: `cached-page-${index}`,
+      date: `2026-07-${String(20 - Math.floor(index / 10)).padStart(2, '0')}T09:00:00.000Z`,
+    }));
+    const originalRaw = JSON.stringify(cached);
+    await AsyncStorage.setItem('history', originalRaw);
+    mockFetchJapamHistoryRows.mockResolvedValue(null);
+
+    const drained = await drainHistoryForUser(UID, undefined, { pageSize: 50 });
+
+    expect(drained.records).toHaveLength(50);
+    expect(drained.complete).toBe(false);
+    expect(drained.remoteUnavailable).toBe(true);
+    expect(await AsyncStorage.getItem('history')).toBe(originalRaw);
   });
 });

@@ -110,6 +110,12 @@ export type HistoryPageResult = {
   pageLoaded: boolean;
 };
 
+export type HistoryDrainResult = {
+  records: HistoryRecord[];
+  complete: boolean;
+  remoteUnavailable: boolean;
+};
+
 const DEFAULT_REMOTE_HISTORY_PAGE_SIZE = 50;
 
 const hydratedHistoryInFlight = new Map<string, Promise<RemoteHydrationSnapshot | null>>();
@@ -481,14 +487,8 @@ const hydrateHistoryForUserDetailsLocalFirst = async (
       // into the current cache instead of being overwritten by the startup snapshot.
       const latestLocal = await resolveLocalHydration(userId, legacyUserId, options.remotePageSize);
       if (remoteSnapshot === null) {
-        const mergedLocal = replaceScopedHistory(
-          latestLocal.allLocalHistory,
-          latestLocal.localScopedRecords,
-          (record) => record.userId === userId || (legacyUserId != null && record.userId === legacyUserId),
-        );
-        if (JSON.stringify(mergedLocal) !== JSON.stringify(latestLocal.allLocalHistory)) {
-          await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedLocal));
-        }
+        // A remote outage must not rewrite, delete, or canonicalize the local cache. Local
+        // history remains available to the screen and export exactly as it was stored.
         return;
       }
       const applied = await applyRemoteHydration(
@@ -559,14 +559,6 @@ export const hydrateHistoryForUserDetails = async (
 
   if (remoteSnapshot === null) {
     const scopedRecords = localScopedRecords;
-    const mergedLocal = replaceScopedHistory(
-      allLocalHistory,
-      scopedRecords,
-      (record) => record.userId === userId || (legacyUserId != null && record.userId === legacyUserId),
-    );
-    if (JSON.stringify(mergedLocal) !== JSON.stringify(allLocalHistory)) {
-      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedLocal));
-    }
     return {
       records: scopedRecords,
       hydrationSucceeded: false,
@@ -652,9 +644,12 @@ export const loadMoreHistoryForUser = async (
 
     let nextSources = snapshot.pagination.sources;
     let available = buffered;
-    if (available.length < pageSize && activeSources.length > 0) {
+    const sourcesNeedingHeadCoverage = activeSources.filter((source) => (
+      available.length < pageSize || source.buffered.length < pageSize
+    ));
+    if (sourcesNeedingHeadCoverage.length > 0) {
       const pages = await Promise.all(
-        activeSources.map((source) => fetchRemoteHistoryPage(
+        sourcesNeedingHeadCoverage.map((source) => fetchRemoteHistoryPage(
           source.userId,
           snapshot.pagination?.sourcePageSize ?? pageSize,
           source.cursor,
@@ -669,7 +664,7 @@ export const loadMoreHistoryForUser = async (
       const resolvedPages = pages as RemoteHistoryPage[];
       let pageIndex = 0;
       nextSources = snapshot.pagination.sources.map((source) => {
-        if (source.exhausted) return source;
+        if (!sourcesNeedingHeadCoverage.includes(source)) return source;
         const page = resolvedPages[pageIndex++];
         return {
           ...source,
@@ -725,16 +720,16 @@ export const drainHistoryForUser = async (
   userId: string | null | undefined,
   legacyUserId?: string | null,
   options: { pageSize?: number } = {},
-): Promise<{ records: HistoryRecord[]; complete: boolean }> => {
-  if (!userId) return { records: await loadHistoryForUser(userId), complete: true };
+): Promise<HistoryDrainResult> => {
+  if (!userId) return { records: await loadHistoryForUser(userId), complete: true, remoteUnavailable: false };
 
   const pageSize = options.pageSize || DEFAULT_REMOTE_HISTORY_PAGE_SIZE;
   const initial = await hydrateHistoryForUserDetails(userId, legacyUserId, { remotePageSize: pageSize });
   if (!initial.hydrationSucceeded) {
-    // Export historically used the complete scoped AsyncStorage cache. A remote outage must not
-    // turn that offline export into an error or require network access merely to read local rows.
+    // Export historically used the scoped AsyncStorage cache. A remote outage must not turn that
+    // offline export into an error, but one cached page is not proof of remote completeness.
     const local = await resolveLocalHydration(userId, legacyUserId, pageSize);
-    return { records: local.localScopedRecords, complete: true };
+    return { records: local.localScopedRecords, complete: false, remoteUnavailable: true };
   }
   let hasMoreRemote = initial.hasMoreRemote;
   let complete: boolean = initial.hydrationSucceeded;
@@ -747,7 +742,7 @@ export const drainHistoryForUser = async (
     hasMoreRemote = page.hasMoreRemote;
   }
   const local = await resolveLocalHydration(userId, legacyUserId, pageSize);
-  return { records: local.localScopedRecords, complete: complete && !hasMoreRemote };
+  return { records: local.localScopedRecords, complete: complete && !hasMoreRemote, remoteUnavailable: false };
 };
 
 /**

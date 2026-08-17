@@ -1273,7 +1273,7 @@ export default function HistoryScreen() {
         const drained = await drainHistoryForUser(exportUserId, legacyUserId, {
           pageSize: HISTORY_REMOTE_PAGE_SIZE,
         });
-        if (!drained.complete) {
+        if (!drained.complete && !drained.remoteUnavailable) {
           Alert.alert('Export failed', 'History could not be fully loaded. No partial export was created.');
           return;
         }
