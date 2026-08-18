@@ -3,6 +3,7 @@ import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { Platform } from 'react-native';
 import { clearAnonymousFlag, LEGACY_USER_ID_KEY } from './anonymousAuth';
 import { emitJapamAuthUpdated } from './authEvents';
+import { cancelSessionRecovery } from './sessionRecovery';
 import { supabase } from './supabase';
 
 const USER_ID_KEY = 'userId';
@@ -39,6 +40,7 @@ const clearPersistedSupabaseSession = async () => {
 };
 
 export async function runSharedLogoutFlow(options: SharedLogoutOptions = {}): Promise<void> {
+  cancelSessionRecovery();
   await options.clearLocalState?.();
 
   await AsyncStorage.removeItem(USER_NAME_KEY);

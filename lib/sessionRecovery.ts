@@ -1,12 +1,34 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { Session } from '@supabase/supabase-js';
 import { Platform } from 'react-native';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { supabase } from './supabase';
 import { getIsAnonymous, repairLegacyStoredUserId, migrateScopedKeysAfterIdentityRepair } from './anonymousAuth';
+import {
+  beginSessionRecovery,
+  finishSessionRecovery,
+  getRecoveryInFlight,
+  isAuthGenerationCurrent,
+  resetAuthRecoveryState,
+  setRecoveryInFlight,
+} from './authRecoveryGate';
 
 const USER_ID_KEY = 'userId';
 
-let recoveryInFlight: Promise<boolean> | null = null;
+const isSameSession = (current: Session | null, candidate: Session | null | undefined): boolean =>
+  !!current?.access_token &&
+  !!candidate?.access_token &&
+  current.access_token === candidate.access_token &&
+  current.refresh_token === candidate.refresh_token &&
+  current.user?.id === candidate.user?.id;
+
+export {
+  cancelSessionRecovery,
+  getAuthGeneration,
+  hasCancelledRecoveryInFlight,
+  isAuthGenerationCurrent,
+  waitForRecoveryToSettleBeforeInteractiveLogin,
+} from './authRecoveryGate';
 
 /**
  * Attempts to recover a lost Supabase auth session using silent Google sign-in.
@@ -41,25 +63,32 @@ let recoveryInFlight: Promise<boolean> | null = null;
  *     missing-userId users.
  */
 export function recoverSessionIfNeeded(): Promise<boolean> {
-  if (recoveryInFlight) return recoveryInFlight;
+  const currentRecovery = getRecoveryInFlight();
+  if (currentRecovery) return currentRecovery;
 
-  recoveryInFlight = (async (): Promise<boolean> => {
+  const recoveryGeneration = beginSessionRecovery();
+  let recovery!: Promise<boolean>;
+  recovery = (async (): Promise<boolean> => {
     try {
       const { data } = await supabase.auth.getSession();
+      if (!isAuthGenerationCurrent(recoveryGeneration)) return false;
       if (data.session?.access_token) return true;
 
       if (Platform.OS === 'web') return false;
 
       const isAnon = await getIsAnonymous();
+      if (!isAuthGenerationCurrent(recoveryGeneration)) return false;
       if (isAnon) return false;
 
       const uid = await AsyncStorage.getItem(USER_ID_KEY);
+      if (!isAuthGenerationCurrent(recoveryGeneration)) return false;
       if (!uid) return false;
 
       GoogleSignin.configure({
         webClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID,
       });
       const userInfo = await GoogleSignin.signInSilently();
+      if (!isAuthGenerationCurrent(recoveryGeneration)) return false;
       const idToken = userInfo?.data?.idToken;
       if (!idToken) return false;
 
@@ -67,6 +96,17 @@ export function recoverSessionIfNeeded(): Promise<boolean> {
         provider: 'google',
         token: idToken,
       });
+      if (!isAuthGenerationCurrent(recoveryGeneration)) {
+        try {
+          const { data: currentData } = await supabase.auth.getSession();
+          if (isSameSession(currentData.session, authData?.session)) {
+            await supabase.auth.signOut();
+          }
+        } catch {
+          // The explicit logout already attempted signOut; do not disrupt a newer session.
+        }
+        return false;
+      }
       if (error || !authData?.session?.access_token) return false;
 
       const repaired = await repairLegacyStoredUserId();
@@ -78,14 +118,15 @@ export function recoverSessionIfNeeded(): Promise<boolean> {
     } catch {
       return false;
     } finally {
-      recoveryInFlight = null;
+      finishSessionRecovery(recoveryGeneration, recovery);
     }
   })();
 
-  return recoveryInFlight;
+  setRecoveryInFlight(recovery);
+  return recovery;
 }
 
 /** Exposed for tests — clears any in-flight recovery promise. */
 export function resetRecoveryState(): void {
-  recoveryInFlight = null;
+  resetAuthRecoveryState();
 }

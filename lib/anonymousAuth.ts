@@ -12,6 +12,7 @@
 import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
+import { waitForRecoveryToSettleBeforeInteractiveLogin } from './authRecoveryGate';
 
 export const USER_ID_KEY = 'userId';
 export const IS_ANONYMOUS_KEY = 'isAnonymousUser';
@@ -109,6 +110,7 @@ export async function signInOrLinkGoogle(
       return { kind: 'linked' };
     }
 
+    await waitForRecoveryToSettleBeforeInteractiveLogin();
     const { error } = await supabase.auth.signInWithIdToken({ provider: 'google', token: idToken });
     if (error) {
       return { kind: 'error', error };

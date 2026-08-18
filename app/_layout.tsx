@@ -31,7 +31,11 @@ export default function RootLayout() {
     let mounted = true;
     const lifecycle = startAuthLifecycle();
     void lifecycle.ready.then((auth) => {
-      if (auth.kind === 'AUTHENTICATED') return repairLegacyStoredUserId();
+      if (auth.kind === 'AUTHENTICATED') {
+        // Legacy-id repair is best effort and may need the network. It must never hold back
+        // rendering the locally cached workspace during offline startup.
+        void repairLegacyStoredUserId().catch(() => {});
+      }
     }).finally(() => {
       if (mounted) setAuthReady(true);
     });

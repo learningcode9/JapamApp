@@ -46,6 +46,7 @@ import {
   showGoogleAccountCollisionDialog,
 } from '../../lib/anonymousAuth';
 import { supabase } from '../../lib/supabase';
+import { waitForRecoveryToSettleBeforeInteractiveLogin } from '../../lib/sessionRecovery';
 import { claimAuthResponse, emitJapamAuthUpdated } from '../../lib/authEvents';
 import { hydrateHistoryForUserDetails } from '../../lib/historyRepository';
 
@@ -518,6 +519,7 @@ export default function TimerScreen() {
 
       try {
         if (idToken) {
+          await waitForRecoveryToSettleBeforeInteractiveLogin();
           console.log('[SUPABASE_AUTH] timer nonce_prefix=%s', rawNonceRef.current.slice(0, 8));
           const { error: supaAuthError } = await supabase.auth.signInWithIdToken({
             provider: 'google',

@@ -2,12 +2,16 @@ jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock')
 );
 
-let mockSessionState: { data: { session: { access_token: string; user: { id: string } } | null }; error: null } = {
+let mockSessionState: {
+  data: { session: { access_token: string; refresh_token?: string; user: { id: string } } | null };
+  error: null;
+} = {
   data: { session: null },
   error: null,
 };
 const mockSignInWithIdToken = jest.fn();
 const mockSignInSilently = jest.fn();
+const mockSignOut = jest.fn();
 const mockGetIsAnonymous = jest.fn();
 const mockRepairLegacy = jest.fn();
 
@@ -16,6 +20,7 @@ jest.mock('../supabase', () => ({
     auth: {
       getSession: jest.fn(() => Promise.resolve(mockSessionState)),
       signInWithIdToken: (...args: unknown[]) => mockSignInWithIdToken(...args),
+      signOut: (...args: unknown[]) => mockSignOut(...args),
     },
   },
 }));
@@ -24,12 +29,14 @@ jest.mock('@react-native-google-signin/google-signin', () => ({
   GoogleSignin: {
     configure: jest.fn(),
     signInSilently: (...args: unknown[]) => mockSignInSilently(...args),
+    signOut: jest.fn(),
   },
 }));
 
 let mockPlatformOS = 'android';
 
 jest.mock('react-native', () => ({
+  DeviceEventEmitter: { emit: jest.fn() },
   Platform: {
     get OS() { return mockPlatformOS; },
   },
@@ -38,13 +45,21 @@ jest.mock('react-native', () => ({
 const mockMigrateScopedKeys = jest.fn();
 
 jest.mock('../anonymousAuth', () => ({
+  clearAnonymousFlag: jest.fn(),
   getIsAnonymous: (...args: unknown[]) => mockGetIsAnonymous(...args),
   repairLegacyStoredUserId: (...args: unknown[]) => mockRepairLegacy(...args),
   migrateScopedKeysAfterIdentityRepair: (...args: unknown[]) => mockMigrateScopedKeys(...args),
 }));
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { recoverSessionIfNeeded, resetRecoveryState } from '../sessionRecovery';
+import {
+  hasCancelledRecoveryInFlight,
+  recoverSessionIfNeeded,
+  resetRecoveryState,
+} from '../sessionRecovery';
+import { signInWithGoogleIdTokenAndStoreIdentity } from '../nativeGoogleAuth';
+import { runSharedLogoutFlow } from '../sharedLogout';
+import { supabase } from '../supabase';
 
 const USER_ID_KEY = 'userId';
 
@@ -58,6 +73,10 @@ beforeEach(async () => {
   mockRepairLegacy.mockResolvedValue('user-id-after-repair');
   mockMigrateScopedKeys.mockResolvedValue(undefined);
   mockSignInSilently.mockRejectedValue(new Error('no cached credentials'));
+  mockSignOut.mockImplementation(async () => {
+    mockSessionState = { data: { session: null }, error: null };
+    return { error: null };
+  });
   mockSignInWithIdToken.mockImplementation(async () => {
     mockSessionState = {
       data: { session: { access_token: 'recovered-token', user: { id: 'recovered-uuid' } } },
@@ -227,6 +246,127 @@ describe('recoverSessionIfNeeded', () => {
     expect(result2).toBe(true);
     expect(mockSignInSilently).toHaveBeenCalledTimes(1);
     expect(mockSignInWithIdToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not resurrect a session when recovery completes after explicit logout', async () => {
+    await AsyncStorage.multiSet([
+      ['userId', 'google-user-123'],
+      ['userName', 'Cached User'],
+      ['history', 'preserve-me'],
+    ]);
+    mockSignInSilently.mockResolvedValue({ data: { idToken: 'fresh-id-token' } });
+
+    let finishSignIn!: (value: unknown) => void;
+    mockSignInWithIdToken.mockReturnValue(new Promise((resolve) => {
+      finishSignIn = resolve;
+    }));
+
+    const recovery = recoverSessionIfNeeded();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockSignInWithIdToken).toHaveBeenCalledTimes(1);
+
+    await runSharedLogoutFlow();
+    expect(hasCancelledRecoveryInFlight()).toBe(true);
+    expect(await AsyncStorage.getItem('userId')).toBeNull();
+    expect(await AsyncStorage.getItem('userName')).toBeNull();
+    expect(await AsyncStorage.getItem('history')).toBe('preserve-me');
+
+    finishSignIn({
+      data: { user: { id: 'recovered-uuid' }, session: { access_token: 'stale-token' } },
+      error: null,
+    });
+
+    await expect(recovery).resolves.toBe(false);
+    expect(hasCancelledRecoveryInFlight()).toBe(false);
+    expect(mockSignOut).toHaveBeenCalledTimes(1);
+    expect((await (jest.requireMock('../supabase').supabase.auth.getSession())).data.session).toBeNull();
+    expect(await AsyncStorage.getItem('userId')).toBeNull();
+    expect(await AsyncStorage.getItem('userName')).toBeNull();
+    expect(await AsyncStorage.getItem('history')).toBe('preserve-me');
+  });
+
+  it('serializes a manual login until stale recovery cleanup finishes', async () => {
+    await AsyncStorage.multiSet([
+      ['userId', 'google-user-123'],
+      ['userName', 'Cached User'],
+      ['history', 'preserve-me'],
+    ]);
+    mockSignInSilently.mockResolvedValue({ data: { idToken: 'fresh-id-token' } });
+
+    let finishStaleRecovery!: () => void;
+    mockSignInWithIdToken.mockImplementationOnce(() => new Promise((resolve) => {
+      finishStaleRecovery = () => {
+        // Supabase can persist the session before the request promise resolves.
+        mockSessionState = {
+          data: {
+            session: {
+              access_token: 'stale-token',
+              refresh_token: 'stale-refresh-token',
+              user: { id: 'recovered-uuid' },
+            },
+          },
+          error: null,
+        };
+        resolve({
+          data: {
+            user: { id: 'recovered-uuid' },
+            session: {
+              access_token: 'stale-token',
+              refresh_token: 'stale-refresh-token',
+              user: { id: 'recovered-uuid' },
+            },
+          },
+          error: null,
+        });
+      };
+    }));
+    mockSignInWithIdToken.mockImplementationOnce(async () => {
+      mockSessionState = {
+        data: {
+          session: {
+            access_token: 'new-token',
+            refresh_token: 'new-refresh-token',
+            user: { id: 'new-user' },
+          },
+        },
+        error: null,
+      };
+      return {
+        data: {
+          user: { id: 'new-user' },
+          session: { access_token: 'new-token', refresh_token: 'new-refresh-token' },
+        },
+        error: null,
+      };
+    });
+
+    const recovery = recoverSessionIfNeeded();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockSignInWithIdToken).toHaveBeenCalledTimes(1);
+
+    await runSharedLogoutFlow();
+
+    const interactiveLogin = signInWithGoogleIdTokenAndStoreIdentity('new-id-token', 'New User', 'new@example.com');
+    expect(mockSignInWithIdToken).toHaveBeenCalledTimes(1);
+
+    finishStaleRecovery();
+
+    await expect(recovery).resolves.toBe(false);
+    await expect(interactiveLogin).resolves.toEqual({ ok: true, userId: 'new-user' });
+    expect(mockSignInWithIdToken).toHaveBeenCalledTimes(2);
+    expect(mockSignInWithIdToken).toHaveBeenLastCalledWith({ provider: 'google', token: 'new-id-token' });
+    expect(mockSignOut).toHaveBeenCalledTimes(2);
+    expect((await supabase.auth.getSession()).data.session?.access_token).toBe('new-token');
+    expect(await AsyncStorage.getItem('userId')).toBe('new-user');
+    expect(await AsyncStorage.getItem('userName')).toBe('New User');
+    expect(await AsyncStorage.getItem('userEmail')).toBe('new@example.com');
+    expect(await AsyncStorage.getItem('history')).toBe('preserve-me');
   });
 
   it('calls migrateScopedKeysAfterIdentityRepair after successful recovery', async () => {

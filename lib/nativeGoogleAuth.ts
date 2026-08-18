@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
+import { waitForRecoveryToSettleBeforeInteractiveLogin } from './authRecoveryGate';
 
 const USER_ID_KEY = 'userId';
 const USER_NAME_KEY = 'userName';
@@ -56,6 +57,7 @@ export async function signInWithGoogleIdTokenAndStoreIdentity(
   userEmail: string
 ): Promise<NativeGoogleAuthResult> {
   try {
+    await waitForRecoveryToSettleBeforeInteractiveLogin();
     const { data, error } = await supabase.auth.signInWithIdToken({
       provider: 'google',
       token: idToken,
