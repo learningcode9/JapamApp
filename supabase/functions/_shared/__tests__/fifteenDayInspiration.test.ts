@@ -50,10 +50,10 @@ describe('fifteenDayInspirationCampaign.buildHtml', () => {
     expect(html).toContain('500'); // lifetimeTotalMalas
   });
 
-  it('includes the CTA button when ctaUrl is set', () => {
+  it('omits the CTA button even when ctaUrl is set', () => {
     const html = fifteenDayInspirationCampaign.buildHtml(makeContext());
-    expect(html).toContain('Continue Today');
-    expect(html).toContain('https://mantra-japam.vercel.app');
+    expect(html).not.toContain("Continue Today's Japam");
+    expect(html).not.toContain('https://mantra-japam.vercel.app');
   });
 
   it('includes the Bhagavad Gita verse, clearly attributed', () => {
@@ -120,9 +120,10 @@ describe('fifteenDayInspirationCampaign.buildText', () => {
     expect(text).toContain('Bhagavad Gita');
   });
 
-  it('omits the CTA line when ctaUrl is empty', () => {
-    const ctx = makeContext({ config: { ...loadEmailConfig(), ctaUrl: '' } });
+  it('omits the CTA line even when ctaUrl is set', () => {
+    const ctx = makeContext();
     const text = fifteenDayInspirationCampaign.buildText(ctx);
-    expect(text).not.toContain('Continue today');
+    expect(text).not.toContain("Continue today's Japam");
+    expect(text).not.toContain('https://mantra-japam.vercel.app');
   });
 });

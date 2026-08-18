@@ -92,7 +92,6 @@ function buildHtml(ctx: CampaignContext): string {
       headline: 'Every Mala Brings You Closer to Inner Peace',
     },
     contentHtml: content,
-    ctaLabel: "Continue Today's Japam",
     config,
   });
 }
@@ -104,7 +103,6 @@ function buildText(ctx: CampaignContext): string {
     ? `${fmtDate(stats.bestDay.date)} (${stats.bestDay.malas} malas)`
     : 'a quiet stretch — every practice still counts';
 
-  const ctaText = config.ctaUrl ? `\n\nContinue today's Japam: ${config.ctaUrl}` : '';
   const unsubscribeText = config.unsubscribeUrl ? `\nUnsubscribe: ${config.unsubscribeUrl}` : '';
 
   return `Every Mala Brings You Closer to Inner Peace
@@ -121,7 +119,7 @@ Over the last fifteen days, you've continued showing up for your Japam practice.
 "You have the right to perform your duty, but never to the fruits of your actions."
 — Bhagavad Gita, Chapter 2, Verse 47
 
-Whatever your path, may these next fifteen days bring a little more stillness than the last.${ctaText}
+Whatever your path, may these next fifteen days bring a little more stillness than the last.
 
 You're receiving this because you have an active ${config.senderName} account.${unsubscribeText}`;
 }
