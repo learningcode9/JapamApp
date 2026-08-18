@@ -4,9 +4,9 @@
 // campaign never means re-writing "find active users" or "check for a
 // duplicate send" again.
 
-import type { SupabaseClient } from '@supabase/supabase-js';
-import type { AuthUser, JapamHistoryRow, EmailSummaryRecord } from './types';
-import { parseAllowlist } from './config';
+import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
+import type { AuthUser, JapamHistoryRow, EmailSummaryRecord } from './types.ts';
+import { parseAllowlist } from './config.ts';
 
 /**
  * user_ids with a non-null unsubscribed_at in user_email_preferences — i.e.
