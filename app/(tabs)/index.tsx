@@ -5,7 +5,6 @@ import {
   buildSupabaseHistoryPayload,
   filterByJapam,
   markSynced,
-  mergeHistories,
   todayStatsFor,
   toLocalDayKey,
 } from '../../lib/historyStore';
@@ -26,7 +25,6 @@ import { isIOSDeviceWeb, isStandaloneOrInstalledWeb } from '../../lib/pwaInstall
 import { runSharedLogoutFlow } from '../../lib/sharedLogout';
 import { waitForRecoveryToSettleBeforeInteractiveLogin } from '../../lib/sessionRecovery';
 import { supabase } from '../../lib/supabase';
-import { fetchJapamHistoryRows } from '../../lib/supabaseRestHelper';
 import { activeJapams } from '../../lib/japams';
 import { ensureJapamSyncedForHistory } from '../../lib/japamsRepository';
 import { claimAuthResponse, emitJapamAuthUpdated } from '../../lib/authEvents';
@@ -64,6 +62,53 @@ type Session = {
   userEmail?: string;
   completionId?: string;
   syncStatus?: 'pending' | 'synced';
+  japamId?: string | null;
+  japamName?: string | null;
+};
+
+type HomeStats = {
+  todayCount: number;
+  dayStreak: number;
+};
+
+type HomeStatsRpcRow = {
+  today_count?: number | string | null;
+  today_malas?: number | string | null;
+  day_streak?: number | string | null;
+};
+
+const normalizeHomeStats = (row: HomeStatsRpcRow | null | undefined): HomeStats | null => {
+  if (!row) return null;
+  const todayCount = Math.max(0, Math.floor(Number(row.today_count) || 0));
+  const dayStreak = Math.max(0, Math.floor(Number(row.day_streak) || 0));
+  if (!Number.isFinite(todayCount) || !Number.isFinite(dayStreak)) return null;
+  return { todayCount, dayStreak };
+};
+
+const getDeviceTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+
+const getDeviceTodayBounds = (now = new Date()) => {
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  return { start: start.toISOString(), end: end.toISOString() };
+};
+
+const fetchHomeStatsSummary = async (japamId: string): Promise<HomeStats | null> => {
+  const bounds = getDeviceTodayBounds();
+  const { data, error } = await supabase.rpc('get_home_stats', {
+    p_japam_id: japamId,
+    p_today_start: bounds.start,
+    p_today_end: bounds.end,
+    p_device_timezone: getDeviceTimezone(),
+  });
+
+  if (error || !data) {
+    if (error) console.log('[HOME_STATS_RPC_FAILED] code=%s message=%s', error.code ?? 'unknown', error.message);
+    return null;
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return normalizeHomeStats(row as HomeStatsRpcRow | undefined);
 };
 
 type HomeWorkspaceRefreshRequest = {
@@ -116,6 +161,49 @@ export const resolveLocalFirstTodayTotal = (
     ? Math.max(0, Math.floor(Number(options.storedTodayTotal) || 0))
     : 0;
   return Math.max(historyTodayTotal, storedTodayTotal);
+};
+
+const resolveLocalHomeStats = (
+  records: Session[],
+  userId: string,
+  japamId: string | null,
+  japamName: string | null,
+  todayKey: string,
+  storedTodayDate: string | null,
+  storedTodayTotal: number | string | null,
+  includeBlankLegacy: boolean,
+  japams: { id: string; name: string }[] | null,
+): HomeStats => {
+  const scoped = japamId === null
+    ? records
+    : filterByJapam(records, japamId, japamName, { includeBlankLegacy }, japams);
+  const todayCount = resolveLocalFirstTodayTotal(
+    records,
+    userId,
+    japamId,
+    japamName,
+    todayKey,
+    toLocalDayKey,
+    { includeBlankLegacy, storedTodayDate, storedTodayTotal },
+    japams,
+  );
+  const activeDays = new Set<string>();
+
+  for (const item of scoped) {
+    if (item.userId !== userId || (Number(item.totalCount) || 0) <= 0) continue;
+    const itemDay = toLocalDayKey(item.date);
+    if (itemDay !== 'unknown') activeDays.add(itemDay);
+  }
+
+  if (todayCount > 0) activeDays.add(todayKey);
+  let cursor = activeDays.has(todayKey) ? todayKey : getPreviousDateKey(todayKey);
+  let dayStreak = 0;
+  while (activeDays.has(cursor)) {
+    dayStreak += 1;
+    cursor = getPreviousDateKey(cursor);
+  }
+
+  return { todayCount, dayStreak };
 };
 
 type TimerStateRow = {
@@ -171,7 +259,6 @@ const TIMER_TARGET_KEY = 'timerTarget';
 const TIMER_MINUTES_KEY = 'timerMinutes';
 const TIMER_LOOP_KEY = 'timerLoop';
 const TOTAL_DATE_KEY = 'totalDate';
-const DELETED_COMPLETIONS_KEY = 'deletedCompletions';
 const DEFAULT_TIMER_MINUTES = 5;
 const SESSION_TIME_OPTIONS = [5, 10, 15];
 
@@ -329,7 +416,7 @@ export default function JapamMain() {
   const workspaceVersionRef = useRef(0);
   const restoreGenerationRef = useRef(0);
   const restoringWorkspaceRef = useRef<{ workspaceId: string | null } | null>(null);
-  const historyWriteQueueRef = useRef(Promise.resolve());
+  const displayedHomeStatsByWorkspaceRef = useRef(new Map<string | null, HomeStats>());
   const displayedTotalsByWorkspaceRef = useRef(new Map<string | null, number>());
   const suppressCounterPersistenceRef = useRef(false);
   const timerRef = useRef({
@@ -371,11 +458,15 @@ export default function JapamMain() {
     activeWorkspaceIdRef.current = nextWorkspaceId;
     workspaceVersionRef.current += 1;
     const nextTotal = displayedTotalsByWorkspaceRef.current.get(nextWorkspaceId) ?? 0;
+    const nextStats = displayedHomeStatsByWorkspaceRef.current.get(nextWorkspaceId);
     suppressCounterPersistenceRef.current = true;
     totalRef.current = nextTotal;
     setTotal(nextTotal);
     setMalas(Math.floor(nextTotal / 108));
     setCount(nextTotal % 108);
+    setHistoryTotal(nextTotal);
+    setHistoryMalas(Math.floor(nextTotal / 108));
+    setDayStreak(nextStats?.dayStreak ?? 0);
   }, []);
 
   useEffect(() => {
@@ -718,49 +809,61 @@ export default function JapamMain() {
     []
   );
 
-  const refreshDayStreak = useCallback(
-    async (options?: { userId?: string | null; todayTotal?: number }) => {
-      const activeUserId =
-        options?.userId === undefined
-          ? await AsyncStorage.getItem(USER_ID_KEY)
-          : options.userId;
+  const getLocalHomeStatsForWorkspace = useCallback(async (
+    userId: string,
+    workspaceId: string | null,
+    workspaceName: string | null,
+    includeBlankLegacyForScope: boolean,
+    japamsForScope: typeof japams,
+  ): Promise<HomeStats> => {
+    const todayKey = getLocalDateKey();
+    const storedTodayDate = await AsyncStorage.getItem(
+      getJapamScopedKey(TOTAL_DATE_KEY, userId, workspaceId),
+    );
+    const storedTodayTotal = await AsyncStorage.getItem(
+      getJapamScopedKey(TOTAL_KEY, userId, workspaceId),
+    );
+    const localHistory = parseHistory(await AsyncStorage.getItem(HISTORY_KEY));
+    return resolveLocalHomeStats(
+      localHistory,
+      userId,
+      workspaceId,
+      workspaceName,
+      todayKey,
+      storedTodayDate,
+      storedTodayTotal,
+      includeBlankLegacyForScope,
+      japamsForScope,
+    );
+  }, []);
 
-      if (!activeUserId) {
-        setDayStreak(0);
-        return;
-      }
+  const refreshLocalHomeStats = useCallback(async (
+    userId: string,
+    workspaceId: string | null,
+    workspaceName: string | null,
+  ) => {
+    const localStats = await getLocalHomeStatsForWorkspace(
+      userId,
+      workspaceId,
+      workspaceName,
+      includeBlankLegacy,
+      japams,
+    );
+    if (activeWorkspaceIdRef.current !== workspaceId) return;
 
-      const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
-      const history: Session[] = rawHistory ? JSON.parse(rawHistory) : [];
-      const activeDays = new Set<string>();
-
-      history.forEach((item) => {
-        if (item.userId !== activeUserId) return;
-        if ((Number(item.totalCount) || 0) <= 0 && (Number(item.malas) || 0) <= 0) return;
-
-        const itemDay = toLocalDayKey(item.date);
-        if (itemDay === 'unknown') return;
-
-        activeDays.add(itemDay);
-      });
-
-      const todayKey = getLocalDateKey();
-      if ((options?.todayTotal ?? 0) > 0) {
-        activeDays.add(todayKey);
-      }
-
-      let cursor = activeDays.has(todayKey) ? todayKey : getPreviousDateKey(todayKey);
-      let nextStreak = 0;
-
-      while (activeDays.has(cursor)) {
-        nextStreak += 1;
-        cursor = getPreviousDateKey(cursor);
-      }
-
-      setDayStreak(nextStreak);
-    },
-    []
-  );
+    const previous = displayedHomeStatsByWorkspaceRef.current.get(workspaceId) ?? {
+      todayCount: 0,
+      dayStreak: 0,
+    };
+    const nextStats = {
+      todayCount: Math.max(localStats.todayCount, previous.todayCount),
+      dayStreak: Math.max(localStats.dayStreak, previous.dayStreak),
+    };
+    displayedHomeStatsByWorkspaceRef.current.set(workspaceId, nextStats);
+    setHistoryTotal(nextStats.todayCount);
+    setHistoryMalas(Math.floor(nextStats.todayCount / 108));
+    setDayStreak(nextStats.dayStreak);
+  }, [getLocalHomeStatsForWorkspace, includeBlankLegacy, japams]);
 
   useFocusEffect(
     useCallback(() => {
@@ -833,31 +936,6 @@ export default function JapamMain() {
     if (!response.ok) console.log('Total save error:', await response.text());
   };
 
-  const getLocalTodayTotalForUser = useCallback(async (
-    userId: string,
-    japamId: string | null,
-    japamName: string | null,
-    includeBlankLegacyForScope: boolean,
-    japamsForScope: typeof japams,
-  ) => {
-    const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
-    const sessions = parseHistory(rawHistory);
-    const todayKey = getLocalDateKey();
-    const scopedSessions = japamId !== null
-      ? filterByJapam(
-        sessions,
-        japamId,
-        japamName,
-        { includeBlankLegacy: includeBlankLegacyForScope },
-        japamsForScope,
-      )
-      : sessions;
-
-    return scopedSessions
-      .filter((item) => item.userId === userId && toLocalDayKey(item.date) === todayKey)
-      .reduce((sum, item) => sum + (Number(item.totalCount) || 0), 0);
-  }, []);
-
   const restoreTodayTotal = useCallback(async (options?: { skipRemoteFetch?: boolean }) => {
     const skipRemote = options?.skipRemoteFetch ?? false;
     const workspaceId = currentJapamId;
@@ -874,29 +952,19 @@ export default function JapamMain() {
       workspaceVersionRef.current,
       activeWorkspaceIdRef.current,
     );
-    const commitSharedHistoryIfCurrent = async (
-      buildHistory: () => Promise<Session[]>,
-    ): Promise<Session[] | null> => {
-      const previousWrite = historyWriteQueueRef.current;
-      let releaseWrite!: () => void;
-      const queuedWrite = new Promise<void>((resolve) => { releaseWrite = resolve; });
-      historyWriteQueueRef.current = previousWrite.then(() => queuedWrite);
-
-      await previousWrite;
-      try {
-        if (!isCurrentRequest()) return null;
-        const nextHistory = await buildHistory();
-        if (!isCurrentRequest()) return null;
-        await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(nextHistory));
-        return isCurrentRequest() ? nextHistory : null;
-      } finally {
-        releaseWrite();
-      }
-    };
-    const applyWorkspaceTotal = async (candidate: number, userId: string | null) => {
+    const applyWorkspaceStats = async (candidate: HomeStats, userId: string | null) => {
       if (!isCurrentRequest()) return null;
+      const previous = displayedHomeStatsByWorkspaceRef.current.get(workspaceId) ?? {
+        todayCount: 0,
+        dayStreak: 0,
+      };
+      const nextStats = {
+        todayCount: Math.max(candidate.todayCount, previous.todayCount),
+        dayStreak: Math.max(candidate.dayStreak, previous.dayStreak),
+      };
+      displayedHomeStatsByWorkspaceRef.current.set(workspaceId, nextStats);
       const nextTotal = resolveHomeWorkspaceTotal(
-        candidate,
+        nextStats.todayCount,
         workspaceId,
         displayedTotalsByWorkspaceRef.current,
       );
@@ -905,7 +973,10 @@ export default function JapamMain() {
       }
       if (!isCurrentRequest()) return null;
       totalRef.current = nextTotal;
-      return nextTotal;
+      setHistoryTotal(nextTotal);
+      setHistoryMalas(Math.floor(nextTotal / 108));
+      setDayStreak(nextStats.dayStreak);
+      return nextStats;
     };
 
     try {
@@ -913,136 +984,55 @@ export default function JapamMain() {
       if (!isCurrentRequest()) return;
 
       if (savedUserId) {
-        const todayKey = getLocalDateKey();
-        const storedTotalDate = await AsyncStorage.getItem(
-          getJapamScopedKey(TOTAL_DATE_KEY, savedUserId, workspaceId),
-        );
-        const storedTodayTotal = await AsyncStorage.getItem(
-          getJapamScopedKey(TOTAL_KEY, savedUserId, workspaceId),
-        );
-        const localHistory = parseHistory(await AsyncStorage.getItem(HISTORY_KEY));
-        const localFirstTotal = resolveLocalFirstTodayTotal(
-          localHistory,
+        const localStats = await getLocalHomeStatsForWorkspace(
           savedUserId,
           workspaceId,
           currentJapamName,
-          todayKey,
-          toLocalDayKey,
-          { includeBlankLegacy, storedTodayDate: storedTotalDate, storedTodayTotal },
+          includeBlankLegacy,
           japams,
         );
-        const neverRegress = await applyWorkspaceTotal(localFirstTotal, savedUserId);
-        if (neverRegress === null || !isCurrentRequest()) return;
-        await refreshDayStreak({ userId: savedUserId, todayTotal: neverRegress });
-        if (!isCurrentRequest()) return;
+        const localStatsApplied = await applyWorkspaceStats(localStats, savedUserId);
+        if (localStatsApplied === null || !isCurrentRequest()) return;
         setHasRestoredTotal(true);
 
-        if (!skipRemote) {
+        if (!skipRemote && workspaceId !== null) {
           void (async () => {
             try {
-              const remoteRows = await fetchJapamHistoryRows({
-                select: 'created_at,malas,count,user_name,completion_id,japam_id,japam_name',
-                userId: savedUserId,
-                order: { column: 'created_at', ascending: true },
-                limit: 10000,
-              });
-              if (!isCurrentRequest()) return;
+              const remoteStats = await fetchHomeStatsSummary(workspaceId);
+              if (!remoteStats || !isCurrentRequest()) return;
 
-              const remoteSessions: Session[] | null = remoteRows === null
-                ? null
-                : remoteRows.map((row: any) => ({
-                  date: row.created_at,
-                  malas: Number(row.malas) || 0,
-                  totalCount: Number(row.count) || 0,
-                  duration: 0,
-                  manual: false,
-                  userId: savedUserId,
-                  userName: row.user_name,
-                  completionId: row.completion_id,
-                  syncStatus: 'synced' as const,
-                  japamId: row.japam_id ?? null,
-                  japamName: row.japam_name ?? null,
-                }));
-
-              if (remoteSessions !== null) {
-                const reconciledHistory = await commitSharedHistoryIfCurrent(async () => {
-                  const localHistory = parseHistory(await AsyncStorage.getItem(HISTORY_KEY));
-                  const rawTombstones = await AsyncStorage.getItem(DELETED_COMPLETIONS_KEY);
-                  const tombSet = new Set<string>(rawTombstones ? JSON.parse(rawTombstones) : []);
-                  const mergedHistory = mergeHistories(localHistory, remoteSessions).filter((session) => {
-                    const day = toLocalDayKey(session.date);
-                    return (day === 'unknown' || day <= todayKey)
-                      && !tombSet.has(session.completionId as string);
-                  });
-                  console.log('[RESTORE_REMOTE_COUNT] screen=main count=%d', remoteSessions.length);
-                  console.log(
-                    '[MERGE_LOCAL_COUNT_BEFORE] screen=main count=%d pending=%d',
-                    localHistory.length,
-                    localHistory.filter((s) => s.userId === savedUserId && s.syncStatus === 'pending').length
-                  );
-                  console.log('[MERGE_LOCAL_COUNT_AFTER] screen=main count=%d', mergedHistory.length);
-                  console.log('[LOCAL_DAY_BUCKET] screen=main todayKey=%s buckets=%o',
-                    todayKey,
-                    mergedHistory.map((s) => ({ completionId: s.completionId, day: toLocalDayKey(s.date) }))
-                  );
-                  return mergedHistory;
-                });
-                if (reconciledHistory === null || !isCurrentRequest()) return;
-
-                const scopedHistory = workspaceId !== null
-                  ? filterByJapam(reconciledHistory, workspaceId, currentJapamName, { includeBlankLegacy }, japams)
-                  : reconciledHistory;
-                const { totalCount: safeTotal } = todayStatsFor(
-                  scopedHistory,
-                  savedUserId,
-                  todayKey,
-                  toLocalDayKey,
-                );
-                const nextTotal = await applyWorkspaceTotal(safeTotal, savedUserId);
-                if (nextTotal === null || !isCurrentRequest()) return;
-                await refreshDayStreak({ userId: savedUserId, todayTotal: nextTotal });
-              } else {
-                const localHistoryTotal = await getLocalTodayTotalForUser(
-                  savedUserId,
-                  workspaceId,
-                  currentJapamName,
-                  includeBlankLegacy,
-                  japams,
-                );
-                const nextTotal = await applyWorkspaceTotal(localHistoryTotal, savedUserId);
-                if (nextTotal === null || !isCurrentRequest()) return;
-                await refreshDayStreak({ userId: savedUserId, todayTotal: nextTotal });
-              }
-            } catch (error) {
-              console.log('Stats sync error, using local data:', error);
-              if (!isCurrentRequest()) return;
-              const localHistoryTotal = await getLocalTodayTotalForUser(
+              const latestLocalStats = await getLocalHomeStatsForWorkspace(
                 savedUserId,
                 workspaceId,
                 currentJapamName,
                 includeBlankLegacy,
                 japams,
               );
-              const nextTotal = await applyWorkspaceTotal(localHistoryTotal, savedUserId);
-              if (nextTotal === null || !isCurrentRequest()) return;
-              await refreshDayStreak({ userId: savedUserId, todayTotal: nextTotal });
+              if (!isCurrentRequest()) return;
+
+              await applyWorkspaceStats({
+                todayCount: Math.max(remoteStats.todayCount, latestLocalStats.todayCount),
+                dayStreak: Math.max(remoteStats.dayStreak, latestLocalStats.dayStreak),
+              }, savedUserId);
+            } catch (error) {
+              console.log('Home stats sync error, using local data:', error);
             }
           })();
         }
         return;
       }
 
-      const nextTotal = await applyWorkspaceTotal(0, null);
-      if (nextTotal === null || !isCurrentRequest()) return;
-      await refreshDayStreak({ userId: null, todayTotal: 0 });
-      if (!isCurrentRequest()) return;
+      displayedHomeStatsByWorkspaceRef.current.delete(workspaceId);
+      displayedTotalsByWorkspaceRef.current.delete(workspaceId);
+      const nextStats = await applyWorkspaceStats({ todayCount: 0, dayStreak: 0 }, null);
+      if (nextStats === null || !isCurrentRequest()) return;
       setHasRestoredTotal(true);
     } finally {
       if (restoringWorkspaceRef.current?.workspaceId === workspaceId) {
         restoringWorkspaceRef.current = null;
       }
     }
-  }, [currentJapamId, currentJapamName, getLocalTodayTotalForUser, refreshDayStreak, restoreTotal, includeBlankLegacy, japams]);
+  }, [currentJapamId, currentJapamName, getLocalHomeStatsForWorkspace, restoreTotal, includeBlankLegacy, japams]);
 
   useEffect(() => {
     restoreTodayTotalRef.current = restoreTodayTotal;
@@ -1086,33 +1076,39 @@ export default function JapamMain() {
     }
   }, [isRunning, seconds, targetSeconds]);
 
-  // Single source of truth for the displayed "today" stat: derive Malas today / Today count from
-  // the merged local history (same as Timer & History screens). Local-first — never waits for or
-  // depends on Supabase, so offline completions count immediately.
+  // Local-first display path: cached/local values remain visible while the bounded RPC is pending
+  // or unavailable, and a newer local completion is never replaced by an older server summary.
   const loadHistoryStats = useCallback(async () => {
     try {
       const uid = await AsyncStorage.getItem(USER_ID_KEY);
-      const raw = await AsyncStorage.getItem(HISTORY_KEY);
-      const history = Array.isArray(JSON.parse(raw || '[]')) ? JSON.parse(raw || '[]') : [];
-      const japamId = currentJapamId;
-      const japamName = currentJapamName;
-      const scopedHistory = japamId !== null
-        ? filterByJapam(history, japamId, japamName, { includeBlankLegacy }, japams)
-        : history;
-      const { malas: hMalas, totalCount: hTotal } = todayStatsFor(
-        scopedHistory,
+      if (!uid) return;
+      const localStats = await getLocalHomeStatsForWorkspace(
         uid,
-        getLocalDateKey(),
-        toLocalDayKey
+        currentJapamId,
+        currentJapamName,
+        includeBlankLegacy,
+        japams,
       );
-      setHistoryMalas(hMalas);
-      setHistoryTotal(hTotal);
+      if (activeWorkspaceIdRef.current !== currentJapamId) return;
+      const previous = displayedHomeStatsByWorkspaceRef.current.get(currentJapamId) ?? {
+        todayCount: 0,
+        dayStreak: 0,
+      };
+      const nextStats = {
+        todayCount: Math.max(localStats.todayCount, previous.todayCount),
+        dayStreak: Math.max(localStats.dayStreak, previous.dayStreak),
+      };
+      displayedHomeStatsByWorkspaceRef.current.set(currentJapamId, nextStats);
+      setHistoryMalas(Math.floor(nextStats.todayCount / 108));
+      setHistoryTotal(nextStats.todayCount);
+      setDayStreak(nextStats.dayStreak);
+      const history = parseHistory(await AsyncStorage.getItem(HISTORY_KEY));
       const pending = history.filter((r: any) => r?.syncStatus === 'pending').length;
       const synced = history.length - pending;
       console.log('[StatsAudit] screen=main localHistoryCount=%d pendingCount=%d syncedCount=%d mainScreenMalasToday=%d historyMalasToday=%d',
-        history.length, pending, synced, hMalas, hMalas);
+        history.length, pending, synced, Math.floor(nextStats.todayCount / 108), Math.floor(nextStats.todayCount / 108));
     } catch {}
-  }, [currentJapamId, currentJapamName, includeBlankLegacy, japams]);
+  }, [currentJapamId, currentJapamName, getLocalHomeStatsForWorkspace, includeBlankLegacy, japams]);
 
   useEffect(() => {
     const onHistoryUpdated = () => {
@@ -1477,61 +1473,6 @@ export default function JapamMain() {
     }
   }, []);
 
-  const restoreHistoryFromSupabase = useCallback(async (googleUserId: string) => {
-    try {
-      const remoteRows = await fetchJapamHistoryRows({
-        select: 'created_at,malas,count,user_name,user_email,completion_id,japam_id,japam_name',
-        userId: googleUserId,
-        order: { column: 'created_at', ascending: true },
-        limit: 10000,
-      });
-
-      if (!remoteRows) return;
-
-      const remoteHistory: Session[] = remoteRows.map((item: any) => ({
-        date: item.created_at,
-        malas: Number(item.malas) || 0,
-        totalCount: Number(item.count) || 0,
-        duration: 0,
-        manual: false,
-        userId: googleUserId,
-        userName: item.user_name,
-        userEmail: item.user_email,
-        completionId: item.completion_id,
-        syncStatus: 'synced' as const,
-        japamId: item.japam_id ?? null,
-        japamName: item.japam_name ?? null,
-      }));
-
-      const rawLocal = await AsyncStorage.getItem(HISTORY_KEY);
-      const localHistory: Session[] = rawLocal ? JSON.parse(rawLocal) : [];
-
-      // Merge — never overwrite. Union by stable completionId; every local record (including
-      // unsynced 'pending' malas recorded offline) is kept, and any that the remote confirms is
-      // upgraded to 'synced'. This replaces the old behavior that discarded the current user's
-      // local entries and could lose unsynced malas on sign-in.
-      const mergedHistory = mergeHistories(localHistory, remoteHistory);
-      // Non-destructive reconcile: persist mergeHistories' union directly, no remote-id-based
-      // prune. A synced local record transiently absent from a stale fetch must NOT be dropped
-      // on login — that would lose today's just-uploaded Timer completion before Day Streak
-      // ever stabilizes. Cross-device deletes flow through DELETED_COMPLETIONS_KEY tombstones.
-      // Mirrors Timer's loadStats (PR #53), History's loadHistory, and Home's own loadStats.
-      const reconciledHistory = mergedHistory;
-      console.log('[RESTORE_REMOTE_COUNT] screen=main-login count=%d', remoteHistory.length);
-      console.log(
-        '[MERGE_LOCAL_COUNT_BEFORE] screen=main-login count=%d pending=%d',
-        localHistory.length,
-        localHistory.filter((item) => item.userId === googleUserId && item.syncStatus === 'pending').length
-      );
-      console.log('[MERGE_LOCAL_COUNT_AFTER] screen=main-login count=%d', reconciledHistory.length);
-
-      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(reconciledHistory));
-      await restoreTodayTotal();
-    } catch (error) {
-      console.log('History restore error:', error);
-    }
-  }, [restoreTodayTotal]);
-
   const restoreTimerForUser = useCallback(async (userId: string) => {
     const timerState = await fetchTimerStateFromSupabase(userId);
     if (timerState) {
@@ -1623,7 +1564,6 @@ export default function JapamMain() {
 
       await loadJapamNameFromSupabase(userId);
       await restoreTodayTotal();
-      await restoreHistoryFromSupabase(userId);
       await restoreTimerForUser(userId);
       emitJapamAuthUpdated();
     } catch (error) {
@@ -1636,7 +1576,6 @@ export default function JapamMain() {
   }, [
     loadJapamNameFromSupabase,
     requestNotificationPermissionOnce,
-    restoreHistoryFromSupabase,
     restoreTimerForUser,
     restoreTodayTotal,
     restoreTotal,
@@ -1791,7 +1730,6 @@ export default function JapamMain() {
 
         await loadJapamNameFromSupabase(userId);
         await restoreTodayTotal();
-        await restoreHistoryFromSupabase(userId);
         await restoreTimerForUser(userId);
         emitJapamAuthUpdated();
       } catch (error) {
@@ -1809,7 +1747,6 @@ export default function JapamMain() {
     response,
     loadJapamNameFromSupabase,
     requestNotificationPermissionOnce,
-    restoreHistoryFromSupabase,
     restoreTimerForUser,
     restoreTodayTotal,
     restoreTotal,
@@ -1843,7 +1780,7 @@ export default function JapamMain() {
       if (activeWorkspaceIdRef.current !== persistenceWorkspaceId) return;
 
       if (savedUserId) {
-        await refreshDayStreak({ userId: savedUserId, todayTotal: persistenceTotal });
+        await refreshLocalHomeStats(savedUserId, persistenceWorkspaceId, currentJapamName);
         if (activeWorkspaceIdRef.current !== persistenceWorkspaceId) return;
 
         if (dbTotalSaveTimeoutRef.current) {
@@ -1861,7 +1798,7 @@ export default function JapamMain() {
         }, 2000);
       }
     })();
-  }, [count, malas, total, userName, hasRestoredTotal, refreshDayStreak]);
+  }, [count, malas, total, userName, hasRestoredTotal, refreshLocalHomeStats, currentJapamName]);
 
   useEffect(() => {
     if (!isRunning) {
