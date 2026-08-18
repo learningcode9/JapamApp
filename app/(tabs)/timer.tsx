@@ -4,7 +4,6 @@ import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import {
   dedupeByCompletionId,
   japamScopedStatsFor,
-  mergeHistories,
   toLocalDayKey,
 } from '../../lib/historyStore';
 import { activeJapams } from '../../lib/japams';
@@ -47,8 +46,8 @@ import {
   showGoogleAccountCollisionDialog,
 } from '../../lib/anonymousAuth';
 import { supabase } from '../../lib/supabase';
-import { fetchJapamHistoryRows } from '../../lib/supabaseRestHelper';
 import { claimAuthResponse, emitJapamAuthUpdated } from '../../lib/authEvents';
+import { hydrateHistoryForUserDetails } from '../../lib/historyRepository';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -137,6 +136,10 @@ export default function TimerScreen() {
   const router = useRouter();
   const timer = useTimer();
   const { currentJapam, japams, isLoading: isJapamContextLoading } = useCurrentJapam();
+  const currentJapamRef = useRef(currentJapam);
+  const japamsRef = useRef(japams);
+  currentJapamRef.current = currentJapam;
+  japamsRef.current = japams;
   const insets = useSafeAreaInsets();
   // Mirror the floating tab bar geometry from _layout.tsx exactly.
   // _layout.tsx uses screenWidth < 500 as its isMobile threshold (different from
@@ -165,6 +168,7 @@ export default function TimerScreen() {
   const [dayStreak, setDayStreak] = useState(0);
   const deferredInstallPromptRef = useRef<any>(null);
   const isIosDeviceWeb = isIOSDeviceWeb();
+  const historyHydrationAttemptedForUserRef = useRef<string | null>(null);
 
   const rawNonceRef = useRef<string>('');
   const isRestoringRef = useRef(false);
@@ -228,61 +232,52 @@ export default function TimerScreen() {
     emitJapamAuthUpdated();
   }, [guestNameInput]);
 
-  const loadStats = useCallback(async () => {
+  const loadStats = useCallback(async ({ allowHydration = false }: { allowHydration?: boolean } = {}) => {
     if (isRestoringRef.current) return;
     isRestoringRef.current = true;
     try {
-    const userId = await AsyncStorage.getItem(USER_ID_KEY);
-    const todayKey = getLocalDateKey();
-    const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
-    const localHistory = parseHistory(rawHistory);
-    let mergedHistory = localHistory;
-
-    // Option A: anonymous guest data syncs to Supabase immediately, same as a signed-in user —
-    // no anonymous-specific suppression here.
-    if (userId) {
+      const userId = await AsyncStorage.getItem(USER_ID_KEY);
+      const todayKey = getLocalDateKey();
+      const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
+      const localHistory = parseHistory(rawHistory);
+      let scopedLocalHistory = localHistory.filter((item) => {
+        if (!userId) return !item.userId;
+        return item.userId === userId;
+      });
+      if (!userId) {
+        historyHydrationAttemptedForUserRef.current = null;
+      } else if (
+        allowHydration &&
+        scopedLocalHistory.length === 0 &&
+        historyHydrationAttemptedForUserRef.current !== userId
+      ) {
+        historyHydrationAttemptedForUserRef.current = userId;
         try {
-          const remoteRows = await fetchJapamHistoryRows({
-            select: 'id,created_at,malas,count,user_name,completion_id,japam_id,japam_name',
-            userId,
-            order: { column: 'created_at', ascending: true },
-            limit: 10000,
-          });
-
-          if (remoteRows !== null) {
-            const remoteHistory: Session[] = remoteRows.map((row: any) => ({
-              date: row.created_at,
-              malas: Number(row.malas) || Math.floor((Number(row.count) || 0) / 108),
-              totalCount: Number(row.count) || (Number(row.malas) || 0) * 108,
-              duration: 0,
-              manual: false,
-              userId,
-              userName: row.user_name,
-              completionId: row.completion_id,
-              syncStatus: 'synced' as const,
-              japamId: row.japam_id ?? null,
-              japamName: row.japam_name ?? null,
-            }));
-            mergedHistory = mergeHistories(localHistory, remoteHistory);
-            const rawTombData = await AsyncStorage.getItem('deletedCompletions');
-            if (rawTombData) {
-              const tombIds = new Set<string>(JSON.parse(rawTombData) as string[]);
-              if (tombIds.size > 0) {
-                mergedHistory = mergedHistory.filter(
-                  (item) => !tombIds.has(item.completionId ?? '')
-                );
-              }
-            }
+          const hydration = await hydrateHistoryForUserDetails(userId, undefined, { localFirst: false });
+          if (!hydration.hydrationSucceeded) {
+            historyHydrationAttemptedForUserRef.current = null;
+          } else {
+            const hydratedRawHistory = await AsyncStorage.getItem(HISTORY_KEY);
+            const hydratedLocalHistory = parseHistory(hydratedRawHistory);
+            scopedLocalHistory = hydratedLocalHistory.filter((item) => item.userId === userId);
           }
         } catch {
-          console.log('[SYNC_FAILED] source=timer-stats-restore reason=network');
+          historyHydrationAttemptedForUserRef.current = null;
+          // Offline empty cache is a valid state; recovery paths can retry later.
+        }
+      }
+      const rawTombstoneData = await AsyncStorage.getItem('deletedCompletions');
+      let tombstoneIds = new Set<string>();
+      if (rawTombstoneData) {
+        try {
+          tombstoneIds = new Set(JSON.parse(rawTombstoneData) as string[]);
+        } catch {
+          // Ignore malformed local tombstone state and retain the cached history.
         }
       }
 
-    const history = dedupeHistoryForStats(mergedHistory).filter((item) => {
-      if (!userId) return !item.userId;
-      return item.userId === userId;
-    });
+      const history = dedupeHistoryForStats(scopedLocalHistory)
+        .filter((item) => !tombstoneIds.has(item.completionId ?? ''))
 
     // Scoped to the currently selected Japam only -- Home/Timer must never show a combined total
     // across every Japam (product requirement: Home/Timer/Tap Japam always reflect the selected
@@ -290,54 +285,63 @@ export default function TimerScreen() {
     // filterByJapam selector History uses (dedupe + strict japamId match + legacy null/name
     // fallback) so Timer and History can never disagree on which records belong to the selected
     // Japam -- including null-japamId legacy records that match the selected Japam's name.
-    const japamId = currentJapam?.id ?? null;
-    const includeBlankLegacy = japamId === activeJapams(japams)[0]?.id;
-    const scopedStats = japamScopedStatsFor(
-      history,
-      userId,
-      japamId,
-      currentJapam?.name ?? null,
-      todayKey,
-      toLocalDayKey,
-      getPreviousDateKey,
-      { includeBlankLegacy },
-      // Pass the live Japam list so legacy-name attribution is ambiguity-safe and identical to
-      // My Japams' statsByJapamWithAttribution (shared rule).
-      japams,
-    );
-    const safeTodayTotal = scopedStats.todayTotalCount;
-    const nextStreak = scopedStats.dayStreak;
+      const selectedJapam = currentJapamRef.current;
+      const availableJapams = japamsRef.current;
+      const japamId = selectedJapam?.id ?? null;
+      const includeBlankLegacy = japamId === activeJapams(availableJapams)[0]?.id;
+      const scopedStats = japamScopedStatsFor(
+        history,
+        userId,
+        japamId,
+        selectedJapam?.name ?? null,
+        todayKey,
+        toLocalDayKey,
+        getPreviousDateKey,
+        { includeBlankLegacy },
+        // Pass the live Japam list so legacy-name attribution is ambiguity-safe and identical to
+        // My Japams' statsByJapamWithAttribution (shared rule).
+        availableJapams,
+      );
+      const safeTodayTotal = scopedStats.todayTotalCount;
+      const nextStreak = scopedStats.dayStreak;
 
-    setTodayCount(safeTodayTotal);
-    setMalasToday(scopedStats.todayMalas);
-    setDayStreak(nextStreak);
-  } finally {
-    isRestoringRef.current = false;
-  }
-  }, [currentJapam, japams]);
+      setTodayCount(safeTodayTotal);
+      setMalasToday(scopedStats.todayMalas);
+      setDayStreak(nextStreak);
+    } finally {
+      isRestoringRef.current = false;
+    }
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
       void loadUser();
-      void loadStats();
+      void loadStats({ allowHydration: true });
     }, [loadStats, loadUser])
   );
 
   useEffect(() => {
     const refresh = () => void loadStats();
-    const refreshAuth = () => void loadUser();
-    const statsSub = DeviceEventEmitter.addListener('japam-stats-updated', refresh);
-    const historySub = DeviceEventEmitter.addListener('japam-history-updated', refresh);
-    const authSub = DeviceEventEmitter.addListener('japam-auth-updated', refreshAuth);
+    const refreshAuth = () => {
+      void loadUser();
+      void loadStats({ allowHydration: true });
+    };
+    let statsSub: { remove: () => void } | null = null;
+    let historySub: { remove: () => void } | null = null;
+    let authSub: { remove: () => void } | null = null;
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       window.addEventListener('japam-stats-updated', refresh);
       window.addEventListener('japam-history-updated', refresh);
       window.addEventListener('japam-auth-updated', refreshAuth);
+    } else {
+      statsSub = DeviceEventEmitter.addListener('japam-stats-updated', refresh);
+      historySub = DeviceEventEmitter.addListener('japam-history-updated', refresh);
+      authSub = DeviceEventEmitter.addListener('japam-auth-updated', refreshAuth);
     }
     return () => {
-      statsSub.remove();
-      historySub.remove();
-      authSub.remove();
+      statsSub?.remove();
+      historySub?.remove();
+      authSub?.remove();
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         window.removeEventListener('japam-stats-updated', refresh);
         window.removeEventListener('japam-history-updated', refresh);
@@ -381,7 +385,7 @@ export default function TimerScreen() {
     setShowUserModal(false);
     emitJapamAuthUpdated();
     DeviceEventEmitter.emit('japam-stats-updated');
-    void loadStats();
+    void loadStats({ allowHydration: true });
   }, [loadStats, migrateGuestHistoryToGoogle]);
 
   const handleNativeGoogleSignIn = useCallback(async () => {
@@ -586,7 +590,7 @@ export default function TimerScreen() {
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
           window.dispatchEvent(new Event('japam-stats-updated'));
         }
-        void loadStats();
+        void loadStats({ allowHydration: true });
       } catch (error) {
         console.log('Google login error:', error);
         setShowUserModal(true);
@@ -598,7 +602,7 @@ export default function TimerScreen() {
     };
 
     void handleGoogleLogin();
-  }, [loadStats, response]);
+  }, [loadStats, migrateGuestHistoryToGoogle, response]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
