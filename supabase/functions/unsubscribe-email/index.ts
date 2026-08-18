@@ -2,16 +2,29 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { verifyUnsubscribeToken } from '../_shared/email/unsubscribeToken.ts';
 import { markUserUnsubscribed } from '../_shared/email/dataAccess.ts';
 
+const PUBLIC_WEB_ORIGIN = Deno.env.get('PUBLIC_WEB_ORIGIN') ?? 'https://mantra-japam.vercel.app';
+const CORS_HEADERS = {
+  'access-control-allow-origin': PUBLIC_WEB_ORIGIN,
+  'access-control-allow-methods': 'GET, OPTIONS',
+};
+
 function htmlResponse(status: number, title: string, message: string): Response {
   return new Response(
     `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title></head>` +
       `<body style="font-family:Georgia,serif;max-width:600px;margin:64px auto;padding:0 24px;color:#2E3B36">` +
       `<h1>${title}</h1><p>${message}</p></body></html>`,
-    { status, headers: { 'content-type': 'text/html; charset=utf-8' } },
+    {
+      status,
+      headers: { 'content-type': 'text/html; charset=utf-8', ...CORS_HEADERS },
+    },
   );
 }
 
 Deno.serve(async request => {
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: CORS_HEADERS });
+  }
+
   if (request.method !== 'GET') {
     return htmlResponse(405, 'Method not allowed', 'Please use the unsubscribe link from your email.');
   }

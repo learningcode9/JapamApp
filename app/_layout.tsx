@@ -221,6 +221,7 @@ export default function RootLayout() {
     <View style={{ flex: 1, backgroundColor: '#edf7f4' }}>
       <PaperProvider>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+<<<<<<< HEAD
           {authReady ? <TimerProvider>
             <CurrentJapamProvider>
               <LegacyHistoryBackfillRunner />
@@ -228,6 +229,7 @@ export default function RootLayout() {
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                 <Stack.Screen name="privacy" options={{ headerShown: false }} />
                 <Stack.Screen name="delete-account" options={{ headerShown: false }} />
+                <Stack.Screen name="unsubscribe" options={{ headerShown: false }} />
                 <Stack.Screen name="my-japams" options={{ headerShown: false }} />
                 <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
               </Stack>
