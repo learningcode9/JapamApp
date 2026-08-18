@@ -4,7 +4,6 @@ import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import {
   dedupeByCompletionId,
   japamScopedStatsFor,
-  mergeHistories,
   toLocalDayKey,
 } from '../../lib/historyStore';
 import { activeJapams } from '../../lib/japams';
@@ -47,8 +46,8 @@ import {
   showGoogleAccountCollisionDialog,
 } from '../../lib/anonymousAuth';
 import { supabase } from '../../lib/supabase';
-import { fetchJapamHistoryRows } from '../../lib/supabaseRestHelper';
 import { claimAuthResponse, emitJapamAuthUpdated } from '../../lib/authEvents';
+import { hydrateHistoryForUserDetails } from '../../lib/historyRepository';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -165,6 +164,7 @@ export default function TimerScreen() {
   const [dayStreak, setDayStreak] = useState(0);
   const deferredInstallPromptRef = useRef<any>(null);
   const isIosDeviceWeb = isIOSDeviceWeb();
+  const historyHydrationAttemptedForUserRef = useRef<string | null>(null);
 
   const rawNonceRef = useRef<string>('');
   const isRestoringRef = useRef(false);
@@ -229,61 +229,53 @@ export default function TimerScreen() {
     emitJapamAuthUpdated();
   }, [guestNameInput]);
 
-  const loadStats = useCallback(async () => {
+  const loadStats = useCallback(async ({ allowHydration = false }: { allowHydration?: boolean } = {}) => {
     if (isRestoringRef.current) return;
     isRestoringRef.current = true;
     try {
-    const userId = await AsyncStorage.getItem(USER_ID_KEY);
-    const todayKey = getLocalDateKey();
-    const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
-    const localHistory = parseHistory(rawHistory);
-    let mergedHistory = localHistory;
-
-    // Option A: anonymous guest data syncs to Supabase immediately, same as a signed-in user —
-    // no anonymous-specific suppression here.
-    if (userId) {
+      const userId = await AsyncStorage.getItem(USER_ID_KEY);
+      const todayKey = getLocalDateKey();
+      const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
+      const localHistory = parseHistory(rawHistory);
+      let scopedLocalHistory = localHistory.filter((item) => {
+        if (!userId) return !item.userId;
+        return item.userId === userId;
+      });
+      if (!userId) {
+        historyHydrationAttemptedForUserRef.current = null;
+      } else if (
+        allowHydration
+        && scopedLocalHistory.length === 0
+        && historyHydrationAttemptedForUserRef.current !== userId
+      ) {
+        historyHydrationAttemptedForUserRef.current = userId;
         try {
-          const remoteRows = await fetchJapamHistoryRows({
-            select: 'id,created_at,malas,count,user_name,completion_id,japam_id,japam_name',
-            userId,
-            order: { column: 'created_at', ascending: true },
-            limit: 10000,
-          });
-
-          if (remoteRows !== null) {
-            const remoteHistory: Session[] = remoteRows.map((row: any) => ({
-              date: row.created_at,
-              malas: Number(row.malas) || Math.floor((Number(row.count) || 0) / 108),
-              totalCount: Number(row.count) || (Number(row.malas) || 0) * 108,
-              duration: 0,
-              manual: false,
-              userId,
-              userName: row.user_name,
-              completionId: row.completion_id,
-              syncStatus: 'synced' as const,
-              japamId: row.japam_id ?? null,
-              japamName: row.japam_name ?? null,
-            }));
-            mergedHistory = mergeHistories(localHistory, remoteHistory);
-            const rawTombData = await AsyncStorage.getItem('deletedCompletions');
-            if (rawTombData) {
-              const tombIds = new Set<string>(JSON.parse(rawTombData) as string[]);
-              if (tombIds.size > 0) {
-                mergedHistory = mergedHistory.filter(
-                  (item) => !tombIds.has(item.completionId ?? '')
-                );
-              }
-            }
+          const legacyUserId = (await AsyncStorage.getItem('legacyUserId')) || undefined;
+          const hydration = await hydrateHistoryForUserDetails(userId, legacyUserId, { localFirst: false });
+          if (hydration.hydrationSucceeded) {
+            scopedLocalHistory = hydration.records as Session[];
+          } else {
+            // Keep the failed attempt bounded to the explicit cold-start/auth recovery paths;
+            // ordinary stats/history events must stay local-only while offline.
+            historyHydrationAttemptedForUserRef.current = null;
           }
         } catch {
-          console.log('[SYNC_FAILED] source=timer-stats-restore reason=network');
+          historyHydrationAttemptedForUserRef.current = null;
         }
       }
 
-    const history = dedupeHistoryForStats(mergedHistory).filter((item) => {
-      if (!userId) return !item.userId;
-      return item.userId === userId;
-    });
+      const rawTombstoneData = await AsyncStorage.getItem('deletedCompletions');
+      let tombstoneIds = new Set<string>();
+      if (rawTombstoneData) {
+        try {
+          tombstoneIds = new Set(JSON.parse(rawTombstoneData) as string[]);
+        } catch {
+          // Ignore malformed local tombstone state and retain the cached history.
+        }
+      }
+
+      const history = dedupeHistoryForStats(scopedLocalHistory)
+        .filter((item) => !tombstoneIds.has(item.completionId ?? ''));
 
     // Scoped to the currently selected Japam only -- Home/Timer must never show a combined total
     // across every Japam (product requirement: Home/Timer/Tap Japam always reflect the selected
@@ -309,24 +301,27 @@ export default function TimerScreen() {
     const safeTodayTotal = scopedStats.todayTotalCount;
     const nextStreak = scopedStats.dayStreak;
 
-    setTodayCount(safeTodayTotal);
-    setMalasToday(scopedStats.todayMalas);
-    setDayStreak(nextStreak);
-  } finally {
-    isRestoringRef.current = false;
-  }
+      setTodayCount(safeTodayTotal);
+      setMalasToday(scopedStats.todayMalas);
+      setDayStreak(nextStreak);
+    } finally {
+      isRestoringRef.current = false;
+    }
   }, [currentJapam, japams]);
 
   useFocusEffect(
     useCallback(() => {
       void loadUser();
-      void loadStats();
+      void loadStats({ allowHydration: true });
     }, [loadStats, loadUser])
   );
 
   useEffect(() => {
     const refresh = () => void loadStats();
-    const refreshAuth = () => void loadUser();
+    const refreshAuth = () => {
+      void loadUser();
+      void loadStats({ allowHydration: true });
+    };
     const statsSub = DeviceEventEmitter.addListener('japam-stats-updated', refresh);
     const historySub = DeviceEventEmitter.addListener('japam-history-updated', refresh);
     const authSub = DeviceEventEmitter.addListener('japam-auth-updated', refreshAuth);
@@ -396,7 +391,7 @@ export default function TimerScreen() {
     setShowUserModal(false);
     emitJapamAuthUpdated();
     DeviceEventEmitter.emit('japam-stats-updated');
-    void loadStats();
+    void loadStats({ allowHydration: true });
   }, [loadStats, migrateGuestHistoryToGoogle]);
 
   const handleNativeGoogleSignIn = useCallback(async () => {
@@ -577,7 +572,7 @@ export default function TimerScreen() {
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
           window.dispatchEvent(new Event('japam-stats-updated'));
         }
-        void loadStats();
+        void loadStats({ allowHydration: true });
       } catch (error) {
         setShowUserModal(true);
         showGoogleSignInRequiredAlert();
