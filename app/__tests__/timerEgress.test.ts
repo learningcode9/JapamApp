@@ -203,7 +203,7 @@ describe('Timer local stats egress', () => {
     expect(mockHydrateHistoryForUserDetails).toHaveBeenCalledWith(
       'user-1',
       undefined,
-      { localFirst: true },
+      { localFirst: false },
     );
 
     const remoteRow = {
@@ -304,6 +304,67 @@ describe('Timer local stats egress', () => {
     }
 
     expect(mockHydrateHistoryForUserDetails).toHaveBeenCalledTimes(1);
+    expect(mockRemoteHistoryFetch).not.toHaveBeenCalled();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('retries cold-cache hydration from auth recovery after an offline failure', async () => {
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([]));
+    mockHydrateHistoryForUserDetails.mockRejectedValueOnce(new Error('offline'));
+    const TimerScreen = require('../(tabs)/timer').default;
+    let tree: any;
+
+    await act(async () => {
+      tree = renderer.create(React.createElement(TimerScreen));
+      await Promise.resolve();
+    });
+    await flush();
+    expect(mockHydrateHistoryForUserDetails).toHaveBeenCalledTimes(1);
+
+    const recoveredRow = {
+      date: new Date().toISOString(),
+      malas: 2,
+      totalCount: 216,
+      duration: 0,
+      userId: 'user-1',
+      completionId: 'recovered-completion',
+      syncStatus: 'synced',
+      japamId: 'japam-1',
+      japamName: 'Morning Japam',
+    };
+    mockHydrateHistoryForUserDetails.mockImplementationOnce(async () => {
+      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([recoveredRow]));
+      return {
+        records: [recoveredRow],
+        hydrationSucceeded: true,
+        localRecordCount: 1,
+        hadLocalTombstones: false,
+        scopedLocalTombstoneApplied: false,
+        localStateAuthoritativelyChanged: false,
+      };
+    });
+    await dispatchWebEvent('japam-auth-updated');
+    await flush();
+
+    expect(mockHydrateHistoryForUserDetails).toHaveBeenCalledTimes(2);
+    expect(mockHydrateHistoryForUserDetails).toHaveBeenLastCalledWith(
+      'user-1',
+      undefined,
+      { localFirst: false },
+    );
+    const malasLabel = tree.root.findAll((node: any) => node.props?.children === 'Malas Today')[0];
+    const countLabel = tree.root.findAll((node: any) => node.props?.children === 'Today Count')[0];
+    expect(malasLabel.parent.children[0].props.children).toBe(2);
+    expect(countLabel.parent.children[0].props.children).toBe(216);
+
+    for (let i = 0; i < 10; i += 1) {
+      await dispatchWebEvent('japam-stats-updated');
+      await dispatchWebEvent('japam-history-updated');
+    }
+    expect(mockHydrateHistoryForUserDetails).toHaveBeenCalledTimes(2);
     expect(mockRemoteHistoryFetch).not.toHaveBeenCalled();
 
     await act(async () => {
