@@ -39,6 +39,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase';
 import { fetchJapamHistoryRows } from '../../lib/supabaseRestHelper';
 import { runSharedLogoutFlow } from '../../lib/sharedLogout';
+import { waitForRecoveryToSettleBeforeInteractiveLogin } from '../../lib/sessionRecovery';
 import { claimAuthResponse, emitJapamAuthUpdated } from '../../lib/authEvents';
 
 import {
@@ -1424,6 +1425,7 @@ export default function JapamMain() {
       const { idToken } = userInfo.data;
       let supabaseUuid: string | undefined;
       if (idToken) {
+        await waitForRecoveryToSettleBeforeInteractiveLogin();
         const { data: authData, error: authError } = await supabase.auth.signInWithIdToken({ provider: 'google', token: idToken });
         if (authError) console.log('Supabase signInWithIdToken error:', authError.message);
         else supabaseUuid = authData?.user?.id;
@@ -1520,6 +1522,7 @@ export default function JapamMain() {
 
       try {
         if (idToken) {
+          await waitForRecoveryToSettleBeforeInteractiveLogin();
           console.log('[SUPABASE_AUTH] tap-japam nonce_prefix=%s', rawNonceRef.current.slice(0, 8));
           const { error: supaAuthError } = await supabase.auth.signInWithIdToken({
             provider: 'google',

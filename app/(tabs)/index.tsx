@@ -24,6 +24,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { openAndroidPlayStoreListing, shouldShowAndroidUpdateBanner } from '../../lib/androidUpdate';
 import { isIOSDeviceWeb, isStandaloneOrInstalledWeb } from '../../lib/pwaInstall';
 import { runSharedLogoutFlow } from '../../lib/sharedLogout';
+import { waitForRecoveryToSettleBeforeInteractiveLogin } from '../../lib/sessionRecovery';
 import { supabase } from '../../lib/supabase';
 import { fetchJapamHistoryRows } from '../../lib/supabaseRestHelper';
 import { activeJapams } from '../../lib/japams';
@@ -1588,6 +1589,7 @@ export default function JapamMain() {
       const { idToken } = userInfo.data;
       let supabaseUuid: string | undefined;
       if (idToken) {
+        await waitForRecoveryToSettleBeforeInteractiveLogin();
         const { data: authData, error: authError } = await supabase.auth.signInWithIdToken({ provider: 'google', token: idToken });
         if (authError) console.log('Supabase signInWithIdToken error:', authError.message);
         else supabaseUuid = authData?.user?.id;
@@ -1706,6 +1708,7 @@ export default function JapamMain() {
 
       try {
         if (idToken) {
+          await waitForRecoveryToSettleBeforeInteractiveLogin();
           console.log('[SUPABASE_AUTH] index nonce_prefix=%s', rawNonceRef.current.slice(0, 8));
           const { error: supaAuthError } = await supabase.auth.signInWithIdToken({
             provider: 'google',
