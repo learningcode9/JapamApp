@@ -7,10 +7,10 @@ function encodeBase64Url(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
-function decodeBase64Url(value: string): Uint8Array {
+function decodeBase64Url(value: string): ArrayBuffer {
   const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((value.length + 3) % 4);
   const binary = atob(padded);
-  return Uint8Array.from(binary, character => character.charCodeAt(0));
+  return Uint8Array.from(binary, character => character.charCodeAt(0)).buffer as ArrayBuffer;
 }
 
 async function importSigningKey(secret: string): Promise<CryptoKey> {

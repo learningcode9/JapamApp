@@ -33,6 +33,22 @@ const FAKE_CAMPAIGN: CampaignDefinition = {
 // the "too new" eligibility gate) is unaffected by its introduction.
 const LONG_ESTABLISHED_USER_ISO = '2020-01-01T00:00:00.000Z';
 
+const withUnsubscribeEnv = async (run: () => Promise<void>) => {
+  const originalUrl = process.env.EMAIL_UNSUBSCRIBE_URL;
+  const originalSecret = process.env.EMAIL_UNSUBSCRIBE_SECRET;
+  process.env.EMAIL_UNSUBSCRIBE_URL = 'http://127.0.0.1:54321/functions/v1/unsubscribe-email';
+  process.env.EMAIL_UNSUBSCRIBE_SECRET = 'test-unsubscribe-secret';
+
+  try {
+    await run();
+  } finally {
+    if (originalUrl === undefined) delete process.env.EMAIL_UNSUBSCRIBE_URL;
+    else process.env.EMAIL_UNSUBSCRIBE_URL = originalUrl;
+    if (originalSecret === undefined) delete process.env.EMAIL_UNSUBSCRIBE_SECRET;
+    else process.env.EMAIL_UNSUBSCRIBE_SECRET = originalSecret;
+  }
+};
+
 /**
  * Subclass that replaces all Supabase data-access methods with injectable
  * fakes — same pattern as SummaryEmailService's TestService.
@@ -147,14 +163,16 @@ describe('CampaignEmailService duplicate prevention', () => {
   });
 
   it('forceResend bypasses duplicate check', async () => {
-    const provider: EmailProvider = {
-      sendEmail: jest.fn().mockResolvedValue({ messageId: 'msg-1' }),
-    };
-    const service = new TestService([USER], [makeRow()], true, 42, provider);
+    await withUnsubscribeEnv(async () => {
+      const provider: EmailProvider = {
+        sendEmail: jest.fn().mockResolvedValue({ messageId: 'msg-1' }),
+      };
+      const service = new TestService([USER], [makeRow()], true, 42, provider);
 
-    const results = await service.run({ dryRun: false, forceResend: true });
+      const results = await service.run({ dryRun: false, forceResend: true });
 
-    expect(results[0].status).toBe('sent');
+      expect(results[0].status).toBe('sent');
+    });
   });
 });
 
@@ -162,12 +180,7 @@ describe('CampaignEmailService duplicate prevention', () => {
 
 describe('CampaignEmailService real sending', () => {
   it('passes a signed per-user unsubscribe URL to campaign builders', async () => {
-    const originalUrl = process.env.EMAIL_UNSUBSCRIBE_URL;
-    const originalSecret = process.env.EMAIL_UNSUBSCRIBE_SECRET;
-    process.env.EMAIL_UNSUBSCRIBE_URL = 'http://127.0.0.1:54321/functions/v1/unsubscribe-email';
-    process.env.EMAIL_UNSUBSCRIBE_SECRET = 'test-unsubscribe-secret';
-
-    try {
+    await withUnsubscribeEnv(async () => {
       const provider: EmailProvider = {
         sendEmail: jest.fn().mockResolvedValue({ messageId: 'msg-unsubscribe' }),
       };
@@ -183,6 +196,43 @@ describe('CampaignEmailService real sending', () => {
       const sent = (provider.sendEmail as jest.Mock).mock.calls[0][0] as { html: string };
       const url = new URL(sent.html);
       expect(await verifyUnsubscribeToken(url.searchParams.get('token')!, 'test-unsubscribe-secret')).toBe('u1');
+    });
+  });
+
+  it('passes lifetimeTotalMalas + stats into the campaign builders', async () => {
+    await withUnsubscribeEnv(async () => {
+      const provider: EmailProvider = {
+        sendEmail: jest.fn().mockResolvedValue({ messageId: 'msg-abc' }),
+      };
+      const service = new TestService([USER], [makeRow({ user_name: 'Devotee' })], false, 999, provider);
+
+      await service.run({ dryRun: false });
+
+      expect(provider.sendEmail).toHaveBeenCalledWith(
+        expect.objectContaining({
+          html: expect.stringContaining('999'),
+          text: expect.stringContaining('999'),
+          subject: 'Test Subject',
+        }),
+      );
+    });
+  });
+
+  it('fails closed instead of sending without a signed unsubscribe link', async () => {
+    const originalUrl = process.env.EMAIL_UNSUBSCRIBE_URL;
+    const originalSecret = process.env.EMAIL_UNSUBSCRIBE_SECRET;
+    delete process.env.EMAIL_UNSUBSCRIBE_URL;
+    delete process.env.EMAIL_UNSUBSCRIBE_SECRET;
+
+    try {
+      const provider: EmailProvider = { sendEmail: jest.fn() };
+      const service = new TestService([USER], [makeRow()], false, 42, provider);
+
+      const results = await service.run({ dryRun: false });
+
+      expect(results[0].status).toBe('failed');
+      expect(results[0].reason).toContain('signed unsubscribe link');
+      expect(provider.sendEmail).not.toHaveBeenCalled();
     } finally {
       if (originalUrl === undefined) delete process.env.EMAIL_UNSUBSCRIBE_URL;
       else process.env.EMAIL_UNSUBSCRIBE_URL = originalUrl;
@@ -191,46 +241,31 @@ describe('CampaignEmailService real sending', () => {
     }
   });
 
-  it('passes lifetimeTotalMalas + stats into the campaign builders', async () => {
-    const provider: EmailProvider = {
-      sendEmail: jest.fn().mockResolvedValue({ messageId: 'msg-abc' }),
-    };
-    const service = new TestService([USER], [makeRow({ user_name: 'Devotee' })], false, 999, provider);
-
-    await service.run({ dryRun: false });
-
-    expect(provider.sendEmail).toHaveBeenCalledWith(
-      expect.objectContaining({
-        html: expect.stringContaining('999'),
-        text: expect.stringContaining('999'),
-        subject: 'Test Subject',
-      }),
-    );
-  });
-
   it('records failed status when provider throws, and continues to next user', async () => {
-    const USER2: AuthUser = { id: 'u2', email: 'user2@example.com' };
-    let callCount = 0;
-    const provider: EmailProvider = {
-      sendEmail: jest.fn().mockImplementation(() => {
-        callCount++;
-        if (callCount === 1) return Promise.reject(new Error('first fails'));
-        return Promise.resolve({ messageId: 'msg-2' });
-      }),
-    };
+    await withUnsubscribeEnv(async () => {
+      const USER2: AuthUser = { id: 'u2', email: 'user2@example.com' };
+      let callCount = 0;
+      const provider: EmailProvider = {
+        sendEmail: jest.fn().mockImplementation(() => {
+          callCount++;
+          if (callCount === 1) return Promise.reject(new Error('first fails'));
+          return Promise.resolve({ messageId: 'msg-2' });
+        }),
+      };
 
-    class MultiUserService extends TestService {
-      protected override async getActiveUsers(): Promise<AuthUser[]> {
-        return [USER, USER2];
+      class MultiUserService extends TestService {
+        protected override async getActiveUsers(): Promise<AuthUser[]> {
+          return [USER, USER2];
+        }
       }
-    }
 
-    const service = new MultiUserService([USER, USER2], [makeRow()], false, 42, provider);
-    const results = await service.run({ dryRun: false });
+      const service = new MultiUserService([USER, USER2], [makeRow()], false, 42, provider);
+      const results = await service.run({ dryRun: false });
 
-    expect(results).toHaveLength(2);
-    expect(results[0].status).toBe('failed');
-    expect(results[1].status).toBe('sent');
+      expect(results).toHaveLength(2);
+      expect(results[0].status).toBe('failed');
+      expect(results[1].status).toBe('sent');
+    });
   });
 });
 

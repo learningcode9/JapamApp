@@ -25,6 +25,25 @@ export async function getUnsubscribedUserIds(supabase: SupabaseClient): Promise<
   return new Set((data ?? []).map(r => r.user_id as string));
 }
 
+export async function markUserUnsubscribed(
+  supabase: SupabaseClient,
+  userId: string,
+  unsubscribedAt = new Date().toISOString(),
+): Promise<void> {
+  const { error } = await supabase.from('user_email_preferences').upsert(
+    {
+      user_id: userId,
+      unsubscribed_at: unsubscribedAt,
+      reason: 'unsubscribe_link',
+    },
+    { onConflict: 'user_id' },
+  );
+
+  if (error) {
+    throw new Error(`markUserUnsubscribed: ${error.message}`);
+  }
+}
+
 export async function getActiveUsersInPeriod(
   supabase: SupabaseClient,
   periodStart: string,

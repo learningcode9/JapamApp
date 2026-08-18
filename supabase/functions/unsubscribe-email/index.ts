@@ -1,5 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { verifyUnsubscribeToken } from '../_shared/email/unsubscribeToken.ts';
+import { markUserUnsubscribed } from '../_shared/email/dataAccess.ts';
 
 function htmlResponse(status: number, title: string, message: string): Response {
   return new Response(
@@ -31,17 +32,13 @@ Deno.serve(async request => {
   const supabase = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
-  const { error } = await supabase.from('user_email_preferences').upsert(
-    {
-      user_id: userId,
-      unsubscribed_at: new Date().toISOString(),
-      reason: 'unsubscribe_link',
-    },
-    { onConflict: 'user_id' },
-  );
-
-  if (error) {
-    console.error('unsubscribe-email: preference update failed', error.message);
+  try {
+    await markUserUnsubscribed(supabase, userId);
+  } catch (error) {
+    console.error(
+      'unsubscribe-email: preference update failed',
+      error instanceof Error ? error.message : String(error),
+    );
     return htmlResponse(500, 'Unable to update preferences', 'Please try again later.');
   }
 

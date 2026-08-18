@@ -1,4 +1,9 @@
-import { isDuplicateSummary, getUnsubscribedUserIds, getActiveUsersInPeriod } from '../email/dataAccess';
+import {
+  isDuplicateSummary,
+  getUnsubscribedUserIds,
+  getActiveUsersInPeriod,
+  markUserUnsubscribed,
+} from '../email/dataAccess';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
@@ -107,6 +112,24 @@ describe('getUnsubscribedUserIds', () => {
     expect(result.has('u2')).toBe(true);
     expect(result.has('u3')).toBe(true);
     expect(result.has('u1')).toBe(false);
+  });
+});
+
+describe('markUserUnsubscribed', () => {
+  it('upserts the user opt-out timestamp used by the next campaign run', async () => {
+    const upsert = jest.fn().mockResolvedValue({ error: null });
+    const supabase = { from: jest.fn(() => ({ upsert })) } as unknown as SupabaseClient;
+
+    await markUserUnsubscribed(supabase, 'u2', '2026-08-18T12:00:00.000Z');
+
+    expect(upsert).toHaveBeenCalledWith(
+      {
+        user_id: 'u2',
+        unsubscribed_at: '2026-08-18T12:00:00.000Z',
+        reason: 'unsubscribe_link',
+      },
+      { onConflict: 'user_id' },
+    );
   });
 });
 

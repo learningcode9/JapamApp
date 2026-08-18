@@ -159,17 +159,20 @@ export class CampaignEmailService {
         throw new Error('emailProvider is null — pass dryRun:true or provide a provider');
       }
 
-      const campaignConfig =
-        this.config.unsubscribeUrl && this.config.unsubscribeSecret
-          ? {
-              ...this.config,
-              unsubscribeUrl: await buildUnsubscribeUrl(
-                this.config.unsubscribeUrl,
-                user.id,
-                this.config.unsubscribeSecret,
-              ),
-            }
-          : this.config;
+      if (!this.config.unsubscribeUrl || !this.config.unsubscribeSecret) {
+        throw new Error(
+          'a signed unsubscribe link requires unsubscribeUrl and unsubscribeSecret for a real campaign send',
+        );
+      }
+
+      const campaignConfig = {
+        ...this.config,
+        unsubscribeUrl: await buildUnsubscribeUrl(
+          this.config.unsubscribeUrl,
+          user.id,
+          this.config.unsubscribeSecret,
+        ),
+      };
       const ctx = { stats, lifetimeTotalMalas, config: campaignConfig };
 
       // Mark pending before attempting send to prevent races.
