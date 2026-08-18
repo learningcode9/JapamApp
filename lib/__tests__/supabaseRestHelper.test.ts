@@ -24,6 +24,7 @@ function mockQueryChain(result: { data: unknown[] | null; error: { message: stri
     select: jest.fn().mockReturnThis(),
     eq: jest.fn().mockReturnThis(),
     order: jest.fn().mockReturnThis(),
+    or: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
     then: jest.fn((resolve: (v: unknown) => void) => resolve(result)),
   };
@@ -128,6 +129,28 @@ describe('query construction', () => {
 
     await fetchJapamHistoryRows({ select: '*', userId: 'u1' });
     expect(chain.limit).not.toHaveBeenCalled();
+  });
+
+  it('builds the deterministic secondary order and keyset cursor without offset pagination', async () => {
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: 'tok' } } });
+    const chain = mockQueryChain({ data: [], error: null });
+    mockFrom.mockReturnValue(chain);
+
+    await fetchJapamHistoryRows({
+      select: 'id,created_at,completion_id',
+      userId: 'u1',
+      order: { column: 'created_at', ascending: false },
+      secondaryOrder: { column: 'completion_id', ascending: false },
+      before: { createdAt: '2026-07-20T09:00:00.000Z', completionId: 'u1:100' },
+      limit: 50,
+    });
+
+    expect(chain.order).toHaveBeenNthCalledWith(1, 'created_at', { ascending: false });
+    expect(chain.order).toHaveBeenNthCalledWith(2, 'completion_id', { ascending: false });
+    expect(chain.or).toHaveBeenCalledWith(
+      'created_at.lt.2026-07-20T09:00:00.000Z,and(created_at.eq.2026-07-20T09:00:00.000Z,completion_id.lt.u1:100)',
+    );
+    expect(chain.limit).toHaveBeenCalledWith(50);
   });
 });
 

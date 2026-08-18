@@ -140,15 +140,22 @@ jest.mock('../../lib/supabase', () => ({
         },
       })),
     },
-    from: jest.fn(() => ({
-      select: jest.fn(() => ({
-        eq: jest.fn(() => ({
-          order: jest.fn(() => ({
-            limit: jest.fn(() => mockRemoteFetch()),
+    from: jest.fn((table: string) => {
+      if (table === 'deleted_completions') {
+        return {
+          select: jest.fn(() => ({
+            eq: jest.fn(async () => ({ data: [], error: null })),
           })),
-        })),
-      })),
-    })),
+        };
+      }
+      const query: Record<string, jest.Mock> = {};
+      query.select = jest.fn(() => query);
+      query.eq = jest.fn(() => query);
+      query.order = jest.fn(() => query);
+      query.or = jest.fn(() => query);
+      query.limit = jest.fn(() => mockRemoteFetch());
+      return query;
+    }),
   },
 }));
 
@@ -159,6 +166,7 @@ const { act } = renderer;
 import { DeviceEventEmitter } from 'react-native';
 import HistoryScreen from '../(tabs)/history';
 import { repairLegacyStoredUserId } from '../../lib/anonymousAuth';
+import * as historyRepository from '../../lib/historyRepository';
 import { loadLifetimeStats } from '../../lib/historyRepository';
 import { resetFetchCoalesceCache } from '../../lib/supabaseRestHelper';
 
@@ -381,6 +389,38 @@ afterEach(() => {
 });
 
 describe('HistoryScreen auth/current-Japam hydration regression', () => {
+  it('loads older pages from a web scroll event when contentSize is not included', async () => {
+    const loadMore = jest.spyOn(historyRepository, 'loadMoreHistoryForUser').mockResolvedValue({
+      records: [],
+      hasMoreRemote: false,
+      pageLoaded: true,
+    });
+    let tree: any;
+
+    try {
+      tree = await renderScreen();
+      const scrollView = tree.root.find((node: any) => node.type === 'ScrollView');
+
+      await act(async () => {
+        scrollView.props.onContentSizeChange?.(390, 2000);
+        scrollView.props.onScroll({
+          nativeEvent: {
+            layoutMeasurement: { height: 600 },
+            contentOffset: { y: 1400 },
+          },
+        });
+        await Promise.resolve();
+      });
+
+      expect(loadMore).toHaveBeenCalledWith(UID, null, { pageSize: 50 });
+    } finally {
+      await act(async () => {
+        tree?.unmount();
+      });
+      loadMore.mockRestore();
+    }
+  });
+
   it('hydrates after auth and current-Japam restore, clears on logout, survives refresh, preserves dedupe, and matches selector totals', async () => {
     mockCurrentJapamState = buildCurrentJapamState({
       currentJapam: null,

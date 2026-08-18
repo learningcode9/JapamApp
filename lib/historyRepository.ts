@@ -57,7 +57,35 @@ const DELETED_COMPLETIONS_KEY = 'deletedCompletions';
 type RemoteHydrationSnapshot = {
   history: HistoryRecord[];
   tombstones: string[];
+  pagination?: RemoteHistoryPagination;
 };
+
+type RemoteHistoryCursor = {
+  createdAt: string;
+  completionId: string;
+};
+
+type RemoteHistoryPage = {
+  records: HistoryRecord[];
+  cursor: RemoteHistoryCursor | null;
+  exhausted: boolean;
+};
+
+type RemoteHistoryPageSource = {
+  userId: string;
+  cursor: RemoteHistoryCursor | null;
+  exhausted: boolean;
+  buffered: HistoryRecord[];
+};
+
+type RemoteHistoryPagination = {
+  pageSize: number;
+  sourcePageSize: number;
+  sources: RemoteHistoryPageSource[];
+};
+
+const paginationHasMore = (pagination?: RemoteHistoryPagination): boolean =>
+  Boolean(pagination?.sources.some((source) => !source.exhausted || source.buffered.length > 0));
 
 type RemoteHydrationApplyResult = {
   records: HistoryRecord[];
@@ -73,16 +101,33 @@ export type HydratedHistoryResult = {
   hadLocalTombstones: boolean;
   scopedLocalTombstoneApplied: boolean;
   localStateAuthoritativelyChanged: boolean;
+  hasMoreRemote: boolean;
 };
+
+export type HistoryPageResult = {
+  records: HistoryRecord[];
+  hasMoreRemote: boolean;
+  pageLoaded: boolean;
+};
+
+export type HistoryDrainResult = {
+  records: HistoryRecord[];
+  complete: boolean;
+  remoteUnavailable: boolean;
+};
+
+const DEFAULT_REMOTE_HISTORY_PAGE_SIZE = 50;
 
 const hydratedHistoryInFlight = new Map<string, Promise<RemoteHydrationSnapshot | null>>();
 const hydratedRemoteSnapshotCache = new Map<string, RemoteHydrationSnapshot>();
 const hydratedScopedLocalBaselineCache = new Map<string, string>();
+const historyPageInFlight = new Map<string, Promise<HistoryPageResult>>();
 
 export const __resetHistoryHydrationState = () => {
   hydratedHistoryInFlight.clear();
   hydratedRemoteSnapshotCache.clear();
   hydratedScopedLocalBaselineCache.clear();
+  historyPageInFlight.clear();
 };
 
 const getLocalDateKey = (date = new Date()) => {
@@ -122,7 +167,11 @@ const loadDeletedCompletionTombstones = async (): Promise<string[]> => {
   }
 };
 
-const getHydrationCacheKey = (userId: string, legacyUserId?: string | null) => `${userId}|${legacyUserId ?? ''}`;
+const getHydrationCacheKey = (
+  userId: string,
+  legacyUserId?: string | null,
+  remotePageSize?: number,
+) => `${userId}|${legacyUserId ?? ''}|${remotePageSize ? `page:${remotePageSize}` : 'full'}`;
 
 const canonicalizeUserHistory = (records: HistoryRecord[], userId: string): HistoryRecord[] =>
   records.map((record) => ({ ...record, userId }));
@@ -168,30 +217,77 @@ const replaceScopedHistory = (
   return result;
 };
 
-const fetchRemoteHistoryForUser = async (
+const fetchRemoteHistoryPage = async (
   userId: string,
-  legacyUserId?: string | null,
-): Promise<HistoryRecord[] | null> => {
+  limit?: number,
+  cursor: RemoteHistoryCursor | null = null,
+): Promise<RemoteHistoryPage | null> => {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { fetchJapamHistoryRows } = require('./supabaseRestHelper') as typeof import('./supabaseRestHelper');
     const select = 'id,created_at,malas,count,user_name,completion_id,japam_id,japam_name';
-    const order = { column: 'created_at', ascending: true } as const;
-    const primary = await fetchJapamHistoryRows({ select, userId, order });
-    if (primary === null) return null;
-    const primaryRecords = (primary as RemoteLegacyHistoryRow[]).map((row) => remoteRowToHistoryRecord(row, userId));
-    if (!legacyUserId || legacyUserId === userId) {
-      return primaryRecords;
-    }
-    const legacyRows = await fetchJapamHistoryRows({ select, userId: legacyUserId, order });
-    if (legacyRows === null) return null;
-    return [
-      ...primaryRecords,
-      ...(legacyRows as RemoteLegacyHistoryRow[]).map((row) => remoteRowToHistoryRecord(row, userId)),
-    ];
+    const rows = await fetchJapamHistoryRows({
+      select,
+      userId,
+      order: { column: 'created_at', ascending: false },
+      secondaryOrder: { column: 'completion_id', ascending: false },
+      before: cursor ?? undefined,
+      ...(limit ? { limit } : {}),
+    });
+    if (rows === null) return null;
+    const typedRows = rows as RemoteLegacyHistoryRow[];
+    const records = typedRows.map((row) => remoteRowToHistoryRecord(row, userId));
+    const lastRow = typedRows[typedRows.length - 1];
+    const lastRecord = records[records.length - 1];
+    const nextCursor = lastRow && lastRecord
+      ? { createdAt: lastRow.created_at || lastRecord.date, completionId: lastRow.completion_id || lastRecord.completionId }
+      : null;
+    return {
+      records,
+      cursor: nextCursor,
+      exhausted: limit === undefined ? true : typedRows.length < limit,
+    };
   } catch {
     return null;
   }
+};
+
+const fetchRemoteHistoryForUser = async (
+  userId: string,
+  legacyUserId?: string | null,
+  pageSize?: number,
+): Promise<{ history: HistoryRecord[]; pagination?: RemoteHistoryPagination } | null> => {
+  const sourceUserIds = [userId, ...(legacyUserId && legacyUserId !== userId ? [legacyUserId] : [])];
+  if (pageSize) {
+    // A global top page cannot be proven from split per-identity quotas. Fetching one bounded
+    // page from each stream is the minimum safe request shape, then keep the unconsumed rows as
+    // buffers behind each stream's independent cursor for the next visible page.
+    const sourcePageSize = pageSize;
+    const pages = await Promise.all(
+      sourceUserIds.map((sourceUserId) => fetchRemoteHistoryPage(sourceUserId, sourcePageSize)),
+    );
+    if (pages.some((page) => page === null)) return null;
+    const resolvedPages = pages as RemoteHistoryPage[];
+    const firstPage = mergeHistories([], resolvedPages.flatMap((page) => page.records)).slice(0, pageSize);
+    const consumedIds = new Set(firstPage.map((record) => record.completionId));
+    return {
+      history: firstPage,
+      pagination: {
+        pageSize,
+        sourcePageSize,
+        sources: sourceUserIds.map((sourceUserId, index) => ({
+          userId: sourceUserId,
+          cursor: resolvedPages[index].cursor,
+          exhausted: resolvedPages[index].exhausted,
+          buffered: resolvedPages[index].records.filter((record) => !consumedIds.has(record.completionId)),
+        })),
+      },
+    };
+  }
+
+  const pages = await Promise.all(sourceUserIds.map((sourceUserId) => fetchRemoteHistoryPage(sourceUserId)));
+  if (pages.some((page) => page === null)) return null;
+  return { history: (pages as RemoteHistoryPage[]).flatMap((page) => page.records) };
 };
 
 const fetchRemoteDeletedCompletions = async (
@@ -211,7 +307,7 @@ const fetchRemoteDeletedCompletions = async (
         .eq('user_id', uid);
 
       if (error || !data) return null;
-      return (data as Array<{ completion_id?: unknown }>)
+      return (data as { completion_id?: unknown }[])
         .map((row) => String(row.completion_id))
         .filter((id) => id.length > 0);
     };
@@ -233,8 +329,10 @@ const fetchRemoteHydrationSnapshot = async (
   userId: string,
   legacyUserId?: string | null,
   force = false,
+  remotePageSize?: number,
 ): Promise<RemoteHydrationSnapshot | null> => {
-  const cacheKey = getHydrationCacheKey(userId, legacyUserId);
+  const cacheKey = getHydrationCacheKey(userId, legacyUserId, remotePageSize);
+  if (force) hydratedRemoteSnapshotCache.delete(cacheKey);
   if (!force) {
     const cached = hydratedRemoteSnapshotCache.get(cacheKey);
     if (cached) return cached;
@@ -244,11 +342,15 @@ const fetchRemoteHydrationSnapshot = async (
   if (existing) return existing;
 
   const task = (async () => {
-    const remoteHistory = await fetchRemoteHistoryForUser(userId, legacyUserId);
+    const remoteHistory = await fetchRemoteHistoryForUser(userId, legacyUserId, remotePageSize);
     const remoteTombstones = await fetchRemoteDeletedCompletions(userId, legacyUserId);
     if (remoteHistory === null || remoteTombstones === null) return null;
 
-    const snapshot = { history: remoteHistory, tombstones: remoteTombstones };
+    const snapshot = {
+      history: remoteHistory.history,
+      tombstones: remoteTombstones,
+      pagination: remoteHistory.pagination,
+    };
     hydratedRemoteSnapshotCache.set(cacheKey, snapshot);
     return snapshot;
   })();
@@ -264,6 +366,7 @@ const fetchRemoteHydrationSnapshot = async (
 const resolveLocalHydration = async (
   userId: string,
   legacyUserId: string | null | undefined,
+  remotePageSize?: number,
 ): Promise<{
   allLocalHistory: HistoryRecord[];
   localTombstones: string[];
@@ -283,7 +386,7 @@ const resolveLocalHydration = async (
   const scopedLocalTombstones = localTombstones.filter((id) => scopedCompletionIds.has(id));
   const localScoped = applyTombstones(localScopedRaw, scopedLocalTombstones);
   const scopedLocalTombstoneApplied = scopedLocalTombstones.length > 0;
-  const cacheKey = getHydrationCacheKey(userId, legacyUserId);
+  const cacheKey = getHydrationCacheKey(userId, legacyUserId, remotePageSize);
   const localScopedRecords = canonicalizeUserHistory(dedupeByCompletionId(localScoped), userId);
   const currentScopedSignature = scopedHistorySignature(localScopedRecords, scopedLocalTombstoneApplied);
   const previousScopedSignature = hydratedScopedLocalBaselineCache.get(cacheKey);
@@ -367,26 +470,25 @@ const emitHistoryUpdated = () => {
 const hydrateHistoryForUserDetailsLocalFirst = async (
   userId: string,
   legacyUserId?: string | null,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; remotePageSize?: number } = {},
 ): Promise<HydratedHistoryResult> => {
-  const local = await resolveLocalHydration(userId, legacyUserId);
+  const local = await resolveLocalHydration(userId, legacyUserId, options.remotePageSize);
   const { localTombstones, localScopedRecords, scopedLocalTombstoneApplied, localStateAuthoritativelyChanged } = local;
 
   const continueInBackground = async () => {
     try {
-      const remoteSnapshot = await fetchRemoteHydrationSnapshot(userId, legacyUserId, options.force);
+      const remoteSnapshot = await fetchRemoteHydrationSnapshot(
+        userId,
+        legacyUserId,
+        options.force,
+        options.remotePageSize,
+      );
       // Re-read immediately after the remote await so newer offline writes/deletions are merged
       // into the current cache instead of being overwritten by the startup snapshot.
-      const latestLocal = await resolveLocalHydration(userId, legacyUserId);
+      const latestLocal = await resolveLocalHydration(userId, legacyUserId, options.remotePageSize);
       if (remoteSnapshot === null) {
-        const mergedLocal = replaceScopedHistory(
-          latestLocal.allLocalHistory,
-          latestLocal.localScopedRecords,
-          (record) => record.userId === userId || (legacyUserId != null && record.userId === legacyUserId),
-        );
-        if (JSON.stringify(mergedLocal) !== JSON.stringify(latestLocal.allLocalHistory)) {
-          await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedLocal));
-        }
+        // A remote outage must not rewrite, delete, or canonicalize the local cache. Local
+        // history remains available to the screen and export exactly as it was stored.
         return;
       }
       const applied = await applyRemoteHydration(
@@ -407,6 +509,10 @@ const hydrateHistoryForUserDetailsLocalFirst = async (
 
   void continueInBackground();
 
+  const cachedPageSnapshot = !options.force && options.remotePageSize
+    ? hydratedRemoteSnapshotCache.get(getHydrationCacheKey(userId, legacyUserId, options.remotePageSize))
+    : undefined;
+
   return {
     records: localScopedRecords,
     hydrationSucceeded: false,
@@ -414,13 +520,16 @@ const hydrateHistoryForUserDetailsLocalFirst = async (
     hadLocalTombstones: localTombstones.length > 0,
     scopedLocalTombstoneApplied,
     localStateAuthoritativelyChanged,
+    hasMoreRemote: cachedPageSnapshot?.pagination
+      ? paginationHasMore(cachedPageSnapshot.pagination)
+      : Boolean(options.remotePageSize),
   };
 };
 
 export const hydrateHistoryForUserDetails = async (
   userId: string | null | undefined,
   legacyUserId?: string | null,
-  options: { force?: boolean; localFirst?: boolean } = {},
+  options: { force?: boolean; localFirst?: boolean; remotePageSize?: number } = {},
 ): Promise<HydratedHistoryResult> => {
   if (options.localFirst && userId) {
     return hydrateHistoryForUserDetailsLocalFirst(userId, legacyUserId, options);
@@ -435,23 +544,21 @@ export const hydrateHistoryForUserDetails = async (
       hadLocalTombstones: false,
       scopedLocalTombstoneApplied: false,
       localStateAuthoritativelyChanged: false,
+      hasMoreRemote: false,
     };
   }
 
-  const local = await resolveLocalHydration(userId, legacyUserId);
+  const local = await resolveLocalHydration(userId, legacyUserId, options.remotePageSize);
   const { allLocalHistory, localTombstones, localScopedRecords, scopedLocalTombstoneApplied, localStateAuthoritativelyChanged } = local;
-  const remoteSnapshot = await fetchRemoteHydrationSnapshot(userId, legacyUserId, options.force);
+  const remoteSnapshot = await fetchRemoteHydrationSnapshot(
+    userId,
+    legacyUserId,
+    options.force,
+    options.remotePageSize,
+  );
 
   if (remoteSnapshot === null) {
     const scopedRecords = localScopedRecords;
-    const mergedLocal = replaceScopedHistory(
-      allLocalHistory,
-      scopedRecords,
-      (record) => record.userId === userId || (legacyUserId != null && record.userId === legacyUserId),
-    );
-    if (JSON.stringify(mergedLocal) !== JSON.stringify(allLocalHistory)) {
-      await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(mergedLocal));
-    }
     return {
       records: scopedRecords,
       hydrationSucceeded: false,
@@ -459,6 +566,7 @@ export const hydrateHistoryForUserDetails = async (
       hadLocalTombstones: localTombstones.length > 0,
       scopedLocalTombstoneApplied,
       localStateAuthoritativelyChanged,
+      hasMoreRemote: false,
     };
   }
 
@@ -478,16 +586,163 @@ export const hydrateHistoryForUserDetails = async (
     hadLocalTombstones: merged.hadLocalTombstones,
     scopedLocalTombstoneApplied,
     localStateAuthoritativelyChanged,
+    hasMoreRemote: paginationHasMore(remoteSnapshot.pagination),
   };
 };
 
 export const hydrateHistoryForUser = async (
   userId: string | null | undefined,
   legacyUserId?: string | null,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; remotePageSize?: number } = {},
 ): Promise<HistoryRecord[]> => {
   const hydrated = await hydrateHistoryForUserDetails(userId, legacyUserId, options);
   return hydrated.records;
+};
+
+/**
+ * Fetch one older remote page for History and merge it into the local cache. Each identity has
+ * its own cursor, so canonical and legacy rows cannot skip one another at a same-timestamp
+ * boundary. A page is additive only: a partial response is never treated as a full snapshot.
+ */
+export const loadMoreHistoryForUser = async (
+  userId: string | null | undefined,
+  legacyUserId?: string | null,
+  options: { pageSize?: number } = {},
+): Promise<HistoryPageResult> => {
+  if (!userId) {
+    const records = await loadHistoryForUser(userId);
+    return { records, hasMoreRemote: false, pageLoaded: false };
+  }
+
+  const pageSize = options.pageSize || DEFAULT_REMOTE_HISTORY_PAGE_SIZE;
+  const cacheKey = getHydrationCacheKey(userId, legacyUserId, pageSize);
+  const existing = historyPageInFlight.get(cacheKey);
+  if (existing) return existing;
+
+  const task = (async (): Promise<HistoryPageResult> => {
+    // If the initial local-first fetch is still running, this awaits it rather than starting a
+    // second stream with a missing cursor.
+    const snapshot = hydratedRemoteSnapshotCache.get(cacheKey)
+      ?? await fetchRemoteHydrationSnapshot(userId, legacyUserId, false, pageSize);
+    if (!snapshot?.pagination) {
+      return {
+        records: await loadHistoryForUser(userId),
+        hasMoreRemote: false,
+        pageLoaded: false,
+      };
+    }
+
+    const activeSources = snapshot.pagination.sources.filter((source) => !source.exhausted);
+    const buffered = mergeHistories([], snapshot.pagination.sources.flatMap((source) => source.buffered));
+    if (activeSources.length === 0 && buffered.length === 0) {
+      return {
+        records: await loadHistoryForUser(userId),
+        hasMoreRemote: false,
+        pageLoaded: false,
+      };
+    }
+
+    let nextSources = snapshot.pagination.sources;
+    let available = buffered;
+    const sourcesNeedingHeadCoverage = activeSources.filter((source) => (
+      available.length < pageSize || source.buffered.length < pageSize
+    ));
+    if (sourcesNeedingHeadCoverage.length > 0) {
+      const pages = await Promise.all(
+        sourcesNeedingHeadCoverage.map((source) => fetchRemoteHistoryPage(
+          source.userId,
+          snapshot.pagination?.sourcePageSize ?? pageSize,
+          source.cursor,
+        )),
+      );
+      // A failed/interrupted page does not touch either AsyncStorage key or the in-memory snapshot.
+      if (pages.some((page) => page === null)) {
+        const local = await resolveLocalHydration(userId, legacyUserId, pageSize);
+        return { records: local.localScopedRecords, hasMoreRemote: true, pageLoaded: false };
+      }
+
+      const resolvedPages = pages as RemoteHistoryPage[];
+      let pageIndex = 0;
+      nextSources = snapshot.pagination.sources.map((source) => {
+        if (!sourcesNeedingHeadCoverage.includes(source)) return source;
+        const page = resolvedPages[pageIndex++];
+        return {
+          ...source,
+          cursor: page.cursor,
+          exhausted: page.exhausted,
+          buffered: [...source.buffered, ...page.records],
+        };
+      });
+      available = mergeHistories([], nextSources.flatMap((source) => source.buffered));
+    }
+
+    const nextPage = available.slice(0, pageSize);
+    const consumedIds = new Set(nextPage.map((record) => record.completionId));
+    nextSources = nextSources.map((source) => ({
+      ...source,
+      buffered: source.buffered.filter((record) => !consumedIds.has(record.completionId)),
+    }));
+    const nextSnapshot: RemoteHydrationSnapshot = {
+      history: mergeHistories([], [...snapshot.history, ...nextPage]),
+      tombstones: snapshot.tombstones,
+      pagination: { ...snapshot.pagination, sources: nextSources },
+    };
+    hydratedRemoteSnapshotCache.set(cacheKey, nextSnapshot);
+
+    const latestLocal = await resolveLocalHydration(userId, legacyUserId, pageSize);
+    const applied = await applyRemoteHydration(
+      userId,
+      legacyUserId,
+      latestLocal,
+      nextSnapshot,
+      latestLocal.allLocalHistory,
+      latestLocal.localTombstones,
+    );
+    if (applied.historyChanged || applied.tombstonesChanged) emitHistoryUpdated();
+
+    return {
+      records: applied.records,
+      hasMoreRemote: nextSources.some((source) => !source.exhausted || source.buffered.length > 0),
+      pageLoaded: nextPage.length > 0,
+    };
+  })();
+
+  historyPageInFlight.set(cacheKey, task);
+  try {
+    return await task;
+  } finally {
+    historyPageInFlight.delete(cacheKey);
+  }
+};
+
+/** Drain the paginated History stream for complete export/full-record operations only. */
+export const drainHistoryForUser = async (
+  userId: string | null | undefined,
+  legacyUserId?: string | null,
+  options: { pageSize?: number } = {},
+): Promise<HistoryDrainResult> => {
+  if (!userId) return { records: await loadHistoryForUser(userId), complete: true, remoteUnavailable: false };
+
+  const pageSize = options.pageSize || DEFAULT_REMOTE_HISTORY_PAGE_SIZE;
+  const initial = await hydrateHistoryForUserDetails(userId, legacyUserId, { remotePageSize: pageSize });
+  if (!initial.hydrationSucceeded) {
+    // Export historically used the scoped AsyncStorage cache. A remote outage must not turn that
+    // offline export into an error, but one cached page is not proof of remote completeness.
+    const local = await resolveLocalHydration(userId, legacyUserId, pageSize);
+    return { records: local.localScopedRecords, complete: false, remoteUnavailable: true };
+  }
+  let hasMoreRemote = initial.hasMoreRemote;
+  let complete: boolean = initial.hydrationSucceeded;
+  while (hasMoreRemote) {
+    const page = await loadMoreHistoryForUser(userId, legacyUserId, { pageSize });
+    if (!page.pageLoaded) {
+      complete = false;
+      break;
+    }
+    hasMoreRemote = page.hasMoreRemote;
+  }
+  const local = await resolveLocalHydration(userId, legacyUserId, pageSize);
+  return { records: local.localScopedRecords, complete: complete && !hasMoreRemote, remoteUnavailable: false };
 };
 
 /**
