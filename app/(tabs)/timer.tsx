@@ -321,6 +321,11 @@ export default function TimerScreen() {
   );
 
   useEffect(() => {
+    if (isJapamContextLoading || !currentJapam?.id) return;
+    void loadStats();
+  }, [currentJapam?.id, isJapamContextLoading, loadStats]);
+
+  useEffect(() => {
     const refresh = () => void loadStats();
     const refreshAuth = () => {
       void loadUser();
