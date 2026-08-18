@@ -47,6 +47,7 @@ import {
 } from '../../lib/anonymousAuth';
 import { supabase } from '../../lib/supabase';
 import { claimAuthResponse, emitJapamAuthUpdated } from '../../lib/authEvents';
+import { hydrateHistoryForUserDetails } from '../../lib/historyRepository';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -163,6 +164,7 @@ export default function TimerScreen() {
   const [dayStreak, setDayStreak] = useState(0);
   const deferredInstallPromptRef = useRef<any>(null);
   const isIosDeviceWeb = isIOSDeviceWeb();
+  const historyHydrationAttemptedForUserRef = useRef<string | null>(null);
 
   const rawNonceRef = useRef<string>('');
   const isRestoringRef = useRef(false);
@@ -234,6 +236,23 @@ export default function TimerScreen() {
       const todayKey = getLocalDateKey();
       const rawHistory = await AsyncStorage.getItem(HISTORY_KEY);
       const localHistory = parseHistory(rawHistory);
+      const scopedLocalHistory = localHistory.filter((item) => {
+        if (!userId) return !item.userId;
+        return item.userId === userId;
+      });
+      if (!userId) {
+        historyHydrationAttemptedForUserRef.current = null;
+      } else if (
+        scopedLocalHistory.length === 0 &&
+        historyHydrationAttemptedForUserRef.current !== userId
+      ) {
+        historyHydrationAttemptedForUserRef.current = userId;
+        try {
+          await hydrateHistoryForUserDetails(userId, undefined, { localFirst: true });
+        } catch {
+          // Offline empty cache is a valid state; the one-time attempt must not create a loop.
+        }
+      }
       const rawTombstoneData = await AsyncStorage.getItem('deletedCompletions');
       let tombstoneIds = new Set<string>();
       if (rawTombstoneData) {
@@ -244,12 +263,8 @@ export default function TimerScreen() {
         }
       }
 
-      const history = dedupeHistoryForStats(localHistory)
+      const history = dedupeHistoryForStats(scopedLocalHistory)
         .filter((item) => !tombstoneIds.has(item.completionId ?? ''))
-        .filter((item) => {
-          if (!userId) return !item.userId;
-          return item.userId === userId;
-        });
 
     // Scoped to the currently selected Japam only -- Home/Timer must never show a combined total
     // across every Japam (product requirement: Home/Timer/Tap Japam always reflect the selected
