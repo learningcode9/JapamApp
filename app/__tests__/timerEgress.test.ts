@@ -8,6 +8,11 @@ const mockDeviceListeners = new Map<string, Set<(...args: unknown[]) => void>>()
 const mockWebListeners = new Map<string, Set<EventListener>>();
 const mockRemoteHistoryFetch = jest.fn();
 const mockHydrateHistoryForUserDetails = jest.fn();
+let mockCurrentJapamState = {
+  currentJapam: { id: 'japam-1', name: 'Morning Japam' } as { id: string; name: string } | null,
+  japams: [{ id: 'japam-1', name: 'Morning Japam', archivedAt: null }],
+  isLoading: false,
+};
 const mockUseFocusEffect = (callback: () => void | (() => void)) => {
   const React = require('react');
   // The mock intentionally invokes the hook supplied by the screen under test.
@@ -88,11 +93,7 @@ jest.mock('../../contexts/timer-context', () => ({
   }),
 }));
 jest.mock('../../contexts/current-japam-context', () => ({
-  useCurrentJapam: () => ({
-    currentJapam: { id: 'japam-1', name: 'Morning Japam' },
-    japams: [{ id: 'japam-1', name: 'Morning Japam', archivedAt: null }],
-    isLoading: false,
-  }),
+  useCurrentJapam: () => mockCurrentJapamState,
 }));
 jest.mock('../../lib/anonymousAuth', () => ({
   getIsAnonymous: jest.fn(),
@@ -147,6 +148,11 @@ beforeEach(async () => {
   mockDeviceListeners.clear();
   mockWebListeners.clear();
   jest.clearAllMocks();
+  mockCurrentJapamState = {
+    currentJapam: { id: 'japam-1', name: 'Morning Japam' },
+    japams: [{ id: 'japam-1', name: 'Morning Japam', archivedAt: null }],
+    isLoading: false,
+  };
   mockHydrateHistoryForUserDetails.mockResolvedValue({
     records: [],
     hydrationSucceeded: false,
@@ -188,6 +194,54 @@ beforeEach(async () => {
 });
 
 describe('Timer local stats egress', () => {
+  it('refreshes stats when the selected Japam finishes loading on authenticated startup', async () => {
+    const today = new Date().toISOString();
+    await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([{
+      date: today,
+      malas: 2,
+      totalCount: 216,
+      duration: 0,
+      manual: false,
+      userId: 'user-1',
+      completionId: 'startup-completion',
+      syncStatus: 'synced',
+      japamId: 'japam-1',
+      japamName: 'Morning Japam',
+    }]));
+    mockCurrentJapamState = { currentJapam: null, japams: [], isLoading: true };
+    const TimerScreen = require('../(tabs)/timer').default;
+    let tree: any;
+
+    await act(async () => {
+      tree = renderer.create(React.createElement(TimerScreen));
+      await Promise.resolve();
+    });
+    await flush();
+
+    mockCurrentJapamState = {
+      currentJapam: { id: 'japam-1', name: 'Morning Japam' },
+      japams: [{ id: 'japam-1', name: 'Morning Japam', archivedAt: null }],
+      isLoading: false,
+    };
+    await act(async () => {
+      tree.update(React.createElement(TimerScreen));
+      await Promise.resolve();
+    });
+    await flush();
+
+    const statValueFor = (label: string) => {
+      const labelNode = tree.root.findAll((node: any) => node.props?.children === label)[0];
+      return labelNode.parent.children[0].props.children;
+    };
+    expect(statValueFor('Malas Today')).toBe(2);
+    expect(statValueFor('Today Count')).toBe(216);
+    expect(statValueFor('Day Streak')).toBe(1);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
   it('hydrates a cold cache once and recomputes Timer stats after remote History lands', async () => {
     await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify([]));
     const TimerScreen = require('../(tabs)/timer').default;
