@@ -873,16 +873,30 @@ const historyBackfillVersion = (record: HistoryRecord): string => JSON.stringify
 
 /**
  * Best-effort remote half of the legacy backfill. The query is scoped to the authenticated user,
- * and the caller supplies the same History-attributed records that are safe to assign locally.
- * Existing rows are patched by their remote id, so retries are idempotent and cannot insert a
- * duplicate or touch another user's/another Japam's history.
+ * and eligibility is decided HERE against the authoritative remote `japam_history` rows using the
+ * EXACT SAME History attribution rule the screens use (`filterByJapam` with `includeBlankLegacy`
+ * plus the caller's Japam list for the ambiguity-safe name index) — so blank legacy rows go to the
+ * canonical first-active Japam, named rows only to their uniquely-matching Japam, and ambiguous or
+ * other-Japam rows stay untouched.
+ *
+ * Deliberately NOT gated on a caller-supplied completion-id set: the runner builds that set from
+ * the client's LOCAL AsyncStorage snapshot at app startup, which can lag behind (or entirely lack)
+ * the rows that actually exist in `japam_history` — the History screen's remote merge has not
+ * populated local storage yet, or a device has no local copy of those rows at all. Intersecting the
+ * remote PATCHes with that stale local-derived set is exactly what left production's eligible
+ * null-japamId rows unassigned (History showed their totals via the same attribution rule while the
+ * Groups RPC, which counts only `japam_id = p_japam_id`, did not). The remote source is
+ * authoritative; the shared attribution rule applied here is the single filter, so no local/remote
+ * divergence can silently skip rows.
+ *
+ * Existing rows are patched one at a time by their remote id + user id, so retries are idempotent
+ * and cannot insert a duplicate or touch another user's/another Japam's history.
  */
 const syncLegacyHistoryBackfillToSupabase = async (
   userId: string,
   japamId: string,
   japamName: string,
   japams: Japam[] | null | undefined,
-  onlyCompletionIds?: ReadonlySet<string>,
 ): Promise<Set<string>> => {
   if (!userId) return new Set();
 
@@ -922,7 +936,6 @@ const syncLegacyHistoryBackfillToSupabase = async (
     ).filter((record) => (
       record.japamId == null
       && record.remoteId != null
-      && (!onlyCompletionIds || onlyCompletionIds.has(record.completionId))
     ));
 
     const syncedIds = new Set<string>();
@@ -1004,7 +1017,6 @@ export const applyLegacyHistoryBackfill = async (
       japamId,
       japamName,
       options.japams,
-      options.onlyCompletionIds,
     )];
     if (remoteSyncedIds.length > 0) {
       const latest = await loadHistory();

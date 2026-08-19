@@ -220,3 +220,73 @@ describe('LegacyHistoryBackfillRunner default Japam routing', () => {
     expect(mockMarkComplete).toHaveBeenCalledWith('user-123');
   });
 });
+
+describe('LegacyHistoryBackfillRunner local snapshot must not skip the remote backfill', () => {
+  const canonicalJapam = {
+    id: 'canonical-1',
+    userId: 'user-123',
+    name: 'My Japam',
+    displayOrder: null,
+    createdAt: '2026-07-20T00:00:00.000Z',
+    updatedAt: '2026-07-20T00:00:00.000Z',
+    archivedAt: null,
+  };
+
+  const mockCanonicalResolution = () => {
+    mockEnsureDefaultJapam.mockResolvedValue({
+      japams: [canonicalJapam],
+      currentJapamId: 'canonical-1',
+      created: null,
+    });
+  };
+
+  it('runs the remote backfill when local history is empty but remote rows may still exist', async () => {
+    // The local AsyncStorage snapshot has NO rows yet (the History screen's remote merge has not
+    // populated it at startup), so a local-only plan reports "nothing to reassign". The remote
+    // japam_history may still hold eligible null-japamId rows, so the runner must STILL reach
+    // applyLegacyHistoryBackfill -- whose remote half derives its eligible set from the
+    // authoritative remote rows.
+    mockLoadHistoryForUser.mockResolvedValue([]);
+    mockCanonicalResolution();
+    mockApplyLegacyHistoryBackfill.mockResolvedValue({ needsBackfill: false });
+
+    await renderRunner();
+
+    expect(mockApplyLegacyHistoryBackfill).toHaveBeenCalledTimes(1);
+    expect(mockApplyLegacyHistoryBackfill).toHaveBeenCalledWith(
+      'user-123',
+      'canonical-1',
+      'My Japam',
+      expect.objectContaining({ onlyCompletionIds: new Set() })
+    );
+    expect(mockMarkComplete).toHaveBeenCalledWith('user-123');
+  });
+
+  it('runs the remote backfill when local rows are all assigned but remote may still have null rows', async () => {
+    // Local snapshot holds only already-assigned rows, so a local-only plan reports
+    // needsBackfill:false. That cannot prove the authoritative remote japam_history is clean --
+    // this device may never have downloaded its rows -- so the runner must still reach
+    // applyLegacyHistoryBackfill instead of marking complete from the local snapshot alone.
+    mockLoadHistoryForUser.mockResolvedValue([
+      {
+        date: '2026-01-01T00:00:00.000Z',
+        malas: 1,
+        totalCount: 108,
+        duration: 60,
+        manual: false,
+        userId: 'user-123',
+        syncStatus: 'synced',
+        japamId: 'canonical-1',
+        japamName: 'My Japam',
+        completionId: 'assigned-1',
+      },
+    ]);
+    mockCanonicalResolution();
+    mockApplyLegacyHistoryBackfill.mockResolvedValue({ needsBackfill: false });
+
+    await renderRunner();
+
+    expect(mockApplyLegacyHistoryBackfill).toHaveBeenCalledTimes(1);
+    expect(mockMarkComplete).toHaveBeenCalledWith('user-123');
+  });
+});
