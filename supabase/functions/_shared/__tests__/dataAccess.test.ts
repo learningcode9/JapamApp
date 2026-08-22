@@ -15,7 +15,7 @@ import type { EmailSummaryRecord } from '../email/types';
  * uses: from().select().eq().eq().in().order().limit() -> { data, error }.
  * Each method returns `this` except the final `limit`, which resolves.
  */
-function fakeSupabase(rows: Array<{ period_end: string }>): SupabaseClient {
+function fakeSupabase(rows: { period_end: string }[]): SupabaseClient {
   const chain = {
     select: () => chain,
     eq: () => chain,
@@ -33,9 +33,11 @@ function fakeSupabase(rows: Array<{ period_end: string }>): SupabaseClient {
 function fakeSupabaseForActiveUsers(params: {
   activityUserIds: string[];
   unsubscribedUserIds: string[];
-  authUsers: Array<{ id: string; email: string }>;
+  authUsers: { id: string; email: string }[];
+  authPages?: { id: string; email: string }[][];
 }): SupabaseClient {
   const { activityUserIds, unsubscribedUserIds, authUsers } = params;
+  const authPages = params.authPages ?? [authUsers];
 
   const japamHistoryChain = {
     select: () => japamHistoryChain,
@@ -56,7 +58,10 @@ function fakeSupabaseForActiveUsers(params: {
     from: (table: string) => (table === 'japam_history' ? japamHistoryChain : preferencesChain),
     auth: {
       admin: {
-        listUsers: async () => ({ data: { users: authUsers }, error: null }),
+        listUsers: async ({ page = 1 }: { page?: number; perPage?: number }) => ({
+          data: { users: authPages[page - 1] ?? [] },
+          error: null,
+        }),
       },
     },
   } as unknown as SupabaseClient;
@@ -266,6 +271,32 @@ describe('getCampaignCandidates (campaign decision inputs)', () => {
 
     const result = await getCampaignCandidates(supabase);
     expect(result.map(user => user.id)).toEqual(['u1']);
+  });
+
+  it('loads users beyond the first 1,000 page without duplicating overlapping users', async () => {
+    delete process.env.EMAIL_ALLOWLIST;
+    delete process.env.EMAIL_CAMPAIGN_EXCLUDED_EMAILS;
+    const firstPage = Array.from({ length: 1000 }, (_, index) => ({
+      id: `u${index}`,
+      email: `user${index}@example.com`,
+    }));
+    const secondPage = [
+      { id: 'u999', email: 'user999@example.com' },
+      { id: 'u1000', email: 'user1000@example.com' },
+    ];
+
+    const result = await getCampaignCandidates(
+      fakeSupabaseForActiveUsers({
+        activityUserIds: [],
+        unsubscribedUserIds: [],
+        authUsers: [],
+        authPages: [firstPage, secondPage],
+      }),
+    );
+
+    expect(result).toHaveLength(1001);
+    expect(new Set(result.map(user => user.id)).size).toBe(1001);
+    expect(result.at(-1)?.id).toBe('u1000');
   });
 });
 

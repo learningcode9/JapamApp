@@ -231,10 +231,9 @@ this feature:
   next concrete step before any real send.
 - **No real hosted hero photo or logo** — see above; both are one env var
   away once assets exist.
-- **`auth.admin.listUsers()` is still capped at one page (1000 users)** —
-  inherited from the original `SummaryEmailService`/now shared via
-  `dataAccess.ts`; fine at current scale, worth revisiting before a much
-  larger user base.
+- **Auth-user pagination is sequential and de-duplicated** — the shared
+  `dataAccess.ts` path fetches every `auth.admin.listUsers()` page instead of
+  silently stopping at the first 1,000 users.
 
 ## Testing
 
