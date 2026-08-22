@@ -9,10 +9,9 @@ const mockJapams = [
   { id: 'workspace-b', userId: 'user-1', name: 'Japam B', syncStatus: 'synced', displayOrder: null, createdAt: '2026-08-02T00:00:00.000Z', updatedAt: '2026-08-02T00:00:00.000Z', archivedAt: null },
 ];
 let mockCurrentJapamId = 'workspace-a';
-const mockFetchResolvers: ((value: unknown) => void)[] = [];
-const mockFetchJapamHistoryRows = jest.fn(() => new Promise((resolve) => {
-  mockFetchResolvers.push(resolve);
-}));
+const mockRpcResolvers: ((value: unknown) => void)[] = [];
+const mockRpc = jest.fn();
+const mockFetchJapamHistoryRows = jest.fn();
 type MockDeviceListener = (payload?: unknown) => void;
 const mockDeviceListeners = new Map<string, Set<MockDeviceListener>>();
 const mockDeviceEventEmitter = {
@@ -81,13 +80,12 @@ jest.mock('../../lib/pwaInstall', () => ({
 jest.mock('../../lib/sharedLogout', () => ({ runSharedLogoutFlow: jest.fn(async () => undefined) }));
 jest.mock('../../lib/supabase', () => ({
   supabase: {
+    rpc: (...args: unknown[]) => mockRpc(...args),
     auth: { getSession: jest.fn(async () => ({ data: { session: null } })) },
   },
 }));
 jest.mock('../../lib/supabaseRestHelper', () => ({
-  get fetchJapamHistoryRows() {
-    return mockFetchJapamHistoryRows;
-  },
+  fetchJapamHistoryRows: (...args: unknown[]) => mockFetchJapamHistoryRows(...args),
 }));
 jest.mock('../../lib/japamsRepository', () => ({ ensureJapamSyncedForHistory: jest.fn(async () => true) }));
 jest.mock('../../lib/authEvents', () => ({ claimAuthResponse: jest.fn(), emitJapamAuthUpdated: jest.fn() }));
@@ -129,6 +127,7 @@ jest.mock('react-native', () => {
     useWindowDimensions: jest.fn(() => ({ width: 390, height: 844 })),
   };
 });
+
 import JapamMain, {
   isCurrentHomeWorkspaceRefresh,
   resolveHomeWorkspaceTotal,
@@ -145,12 +144,48 @@ const flush = async () => {
   });
 };
 
-describe('Home offline workspace total isolation', () => {
+const localDayKey = (date = new Date()) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const localNoon = (daysAgo: number) => {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() - daysAgo);
+  return date.toISOString();
+};
+
+const renderHome = async () => {
+  let tree: any;
+  await act(async () => {
+    tree = renderer.create(React.createElement(JapamMain));
+    await Promise.resolve();
+  });
+  await flush();
+  return tree;
+};
+
+const statValue = (tree: any, label: string) => {
+  const order = ['Malas today', 'Day streak', 'Today count'];
+  const values = tree.root.findAll((node: any) =>
+    node.type === 'Text' && node.props.style?.fontSize === 32
+  );
+  return values[order.indexOf(label)]?.props.children;
+};
+
+describe('Home bounded stats RPC and workspace isolation', () => {
   beforeEach(async () => {
     jest.useFakeTimers();
     mockCurrentJapamId = 'workspace-a';
+    mockRpc.mockReset();
+    mockRpcResolvers.length = 0;
+    mockRpc.mockImplementation(() => new Promise((resolve) => {
+      mockRpcResolvers.push(resolve);
+    }));
     mockFetchJapamHistoryRows.mockClear();
-    mockFetchResolvers.length = 0;
     mockDeviceListeners.clear();
     await AsyncStorage.clear();
   });
@@ -160,240 +195,121 @@ describe('Home offline workspace total isolation', () => {
     jest.useRealTimers();
   });
 
-  it('never carries Workspace A total into Workspace B offline, then restores A when switching back', () => {
-    const totalsByWorkspace = new Map<string | null, number>();
+  it('loads the selected Japam through the bounded Home stats RPC', async () => {
+    await AsyncStorage.setItem('userId', 'user-1');
+    mockRpc.mockResolvedValueOnce({
+      data: [{ today_count: 216, today_malas: 2, day_streak: 3 }],
+      error: null,
+    });
 
-    expect(resolveHomeWorkspaceTotal(216, 'workspace-a', totalsByWorkspace)).toBe(216);
-    expect(resolveHomeWorkspaceTotal(0, 'workspace-b', totalsByWorkspace)).toBe(0);
-    expect(resolveHomeWorkspaceTotal(0, 'workspace-a', totalsByWorkspace)).toBe(216);
+    const tree = await renderHome();
+
+    expect(mockRpc).toHaveBeenCalledWith('get_home_stats', expect.objectContaining({
+      p_japam_id: 'workspace-a',
+      p_device_timezone: expect.any(String),
+      p_today_start: expect.any(String),
+      p_today_end: expect.any(String),
+    }));
+    expect(statValue(tree, 'Malas today')).toBe(2);
+    expect(statValue(tree, 'Today count')).toBe(216);
+    expect(statValue(tree, 'Day streak')).toBe(3);
   });
 
-  it('rejects a stale Workspace A refresh after Workspace B becomes active', () => {
+  it('ignores a stale RPC result after switching workspaces', async () => {
+    await AsyncStorage.setItem('userId', 'user-1');
+    const tree = await renderHome();
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      mockCurrentJapamId = 'workspace-b';
+      mockDeviceEventEmitter.emit('japam-did-switch', { japamId: 'workspace-b' });
+      tree.update(React.createElement(JapamMain));
+      await Promise.resolve();
+    });
+    await flush();
+    expect(mockRpc).toHaveBeenCalledTimes(2);
+
+    mockRpcResolvers[1]({ data: [{ today_count: 54, today_malas: 0, day_streak: 2 }], error: null });
+    await flush();
+    const writesBeforeStaleA = (AsyncStorage.setItem as jest.Mock).mock.calls.length;
+
+    mockRpcResolvers[0]({ data: [{ today_count: 999, today_malas: 9, day_streak: 10 }], error: null });
+    await flush();
+
+    expect(statValue(tree, 'Today count')).toBe(54);
+    expect(statValue(tree, 'Day streak')).toBe(2);
+    expect((AsyncStorage.setItem as jest.Mock).mock.calls.length).toBe(writesBeforeStaleA);
+    expect(await AsyncStorage.getItem('totalCount:user-1:workspace-a')).toBeNull();
+    expect(await AsyncStorage.getItem('totalCount:user-1:workspace-b')).toBe('54');
+  });
+
+  it('keeps local cached stats visible when the RPC fails', async () => {
+    await AsyncStorage.multiSet([
+      ['userId', 'user-1'],
+      [`totalCount:user-1:workspace-a`, '324'],
+      [`totalDate:user-1:workspace-a`, localDayKey()],
+      ['history', JSON.stringify([
+        { date: localNoon(0), totalCount: 108, malas: 1, userId: 'user-1', japamId: 'workspace-a', completionId: 'today-local' },
+        { date: localNoon(1), totalCount: 108, malas: 1, userId: 'user-1', japamId: 'workspace-a', completionId: 'yesterday-local' },
+      ])],
+    ]);
+    mockRpc.mockRejectedValueOnce(new Error('offline'));
+
+    const tree = await renderHome();
+
+    expect(statValue(tree, 'Today count')).toBe(324);
+    expect(statValue(tree, 'Malas today')).toBe(3);
+    expect(statValue(tree, 'Day streak')).toBe(2);
+  });
+
+  it('lets an unsynced local completion win over a stale server summary', async () => {
+    const localPending = {
+      date: localNoon(0),
+      totalCount: 108,
+      malas: 1,
+      userId: 'user-1',
+      japamId: 'workspace-a',
+      completionId: 'pending-local',
+      syncStatus: 'pending',
+    };
+    await AsyncStorage.multiSet([
+      ['userId', 'user-1'],
+      ['history', JSON.stringify([localPending])],
+    ]);
+    mockRpc.mockResolvedValueOnce({
+      data: [{ today_count: 0, today_malas: 0, day_streak: 0 }],
+      error: null,
+    });
+
+    const tree = await renderHome();
+
+    expect(statValue(tree, 'Today count')).toBe(108);
+    expect(statValue(tree, 'Malas today')).toBe(1);
+    expect(statValue(tree, 'Day streak')).toBe(1);
+    expect(JSON.parse(await AsyncStorage.getItem('history') || '[]')).toEqual([localPending]);
+  });
+
+  it('does not issue a raw full-history Home fetch', async () => {
+    await AsyncStorage.setItem('userId', 'user-1');
+    mockRpc.mockResolvedValueOnce({
+      data: [{ today_count: 0, today_malas: 0, day_streak: 0 }],
+      error: null,
+    });
+
+    await renderHome();
+
+    expect(mockFetchJapamHistoryRows).not.toHaveBeenCalled();
+    expect(mockRpc).toHaveBeenCalledWith('get_home_stats', expect.any(Object));
+  });
+
+  it('rejects stale refreshes and preserves per-workspace non-regression', () => {
+    const totalsByWorkspace = new Map<string | null, number>();
     const requestA = { generation: 1, workspaceId: 'workspace-a', workspaceVersion: 1 };
-
-    expect(isCurrentHomeWorkspaceRefresh(requestA, 1, 2, 'workspace-b')).toBe(false);
-    expect(isCurrentHomeWorkspaceRefresh(requestA, 2, 2, 'workspace-b')).toBe(false);
-  });
-
-  it('preserves same-workspace non-regression while allowing a new workspace to start at zero', () => {
-    const totalsByWorkspace = new Map<string | null, number>();
 
     expect(resolveHomeWorkspaceTotal(324, 'workspace-a', totalsByWorkspace)).toBe(324);
     expect(resolveHomeWorkspaceTotal(216, 'workspace-a', totalsByWorkspace)).toBe(324);
     expect(resolveHomeWorkspaceTotal(216, 'workspace-b', totalsByWorkspace)).toBe(216);
-  });
-
-  it('mounts Home, switches A→B offline, and ignores a stale A refresh without unscoped writes', async () => {
-    const today = new Date().toISOString();
-    const localHistory = [{
-      date: today,
-      malas: 2,
-      totalCount: 217,
-      duration: 0,
-      manual: false,
-      userId: 'user-1',
-      completionId: 'a-local',
-      syncStatus: 'synced' as const,
-      japamId: 'workspace-a',
-      japamName: 'Japam A',
-    }];
-    await AsyncStorage.multiSet([
-      ['userId', 'user-1'],
-      ['totalCount:user-1', '217'],
-      ['totalDate:user-1', today.slice(0, 10)],
-      ['history', JSON.stringify(localHistory)],
-    ]);
-    (AsyncStorage.setItem as jest.Mock).mockClear();
-
-    let tree: any;
-    await act(async () => {
-      tree = renderer.create(React.createElement(JapamMain));
-      await Promise.resolve();
-    });
-    await flush();
-
-    expect(mockFetchJapamHistoryRows).toHaveBeenCalledTimes(1);
-    expect(await AsyncStorage.getItem('totalCount:user-1:workspace-a')).toBe('217');
-    expect(await AsyncStorage.getItem('totalCount:user-1:workspace-b')).toBeNull();
-    expect((AsyncStorage.setItem as jest.Mock).mock.calls.some(([key]) => key === 'totalCount:user-1')).toBe(false);
-
-    const staleAResolver = mockFetchResolvers[0];
-    await act(async () => {
-      mockCurrentJapamId = 'workspace-b';
-      mockDeviceEventEmitter.emit('japam-did-switch', { japamId: 'workspace-b' });
-      tree.update(React.createElement(JapamMain));
-      await Promise.resolve();
-    });
-    await flush();
-
-    expect(mockFetchJapamHistoryRows).toHaveBeenCalledTimes(2);
-    const writesBeforeStaleA = (AsyncStorage.setItem as jest.Mock).mock.calls.length;
-    await act(async () => {
-      staleAResolver([{ created_at: today, malas: 2, count: 217, completion_id: 'a-remote', japam_id: 'workspace-a', japam_name: 'Japam A' }]);
-      await Promise.resolve();
-    });
-    await flush();
-
-    expect((AsyncStorage.setItem as jest.Mock).mock.calls.length).toBe(writesBeforeStaleA);
-    expect(await AsyncStorage.getItem('history')).toBe(JSON.stringify(localHistory));
-    expect(await AsyncStorage.getItem('totalCount:user-1:workspace-b')).toBeNull();
-    expect(await AsyncStorage.getItem('totalCount:user-1')).toBe('217');
-
-    const progressCount = tree.root.findAll((node: any) => node.type === 'Text' && node.props.style?.fontSize === 72);
-    expect(progressCount[0]?.children).toEqual(['0']);
-
-    mockFetchResolvers[1]?.(null);
-    await flush();
-  });
-
-  it('does not persist Workspace A totals under Workspace B when the persistence user read resolves after switching', async () => {
-    const today = new Date().toISOString();
-    const localHistory = [{
-      date: today,
-      malas: 2,
-      totalCount: 217,
-      duration: 0,
-      manual: false,
-      userId: 'user-1',
-      userName: 'Test User',
-      completionId: 'a-local',
-      syncStatus: 'synced' as const,
-      japamId: 'workspace-a',
-      japamName: 'Japam A',
-    }];
-    await AsyncStorage.multiSet([
-      ['userId', 'user-1'],
-      ['userName', 'Test User'],
-      ['history', JSON.stringify(localHistory)],
-    ]);
-
-    let tree: any;
-    await act(async () => {
-      tree = renderer.create(React.createElement(JapamMain));
-      await Promise.resolve();
-    });
-    await flush();
-
-    const originalGetItem = (AsyncStorage.getItem as jest.Mock).getMockImplementation();
-    const releaseUserIdRead = jest.fn();
-    let resolveUserIdRead!: (value: string) => void;
-    let holdNextUserIdRead = true;
-    (AsyncStorage.getItem as jest.Mock).mockImplementation((key: string) => {
-      if (key === 'userId' && holdNextUserIdRead) {
-        holdNextUserIdRead = false;
-        return new Promise<string>((resolve) => {
-          resolveUserIdRead = (value: string) => {
-            releaseUserIdRead();
-            resolve(value);
-          };
-        });
-      }
-      return originalGetItem?.(key);
-    });
-
-    const multiSetMock = AsyncStorage.multiSet as jest.Mock;
-    multiSetMock.mockClear();
-    const pressables = tree.root.findAll((node: any) => typeof node.props.onPress === 'function');
-    expect(pressables.length).toBeGreaterThan(1);
-    await act(async () => {
-      pressables[2].props.onPress();
-      await Promise.resolve();
-    });
-
-    await act(async () => {
-      mockCurrentJapamId = 'workspace-b';
-      mockDeviceEventEmitter.emit('japam-did-switch', { japamId: 'workspace-b' });
-      tree.update(React.createElement(JapamMain));
-      await Promise.resolve();
-      resolveUserIdRead?.('user-1');
-      await Promise.resolve();
-    });
-    await flush();
-
-    expect(releaseUserIdRead).toHaveBeenCalledTimes(1);
-    expect(await AsyncStorage.getItem('totalCount:user-1:workspace-a')).toBe('218');
-    expect(await AsyncStorage.getItem('totalCount:user-1:workspace-b')).not.toBe('218');
-    const persistedPairs = multiSetMock.mock.calls.flatMap(([pairs]) => pairs as [string, string][]);
-    expect(persistedPairs).not.toContainEqual(['totalCount:user-1:workspace-b', '218']);
-
-    (AsyncStorage.getItem as jest.Mock).mockImplementation(originalGetItem);
-    mockFetchResolvers.forEach((resolve) => resolve(null));
-    await flush();
-  });
-
-  it('lets the current Workspace B refresh own the final shared history write after A is switched away', async () => {
-    const today = new Date().toISOString();
-    const localHistory = [{
-      date: today,
-      malas: 1,
-      totalCount: 108,
-      duration: 0,
-      manual: false,
-      userId: 'user-1',
-      completionId: 'a-local',
-      syncStatus: 'synced' as const,
-      japamId: 'workspace-a',
-      japamName: 'Japam A',
-    }];
-    await AsyncStorage.multiSet([
-      ['userId', 'user-1'],
-      ['history', JSON.stringify(localHistory)],
-    ]);
-
-    let tree: any;
-    await act(async () => {
-      tree = renderer.create(React.createElement(JapamMain));
-      await Promise.resolve();
-    });
-    await flush();
-    expect(mockFetchResolvers).toHaveLength(1);
-
-    const originalSetItem = (AsyncStorage.setItem as jest.Mock).getMockImplementation();
-    const historyPayloads: string[] = [];
-    let historyWriteStarted = false;
-    let releaseHistoryWrite!: () => void;
-    const historyWriteGate = new Promise<void>((resolve) => {
-      releaseHistoryWrite = resolve;
-    });
-    (AsyncStorage.setItem as jest.Mock).mockImplementation(async (key: string, value: string) => {
-      if (key === 'history') {
-        historyPayloads.push(value);
-        if (!historyWriteStarted) {
-          historyWriteStarted = true;
-          await historyWriteGate;
-        }
-      }
-      return originalSetItem?.(key, value);
-    });
-
-    await act(async () => {
-      mockFetchResolvers[0]([{ created_at: today, malas: 1, count: 108, completion_id: 'a-remote', japam_id: 'workspace-a', japam_name: 'Japam A' }]);
-      await Promise.resolve();
-    });
-    await flush();
-    expect(historyWriteStarted).toBe(true);
-
-    await act(async () => {
-      mockCurrentJapamId = 'workspace-b';
-      mockDeviceEventEmitter.emit('japam-did-switch', { japamId: 'workspace-b' });
-      tree.update(React.createElement(JapamMain));
-      await Promise.resolve();
-    });
-    await flush();
-    expect(mockFetchResolvers).toHaveLength(2);
-
-    releaseHistoryWrite();
-    await act(async () => {
-      mockFetchResolvers[1]([{ created_at: today, malas: 1, count: 108, completion_id: 'b-remote', japam_id: 'workspace-b', japam_name: 'Japam B' }]);
-      await Promise.resolve();
-    });
-    await flush();
-
-    expect(historyPayloads.length).toBeGreaterThanOrEqual(2);
-    const finalHistory = JSON.parse(historyPayloads[historyPayloads.length - 1]);
-    expect(finalHistory.some((session: any) => session.completionId === 'b-remote')).toBe(true);
-    expect(await AsyncStorage.getItem('history')).toBe(historyPayloads[historyPayloads.length - 1]);
-
-    (AsyncStorage.setItem as jest.Mock).mockImplementation(originalSetItem);
+    expect(isCurrentHomeWorkspaceRefresh(requestA, 1, 2, 'workspace-b')).toBe(false);
+    expect(isCurrentHomeWorkspaceRefresh(requestA, 2, 2, 'workspace-b')).toBe(false);
   });
 });
