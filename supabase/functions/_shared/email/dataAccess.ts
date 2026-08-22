@@ -134,8 +134,8 @@ export async function getActiveUsersInPeriod(
 /**
  * Loads auth users for campaign eligibility decisions without pre-filtering
  * by activity. The campaign service intentionally owns the deterministic
- * decision order so dry-runs can explain invalid, excluded, suppressed,
- * out-of-window, and no-activity skips instead of silently dropping them.
+ * decision order so dry-runs can explain invalid, excluded, suppressed, and
+ * no-activity skips instead of silently dropping them.
  */
 export async function getCampaignCandidates(supabase: SupabaseClient): Promise<AuthUser[]> {
   const unsubscribedIds = await getUnsubscribedUserIds(supabase);

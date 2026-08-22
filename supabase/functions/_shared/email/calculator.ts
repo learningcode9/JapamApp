@@ -22,33 +22,6 @@ export function getPeriodDates(
   };
 }
 
-/**
- * Returns completed UTC days since an auth account was created, or null for
- * malformed/future timestamps. Keeping this calculation explicit prevents a
- * history row from being mistaken for the account signup date.
- */
-export function getAccountAgeDays(createdAt: string | undefined, now = new Date()): number | null {
-  if (!createdAt) return null;
-  const createdAtMs = Date.parse(createdAt);
-  if (!Number.isFinite(createdAtMs)) return null;
-
-  const ageDays = Math.floor((now.getTime() - createdAtMs) / 86_400_000);
-  return ageDays >= 0 ? ageDays : null;
-}
-
-/**
- * Returns true only during the account's first daily 15-day milestone window.
- * Because getAccountAgeDays() is completed elapsed UTC days, this is the
- * half-open interval [milestoneDays, milestoneDays + 1): it includes 15d
- * exactly and excludes accounts once they reach 16d, preventing backfill.
- */
-export function isWithinAccountMilestoneWindow(
-  accountAgeDays: number,
-  milestoneDays: number,
-): boolean {
-  return accountAgeDays >= milestoneDays && accountAgeDays < milestoneDays + 1;
-}
-
 // ─── Streak calculation ────────────────────────────────────────────────────────
 
 /**
@@ -104,13 +77,16 @@ export function calculateSummaryStats(
   periodStart: string,
   periodEnd: string,
 ): SummaryStats | null {
-  if (rows.length === 0) return null;
+  const genuineActivityRows = rows.filter(
+    row => Number(row.malas) > 0 || Number(row.count) > 0,
+  );
+  if (genuineActivityRows.length === 0) return null;
 
   const dailyMap = new Map<string, DailyStats>();
   let hasSourceData = false;
   const breakdown: SourceBreakdown = { timer: 0, tap: 0, manual: 0 };
 
-  for (const row of rows) {
+  for (const row of genuineActivityRows) {
     const date = toDateString(row.created_at);
     const existing = dailyMap.get(date) ?? { date, sessions: 0, malas: 0 };
     dailyMap.set(date, {
@@ -145,7 +121,7 @@ export function calculateSummaryStats(
 
   // Best available display name: user_name field from any row, or email prefix
   const userName =
-    rows.find(r => r.user_name)?.user_name?.trim() || email.split('@')[0];
+    genuineActivityRows.find(r => r.user_name)?.user_name?.trim() || email.split('@')[0];
 
   return {
     userId,

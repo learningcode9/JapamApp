@@ -49,8 +49,17 @@ class EligibilityService extends CampaignEmailService {
     return this.fakeUsers;
   }
 
-  protected override async getHistoryForUser(userId: string): Promise<JapamHistoryRow[]> {
-    return this.fakeHistory[userId] ?? [];
+  protected override async getHistoryForUser(
+    userId: string,
+    periodStart: string,
+    periodEnd: string,
+  ): Promise<JapamHistoryRow[]> {
+    const start = Date.parse(`${periodStart}T00:00:00.000Z`);
+    const end = Date.parse(`${periodEnd}T23:59:59.999Z`);
+    return (this.fakeHistory[userId] ?? []).filter(row => {
+      const createdAt = Date.parse(row.created_at);
+      return createdAt >= start && createdAt <= end;
+    });
   }
 
   protected override async getLifetimeStats(userId: string) {
@@ -78,35 +87,52 @@ class EligibilityService extends CampaignEmailService {
   }
 }
 
-describe('15-day recipient milestone window', () => {
-  it('skips an account at 14d23h59m, then accepts the 15-day window', async () => {
-    const service = (createdAt: string) => new EligibilityService(
-      [{ id: 'u1', email: 'u1@example.test', createdAt }],
-      { u1: [historyRow('u1', 1, 108)] },
+describe('15-day rolling activity eligibility', () => {
+  it('allows an old account with one recent Mala', async () => {
+    const service = new EligibilityService(
+      [{ id: 'old-mala', email: 'old-mala@example.test', createdAt: '2020-01-01T00:00:00.000Z' }],
+      { 'old-mala': [historyRow('old-mala', 1, 108)] },
       new Set(),
       null,
     );
 
-    expect((await service('2026-08-07T12:01:00.000Z').run({ dryRun: true }))[0].status)
-      .toBe('skipped_too_new');
-    expect((await service('2026-08-07T12:00:00.000Z').run({ dryRun: true }))[0].status)
-      .toBe('dry_run');
-    expect((await service('2026-08-07T00:01:00.000Z').run({ dryRun: true }))[0].status)
-      .toBe('dry_run');
+    expect((await service.run({ dryRun: true }))[0].status).toBe('dry_run');
   });
 
-  it('skips accounts at 16 days or older instead of backfilling them', async () => {
+  it('allows an old account with recent positive count-only activity', async () => {
     const service = new EligibilityService(
-      [{ id: 'old', email: 'old@example.test', createdAt: '2026-08-06T12:00:00.000Z' }],
-      { old: [historyRow('old', 1, 108)] },
+      [{ id: 'old-count', email: 'old-count@example.test', createdAt: '2020-01-01T00:00:00.000Z' }],
+      { 'old-count': [historyRow('old-count', 0, 50)] },
+      new Set(),
+      null,
+    );
+
+    expect((await service.run({ dryRun: true }))[0].status).toBe('dry_run');
+  });
+
+  it('allows a new account with recent activity', async () => {
+    const service = new EligibilityService(
+      [{ id: 'new', email: 'new@example.test', createdAt: '2026-08-21T12:00:00.000Z' }],
+      { new: [historyRow('new', 1, 108)] },
+      new Set(),
+      null,
+    );
+
+    expect((await service.run({ dryRun: true }))[0].status).toBe('dry_run');
+  });
+
+  it('skips activity that is only outside the rolling 15-day window', async () => {
+    const service = new EligibilityService(
+      [{ id: 'stale', email: 'stale@example.test', createdAt: '2020-01-01T00:00:00.000Z' }],
+      { stale: [{ ...historyRow('stale', 1, 108), created_at: '2026-08-06T08:00:00.000Z' }] },
       new Set(),
       null,
     );
 
     const result = await service.run({ dryRun: true });
     expect(result[0]).toMatchObject({
-      status: 'skipped_outside_milestone',
-      reason: expect.stringContaining('milestone window has passed'),
+      status: 'skipped_no_activity',
+      reason: 'no japam activity in period',
     });
   });
 });
@@ -118,7 +144,7 @@ describe('15-day recipient safety decisions', () => {
       { id: 'mala15', email: 'mala15@example.test', createdAt: '2026-08-07T12:00:00.000Z' },
       { id: 'count15', email: 'count15@example.test', createdAt: '2026-08-07T12:00:00.000Z' },
       { id: 'zero15', email: 'zero15@example.test', createdAt: '2026-08-07T12:00:00.000Z' },
-      { id: 'old20', email: 'old20@example.test', createdAt: '2026-08-02T12:00:00.000Z' },
+      { id: 'old20', email: 'old20@example.test', createdAt: '2020-01-01T00:00:00.000Z' },
       { id: 'unsubscribed', email: 'unsubscribed@example.test', createdAt: '2026-08-07T12:00:00.000Z', isUnsubscribed: true },
       { id: 'alreadySent', email: 'already-sent@example.test', createdAt: '2026-08-07T12:00:00.000Z' },
       { id: 'excluded', email: 'Reviewer@Example.test', createdAt: '2026-08-07T12:00:00.000Z', isExcluded: true },
@@ -143,8 +169,8 @@ describe('15-day recipient safety decisions', () => {
 
     expect(byId.get('mala15')?.status).toBe('dry_run');
     expect(byId.get('count15')?.status).toBe('dry_run');
-    expect(byId.get('new10')?.status).toBe('skipped_too_new');
-    expect(byId.get('old20')?.status).toBe('skipped_outside_milestone');
+    expect(byId.get('new10')?.status).toBe('skipped_no_activity');
+    expect(byId.get('old20')?.status).toBe('dry_run');
     expect(byId.get('zero15')).toMatchObject({
       status: 'skipped_no_activity',
       reason: 'no japam activity in period',

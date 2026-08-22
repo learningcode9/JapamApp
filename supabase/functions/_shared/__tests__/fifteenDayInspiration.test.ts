@@ -110,10 +110,8 @@ describe('fifteenDayInspirationCampaign.buildHtml', () => {
   });
 
   it('does not claim the recipient started exactly 15 days ago', () => {
-    // The copy must read correctly for long-time practitioners too, not
-    // just someone on literally day 15 — see campaignService's "too new"
-    // eligibility gate, which only guarantees >= 15 days of history, not
-    // exactly 15.
+    // The copy must read correctly for long-time practitioners and new users
+    // alike; eligibility is based on recent activity, not account age.
     const html = fifteenDayInspirationCampaign.buildHtml(makeContext());
     expect(html).not.toContain('Fifteen days ago, you began');
   });

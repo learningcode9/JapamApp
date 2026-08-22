@@ -19,7 +19,7 @@ export interface AuthUser {
   id: string;
   email: string;
   displayName?: string;
-  /** `auth.users.created_at`, used for account-age campaign eligibility. */
+  /** `auth.users.created_at`, retained as candidate metadata; not an eligibility gate. */
   createdAt?: string;
   /** Populated by campaign candidate loading; absent means not suppressed. */
   isUnsubscribed?: boolean;
@@ -109,12 +109,9 @@ export type ResultStatus =
   | 'dry_run'
   | 'skipped_no_activity'
   | 'skipped_duplicate'
-  | 'skipped_too_new'
-  | 'skipped_outside_milestone'
   | 'skipped_invalid_email'
   | 'skipped_excluded'
   | 'skipped_unsubscribed'
-  | 'skipped_missing_account_age'
   | 'failed';
 
 export interface SummaryRunResult {

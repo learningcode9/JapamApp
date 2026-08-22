@@ -153,8 +153,6 @@ describe('send-campaign-email wrapper', () => {
   it('reports shared-service eligibility outcomes without changing them', async () => {
     const statuses = [
       'dry_run',
-      'skipped_too_new',
-      'skipped_outside_milestone',
       'skipped_no_activity',
       'skipped_duplicate',
       'skipped_unsubscribed',
@@ -169,8 +167,6 @@ describe('send-campaign-email wrapper', () => {
 
     expect(body.eligible_count).toBe(1);
     expect(body.skipped_counts).toEqual({
-      skipped_too_new: 1,
-      skipped_outside_milestone: 1,
       skipped_no_activity: 1,
       skipped_duplicate: 1,
       skipped_unsubscribed: 1,
