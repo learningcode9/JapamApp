@@ -98,13 +98,15 @@ file ever reads `process.env` directly.
 | `EMAIL_SOCIAL_LINKS` | `''` | Comma-separated `Label\|https://url` pairs, rendered in the footer |
 | `PERIOD_DAYS` | `15` | Existing var; default period for campaigns that don't set their own |
 | `EMAIL_ALLOWLIST` | `''` (no restriction) | Comma-separated addresses. When set, **every** campaign only sends to these — for controlled testing against real production data |
+| `EMAIL_CAMPAIGN_EXCLUDED_EMAILS` | `''` (no exclusions) | Comma-separated, case-insensitive exact email matches excluded from campaign sends; useful for internal/test accounts |
 
 ## Unsubscribe & allowlist
 
-Both are enforced in exactly one place: `dataAccess.ts`'s `getActiveUsersInPeriod` —
-the single function every service (`SummaryEmailService` and
-`CampaignEmailService` alike) calls to find who's eligible this run. Neither
-campaign code nor the per-user loop needs to know either exists.
+Unsubscribe suppression is enforced in `dataAccess.ts`, while campaign
+eligibility is decided in `CampaignEmailService` so dry-runs can report a
+deterministic reason for every candidate. The summary service continues to use
+`getActiveUsersInPeriod`; campaign services use `getCampaignCandidates` and
+then apply the campaign-specific checks.
 
 - **Unsubscribe:** `getUnsubscribedUserIds()` reads `user_email_preferences`
   (migration `20260705_add_user_email_preferences.sql`) for every user with a
@@ -120,14 +122,23 @@ campaign code nor the per-user loop needs to know either exists.
   operators/service-role only. Building that page is the next step before
   any real send.
 - **Allowlist:** `EMAIL_ALLOWLIST` (comma-separated addresses) is parsed via
-  `config.ts`'s `parseAllowlist()` and applied as a second filter in the same
-  function. Unset (the default) means no restriction — identical to behavior
-  before this existed.
+  `config.ts`'s `parseAllowlist()` and applied as a second filter by both
+  shared candidate loaders. Unset (the default) means no restriction —
+  identical to behavior before this existed.
+- **Explicit exclusions:** `EMAIL_CAMPAIGN_EXCLUDED_EMAILS` is parsed as
+  comma-separated, trimmed, lowercased exact email addresses. Matching users
+  receive a deterministic `skipped_excluded` result. There is no hardcoded
+  personal/test address list.
 
 Campaign eligibility also requires a valid recipient email and uses
 `auth.users.created_at` for the account-age check; a history row is never used
-as a signup-date proxy. The 15-day campaign requires at least 15 completed UTC
-days and still requires activity in the current 15-day stats window.
+as a signup-date proxy. The 15-day campaign sends only during the half-open
+completed-age window `[15, 16)` days: users are eligible once they reach 15
+completed elapsed UTC days, and are not backfilled after the window passes.
+Within that window, at least one row in the canonical current 15-day UTC stats
+window is required. Any history row counts as activity, including count-only
+rows with zero malas; no rows produces the deterministic `no_japam_activity`
+skip.
 
 The send claim is durable and race-safe: the unique
 `(user_id, email_type, period_start)` key is claimed before the provider call,

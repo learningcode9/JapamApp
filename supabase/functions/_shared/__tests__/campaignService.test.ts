@@ -27,7 +27,7 @@ const USER: AuthUser = {
   id: 'u1',
   email: 'user@example.com',
   displayName: 'Test User',
-  createdAt: '2020-01-01T00:00:00.000Z',
+  createdAt: EXACTLY_15_DAYS_OLD,
 };
 
 const FAKE_CAMPAIGN: CampaignDefinition = {
@@ -75,6 +75,10 @@ class TestService extends CampaignEmailService {
   public fakeClaimResults: boolean[] = [],
   ) {
     super(campaign, {} as never, emailProvider, loadEmailConfig());
+  }
+
+  override async run(options: { dryRun: boolean; now?: Date }) {
+    return super.run({ now: NOW, ...options });
   }
 
   protected override async getActiveUsers(): Promise<AuthUser[]> {
@@ -159,11 +163,18 @@ describe('CampaignEmailService new-user eligibility', () => {
     expect(results[0].status).toBe('skipped_too_new');
   });
 
-  it('does not skip a long-established user', async () => {
-    const service = new TestService([USER], [makeRow()], false, 42, null, FAKE_CAMPAIGN);
+  it('skips a long-established user instead of backfilling the campaign', async () => {
+    const service = new TestService(
+      [{ ...USER, createdAt: LONG_ESTABLISHED_USER_ISO }],
+      [makeRow()],
+      false,
+      42,
+      null,
+      FAKE_CAMPAIGN,
+    );
     const results = await service.run({ dryRun: true });
 
-    expect(results[0].status).toBe('dry_run');
+    expect(results[0].status).toBe('skipped_outside_milestone');
   });
 
   it('fails closed when the auth account creation timestamp is missing', async () => {
@@ -276,7 +287,7 @@ describe('CampaignEmailService real sending', () => {
       const USER2: AuthUser = {
         id: 'u2',
         email: 'user2@example.com',
-        createdAt: '2020-01-01T00:00:00.000Z',
+        createdAt: EXACTLY_15_DAYS_OLD,
       };
       let callCount = 0;
       const provider: EmailProvider = {
@@ -390,7 +401,7 @@ describe('CampaignEmailService input safety', () => {
       const user2: AuthUser = {
         id: 'u2',
         email: 'second@example.com',
-        createdAt: '2020-01-01T00:00:00.000Z',
+        createdAt: EXACTLY_15_DAYS_OLD,
       };
       const provider: EmailProvider = {
         sendEmail: jest.fn().mockResolvedValue({ messageId: 'msg-isolated' }),

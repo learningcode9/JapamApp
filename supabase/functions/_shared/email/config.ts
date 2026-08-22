@@ -38,6 +38,8 @@ export interface EmailConfig {
   socialLinks: SocialLink[];
   /** Default interval (days) for campaigns that don't specify their own. */
   defaultPeriodDays: number;
+  /** Exact, normalized email addresses excluded from campaign delivery. */
+  excludedEmails: Set<string>;
 }
 
 // Calm/Headspace-inspired palette: soft sage + warm cream, not the older
@@ -98,6 +100,21 @@ export function parseAllowlist(raw: string | undefined): Set<string> | null {
 }
 
 /**
+ * Parses an explicit campaign exclusion list. Values are normalized for
+ * case-insensitive exact matching; empty entries are ignored and a missing or
+ * empty variable means that no addresses are excluded.
+ */
+export function parseExcludedEmails(raw: string | undefined): Set<string> {
+  if (!raw || !raw.trim()) return new Set();
+  return new Set(
+    raw
+      .split(',')
+      .map(address => address.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+/**
  * Loads campaign-agnostic config from environment variables, with sensible
  * defaults so the system still renders a complete, good-looking email when
  * only the required Supabase/email vars are set.
@@ -128,6 +145,7 @@ export function loadEmailConfig(): EmailConfig {
     },
     socialLinks: parseSocialLinks(process.env.EMAIL_SOCIAL_LINKS),
     defaultPeriodDays: Number(process.env.PERIOD_DAYS) || 15,
+    excludedEmails: parseExcludedEmails(process.env.EMAIL_CAMPAIGN_EXCLUDED_EMAILS),
   };
 }
 

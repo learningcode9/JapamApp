@@ -1,4 +1,9 @@
-import { parseAllowlist, validateProductionEnv, assertProductionReady } from '../email/config';
+import {
+  parseAllowlist,
+  parseExcludedEmails,
+  validateProductionEnv,
+  assertProductionReady,
+} from '../email/config';
 
 describe('parseAllowlist', () => {
   it('returns null when unset', () => {
@@ -120,5 +125,24 @@ describe('validateProductionEnv / assertProductionReady', () => {
     delete process.env.SUPABASE_URL;
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
     expect(() => assertProductionReady()).toThrow(/RESEND_API_KEY[\s\S]*EMAIL_FROM_ADDRESS/);
+  });
+});
+
+describe('parseExcludedEmails', () => {
+  it('returns an empty set when unset or whitespace-only', () => {
+    expect(parseExcludedEmails(undefined).size).toBe(0);
+    expect(parseExcludedEmails(' ,  , ')).toEqual(new Set());
+  });
+
+  it('trims and matches excluded addresses case-insensitively', () => {
+    const result = parseExcludedEmails(' Reviewer@Example.com, internal@example.com ');
+    expect(result).toEqual(new Set(['reviewer@example.com', 'internal@example.com']));
+  });
+
+  it('uses exact addresses and does not exclude unrelated recipients', () => {
+    const result = parseExcludedEmails('reviewer@example.com');
+    expect(result.has('reviewer@example.com')).toBe(true);
+    expect(result.has('reviewer+other@example.com')).toBe(false);
+    expect(result.has('other@example.com')).toBe(false);
   });
 });
