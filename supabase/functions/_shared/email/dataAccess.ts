@@ -7,6 +7,7 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import type { AuthUser, JapamHistoryRow, EmailSummaryRecord } from './types.ts';
 import { parseAllowlist, parseExcludedEmails } from './config.ts';
+import { getEnv } from './env.ts';
 
 const SIMPLE_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const AUTH_USERS_PAGE_SIZE = 1000;
@@ -110,7 +111,7 @@ export async function getActiveUsersInPeriod(
   // addresses — intended for controlled testing against real production
   // data without emailing real users. Unset (the default) means no
   // restriction, identical to behavior before this filter existed.
-  const allowlist = parseAllowlist(process.env.EMAIL_ALLOWLIST);
+  const allowlist = parseAllowlist(getEnv('EMAIL_ALLOWLIST'));
 
   const users: AuthUser[] = [];
   for await (const user of listAllAuthUsers(supabase)) {
@@ -141,8 +142,8 @@ export async function getCampaignCandidates(supabase: SupabaseClient): Promise<A
 
   // Preserve the existing operator safety valve for campaign runs. When set,
   // only explicitly listed valid addresses enter the decision loop.
-  const allowlist = parseAllowlist(process.env.EMAIL_ALLOWLIST);
-  const excludedEmails = parseExcludedEmails(process.env.EMAIL_CAMPAIGN_EXCLUDED_EMAILS);
+  const allowlist = parseAllowlist(getEnv('EMAIL_ALLOWLIST'));
+  const excludedEmails = parseExcludedEmails(getEnv('EMAIL_CAMPAIGN_EXCLUDED_EMAILS'));
   const users: AuthUser[] = [];
   for await (const user of listAllAuthUsers(supabase)) {
       const email = user.email?.trim() ?? '';

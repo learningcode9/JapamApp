@@ -3,6 +3,8 @@
 // `campaigns/`. Adding a new brand knob (a color, a social link) means adding
 // one field here, not touching every campaign or template file.
 
+import { getEnv } from './env.ts';
+
 export interface BrandColors {
   primary: string;
   primaryDark: string;
@@ -120,32 +122,32 @@ export function parseExcludedEmails(raw: string | undefined): Set<string> {
  * only the required Supabase/email vars are set.
  */
 export function loadEmailConfig(): EmailConfig {
-  const fromAddress = process.env.EMAIL_FROM_ADDRESS ?? 'Japam App <noreply@japamapp.com>';
+  const fromAddress = getEnv('EMAIL_FROM_ADDRESS') ?? 'Japam App <noreply@japamapp.com>';
   const senderName =
-    process.env.EMAIL_SENDER_NAME ?? (fromAddress.split('<')[0].trim() || 'Japam App');
-  const appUrl = process.env.APP_URL ?? '';
+    getEnv('EMAIL_SENDER_NAME') ?? (fromAddress.split('<')[0].trim() || 'Japam App');
+  const appUrl = getEnv('APP_URL') ?? '';
 
   return {
     fromAddress,
     senderName,
     appUrl,
-    ctaUrl: process.env.EMAIL_CTA_URL ?? appUrl,
-    logoUrl: process.env.EMAIL_LOGO_URL ?? '',
-    heroImageUrl: process.env.EMAIL_HERO_IMAGE_URL ?? '',
-    unsubscribeUrl: process.env.EMAIL_UNSUBSCRIBE_URL ?? '',
-    unsubscribeSecret: process.env.EMAIL_UNSUBSCRIBE_SECRET ?? '',
+    ctaUrl: getEnv('EMAIL_CTA_URL') ?? appUrl,
+    logoUrl: getEnv('EMAIL_LOGO_URL') ?? '',
+    heroImageUrl: getEnv('EMAIL_HERO_IMAGE_URL') ?? '',
+    unsubscribeUrl: getEnv('EMAIL_UNSUBSCRIBE_URL') ?? '',
+    unsubscribeSecret: getEnv('EMAIL_UNSUBSCRIBE_SECRET') ?? '',
     colors: {
-      primary: process.env.EMAIL_COLOR_PRIMARY ?? DEFAULT_COLORS.primary,
-      primaryDark: process.env.EMAIL_COLOR_PRIMARY_DARK ?? DEFAULT_COLORS.primaryDark,
-      accent: process.env.EMAIL_COLOR_ACCENT ?? DEFAULT_COLORS.accent,
-      background: process.env.EMAIL_COLOR_BACKGROUND ?? DEFAULT_COLORS.background,
-      cardBackground: process.env.EMAIL_COLOR_CARD ?? DEFAULT_COLORS.cardBackground,
-      textPrimary: process.env.EMAIL_COLOR_TEXT ?? DEFAULT_COLORS.textPrimary,
-      textMuted: process.env.EMAIL_COLOR_TEXT_MUTED ?? DEFAULT_COLORS.textMuted,
+      primary: getEnv('EMAIL_COLOR_PRIMARY') ?? DEFAULT_COLORS.primary,
+      primaryDark: getEnv('EMAIL_COLOR_PRIMARY_DARK') ?? DEFAULT_COLORS.primaryDark,
+      accent: getEnv('EMAIL_COLOR_ACCENT') ?? DEFAULT_COLORS.accent,
+      background: getEnv('EMAIL_COLOR_BACKGROUND') ?? DEFAULT_COLORS.background,
+      cardBackground: getEnv('EMAIL_COLOR_CARD') ?? DEFAULT_COLORS.cardBackground,
+      textPrimary: getEnv('EMAIL_COLOR_TEXT') ?? DEFAULT_COLORS.textPrimary,
+      textMuted: getEnv('EMAIL_COLOR_TEXT_MUTED') ?? DEFAULT_COLORS.textMuted,
     },
-    socialLinks: parseSocialLinks(process.env.EMAIL_SOCIAL_LINKS),
-    defaultPeriodDays: Number(process.env.PERIOD_DAYS) || 15,
-    excludedEmails: parseExcludedEmails(process.env.EMAIL_CAMPAIGN_EXCLUDED_EMAILS),
+    socialLinks: parseSocialLinks(getEnv('EMAIL_SOCIAL_LINKS')),
+    defaultPeriodDays: Number(getEnv('PERIOD_DAYS')) || 15,
+    excludedEmails: parseExcludedEmails(getEnv('EMAIL_CAMPAIGN_EXCLUDED_EMAILS')),
   };
 }
 
@@ -163,11 +165,11 @@ export function loadEmailConfig(): EmailConfig {
 export function validateProductionEnv(): string[] {
   const problems: string[] = [];
 
-  if (!process.env.RESEND_API_KEY) {
+  if (!getEnv('RESEND_API_KEY')) {
     problems.push('RESEND_API_KEY is not set — required for real sending.');
   }
 
-  const fromAddress = process.env.EMAIL_FROM_ADDRESS;
+  const fromAddress = getEnv('EMAIL_FROM_ADDRESS');
   if (!fromAddress) {
     problems.push(
       'EMAIL_FROM_ADDRESS is not set — sending would silently fall back to the built-in ' +
@@ -182,23 +184,23 @@ export function validateProductionEnv(): string[] {
     );
   }
 
-  if (!process.env.EMAIL_UNSUBSCRIBE_URL) {
+  if (!getEnv('EMAIL_UNSUBSCRIBE_URL')) {
     problems.push(
       'EMAIL_UNSUBSCRIBE_URL is not set — required before any real production send.',
     );
   }
 
-  if (!process.env.EMAIL_UNSUBSCRIBE_SECRET) {
+  if (!getEnv('EMAIL_UNSUBSCRIBE_SECRET')) {
     problems.push(
       'EMAIL_UNSUBSCRIBE_SECRET is not set — required to sign per-user unsubscribe links.',
     );
   }
 
-  if (!(process.env.EXPO_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL)) {
+  if (!(getEnv('EXPO_PUBLIC_SUPABASE_URL') ?? getEnv('SUPABASE_URL'))) {
     problems.push('EXPO_PUBLIC_SUPABASE_URL (or SUPABASE_URL) is not set.');
   }
 
-  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  if (!getEnv('SUPABASE_SERVICE_ROLE_KEY')) {
     problems.push('SUPABASE_SERVICE_ROLE_KEY is not set.');
   }
 
@@ -224,7 +226,7 @@ export function assertProductionReady(): void {
 
 /** FIRST campaign guard: real sends must use a signed, user-specific link. */
 export function assertCampaignUnsubscribeReady(): void {
-  if (!process.env.EMAIL_UNSUBSCRIBE_SECRET) {
+  if (!getEnv('EMAIL_UNSUBSCRIBE_SECRET')) {
     throw new Error(
       'Refusing to send the campaign — EMAIL_UNSUBSCRIBE_SECRET is not set; ' +
         'a signed per-user unsubscribe link is required.',

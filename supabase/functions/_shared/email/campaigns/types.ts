@@ -3,8 +3,8 @@
 // `campaigns/fifteenDayInspiration.ts` for a full example, and `registry.ts`
 // for how a finished campaign gets wired in (one import + one map entry).
 
-import type { SummaryStats } from '../types';
-import type { EmailConfig } from '../config';
+import type { SummaryStats } from '../types.ts';
+import type { EmailConfig } from '../config.ts';
 
 export interface CampaignContext {
   stats: SummaryStats;

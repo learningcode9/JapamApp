@@ -1,4 +1,5 @@
-import type { EmailMessage, SendEmailResult } from './types';
+import type { EmailMessage, SendEmailResult } from './types.ts';
+import { getEnv } from './env.ts';
 
 export class EmailProviderError extends Error {
   constructor(message: string, public readonly safeToRetry: boolean) {
@@ -74,7 +75,7 @@ export class ResendProvider implements EmailProvider {
  * In dry-run mode, pass `null` as the provider — the service handles that.
  */
 export function createEmailProvider(): EmailProvider {
-  const apiKey = process.env.RESEND_API_KEY;
+  const apiKey = getEnv('RESEND_API_KEY');
   if (!apiKey) {
     throw new Error(
       'RESEND_API_KEY is not set. ' +

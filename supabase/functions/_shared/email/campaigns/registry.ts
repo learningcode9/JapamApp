@@ -2,8 +2,8 @@
 // lines here (import + map entry) once its content module exists — nothing
 // else in the system needs to change.
 
-import type { CampaignDefinition } from './types';
-import { fifteenDayInspirationCampaign } from './fifteenDayInspiration';
+import type { CampaignDefinition } from './types.ts';
+import { fifteenDayInspirationCampaign } from './fifteenDayInspiration.ts';
 
 export const CAMPAIGN_REGISTRY: Record<string, CampaignDefinition> = {
   [fifteenDayInspirationCampaign.id]: fifteenDayInspirationCampaign,
