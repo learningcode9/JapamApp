@@ -14,7 +14,7 @@ function makeRow(overrides: Partial<JapamHistoryRow> = {}): JapamHistoryRow {
     user_name: 'Test User',
     malas: 2,
     count: 216,
-    created_at: '2026-06-20T08:00:00.000Z',
+    created_at: '2026-08-20T08:00:00.000Z',
     completion_id: 'c1',
     ...overrides,
   };
@@ -22,7 +22,6 @@ function makeRow(overrides: Partial<JapamHistoryRow> = {}): JapamHistoryRow {
 
 const NOW = new Date('2026-08-22T12:00:00.000Z');
 const EXACTLY_15_DAYS_OLD = '2026-08-07T12:00:00.000Z';
-const TOO_EARLY = '2026-08-08T12:00:00.000Z';
 const USER: AuthUser = {
   id: 'u1',
   email: 'user@example.com',
@@ -38,8 +37,6 @@ const FAKE_CAMPAIGN: CampaignDefinition = {
   buildText: (ctx: CampaignContext) => `${ctx.stats.userName}:${ctx.lifetimeTotalMalas}`,
 };
 
-// Far enough in the past that every existing test (none of which are about
-// the "too new" eligibility gate) is unaffected by its introduction.
 const LONG_ESTABLISHED_USER_ISO = '2020-01-01T00:00:00.000Z';
 
 const withUnsubscribeEnv = async (run: () => Promise<void>) => {
@@ -63,7 +60,7 @@ const withUnsubscribeEnv = async (run: () => Promise<void>) => {
  * fakes — same pattern as SummaryEmailService's TestService.
  */
 class TestService extends CampaignEmailService {
-  public recordedSummaries: Array<Omit<EmailSummaryRecord, 'id' | 'created_at'>> = [];
+  public recordedSummaries: Omit<EmailSummaryRecord, 'id' | 'created_at'>[] = [];
 
   constructor(
     public fakeUsers: AuthUser[] = [USER],
@@ -87,10 +84,15 @@ class TestService extends CampaignEmailService {
 
   protected override async getHistoryForUser(
     _userId: string,
-    _periodStart: string,
-    _periodEnd: string,
+    periodStart: string,
+    periodEnd: string,
   ): Promise<JapamHistoryRow[]> {
-    return this.fakeHistory;
+    const start = Date.parse(`${periodStart}T00:00:00.000Z`);
+    const end = Date.parse(`${periodEnd}T23:59:59.999Z`);
+    return this.fakeHistory.filter(row => {
+      const createdAt = Date.parse(row.created_at);
+      return createdAt >= start && createdAt <= end;
+    });
   }
 
   protected override async getLifetimeStats(): Promise<{ lifetimeTotalMalas: number; firstActivityAt: string | null }> {
@@ -144,44 +146,75 @@ describe('CampaignEmailService no activity', () => {
   });
 });
 
-// ─── New-user eligibility ───────────────────────────────────────────────────
+// ─── Rolling activity eligibility ────────────────────────────────────────────
 
-describe('CampaignEmailService new-user eligibility', () => {
-  it('allows a user whose auth account is exactly 15 days old', async () => {
-    const user = { ...USER, createdAt: EXACTLY_15_DAYS_OLD };
-    const service = new TestService([user], [makeRow()], false, 42, null);
-    const results = await service.run({ dryRun: true, now: NOW });
+describe('CampaignEmailService rolling activity eligibility', () => {
+  it('allows an old user with a recent one-Mala session', async () => {
+    const service = new TestService(
+      [{ ...USER, createdAt: LONG_ESTABLISHED_USER_ISO }],
+      [makeRow({ malas: 1, count: 108 })],
+      false,
+      42,
+      null,
+    );
+    const results = await service.run({ dryRun: true });
 
     expect(results[0].status).toBe('dry_run');
   });
 
-  it('skips an auth account that is too early for the campaign', async () => {
-    const user = { ...USER, createdAt: TOO_EARLY };
-    const service = new TestService([user], [makeRow()], false, 42, null);
-    const results = await service.run({ dryRun: true, now: NOW });
-
-    expect(results[0].status).toBe('skipped_too_new');
-  });
-
-  it('skips a long-established user instead of backfilling the campaign', async () => {
+  it('allows an old user with recent positive count-only activity', async () => {
     const service = new TestService(
       [{ ...USER, createdAt: LONG_ESTABLISHED_USER_ISO }],
+      [makeRow({ malas: 0, count: 50 })],
+      false,
+      42,
+      null,
+    );
+    const results = await service.run({ dryRun: true });
+
+    expect(results[0].status).toBe('dry_run');
+  });
+
+  it('allows a new user with recent activity', async () => {
+    const service = new TestService(
+      [{ ...USER, createdAt: '2026-08-21T12:00:00.000Z' }],
       [makeRow()],
       false,
       42,
       null,
-      FAKE_CAMPAIGN,
     );
     const results = await service.run({ dryRun: true });
 
-    expect(results[0].status).toBe('skipped_outside_milestone');
+    expect(results[0].status).toBe('dry_run');
   });
 
-  it('fails closed when the auth account creation timestamp is missing', async () => {
-    const service = new TestService([{ ...USER, createdAt: undefined }], [makeRow()], false, 42, null);
+  it('skips a user whose only activity is older than the rolling period', async () => {
+    const service = new TestService(
+      [{ ...USER, createdAt: LONG_ESTABLISHED_USER_ISO }],
+      [makeRow({ created_at: '2026-08-06T08:00:00.000Z' })],
+      false,
+      42,
+      null,
+    );
     const results = await service.run({ dryRun: true });
 
-    expect(results[0].status).toBe('skipped_missing_account_age');
+    expect(results[0]).toMatchObject({
+      status: 'skipped_no_activity',
+      reason: 'no japam activity in period',
+    });
+  });
+
+  it('skips a user with no genuine activity rows', async () => {
+    const service = new TestService(
+      [{ ...USER, createdAt: LONG_ESTABLISHED_USER_ISO }],
+      [makeRow({ malas: 0, count: 0 })],
+      false,
+      42,
+      null,
+    );
+    const results = await service.run({ dryRun: true });
+
+    expect(results[0].status).toBe('skipped_no_activity');
   });
 });
 

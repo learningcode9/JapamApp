@@ -1,9 +1,7 @@
 import {
   calculateSummaryStats,
   calculateLongestStreak,
-  getAccountAgeDays,
   getPeriodDates,
-  isWithinAccountMilestoneWindow,
 } from '../email/calculator';
 import type { JapamHistoryRow } from '../email/types';
 
@@ -69,6 +67,28 @@ describe('calculateSummaryStats', () => {
 
   it('returns null for empty rows regardless of period', () => {
     expect(calculateSummaryStats('u1', 'a@b.com', [], '2026-01-01', '2026-01-15')).toBeNull();
+  });
+
+  it('returns null when rows contain no positive Mala or count activity', () => {
+    expect(calculateSummaryStats(
+      'u1',
+      'a@b.com',
+      [row({ malas: 0, count: 0 })],
+      P_START,
+      P_END,
+    )).toBeNull();
+  });
+
+  it('treats positive count-only activity as genuine activity', () => {
+    const stats = calculateSummaryStats(
+      'u1',
+      'a@b.com',
+      [row({ malas: 0, count: 50 })],
+      P_START,
+      P_END,
+    );
+    expect(stats).not.toBeNull();
+    expect(stats?.totalMalas).toBe(0);
   });
 
   it('calculates totalMalas correctly', () => {
@@ -168,23 +188,6 @@ describe('calculateSummaryStats', () => {
     const rows = [row({ source: 'unknown_future_type' })];
     const stats = calculateSummaryStats('u1', 'a@b.com', rows, P_START, P_END)!;
     expect(stats.breakdown?.manual).toBe(1);
-  });
-});
-
-describe('account milestone window', () => {
-  const NOW = new Date('2026-08-22T12:00:00.000Z');
-
-  it('uses completed UTC elapsed days and the half-open 15-to-16-day window', () => {
-    expect(getAccountAgeDays('2026-08-07T12:01:00.000Z', NOW)).toBe(14);
-    expect(getAccountAgeDays('2026-08-07T12:00:00.000Z', NOW)).toBe(15);
-    expect(getAccountAgeDays('2026-08-07T00:01:00.000Z', NOW)).toBe(15);
-    expect(getAccountAgeDays('2026-08-06T12:00:00.000Z', NOW)).toBe(16);
-  });
-
-  it('accepts only ages 15 through 15 completed days', () => {
-    expect(isWithinAccountMilestoneWindow(14, 15)).toBe(false);
-    expect(isWithinAccountMilestoneWindow(15, 15)).toBe(true);
-    expect(isWithinAccountMilestoneWindow(16, 15)).toBe(false);
   });
 });
 

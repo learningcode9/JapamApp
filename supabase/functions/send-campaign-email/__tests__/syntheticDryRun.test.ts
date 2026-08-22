@@ -27,7 +27,7 @@ class SyntheticService extends CampaignEmailService {
       id: 'fixture-user',
       email: 'fixture@example.com',
       displayName: 'Synthetic User',
-      createdAt: new Date(NOW.getTime() - 15 * 86_400_000).toISOString(),
+      createdAt: '2020-01-01T00:00:00.000Z',
     }];
   }
 

@@ -141,15 +141,12 @@ then apply the campaign-specific checks.
   receive a deterministic `skipped_excluded` result. There is no hardcoded
   personal/test address list.
 
-Campaign eligibility also requires a valid recipient email and uses
-`auth.users.created_at` for the account-age check; a history row is never used
-as a signup-date proxy. The 15-day campaign sends only during the half-open
-completed-age window `[15, 16)` days: users are eligible once they reach 15
-completed elapsed UTC days, and are not backfilled after the window passes.
-Within that window, at least one row in the canonical current 15-day UTC stats
-window is required. Any history row counts as activity, including count-only
-rows with zero malas; no rows produces the deterministic `no_japam_activity`
-skip.
+Campaign eligibility requires a valid recipient email and at least one genuine
+activity row in the canonical rolling 15-day UTC history window. Account age is
+not a restriction, so both new and long-established users qualify when they
+have recent practice; there is no signup-age backfill rule. A Mala or any
+positive count-mode activity qualifies, while no activity produces the
+deterministic `no_japam_activity` skip.
 
 The send claim is durable and race-safe: the unique
 `(user_id, email_type, period_start)` key is claimed before the provider call,

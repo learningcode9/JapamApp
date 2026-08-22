@@ -4,12 +4,7 @@ import type { EmailProvider } from './emailProvider.ts';
 import type { AuthUser, JapamHistoryRow, EmailSummaryRecord, SummaryRunResult } from './types.ts';
 import type { CampaignDefinition } from './campaigns/types.ts';
 import type { EmailConfig } from './config.ts';
-import {
-  calculateSummaryStats,
-  getAccountAgeDays,
-  getPeriodDates,
-  isWithinAccountMilestoneWindow,
-} from './calculator.ts';
+import { calculateSummaryStats, getPeriodDates } from './calculator.ts';
 import { buildUnsubscribeUrl } from './unsubscribeToken.ts';
 import * as dataAccess from './dataAccess.ts';
 
@@ -21,10 +16,11 @@ export interface CampaignRunOptions {
 
 /**
  * Generic engine that runs any CampaignDefinition against campaign candidates:
- * it makes deterministic eligibility decisions, skips anyone already sent to
- * this milestone, computes stats + lifetime totals, renders, sends, and
- * records the outcome in `user_email_summaries` (keyed by the campaign's own
- * `id` as `email_type`, so no per-campaign DB migration is ever needed).
+ * it makes deterministic safety decisions, requires genuine activity in the
+ * campaign's rolling period, skips anyone already sent to this milestone,
+ * computes stats + lifetime totals, renders, sends, and records the outcome
+ * in `user_email_summaries` (keyed by the campaign's own `id` as `email_type`,
+ * so no per-campaign DB migration is ever needed).
  *
  * Data-access methods are `protected` for the same reason they are in
  * SummaryEmailService: tests subclass this service and replace them with
@@ -137,32 +133,6 @@ export class CampaignEmailService {
           email: user.email,
           status: 'skipped_unsubscribed',
           reason: 'unsubscribed/suppressed',
-        };
-      }
-
-      const accountAgeDays = getAccountAgeDays(user.createdAt, now);
-      if (accountAgeDays === null) {
-        return {
-          userId: user.id,
-          email: user.email,
-          status: 'skipped_missing_account_age',
-          reason: 'auth account creation timestamp is missing or invalid',
-        };
-      }
-      if (accountAgeDays < this.campaign.periodDays) {
-        return {
-          userId: user.id,
-          email: user.email,
-          status: 'skipped_too_new',
-          reason: `account is ${accountAgeDays} days old — requires ${this.campaign.periodDays}`,
-        };
-      }
-      if (!isWithinAccountMilestoneWindow(accountAgeDays, this.campaign.periodDays)) {
-        return {
-          userId: user.id,
-          email: user.email,
-          status: 'skipped_outside_milestone',
-          reason: `account is ${accountAgeDays} days old — ${this.campaign.periodDays}-day milestone window has passed`,
         };
       }
 
