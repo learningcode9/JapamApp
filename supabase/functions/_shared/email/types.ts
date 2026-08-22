@@ -19,6 +19,8 @@ export interface AuthUser {
   id: string;
   email: string;
   displayName?: string;
+  /** `auth.users.created_at`, used for account-age campaign eligibility. */
+  createdAt?: string;
 }
 
 // ─── Stats computed from history rows ─────────────────────────────────────────
@@ -64,6 +66,8 @@ export interface EmailMessage {
   subject: string;
   html: string;
   text: string;
+  /** Stable key for provider-level retry deduplication. */
+  idempotencyKey?: string;
 }
 
 export interface SendEmailResult {
@@ -101,6 +105,9 @@ export type ResultStatus =
   | 'dry_run'
   | 'skipped_no_activity'
   | 'skipped_duplicate'
+  | 'skipped_too_new'
+  | 'skipped_invalid_email'
+  | 'skipped_missing_account_age'
   | 'failed';
 
 export interface SummaryRunResult {

@@ -1,5 +1,12 @@
 import type { EmailMessage, SendEmailResult } from './types';
 
+export class EmailProviderError extends Error {
+  constructor(message: string, public readonly safeToRetry: boolean) {
+    super(message);
+    this.name = 'EmailProviderError';
+  }
+}
+
 // ─── Provider interface ────────────────────────────────────────────────────────
 
 export interface EmailProvider {
@@ -21,24 +28,36 @@ export class ResendProvider implements EmailProvider {
   }
 
   async sendEmail(message: EmailMessage): Promise<SendEmailResult> {
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: message.from,
-        to: [message.to],
-        subject: message.subject,
-        html: message.html,
-        text: message.text,
-      }),
-    });
+    let response: Response;
+    try {
+      response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+          ...(message.idempotencyKey ? { 'Idempotency-Key': message.idempotencyKey } : {}),
+        },
+        body: JSON.stringify({
+          from: message.from,
+          to: [message.to],
+          subject: message.subject,
+          html: message.html,
+          text: message.text,
+        }),
+      });
+    } catch (error) {
+      throw new EmailProviderError(
+        `Resend network error: ${error instanceof Error ? error.message : String(error)}`,
+        false,
+      );
+    }
 
     if (!response.ok) {
       const body = await response.text().catch(() => '(no body)');
-      throw new Error(`Resend API error: HTTP ${response.status} — ${body}`);
+      throw new EmailProviderError(
+        `Resend API error: HTTP ${response.status} — ${body}`,
+        response.status !== 408 && response.status < 500,
+      );
     }
 
     const data = (await response.json()) as ResendSuccessResponse;

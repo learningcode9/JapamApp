@@ -9,6 +9,7 @@ import type {
 } from './types';
 import { calculateSummaryStats, getPeriodDates } from './calculator';
 import { buildEmailHtml, buildEmailText } from './template';
+import * as dataAccess from './dataAccess';
 
 const EMAIL_TYPE = '15day_summary';
 const EMAIL_SUBJECT = '🙏 Your 15-Day Japam Journey';
@@ -55,38 +56,7 @@ export class SummaryEmailService {
   // ─── Data access (protected for test subclassing) ─────────────────────────
 
   protected async getActiveUsers(periodStart: string, periodEnd: string): Promise<AuthUser[]> {
-    const { data: activityRows, error: activityErr } = await this.supabase
-      .from('japam_history')
-      .select('user_id')
-      .gte('created_at', `${periodStart}T00:00:00.000Z`)
-      .lte('created_at', `${periodEnd}T23:59:59.999Z`);
-
-    if (activityErr) {
-      throw new Error(`getActiveUsers: japam_history query failed — ${activityErr.message}`);
-    }
-    if (!activityRows?.length) return [];
-
-    const activeIds = new Set(activityRows.map(r => r.user_id as string).filter(Boolean));
-    if (activeIds.size === 0) return [];
-
-    const { data: { users }, error: authErr } = await this.supabase.auth.admin.listUsers({
-      page: 1,
-      perPage: 1000,
-    });
-
-    if (authErr) {
-      throw new Error(`getActiveUsers: auth.admin.listUsers failed — ${authErr.message}`);
-    }
-
-    return (users ?? [])
-      .filter(u => u.email && activeIds.has(u.id))
-      .map(u => ({
-        id: u.id,
-        email: u.email!,
-        displayName:
-          (u.user_metadata?.full_name as string | undefined) ??
-          (u.user_metadata?.name as string | undefined),
-      }));
+    return dataAccess.getActiveUsersInPeriod(this.supabase, periodStart, periodEnd);
   }
 
   protected async getHistoryForUser(
@@ -94,43 +64,15 @@ export class SummaryEmailService {
     periodStart: string,
     periodEnd: string,
   ): Promise<JapamHistoryRow[]> {
-    const { data, error } = await this.supabase
-      .from('japam_history')
-      .select('user_id, user_name, malas, count, created_at, completion_id, source')
-      .eq('user_id', userId)
-      .gte('created_at', `${periodStart}T00:00:00.000Z`)
-      .lte('created_at', `${periodEnd}T23:59:59.999Z`);
-
-    if (error) {
-      throw new Error(`getHistoryForUser(${userId}): ${error.message}`);
-    }
-    return (data ?? []) as JapamHistoryRow[];
+    return dataAccess.getHistoryForUser(this.supabase, userId, periodStart, periodEnd);
   }
 
   protected async isDuplicate(userId: string, periodStart: string): Promise<boolean> {
-    const { data, error } = await this.supabase
-      .from('user_email_summaries')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('email_type', EMAIL_TYPE)
-      .eq('period_start', periodStart)
-      .in('status', ['sent', 'dry_run'])
-      .limit(1);
-
-    if (error) {
-      throw new Error(`isDuplicate(${userId}): ${error.message}`);
-    }
-    return (data?.length ?? 0) > 0;
+    return dataAccess.isDuplicateSummary(this.supabase, userId, EMAIL_TYPE, periodStart);
   }
 
   protected async recordSummary(record: Omit<EmailSummaryRecord, 'id' | 'created_at'>): Promise<void> {
-    const { error } = await this.supabase
-      .from('user_email_summaries')
-      .upsert(record, { onConflict: 'user_id,email_type,period_start' });
-
-    if (error) {
-      throw new Error(`recordSummary: ${error.message}`);
-    }
+    return dataAccess.recordSummary(this.supabase, record);
   }
 
   // ─── Per-user orchestration ────────────────────────────────────────────────

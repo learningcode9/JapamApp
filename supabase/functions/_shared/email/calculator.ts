@@ -6,8 +6,11 @@ import type { JapamHistoryRow, DailyStats, SummaryStats, SourceBreakdown } from 
  * Returns the inclusive start/end dates for a rolling window ending today (UTC).
  * A 15-day period ending today means today is included, so start = today - 14 days.
  */
-export function getPeriodDates(periodDays = 15): { periodStart: string; periodEnd: string } {
-  const end = new Date();
+export function getPeriodDates(
+  periodDays = 15,
+  now = new Date(),
+): { periodStart: string; periodEnd: string } {
+  const end = new Date(now);
   end.setUTCHours(0, 0, 0, 0);
 
   const start = new Date(end);
@@ -17,6 +20,20 @@ export function getPeriodDates(periodDays = 15): { periodStart: string; periodEn
     periodStart: start.toISOString().slice(0, 10),
     periodEnd: end.toISOString().slice(0, 10),
   };
+}
+
+/**
+ * Returns completed UTC days since an auth account was created, or null for
+ * malformed/future timestamps. Keeping this calculation explicit prevents a
+ * history row from being mistaken for the account signup date.
+ */
+export function getAccountAgeDays(createdAt: string | undefined, now = new Date()): number | null {
+  if (!createdAt) return null;
+  const createdAtMs = Date.parse(createdAt);
+  if (!Number.isFinite(createdAtMs)) return null;
+
+  const ageDays = Math.floor((now.getTime() - createdAtMs) / 86_400_000);
+  return ageDays >= 0 ? ageDays : null;
 }
 
 // ─── Streak calculation ────────────────────────────────────────────────────────

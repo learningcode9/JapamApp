@@ -228,6 +228,7 @@ export default function RootLayout() {
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                 <Stack.Screen name="privacy" options={{ headerShown: false }} />
                 <Stack.Screen name="delete-account" options={{ headerShown: false }} />
+                <Stack.Screen name="unsubscribe" options={{ headerShown: false }} />
                 <Stack.Screen name="my-japams" options={{ headerShown: false }} />
                 <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
               </Stack>

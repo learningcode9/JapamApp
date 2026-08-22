@@ -1,4 +1,5 @@
 import type { SummaryStats } from './types';
+import { escapeHtml } from './baseTemplate';
 
 function fmtDate(dateStr: string): string {
   const [y, m, d] = dateStr.split('-').map(Number);
@@ -78,7 +79,7 @@ export function buildEmailHtml(stats: SummaryStats, appUrl = ''): string {
   <!-- Greeting -->
   <tr><td style="padding:32px 32px 20px;">
     <p style="margin:0;font-size:18px;color:#3D2B1F;">
-      Jai Shri Ram, <strong>${stats.userName}</strong> 🙏
+      Jai Shri Ram, <strong>${escapeHtml(stats.userName)}</strong> 🙏
     </p>
     <p style="color:#6B4226;font-size:15px;margin:12px 0 0;line-height:1.7;">
       Here is a gentle reflection on your devotion over the past 15 days.
