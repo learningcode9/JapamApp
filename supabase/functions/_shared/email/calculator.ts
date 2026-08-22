@@ -36,6 +36,19 @@ export function getAccountAgeDays(createdAt: string | undefined, now = new Date(
   return ageDays >= 0 ? ageDays : null;
 }
 
+/**
+ * Returns true only during the account's first daily 15-day milestone window.
+ * Because getAccountAgeDays() is completed elapsed UTC days, this is the
+ * half-open interval [milestoneDays, milestoneDays + 1): it includes 15d
+ * exactly and excludes accounts once they reach 16d, preventing backfill.
+ */
+export function isWithinAccountMilestoneWindow(
+  accountAgeDays: number,
+  milestoneDays: number,
+): boolean {
+  return accountAgeDays >= milestoneDays && accountAgeDays < milestoneDays + 1;
+}
+
 // ─── Streak calculation ────────────────────────────────────────────────────────
 
 /**

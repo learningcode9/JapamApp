@@ -2,6 +2,7 @@ import {
   isDuplicateSummary,
   getUnsubscribedUserIds,
   getActiveUsersInPeriod,
+  getCampaignCandidates,
   markUserUnsubscribed,
   claimSummary,
   isValidEmail,
@@ -211,6 +212,60 @@ describe('getActiveUsersInPeriod (unsubscribe + allowlist enforcement)', () => {
 
     // u2 is allowlisted but unsubscribed; u3 is active but not allowlisted.
     expect(result.map(u => u.id)).toEqual(['u1']);
+  });
+});
+
+describe('getCampaignCandidates (campaign decision inputs)', () => {
+  const ORIGINAL_ALLOWLIST = process.env.EMAIL_ALLOWLIST;
+  const ORIGINAL_EXCLUSIONS = process.env.EMAIL_CAMPAIGN_EXCLUDED_EMAILS;
+
+  afterEach(() => {
+    if (ORIGINAL_ALLOWLIST === undefined) {
+      delete process.env.EMAIL_ALLOWLIST;
+    } else {
+      process.env.EMAIL_ALLOWLIST = ORIGINAL_ALLOWLIST;
+    }
+    if (ORIGINAL_EXCLUSIONS === undefined) {
+      delete process.env.EMAIL_CAMPAIGN_EXCLUDED_EMAILS;
+    } else {
+      process.env.EMAIL_CAMPAIGN_EXCLUDED_EMAILS = ORIGINAL_EXCLUSIONS;
+    }
+  });
+
+  it('returns invalid, excluded, and unsubscribed users for deterministic service skip reasons', async () => {
+    process.env.EMAIL_CAMPAIGN_EXCLUDED_EMAILS = ' REVIEWER@example.com ';
+    const supabase = fakeSupabaseForActiveUsers({
+      activityUserIds: [],
+      unsubscribedUserIds: ['u2'],
+      authUsers: [
+        { id: 'u1', email: 'Reviewer@example.com' },
+        { id: 'u2', email: 'unsubscribed@example.com' },
+        { id: 'u3', email: 'not-an-email' },
+      ],
+    });
+
+    const result = await getCampaignCandidates(supabase);
+    expect(result).toEqual([
+      expect.objectContaining({ id: 'u1', isExcluded: true, isUnsubscribed: false }),
+      expect.objectContaining({ id: 'u2', isExcluded: false, isUnsubscribed: true }),
+      expect.objectContaining({ id: 'u3', isExcluded: false, isUnsubscribed: false }),
+    ]);
+  });
+
+  it('preserves EMAIL_ALLOWLIST as a campaign-wide send safety filter', async () => {
+    process.env.EMAIL_ALLOWLIST = 'allowed@example.com';
+    delete process.env.EMAIL_CAMPAIGN_EXCLUDED_EMAILS;
+    const supabase = fakeSupabaseForActiveUsers({
+      activityUserIds: [],
+      unsubscribedUserIds: [],
+      authUsers: [
+        { id: 'u1', email: 'allowed@example.com' },
+        { id: 'u2', email: 'other@example.com' },
+      ],
+    });
+
+    const result = await getCampaignCandidates(supabase);
+    expect(result.map(user => user.id)).toEqual(['u1']);
   });
 });
 

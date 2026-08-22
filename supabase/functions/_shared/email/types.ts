@@ -21,6 +21,10 @@ export interface AuthUser {
   displayName?: string;
   /** `auth.users.created_at`, used for account-age campaign eligibility. */
   createdAt?: string;
+  /** Populated by campaign candidate loading; absent means not suppressed. */
+  isUnsubscribed?: boolean;
+  /** Populated by campaign candidate loading; absent means not excluded. */
+  isExcluded?: boolean;
 }
 
 // ─── Stats computed from history rows ─────────────────────────────────────────
@@ -106,7 +110,10 @@ export type ResultStatus =
   | 'skipped_no_activity'
   | 'skipped_duplicate'
   | 'skipped_too_new'
+  | 'skipped_outside_milestone'
   | 'skipped_invalid_email'
+  | 'skipped_excluded'
+  | 'skipped_unsubscribed'
   | 'skipped_missing_account_age'
   | 'failed';
 

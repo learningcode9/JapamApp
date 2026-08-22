@@ -6,7 +6,7 @@
 
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import type { AuthUser, JapamHistoryRow, EmailSummaryRecord } from './types.ts';
-import { parseAllowlist } from './config.ts';
+import { parseAllowlist, parseExcludedEmails } from './config.ts';
 
 const SIMPLE_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -97,6 +97,45 @@ export async function getActiveUsersInPeriod(
         (u.user_metadata?.full_name as string | undefined) ??
         (u.user_metadata?.name as string | undefined),
     }));
+}
+
+/**
+ * Loads auth users for campaign eligibility decisions without pre-filtering
+ * by activity. The campaign service intentionally owns the deterministic
+ * decision order so dry-runs can explain invalid, excluded, suppressed,
+ * out-of-window, and no-activity skips instead of silently dropping them.
+ */
+export async function getCampaignCandidates(supabase: SupabaseClient): Promise<AuthUser[]> {
+  const [{ data: { users }, error: authErr }, unsubscribedIds] = await Promise.all([
+    supabase.auth.admin.listUsers({ page: 1, perPage: 1000 }),
+    getUnsubscribedUserIds(supabase),
+  ]);
+
+  if (authErr) {
+    throw new Error(`getCampaignCandidates: auth.admin.listUsers failed — ${authErr.message}`);
+  }
+
+  // Preserve the existing operator safety valve for campaign runs. When set,
+  // only explicitly listed valid addresses enter the decision loop.
+  const allowlist = parseAllowlist(process.env.EMAIL_ALLOWLIST);
+  const excludedEmails = parseExcludedEmails(process.env.EMAIL_CAMPAIGN_EXCLUDED_EMAILS);
+  return (users ?? [])
+    .map(user => {
+      const email = user.email?.trim() ?? '';
+      return {
+        id: user.id,
+        email,
+        createdAt: user.created_at,
+        displayName:
+          (user.user_metadata?.full_name as string | undefined) ??
+          (user.user_metadata?.name as string | undefined),
+        isUnsubscribed: unsubscribedIds.has(user.id),
+        isExcluded: excludedEmails.has(email.toLowerCase()),
+      };
+    })
+    .filter(user =>
+      allowlist === null || (isValidEmail(user.email) && allowlist.has(user.email.toLowerCase())),
+    );
 }
 
 export async function getHistoryForUser(

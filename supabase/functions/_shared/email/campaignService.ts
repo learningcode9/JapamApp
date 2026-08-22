@@ -4,7 +4,12 @@ import type { EmailProvider } from './emailProvider';
 import type { AuthUser, JapamHistoryRow, EmailSummaryRecord, SummaryRunResult } from './types';
 import type { CampaignDefinition } from './campaigns/types';
 import type { EmailConfig } from './config';
-import { calculateSummaryStats, getAccountAgeDays, getPeriodDates } from './calculator';
+import {
+  calculateSummaryStats,
+  getAccountAgeDays,
+  getPeriodDates,
+  isWithinAccountMilestoneWindow,
+} from './calculator';
 import { loadEmailConfig } from './config';
 import { buildUnsubscribeUrl } from './unsubscribeToken';
 import * as dataAccess from './dataAccess';
@@ -16,10 +21,10 @@ export interface CampaignRunOptions {
 }
 
 /**
- * Generic engine that runs any CampaignDefinition against every user active
- * in that campaign's period window: find active users, skip anyone already
- * sent-to this period, compute stats + lifetime totals, render, send, and
- * record the outcome in `user_email_summaries` (keyed by the campaign's own
+ * Generic engine that runs any CampaignDefinition against campaign candidates:
+ * it makes deterministic eligibility decisions, skips anyone already sent to
+ * this milestone, computes stats + lifetime totals, renders, sends, and
+ * records the outcome in `user_email_summaries` (keyed by the campaign's own
  * `id` as `email_type`, so no per-campaign DB migration is ever needed).
  *
  * Data-access methods are `protected` for the same reason they are in
@@ -43,7 +48,7 @@ export class CampaignEmailService {
     );
 
     const users = await this.getActiveUsers(periodStart, periodEnd);
-    console.log(`[Campaign:${this.campaign.id}] ${users.length} user(s) with activity in period`);
+    console.log(`[Campaign:${this.campaign.id}] ${users.length} campaign candidate(s)`);
 
     const results: SummaryRunResult[] = [];
     for (const user of users) {
@@ -65,7 +70,9 @@ export class CampaignEmailService {
   // ─── Data access (protected for test subclassing) ─────────────────────────
 
   protected async getActiveUsers(periodStart: string, periodEnd: string): Promise<AuthUser[]> {
-    return dataAccess.getActiveUsersInPeriod(this.supabase, periodStart, periodEnd);
+    void periodStart;
+    void periodEnd;
+    return dataAccess.getCampaignCandidates(this.supabase);
   }
 
   protected async getHistoryForUser(
@@ -116,12 +123,21 @@ export class CampaignEmailService {
         };
       }
 
-      if (await this.isDuplicate(user.id, periodStart)) {
+      if (user.isExcluded) {
         return {
           userId: user.id,
           email: user.email,
-          status: 'skipped_duplicate',
-          reason: 'already claimed or sent for this period',
+          status: 'skipped_excluded',
+          reason: 'explicitly excluded campaign recipient',
+        };
+      }
+
+      if (user.isUnsubscribed) {
+        return {
+          userId: user.id,
+          email: user.email,
+          status: 'skipped_unsubscribed',
+          reason: 'unsubscribed/suppressed',
         };
       }
 
@@ -140,6 +156,23 @@ export class CampaignEmailService {
           email: user.email,
           status: 'skipped_too_new',
           reason: `account is ${accountAgeDays} days old — requires ${this.campaign.periodDays}`,
+        };
+      }
+      if (!isWithinAccountMilestoneWindow(accountAgeDays, this.campaign.periodDays)) {
+        return {
+          userId: user.id,
+          email: user.email,
+          status: 'skipped_outside_milestone',
+          reason: `account is ${accountAgeDays} days old — ${this.campaign.periodDays}-day milestone window has passed`,
+        };
+      }
+
+      if (await this.isDuplicate(user.id, periodStart)) {
+        return {
+          userId: user.id,
+          email: user.email,
+          status: 'skipped_duplicate',
+          reason: 'already claimed or sent for this period',
         };
       }
 
