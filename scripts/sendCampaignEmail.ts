@@ -13,7 +13,7 @@
  * Reads .env.local automatically if present.
  */
 
-import { createCampaignService } from '../supabase/functions/_shared/email/campaignService';
+import { createCampaignService } from '../supabase/functions/_shared/email/campaignServiceFactory';
 import { createEmailProvider } from '../supabase/functions/_shared/email/emailProvider';
 import { getCampaign } from '../supabase/functions/_shared/email/campaigns/registry';
 import {

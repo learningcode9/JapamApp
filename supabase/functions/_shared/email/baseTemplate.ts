@@ -9,7 +9,7 @@
 // Gmail, Apple Mail, and Outlook (which uses Word's rendering engine and
 // ignores most modern CSS, including flexbox/grid and external stylesheets).
 
-import type { EmailConfig } from './config';
+import type { EmailConfig } from './config.ts';
 
 export interface HeroContent {
   /** Short line above the headline, e.g. "🪷 Japam App". Optional. */

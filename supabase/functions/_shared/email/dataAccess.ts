@@ -7,8 +7,43 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import type { AuthUser, JapamHistoryRow, EmailSummaryRecord } from './types.ts';
 import { parseAllowlist, parseExcludedEmails } from './config.ts';
+import { getEnv } from './env.ts';
 
 const SIMPLE_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const AUTH_USERS_PAGE_SIZE = 1000;
+
+/**
+ * Auth admin listUsers is paginated at 1,000 users per request. Fetch pages
+ * sequentially so a campaign never silently ignores users beyond page one.
+ * The seen set protects against an overlapping/duplicated page.
+ */
+async function* listAllAuthUsers(supabase: SupabaseClient) {
+  const seenUserIds = new Set<string>();
+
+  for (let page = 1; ; page += 1) {
+    const { data, error } = await supabase.auth.admin.listUsers({
+      page,
+      perPage: AUTH_USERS_PAGE_SIZE,
+    });
+
+    if (error) {
+      throw new Error(`listAllAuthUsers: auth.admin.listUsers failed on page ${page} — ${error.message}`);
+    }
+
+    const users = data?.users ?? [];
+    let newUsersOnPage = 0;
+    for (const user of users) {
+      if (seenUserIds.has(user.id)) continue;
+      seenUserIds.add(user.id);
+      newUsersOnPage += 1;
+      yield user;
+    }
+
+    // A short page is the normal end condition. The second condition also
+    // prevents an accidental repeated full page from causing an infinite loop.
+    if (users.length < AUTH_USERS_PAGE_SIZE || newUsersOnPage === 0) break;
+  }
+}
 
 export function isValidEmail(email: string | null | undefined): email is string {
   const normalized = email?.trim();
@@ -70,33 +105,30 @@ export async function getActiveUsersInPeriod(
   const activeIds = new Set(activityRows.map(r => r.user_id as string).filter(Boolean));
   if (activeIds.size === 0) return [];
 
-  const [{ data: { users }, error: authErr }, unsubscribedIds] = await Promise.all([
-    supabase.auth.admin.listUsers({ page: 1, perPage: 1000 }),
-    getUnsubscribedUserIds(supabase),
-  ]);
-
-  if (authErr) {
-    throw new Error(`getActiveUsersInPeriod: auth.admin.listUsers failed — ${authErr.message}`);
-  }
+  const unsubscribedIds = await getUnsubscribedUserIds(supabase);
 
   // EMAIL_ALLOWLIST, when set, restricts every campaign to only the listed
   // addresses — intended for controlled testing against real production
   // data without emailing real users. Unset (the default) means no
   // restriction, identical to behavior before this filter existed.
-  const allowlist = parseAllowlist(process.env.EMAIL_ALLOWLIST);
+  const allowlist = parseAllowlist(getEnv('EMAIL_ALLOWLIST'));
 
-  return (users ?? [])
-    .filter(u => isValidEmail(u.email) && activeIds.has(u.id))
-    .filter(u => !unsubscribedIds.has(u.id))
-    .filter(u => allowlist === null || allowlist.has(u.email!.trim().toLowerCase()))
-    .map(u => ({
-      id: u.id,
-      email: u.email!.trim(),
-      createdAt: u.created_at,
+  const users: AuthUser[] = [];
+  for await (const user of listAllAuthUsers(supabase)) {
+    if (!isValidEmail(user.email) || !activeIds.has(user.id)) continue;
+    if (unsubscribedIds.has(user.id)) continue;
+    if (allowlist !== null && !allowlist.has(user.email!.trim().toLowerCase())) continue;
+
+    users.push({
+      id: user.id,
+      email: user.email!.trim(),
+      createdAt: user.created_at,
       displayName:
-        (u.user_metadata?.full_name as string | undefined) ??
-        (u.user_metadata?.name as string | undefined),
-    }));
+        (user.user_metadata?.full_name as string | undefined) ??
+        (user.user_metadata?.name as string | undefined),
+    });
+  }
+  return users;
 }
 
 /**
@@ -106,23 +138,16 @@ export async function getActiveUsersInPeriod(
  * out-of-window, and no-activity skips instead of silently dropping them.
  */
 export async function getCampaignCandidates(supabase: SupabaseClient): Promise<AuthUser[]> {
-  const [{ data: { users }, error: authErr }, unsubscribedIds] = await Promise.all([
-    supabase.auth.admin.listUsers({ page: 1, perPage: 1000 }),
-    getUnsubscribedUserIds(supabase),
-  ]);
-
-  if (authErr) {
-    throw new Error(`getCampaignCandidates: auth.admin.listUsers failed — ${authErr.message}`);
-  }
+  const unsubscribedIds = await getUnsubscribedUserIds(supabase);
 
   // Preserve the existing operator safety valve for campaign runs. When set,
   // only explicitly listed valid addresses enter the decision loop.
-  const allowlist = parseAllowlist(process.env.EMAIL_ALLOWLIST);
-  const excludedEmails = parseExcludedEmails(process.env.EMAIL_CAMPAIGN_EXCLUDED_EMAILS);
-  return (users ?? [])
-    .map(user => {
+  const allowlist = parseAllowlist(getEnv('EMAIL_ALLOWLIST'));
+  const excludedEmails = parseExcludedEmails(getEnv('EMAIL_CAMPAIGN_EXCLUDED_EMAILS'));
+  const users: AuthUser[] = [];
+  for await (const user of listAllAuthUsers(supabase)) {
       const email = user.email?.trim() ?? '';
-      return {
+      users.push({
         id: user.id,
         email,
         createdAt: user.created_at,
@@ -131,11 +156,11 @@ export async function getCampaignCandidates(supabase: SupabaseClient): Promise<A
           (user.user_metadata?.name as string | undefined),
         isUnsubscribed: unsubscribedIds.has(user.id),
         isExcluded: excludedEmails.has(email.toLowerCase()),
-      };
-    })
-    .filter(user =>
-      allowlist === null || (isValidEmail(user.email) && allowlist.has(user.email.toLowerCase())),
-    );
+      });
+  }
+  return users.filter(user =>
+    allowlist === null || (isValidEmail(user.email) && allowlist.has(user.email.toLowerCase())),
+  );
 }
 
 export async function getHistoryForUser(

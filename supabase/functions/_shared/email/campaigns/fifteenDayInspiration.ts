@@ -7,8 +7,8 @@
 // background; the Bhagavad Gita verse is included as optional inspirational
 // content, clearly attributed, alongside a more universal reflection line.
 
-import type { CampaignDefinition, CampaignContext } from './types';
-import { renderCampaignEmail, escapeHtml } from '../baseTemplate';
+import type { CampaignDefinition, CampaignContext } from './types.ts';
+import { renderCampaignEmail, escapeHtml } from '../baseTemplate.ts';
 
 function fmtDate(dateStr: string): string {
   const [y, m, d] = dateStr.split('-').map(Number);

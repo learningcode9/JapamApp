@@ -31,7 +31,9 @@ supabase/functions/_shared/email/
 
 supabase/functions/
   send-summary-email/index.ts     ← original stub (unchanged)
-  send-campaign-email/index.ts    ← NEW stub, generic over campaign id
+  send-campaign-email/index.ts    ← Deno wrapper with operator/allowlist gates
+  send-campaign-email/handler.ts  ← testable request validation and orchestration
+  send-campaign-email/__tests__/  ← wrapper safety tests
 
 scripts/
   sendSummaryEmails.ts    ← original CLI (unchanged)
@@ -98,7 +100,16 @@ file ever reads `process.env` directly.
 | `EMAIL_SOCIAL_LINKS` | `''` | Comma-separated `Label\|https://url` pairs, rendered in the footer |
 | `PERIOD_DAYS` | `15` | Existing var; default period for campaigns that don't set their own |
 | `EMAIL_ALLOWLIST` | `''` (no restriction) | Comma-separated addresses. When set, **every** campaign only sends to these — for controlled testing against real production data |
+| `EMAIL_CONTROLLED_RECIPIENT` | `''` | Must match the single approved address in `EMAIL_ALLOWLIST` for a real wrapper send |
 | `EMAIL_CAMPAIGN_EXCLUDED_EMAILS` | `''` (no exclusions) | Comma-separated, case-insensitive exact email matches excluded from campaign sends; useful for internal/test accounts |
+
+The deployment wrapper additionally requires `RESEND_API_KEY`,
+`SUPABASE_SERVICE_ROLE_KEY`, and a Supabase URL for real execution. Missing
+`EMAIL_CAMPAIGN_EXCLUDED_EMAILS` safely means no explicit exclusions. A real
+send must have `EMAIL_CONTROLLED_RECIPIENT` and `EMAIL_ALLOWLIST` set to the
+same approved controlled recipient; the wrapper also checks a fixed
+controlled-recipient fingerprint. Dry-runs may omit this gate and remain
+provider-free.
 
 ## Unsubscribe & allowlist
 
@@ -164,6 +175,16 @@ wrong:
 
 `DRY_RUN=true` (the default) skips this check entirely — dry-run and testing
 workflows are unaffected.
+
+## Edge Function request safety
+
+`send-campaign-email` is deployed with `verify_jwt=true`. The wrapper then
+requires a syntactically valid JWT whose role is `service_role`, accepts POST
+only, rejects malformed JSON and the legacy `force_resend` bypass, and defaults
+to dry-run. `validate_only=true` returns configuration and allowlist status
+without reading campaign data. Real sends require the production configuration
+to pass and the allowlist to contain exactly the configured approved recipient;
+wrapper never logs or returns secret values.
 
 ## DNS requirements (Resend)
 
@@ -231,10 +252,9 @@ this feature:
   next concrete step before any real send.
 - **No real hosted hero photo or logo** — see above; both are one env var
   away once assets exist.
-- **`auth.admin.listUsers()` is still capped at one page (1000 users)** —
-  inherited from the original `SummaryEmailService`/now shared via
-  `dataAccess.ts`; fine at current scale, worth revisiting before a much
-  larger user base.
+- **Auth-user pagination is sequential and de-duplicated** — the shared
+  `dataAccess.ts` path fetches every `auth.admin.listUsers()` page instead of
+  silently stopping at the first 1,000 users.
 
 ## Testing
 

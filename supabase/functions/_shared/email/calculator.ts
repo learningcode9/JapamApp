@@ -1,4 +1,4 @@
-import type { JapamHistoryRow, DailyStats, SummaryStats, SourceBreakdown } from './types';
+import type { JapamHistoryRow, DailyStats, SummaryStats, SourceBreakdown } from './types.ts';
 
 // ─── Period helpers ────────────────────────────────────────────────────────────
 

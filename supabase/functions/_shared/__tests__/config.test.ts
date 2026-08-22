@@ -58,6 +58,7 @@ describe('validateProductionEnv / assertProductionReady', () => {
   });
 
   function setValidEnv() {
+    delete process.env.SUPABASE_URL;
     process.env.RESEND_API_KEY = 're_test_key';
     process.env.EMAIL_FROM_ADDRESS = 'Japam App <noreply@realdomain.example>';
     process.env.EMAIL_UNSUBSCRIBE_URL = 'https://example.com/unsubscribe';
@@ -109,7 +110,8 @@ describe('validateProductionEnv / assertProductionReady', () => {
 
   it('flags missing Supabase credentials', () => {
     setValidEnv();
-    delete process.env.EXPO_PUBLIC_SUPABASE_URL;
+    process.env.EXPO_PUBLIC_SUPABASE_URL = '';
+    process.env.SUPABASE_URL = '';
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
     const problems = validateProductionEnv();
     expect(problems.some(p => p.includes('SUPABASE_URL'))).toBe(true);
