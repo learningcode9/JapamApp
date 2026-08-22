@@ -221,7 +221,6 @@ export default function RootLayout() {
     <View style={{ flex: 1, backgroundColor: '#edf7f4' }}>
       <PaperProvider>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-<<<<<<< HEAD
           {authReady ? <TimerProvider>
             <CurrentJapamProvider>
               <LegacyHistoryBackfillRunner />
