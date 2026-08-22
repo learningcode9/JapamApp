@@ -80,6 +80,23 @@ describe('fifteenDayInspirationCampaign.buildHtml', () => {
     expect(() => fifteenDayInspirationCampaign.buildHtml(ctx)).not.toThrow();
   });
 
+  it('renders zero-activity totals safely', () => {
+    const ctx = makeContext({
+      stats: makeStats({
+        totalSessions: 0,
+        totalMalas: 0,
+        daysPracticed: 0,
+        averageMalasPerActiveDay: 0,
+        longestStreak: 0,
+        bestDay: null,
+      }),
+      lifetimeTotalMalas: 0,
+    });
+    const html = fifteenDayInspirationCampaign.buildHtml(ctx);
+    expect(html).toContain('0');
+    expect(html).toContain('a quiet stretch');
+  });
+
   it('HTML-escapes a user-controlled display name instead of injecting it raw', () => {
     const ctx = makeContext({ stats: makeStats({ userName: '<script>alert(1)</script>' }) });
     const html = fifteenDayInspirationCampaign.buildHtml(ctx);

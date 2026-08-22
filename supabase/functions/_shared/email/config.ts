@@ -170,6 +170,12 @@ export function validateProductionEnv(): string[] {
     );
   }
 
+  if (!process.env.EMAIL_UNSUBSCRIBE_SECRET) {
+    problems.push(
+      'EMAIL_UNSUBSCRIBE_SECRET is not set — required to sign per-user unsubscribe links.',
+    );
+  }
+
   if (!(process.env.EXPO_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL)) {
     problems.push('EXPO_PUBLIC_SUPABASE_URL (or SUPABASE_URL) is not set.');
   }

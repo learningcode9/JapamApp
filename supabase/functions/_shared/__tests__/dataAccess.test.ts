@@ -3,8 +3,11 @@ import {
   getUnsubscribedUserIds,
   getActiveUsersInPeriod,
   markUserUnsubscribed,
+  claimSummary,
+  isValidEmail,
 } from '../email/dataAccess';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { EmailSummaryRecord } from '../email/types';
 
 /**
  * Minimal fake that supports exactly the query chain isDuplicateSummary
@@ -208,5 +211,54 @@ describe('getActiveUsersInPeriod (unsubscribe + allowlist enforcement)', () => {
 
     // u2 is allowlisted but unsubscribed; u3 is active but not allowlisted.
     expect(result.map(u => u.id)).toEqual(['u1']);
+  });
+});
+
+describe('recipient email validation', () => {
+  it('accepts a normal address and rejects missing or malformed values', () => {
+    expect(isValidEmail('devotee@example.com')).toBe(true);
+    expect(isValidEmail('  devotee@example.com  ')).toBe(true);
+    expect(isValidEmail(undefined)).toBe(false);
+    expect(isValidEmail('not-an-email')).toBe(false);
+    expect(isValidEmail('devotee@example')).toBe(false);
+  });
+});
+
+describe('claimSummary', () => {
+  const record: Omit<EmailSummaryRecord, 'id' | 'created_at'> = {
+    user_id: 'u1',
+    email_type: '15day_inspiration',
+    period_start: '2026-08-08',
+    period_end: '2026-08-22',
+    sent_at: null,
+    status: 'pending',
+    provider_message_id: null,
+    error: null,
+  };
+
+  function fakeClaimSupabase(insertedRows: unknown[], retriedRows: unknown[] = []): SupabaseClient {
+    const insertSelect = jest.fn().mockResolvedValue({ data: insertedRows, error: null });
+    const retrySelect = jest.fn().mockResolvedValue({ data: retriedRows, error: null });
+    const retryChain = {
+      eq: () => retryChain,
+      select: retrySelect,
+    };
+    const table = {
+      upsert: jest.fn(() => ({ select: insertSelect })),
+      update: jest.fn(() => retryChain),
+    };
+    return { from: jest.fn(() => table) } as unknown as SupabaseClient;
+  }
+
+  it('claims a previously unused key', async () => {
+    expect(await claimSummary(fakeClaimSupabase([{ id: 1 }]), record)).toBe(true);
+  });
+
+  it('does not claim an already-existing sent or pending key', async () => {
+    expect(await claimSummary(fakeClaimSupabase([]), record)).toBe(false);
+  });
+
+  it('atomically reclaims a failed key for a safe retry', async () => {
+    expect(await claimSummary(fakeClaimSupabase([], [{ id: 1 }]), record)).toBe(true);
   });
 });

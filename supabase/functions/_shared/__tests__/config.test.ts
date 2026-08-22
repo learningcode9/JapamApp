@@ -56,6 +56,7 @@ describe('validateProductionEnv / assertProductionReady', () => {
     process.env.RESEND_API_KEY = 're_test_key';
     process.env.EMAIL_FROM_ADDRESS = 'Japam App <noreply@realdomain.example>';
     process.env.EMAIL_UNSUBSCRIBE_URL = 'https://example.com/unsubscribe';
+    process.env.EMAIL_UNSUBSCRIBE_SECRET = 'test-secret';
     process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://project.supabase.co';
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-role-key';
   }
@@ -94,6 +95,13 @@ describe('validateProductionEnv / assertProductionReady', () => {
     expect(problems.some(p => p.includes('EMAIL_UNSUBSCRIBE_URL'))).toBe(true);
   });
 
+  it('flags a missing EMAIL_UNSUBSCRIBE_SECRET', () => {
+    setValidEnv();
+    delete process.env.EMAIL_UNSUBSCRIBE_SECRET;
+    const problems = validateProductionEnv();
+    expect(problems.some(p => p.includes('EMAIL_UNSUBSCRIBE_SECRET'))).toBe(true);
+  });
+
   it('flags missing Supabase credentials', () => {
     setValidEnv();
     delete process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -107,6 +115,7 @@ describe('validateProductionEnv / assertProductionReady', () => {
     delete process.env.RESEND_API_KEY;
     delete process.env.EMAIL_FROM_ADDRESS;
     delete process.env.EMAIL_UNSUBSCRIBE_URL;
+    delete process.env.EMAIL_UNSUBSCRIBE_SECRET;
     delete process.env.EXPO_PUBLIC_SUPABASE_URL;
     delete process.env.SUPABASE_URL;
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;

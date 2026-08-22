@@ -36,7 +36,7 @@
  *       const supabase = createClient(url, key, { auth: { persistSession: false } });
  *       const provider = dryRun ? null : new ResendProvider(Deno.env.get('RESEND_API_KEY')!);
  *       const service = new CampaignEmailService(campaign, supabase, provider, loadEmailConfig());
- *       const results = await service.run({ dryRun, forceResend: body.force_resend ?? false });
+ *       const results = await service.run({ dryRun });
  *       return Response.json({ results });
  *     });
  *

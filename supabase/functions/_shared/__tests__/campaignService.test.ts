@@ -1,4 +1,5 @@
 import { CampaignEmailService } from '../email/campaignService';
+import { EmailProviderError } from '../email/emailProvider';
 import type { EmailProvider } from '../email/emailProvider';
 import type { JapamHistoryRow, AuthUser, EmailSummaryRecord } from '../email/types';
 import type { CampaignDefinition, CampaignContext } from '../email/campaigns/types';
@@ -19,7 +20,15 @@ function makeRow(overrides: Partial<JapamHistoryRow> = {}): JapamHistoryRow {
   };
 }
 
-const USER: AuthUser = { id: 'u1', email: 'user@example.com', displayName: 'Test User' };
+const NOW = new Date('2026-08-22T12:00:00.000Z');
+const EXACTLY_15_DAYS_OLD = '2026-08-07T12:00:00.000Z';
+const TOO_EARLY = '2026-08-08T12:00:00.000Z';
+const USER: AuthUser = {
+  id: 'u1',
+  email: 'user@example.com',
+  displayName: 'Test User',
+  createdAt: '2020-01-01T00:00:00.000Z',
+};
 
 const FAKE_CAMPAIGN: CampaignDefinition = {
   id: 'test_campaign',
@@ -63,7 +72,7 @@ class TestService extends CampaignEmailService {
     public fakeLifetimeTotal = 42,
     emailProvider: EmailProvider | null = null,
     campaign: CampaignDefinition = FAKE_CAMPAIGN,
-    public fakeFirstActivityAt: string | null = LONG_ESTABLISHED_USER_ISO,
+  public fakeClaimResults: boolean[] = [],
   ) {
     super(campaign, {} as never, emailProvider, loadEmailConfig());
   }
@@ -72,16 +81,25 @@ class TestService extends CampaignEmailService {
     return this.fakeUsers;
   }
 
-  protected override async getHistoryForUser(): Promise<JapamHistoryRow[]> {
+  protected override async getHistoryForUser(
+    _userId: string,
+    _periodStart: string,
+    _periodEnd: string,
+  ): Promise<JapamHistoryRow[]> {
     return this.fakeHistory;
   }
 
   protected override async getLifetimeStats(): Promise<{ lifetimeTotalMalas: number; firstActivityAt: string | null }> {
-    return { lifetimeTotalMalas: this.fakeLifetimeTotal, firstActivityAt: this.fakeFirstActivityAt };
+    return { lifetimeTotalMalas: this.fakeLifetimeTotal, firstActivityAt: LONG_ESTABLISHED_USER_ISO };
   }
 
   protected override async isDuplicate(): Promise<boolean> {
     return this.fakeDuplicate;
+  }
+
+  protected override async claimSummary(): Promise<boolean> {
+    if (this.fakeClaimResults.length > 0) return this.fakeClaimResults.shift()!;
+    return !this.fakeDuplicate;
   }
 
   protected override async recordSummary(
@@ -103,13 +121,11 @@ describe('CampaignEmailService dry-run mode', () => {
     expect(provider.sendEmail).not.toHaveBeenCalled();
   });
 
-  it('records a dry_run row using the campaign id as email_type', async () => {
+  it('does not write campaign history during a dry-run', async () => {
     const service = new TestService([USER], [makeRow()], false, 42, null);
     await service.run({ dryRun: true });
 
-    const record = service.recordedSummaries.find(r => r.status === 'dry_run');
-    expect(record?.email_type).toBe('test_campaign');
-    expect(record?.user_id).toBe('u1');
+    expect(service.recordedSummaries).toHaveLength(0);
   });
 });
 
@@ -127,25 +143,34 @@ describe('CampaignEmailService no activity', () => {
 // ─── New-user eligibility ───────────────────────────────────────────────────
 
 describe('CampaignEmailService new-user eligibility', () => {
-  it('skips a user whose first-ever activity is more recent than the campaign period', async () => {
-    const service = new TestService([USER], [makeRow()], false, 42, null, FAKE_CAMPAIGN, new Date().toISOString());
-    const results = await service.run({ dryRun: true });
+  it('allows a user whose auth account is exactly 15 days old', async () => {
+    const user = { ...USER, createdAt: EXACTLY_15_DAYS_OLD };
+    const service = new TestService([user], [makeRow()], false, 42, null);
+    const results = await service.run({ dryRun: true, now: NOW });
+
+    expect(results[0].status).toBe('dry_run');
+  });
+
+  it('skips an auth account that is too early for the campaign', async () => {
+    const user = { ...USER, createdAt: TOO_EARLY };
+    const service = new TestService([user], [makeRow()], false, 42, null);
+    const results = await service.run({ dryRun: true, now: NOW });
 
     expect(results[0].status).toBe('skipped_too_new');
   });
 
   it('does not skip a long-established user', async () => {
-    const service = new TestService([USER], [makeRow()], false, 42, null, FAKE_CAMPAIGN, LONG_ESTABLISHED_USER_ISO);
+    const service = new TestService([USER], [makeRow()], false, 42, null, FAKE_CAMPAIGN);
     const results = await service.run({ dryRun: true });
 
     expect(results[0].status).toBe('dry_run');
   });
 
-  it('does not skip when firstActivityAt is null (defensive default)', async () => {
-    const service = new TestService([USER], [makeRow()], false, 42, null, FAKE_CAMPAIGN, null);
+  it('fails closed when the auth account creation timestamp is missing', async () => {
+    const service = new TestService([{ ...USER, createdAt: undefined }], [makeRow()], false, 42, null);
     const results = await service.run({ dryRun: true });
 
-    expect(results[0].status).toBe('dry_run');
+    expect(results[0].status).toBe('skipped_missing_account_age');
   });
 });
 
@@ -153,25 +178,30 @@ describe('CampaignEmailService new-user eligibility', () => {
 
 describe('CampaignEmailService duplicate prevention', () => {
   it('skips when a record already exists, scoped per campaign id', async () => {
-    const provider: EmailProvider = { sendEmail: jest.fn() };
-    const service = new TestService([USER], [makeRow()], true, 42, provider);
+    await withUnsubscribeEnv(async () => {
+      const provider: EmailProvider = { sendEmail: jest.fn() };
+      const service = new TestService([USER], [makeRow()], true, 42, provider);
 
-    const results = await service.run({ dryRun: false });
+      const results = await service.run({ dryRun: false });
 
-    expect(results[0].status).toBe('skipped_duplicate');
-    expect(provider.sendEmail).not.toHaveBeenCalled();
+      expect(results[0].status).toBe('skipped_duplicate');
+      expect(provider.sendEmail).not.toHaveBeenCalled();
+    });
   });
 
-  it('forceResend bypasses duplicate check', async () => {
+  it('does not duplicate a send when the scheduler runs again', async () => {
     await withUnsubscribeEnv(async () => {
       const provider: EmailProvider = {
         sendEmail: jest.fn().mockResolvedValue({ messageId: 'msg-1' }),
       };
-      const service = new TestService([USER], [makeRow()], true, 42, provider);
+      const service = new TestService([USER], [makeRow()], false, 42, provider, FAKE_CAMPAIGN, [true, false]);
 
-      const results = await service.run({ dryRun: false, forceResend: true });
+      const first = await service.run({ dryRun: false, now: NOW });
+      const second = await service.run({ dryRun: false, now: NOW });
 
-      expect(results[0].status).toBe('sent');
+      expect(first[0].status).toBe('sent');
+      expect(second[0].status).toBe('skipped_duplicate');
+      expect(provider.sendEmail).toHaveBeenCalledTimes(1);
     });
   });
 });
@@ -243,7 +273,11 @@ describe('CampaignEmailService real sending', () => {
 
   it('records failed status when provider throws, and continues to next user', async () => {
     await withUnsubscribeEnv(async () => {
-      const USER2: AuthUser = { id: 'u2', email: 'user2@example.com' };
+      const USER2: AuthUser = {
+        id: 'u2',
+        email: 'user2@example.com',
+        createdAt: '2020-01-01T00:00:00.000Z',
+      };
       let callCount = 0;
       const provider: EmailProvider = {
         sendEmail: jest.fn().mockImplementation(() => {
@@ -277,5 +311,124 @@ describe('CampaignEmailService provider null guard', () => {
 
     expect(results[0].status).toBe('failed');
     expect(results[0].reason).toContain('emailProvider is null');
+  });
+});
+
+describe('CampaignEmailService input safety', () => {
+  it('skips a missing or invalid email without calling the provider', async () => {
+    const provider: EmailProvider = { sendEmail: jest.fn() };
+    const service = new TestService(
+      [{ ...USER, email: 'not-an-email' }],
+      [makeRow()],
+      false,
+      42,
+      provider,
+    );
+
+    const results = await service.run({ dryRun: false, now: NOW });
+
+    expect(results[0].status).toBe('skipped_invalid_email');
+    expect(provider.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('retries a provider failure with the same idempotency key', async () => {
+    await withUnsubscribeEnv(async () => {
+      const provider: EmailProvider = {
+        sendEmail: jest
+          .fn()
+          .mockRejectedValueOnce(new Error('temporary provider failure'))
+          .mockResolvedValueOnce({ messageId: 'msg-retry' }),
+      };
+      const service = new TestService(
+        [USER],
+        [makeRow()],
+        false,
+        42,
+        provider,
+        FAKE_CAMPAIGN,
+        [true, true],
+      );
+
+      const first = await service.run({ dryRun: false, now: NOW });
+      const second = await service.run({ dryRun: false, now: NOW });
+      const firstKey = (provider.sendEmail as jest.Mock).mock.calls[0][0].idempotencyKey;
+      const secondKey = (provider.sendEmail as jest.Mock).mock.calls[1][0].idempotencyKey;
+
+      expect(first[0].status).toBe('failed');
+      expect(second[0].status).toBe('sent');
+      expect(firstKey).toBe(secondKey);
+    });
+  });
+
+  it('leaves an uncertain provider failure pending and blocks automatic retry', async () => {
+    await withUnsubscribeEnv(async () => {
+      const provider: EmailProvider = {
+        sendEmail: jest.fn().mockRejectedValue(new EmailProviderError('network timeout', false)),
+      };
+      const service = new TestService(
+        [USER],
+        [makeRow()],
+        false,
+        42,
+        provider,
+        FAKE_CAMPAIGN,
+        [true, false],
+      );
+
+      const first = await service.run({ dryRun: false, now: NOW });
+      const second = await service.run({ dryRun: false, now: NOW });
+
+      expect(first[0].status).toBe('failed');
+      expect(service.recordedSummaries.find(record => record.status === 'pending')).toBeDefined();
+      expect(second[0].status).toBe('skipped_duplicate');
+      expect(provider.sendEmail).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('keeps period stats scoped to each user', async () => {
+    await withUnsubscribeEnv(async () => {
+      const user2: AuthUser = {
+        id: 'u2',
+        email: 'second@example.com',
+        createdAt: '2020-01-01T00:00:00.000Z',
+      };
+      const provider: EmailProvider = {
+        sendEmail: jest.fn().mockResolvedValue({ messageId: 'msg-isolated' }),
+      };
+      class IsolatedService extends TestService {
+        protected override async getHistoryForUser(userId: string): Promise<JapamHistoryRow[]> {
+          return [
+            makeRow({
+              user_id: userId,
+              user_name: userId === 'u1' ? 'First' : 'Second',
+              malas: userId === 'u1' ? 3 : 9,
+            }),
+          ];
+        }
+      }
+
+      const isolatedCampaign: CampaignDefinition = {
+        ...FAKE_CAMPAIGN,
+        buildHtml: (ctx: CampaignContext) => `${ctx.stats.userName}:${ctx.stats.totalMalas}`,
+        buildText: (ctx: CampaignContext) => `${ctx.stats.userName}:${ctx.stats.totalMalas}`,
+      };
+      const service = new IsolatedService(
+        [USER, user2],
+        [makeRow()],
+        false,
+        42,
+        provider,
+        isolatedCampaign,
+      );
+      await service.run({ dryRun: false, now: NOW });
+
+      const messages = (provider.sendEmail as jest.Mock).mock.calls.map(call => call[0]);
+      expect(messages[0].html).toContain('First');
+      expect(messages[0].html).toContain('3');
+      expect(messages[0].html).not.toContain('Second');
+      expect(messages[1].html).toContain('Second');
+      expect(messages[1].html).toContain('9');
+      expect(messages[1].html).not.toContain('First');
+    });
   });
 });

@@ -8,6 +8,13 @@ import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import type { AuthUser, JapamHistoryRow, EmailSummaryRecord } from './types.ts';
 import { parseAllowlist } from './config.ts';
 
+const SIMPLE_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function isValidEmail(email: string | null | undefined): email is string {
+  const normalized = email?.trim();
+  return Boolean(normalized && normalized.length <= 254 && SIMPLE_EMAIL_PATTERN.test(normalized));
+}
+
 /**
  * user_ids with a non-null unsubscribed_at in user_email_preferences — i.e.
  * everyone who has opted out of campaign emails. See the 20260705 migration
@@ -79,12 +86,13 @@ export async function getActiveUsersInPeriod(
   const allowlist = parseAllowlist(process.env.EMAIL_ALLOWLIST);
 
   return (users ?? [])
-    .filter(u => u.email && activeIds.has(u.id))
+    .filter(u => isValidEmail(u.email) && activeIds.has(u.id))
     .filter(u => !unsubscribedIds.has(u.id))
-    .filter(u => allowlist === null || allowlist.has(u.email!.toLowerCase()))
+    .filter(u => allowlist === null || allowlist.has(u.email!.trim().toLowerCase()))
     .map(u => ({
       id: u.id,
-      email: u.email!,
+      email: u.email!.trim(),
+      createdAt: u.created_at,
       displayName:
         (u.user_metadata?.full_name as string | undefined) ??
         (u.user_metadata?.name as string | undefined),
@@ -175,7 +183,7 @@ export async function isDuplicateSummary(
     .select('period_end')
     .eq('user_id', userId)
     .eq('email_type', emailType)
-    .in('status', ['sent', 'dry_run'])
+    .in('status', ['sent', 'dry_run', 'pending'])
     .order('period_start', { ascending: false })
     .limit(1);
 
@@ -198,4 +206,51 @@ export async function recordSummary(
   if (error) {
     throw new Error(`recordSummary: ${error.message}`);
   }
+}
+
+/**
+ * Atomically claims a user/campaign/period slot for sending.
+ *
+ * The unique constraint handles the first claim race. A failed claim may be
+ * retried by conditionally moving only that failed row back to pending; sent
+ * and in-flight rows remain owned by their original attempt. The caller must
+ * use the same provider idempotency key when retrying after an uncertain
+ * provider response.
+ */
+export async function claimSummary(
+  supabase: SupabaseClient,
+  record: Omit<EmailSummaryRecord, 'id' | 'created_at'>,
+): Promise<boolean> {
+  const inserted = await supabase
+    .from('user_email_summaries')
+    .upsert(record, {
+      onConflict: 'user_id,email_type,period_start',
+      ignoreDuplicates: true,
+    })
+    .select('id');
+
+  if (inserted.error) {
+    throw new Error(`claimSummary: ${inserted.error.message}`);
+  }
+  if ((inserted.data ?? []).length > 0) return true;
+
+  const retried = await supabase
+    .from('user_email_summaries')
+    .update({
+      period_end: record.period_end,
+      sent_at: null,
+      status: 'pending',
+      provider_message_id: null,
+      error: null,
+    })
+    .eq('user_id', record.user_id)
+    .eq('email_type', record.email_type)
+    .eq('period_start', record.period_start)
+    .eq('status', 'failed')
+    .select('id');
+
+  if (retried.error) {
+    throw new Error(`claimSummary retry: ${retried.error.message}`);
+  }
+  return (retried.data ?? []).length > 0;
 }

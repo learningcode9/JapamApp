@@ -31,12 +31,10 @@ try {
 async function main(): Promise<void> {
   const campaignId = process.env.CAMPAIGN_ID ?? '15day_inspiration';
   const dryRun = process.env.DRY_RUN !== 'false';
-  const forceResend = process.env.FORCE_RESEND === 'true';
 
   console.log('[sendCampaignEmail] Starting');
   console.log(`  campaignId  = ${campaignId}`);
   console.log(`  dryRun      = ${dryRun}`);
-  console.log(`  forceResend = ${forceResend}`);
 
   if (!dryRun) {
     assertProductionReady();
@@ -47,7 +45,7 @@ async function main(): Promise<void> {
   const emailProvider = dryRun ? null : createEmailProvider();
   const service = createCampaignService(campaign, emailProvider);
 
-  const results = await service.run({ dryRun, forceResend });
+  const results = await service.run({ dryRun });
 
   const failed = results.filter(r => r.status === 'failed');
   if (failed.length > 0) {

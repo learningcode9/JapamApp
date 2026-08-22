@@ -1,17 +1,18 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { EmailProviderError } from './emailProvider';
 import type { EmailProvider } from './emailProvider';
 import type { AuthUser, JapamHistoryRow, EmailSummaryRecord, SummaryRunResult } from './types';
 import type { CampaignDefinition } from './campaigns/types';
 import type { EmailConfig } from './config';
-import { calculateSummaryStats, getPeriodDates } from './calculator';
+import { calculateSummaryStats, getAccountAgeDays, getPeriodDates } from './calculator';
 import { loadEmailConfig } from './config';
 import { buildUnsubscribeUrl } from './unsubscribeToken';
 import * as dataAccess from './dataAccess';
 
 export interface CampaignRunOptions {
   dryRun: boolean;
-  /** Skip the duplicate check and re-send regardless. */
-  forceResend?: boolean;
+  /** Injectable clock for deterministic local tests; production uses now. */
+  now?: Date;
 }
 
 /**
@@ -34,11 +35,11 @@ export class CampaignEmailService {
   ) {}
 
   async run(options: CampaignRunOptions): Promise<SummaryRunResult[]> {
-    const { dryRun, forceResend = false } = options;
-    const { periodStart, periodEnd } = getPeriodDates(this.campaign.periodDays);
+    const { dryRun, now = new Date() } = options;
+    const { periodStart, periodEnd } = getPeriodDates(this.campaign.periodDays, now);
 
     console.log(
-      `[Campaign:${this.campaign.id}] period=${periodStart}→${periodEnd} dryRun=${dryRun} forceResend=${forceResend}`,
+      `[Campaign:${this.campaign.id}] period=${periodStart}→${periodEnd} dryRun=${dryRun}`,
     );
 
     const users = await this.getActiveUsers(periodStart, periodEnd);
@@ -46,7 +47,7 @@ export class CampaignEmailService {
 
     const results: SummaryRunResult[] = [];
     for (const user of users) {
-      const result = await this.processUser(user, periodStart, periodEnd, dryRun, forceResend);
+      const result = await this.processUser(user, periodStart, periodEnd, dryRun, now);
       results.push(result);
       const extra = result.reason ? ` — ${result.reason}` : result.messageId ? ` (${result.messageId})` : '';
       console.log(`[Campaign:${this.campaign.id}] ${user.email}: ${result.status}${extra}`);
@@ -79,8 +80,13 @@ export class CampaignEmailService {
     return dataAccess.getLifetimeStats(this.supabase, userId);
   }
 
+  /** Read-only advisory check; claimSummary remains the race-safe authority. */
   protected async isDuplicate(userId: string, periodStart: string): Promise<boolean> {
     return dataAccess.isDuplicateSummary(this.supabase, userId, this.campaign.id, periodStart);
+  }
+
+  protected async claimSummary(record: Omit<EmailSummaryRecord, 'id' | 'created_at'>): Promise<boolean> {
+    return dataAccess.claimSummary(this.supabase, record);
   }
 
   protected async recordSummary(record: Omit<EmailSummaryRecord, 'id' | 'created_at'>): Promise<void> {
@@ -94,17 +100,46 @@ export class CampaignEmailService {
     periodStart: string,
     periodEnd: string,
     dryRun: boolean,
-    forceResend: boolean,
+    now: Date,
   ): Promise<SummaryRunResult> {
     const emailType = this.campaign.id;
+    let claimed = false;
+    let providerAccepted = false;
 
     try {
-      if (!forceResend && (await this.isDuplicate(user.id, periodStart))) {
+      if (!dataAccess.isValidEmail(user.email)) {
+        return {
+          userId: user.id,
+          email: user.email,
+          status: 'skipped_invalid_email',
+          reason: 'missing or invalid recipient email',
+        };
+      }
+
+      if (await this.isDuplicate(user.id, periodStart)) {
         return {
           userId: user.id,
           email: user.email,
           status: 'skipped_duplicate',
-          reason: 'already sent for this period',
+          reason: 'already claimed or sent for this period',
+        };
+      }
+
+      const accountAgeDays = getAccountAgeDays(user.createdAt, now);
+      if (accountAgeDays === null) {
+        return {
+          userId: user.id,
+          email: user.email,
+          status: 'skipped_missing_account_age',
+          reason: 'auth account creation timestamp is missing or invalid',
+        };
+      }
+      if (accountAgeDays < this.campaign.periodDays) {
+        return {
+          userId: user.id,
+          email: user.email,
+          status: 'skipped_too_new',
+          reason: `account is ${accountAgeDays} days old — requires ${this.campaign.periodDays}`,
         };
       }
 
@@ -120,38 +155,29 @@ export class CampaignEmailService {
         };
       }
 
-      const { lifetimeTotalMalas, firstActivityAt } = await this.getLifetimeStats(user.id);
-
-      // This campaign's copy ("fifteen days ago, you began...") assumes an
-      // established practice of at least one full period. Without this
-      // check, a user who signed up and practiced once yesterday would
-      // immediately qualify (they have "activity in the period") and
-      // receive a message that describes a journey they haven't had yet.
-      if (firstActivityAt) {
-        const daysSinceFirstActivity =
-          (Date.parse(`${periodEnd}T23:59:59.999Z`) - Date.parse(firstActivityAt)) / 86_400_000;
-        if (daysSinceFirstActivity < this.campaign.periodDays) {
-          return {
-            userId: user.id,
-            email: user.email,
-            status: 'skipped_too_new',
-            reason: `first activity ${daysSinceFirstActivity.toFixed(1)} days ago — requires ${this.campaign.periodDays}`,
-          };
-        }
-      }
+      const { lifetimeTotalMalas } = await this.getLifetimeStats(user.id);
 
       if (dryRun) {
+        const campaignConfig =
+          this.config.unsubscribeUrl && this.config.unsubscribeSecret
+            ? {
+                ...this.config,
+                unsubscribeUrl: await buildUnsubscribeUrl(
+                  this.config.unsubscribeUrl,
+                  user.id,
+                  this.config.unsubscribeSecret,
+                  now.getTime(),
+                ),
+              }
+            : this.config;
+        const ctx = { stats, lifetimeTotalMalas, config: campaignConfig };
+        const html = this.campaign.buildHtml(ctx);
+        const text = this.campaign.buildText(ctx);
+
         console.log(`[Campaign:${emailType}] DRY RUN would send to:`, user.email);
-        await this.recordSummary({
-          user_id: user.id,
-          email_type: emailType,
-          period_start: periodStart,
-          period_end: periodEnd,
-          sent_at: null,
-          status: 'dry_run',
-          provider_message_id: null,
-          error: null,
-        });
+        console.log(`[Campaign:${emailType}] subject:`, this.campaign.subject);
+        console.log(`[Campaign:${emailType}] stats:`, JSON.stringify(stats));
+        console.log(`[Campaign:${emailType}] rendered bytes:`, html.length + text.length);
         return { userId: user.id, email: user.email, status: 'dry_run' };
       }
 
@@ -171,12 +197,12 @@ export class CampaignEmailService {
           this.config.unsubscribeUrl,
           user.id,
           this.config.unsubscribeSecret,
+          now.getTime(),
         ),
       };
       const ctx = { stats, lifetimeTotalMalas, config: campaignConfig };
 
-      // Mark pending before attempting send to prevent races.
-      await this.recordSummary({
+      const pendingRecord: Omit<EmailSummaryRecord, 'id' | 'created_at'> = {
         user_id: user.id,
         email_type: emailType,
         period_start: periodStart,
@@ -185,7 +211,19 @@ export class CampaignEmailService {
         status: 'pending',
         provider_message_id: null,
         error: null,
-      });
+      };
+
+      // The unique key plus a conditional failed-row retry makes this claim
+      // atomic across concurrent scheduler invocations.
+      claimed = await this.claimSummary(pendingRecord);
+      if (!claimed) {
+        return {
+          userId: user.id,
+          email: user.email,
+          status: 'skipped_duplicate',
+          reason: 'already claimed or sent for this period',
+        };
+      }
 
       const html = this.campaign.buildHtml(ctx);
       const text = this.campaign.buildText(ctx);
@@ -196,7 +234,9 @@ export class CampaignEmailService {
         subject: this.campaign.subject,
         html,
         text,
+        idempotencyKey: `${emailType}/${user.id}/${periodStart}`,
       });
+      providerAccepted = true;
 
       await this.recordSummary({
         user_id: user.id,
@@ -212,16 +252,19 @@ export class CampaignEmailService {
       return { userId: user.id, email: user.email, status: 'sent', messageId };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await this.recordSummary({
-        user_id: user.id,
-        email_type: emailType,
-        period_start: periodStart,
-        period_end: periodEnd,
-        sent_at: null,
-        status: 'failed',
-        provider_message_id: null,
-        error: message,
-      }).catch(() => {/* ignore secondary failure */});
+      if (claimed) {
+        const safeToRetry = !(err instanceof EmailProviderError) || err.safeToRetry;
+        await this.recordSummary({
+          user_id: user.id,
+          email_type: emailType,
+          period_start: periodStart,
+          period_end: periodEnd,
+          sent_at: null,
+          status: providerAccepted || !safeToRetry ? 'pending' : 'failed',
+          provider_message_id: null,
+          error: message,
+        }).catch(() => {/* ignore secondary failure */});
+      }
 
       return { userId: user.id, email: user.email, status: 'failed', reason: message };
     }

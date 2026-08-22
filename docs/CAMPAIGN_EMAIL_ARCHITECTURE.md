@@ -124,6 +124,19 @@ campaign code nor the per-user loop needs to know either exists.
   function. Unset (the default) means no restriction — identical to behavior
   before this existed.
 
+Campaign eligibility also requires a valid recipient email and uses
+`auth.users.created_at` for the account-age check; a history row is never used
+as a signup-date proxy. The 15-day campaign requires at least 15 completed UTC
+days and still requires activity in the current 15-day stats window.
+
+The send claim is durable and race-safe: the unique
+`(user_id, email_type, period_start)` key is claimed before the provider call,
+failed claims can be retried, and pending/sent claims block repeated scheduler
+runs. Deterministic provider failures are retryable; ambiguous network/5xx
+failures remain pending for manual reconciliation instead of risking a second
+delivery. Dry-runs render the subject, stats, and template but do not write
+campaign history and never construct a provider.
+
 ## Production environment validation
 
 `config.ts`'s `assertProductionReady()` is called from both CLI scripts
