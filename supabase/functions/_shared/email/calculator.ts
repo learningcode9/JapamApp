@@ -107,6 +107,7 @@ export function calculateSummaryStats(
 
   const totalSessions = days.reduce((sum, d) => sum + d.sessions, 0);
   const totalMalas = days.reduce((sum, d) => sum + d.malas, 0);
+  const recentCount = genuineActivityRows.reduce((sum, row) => sum + (Number(row.count) || 0), 0);
   const daysPracticed = days.length;
   const averageMalasPerActiveDay = daysPracticed > 0 ? totalMalas / daysPracticed : 0;
 
@@ -131,6 +132,8 @@ export function calculateSummaryStats(
     periodEnd,
     totalSessions,
     totalMalas,
+    recentMalas: totalMalas,
+    recentCount,
     daysPracticed,
     longestStreak,
     averageMalasPerActiveDay,

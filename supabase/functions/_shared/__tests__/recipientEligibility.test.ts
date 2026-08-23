@@ -68,6 +68,10 @@ class EligibilityService extends CampaignEmailService {
         (total, row) => total + row.malas,
         0,
       ),
+      lifetimeTotalCount: (this.fakeHistory[userId] ?? []).reduce(
+        (total, row) => total + row.count,
+        0,
+      ),
       firstActivityAt: this.fakeHistory[userId]?.[0]?.created_at ?? null,
     };
   }
