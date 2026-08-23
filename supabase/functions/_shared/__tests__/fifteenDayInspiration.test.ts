@@ -139,6 +139,19 @@ describe('fifteenDayInspirationCampaign.buildHtml', () => {
     expect(html).toContain('Your Japam Practice Is Building Quietly');
     expect(html).toContain('Japam count in the last 15 days');
     expect(html).toContain('>7</td>');
+    expect(html).toContain('Lifetime Japam count');
+    expect(html).toContain('54,000');
+  });
+
+  it('renders recent and lifetime Japam counts in Count-only plain text', () => {
+    const ctx = makeContext({
+      stats: makeStats({ recentMalas: 0, recentCount: 7, totalMalas: 0 }),
+      lifetimeTotalMalas: 0,
+      lifetimeTotalCount: 54_000,
+    });
+    const text = fifteenDayInspirationCampaign.buildText(ctx);
+    expect(text).toContain('Japam count in the last 15 days: 7');
+    expect(text).toContain('Lifetime Japam count:             54,000');
   });
 
   it('does not use Mala-specific activity wording for Count-only activity', () => {
