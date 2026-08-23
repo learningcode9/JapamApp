@@ -63,6 +63,7 @@ const CONTROLLED_RECIPIENT_SHA256 =
   '0ebf70c1c2fb2da6f7e64346d2b5f8c3312c396dc87d73cdc2151bf450665f8f';
 const PRODUCTION_CONFIRMATION = 'SEND_TO_ALL_ELIGIBLE_USERS';
 const EMAIL_ADDRESS_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const ALWAYS_EXCLUDED_CAMPAIGN_DOMAIN = '@cloudtestlabaccounts.com';
 
 function isValidEmailAddress(value: string): boolean {
   return value.length <= 254 && EMAIL_ADDRESS_PATTERN.test(value);
@@ -253,6 +254,15 @@ export function parseExcludedEmails(raw: string | undefined): Set<string> {
       .map(address => address.trim().toLowerCase())
       .filter(Boolean),
   );
+}
+
+/**
+ * Permanent campaign safety exclusion for known test/reviewer accounts.
+ * Matching is normalized and domain-exact: similarly named domains remain
+ * eligible, while any address at the test domain is excluded.
+ */
+export function isAlwaysExcludedCampaignEmail(email: string): boolean {
+  return email.trim().toLowerCase().endsWith(ALWAYS_EXCLUDED_CAMPAIGN_DOMAIN);
 }
 
 /**
