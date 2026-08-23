@@ -18,7 +18,7 @@ import {
   validateProductionEnv,
 } from '../_shared/email/config.ts';
 import { getEnv } from '../_shared/email/env.ts';
-import { ResendProvider } from '../_shared/email/emailProvider.ts';
+import { createCampaignEmailProvider } from '../_shared/email/emailProvider.ts';
 import { getCampaign } from '../_shared/email/campaigns/registry.ts';
 import { isOperatorAuthorization } from '../_shared/email/operatorAuth.ts';
 import { handleCampaignRequest } from './handler.ts';
@@ -35,7 +35,7 @@ Deno.serve(request =>
       createClient(url, serviceRoleKey, {
         auth: { persistSession: false, autoRefreshToken: false },
       }),
-    createEmailProvider: apiKey => new ResendProvider(apiKey),
+    createEmailProvider: () => createCampaignEmailProvider(),
     createCampaignService: (campaign, supabase, provider, config) =>
       new CampaignEmailService(
         campaign as CampaignDefinition,
