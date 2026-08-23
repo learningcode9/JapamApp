@@ -26,8 +26,8 @@ function makeDeps(results: unknown[] = [{ userId: 'u1', email: 'user@example.com
     EMAIL_FROM_ADDRESS: 'Japam App <noreply@example.com>',
     EMAIL_UNSUBSCRIBE_URL: 'https://example.com/unsubscribe',
     EMAIL_UNSUBSCRIBE_SECRET: 'unsubscribe-test-only',
-    EMAIL_ALLOWLIST: 'mantrajapamapp@gmail.com',
-    EMAIL_CONTROLLED_RECIPIENT: 'mantrajapamapp@gmail.com',
+    EMAIL_ALLOWLIST: 'learningcode9@gmail.com',
+    EMAIL_CONTROLLED_RECIPIENT: 'learningcode9@gmail.com',
   };
   let providerCreations = 0;
   let remoteWrites = 0;
@@ -121,12 +121,23 @@ describe('send-campaign-email wrapper', () => {
   });
 
   it('preserves the controlled-recipient allowlist for real sends', async () => {
-    const fixture = makeDeps([{ userId: 'u1', email: 'mantrajapamapp@gmail.com', status: 'sent' }]);
+    const fixture = makeDeps([{ userId: 'u1', email: 'learningcode9@gmail.com', status: 'sent' }]);
     const response = await handleCampaignRequest(request({ dry_run: false }), fixture.deps);
 
     expect(response.status).toBe(200);
     expect(fixture.providerCreations).toBe(1);
     expect(fixture.deps.assertCampaignUnsubscribeReady).toHaveBeenCalled();
+  });
+
+  it('rejects the previous controlled recipient after the controlled hash moves', async () => {
+    const fixture = makeDeps();
+    fixture.env.EMAIL_ALLOWLIST = 'mantrajapamapp@gmail.com';
+    fixture.env.EMAIL_CONTROLLED_RECIPIENT = 'mantrajapamapp@gmail.com';
+    const response = await handleCampaignRequest(request({ dry_run: false }), fixture.deps);
+
+    expect(response.status).toBe(409);
+    expect(fixture.providerCreations).toBe(0);
+    expect(fixture.serviceRun).not.toHaveBeenCalled();
   });
 
   it('blocks a real send when the allowlist is not exactly the controlled recipient', async () => {

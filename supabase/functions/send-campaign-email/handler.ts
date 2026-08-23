@@ -26,7 +26,7 @@ type RequestBody = {
 // supplied through configuration; only its SHA-256 is kept in source so the
 // recipient is never embedded in the deployable function text.
 const CONTROLLED_RECIPIENT_SHA256 =
-  '33aa9948560fc7c12922827a203711f80b1a73303bdaebf7bce6a7d3e92bf464';
+  '0ebf70c1c2fb2da6f7e64346d2b5f8c3312c396dc87d73cdc2151bf450665f8f';
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
