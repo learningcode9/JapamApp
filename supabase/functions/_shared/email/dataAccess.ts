@@ -239,7 +239,7 @@ export async function isDuplicateSummary(
   // SUMMARY_EMAIL_SETUP.md docs suggest as a valid scheduling option), every
   // active user would receive a new email every day instead of every N days.
   //
-  // Instead, look at the most recent sent/dry_run record for this user+type
+  // Instead, look at the most recent sent/pending record for this user+type
   // and treat it as a duplicate if its period still overlaps with (or ends
   // after) the start of the period being computed now — i.e. fewer than
   // `periodDays` have elapsed since the last send.
@@ -248,7 +248,7 @@ export async function isDuplicateSummary(
     .select('period_end')
     .eq('user_id', userId)
     .eq('email_type', emailType)
-    .in('status', ['sent', 'dry_run', 'pending'])
+    .in('status', ['sent', 'pending'])
     .order('period_start', { ascending: false })
     .limit(1);
 
@@ -261,11 +261,12 @@ export async function isDuplicateSummary(
 }
 
 /**
- * Checks the recurring campaign's fixed cycle without letting older cycles
- * become a permanent block. The overlap predicate also recognizes legacy
- * rows written before fixed cycle keys were introduced, while the unique
- * (user_id, email_type, period_start) constraint remains the atomic claim
- * boundary for all new rows.
+ * Checks the recurring campaign's fixed cycle and enforces a full-period gap
+ * from the previous successful send. Pending rows remain a permanent automatic
+ * block because they may represent an ambiguous provider outcome. Dry-run rows
+ * are deliberately ignored: this campaign never writes them, and they must
+ * never block a real send. The unique (user_id, email_type, period_start)
+ * constraint remains the atomic claim boundary for all new rows.
  */
 export async function isCampaignCycleDuplicate(
   supabase: SupabaseClient,
@@ -273,20 +274,36 @@ export async function isCampaignCycleDuplicate(
   emailType: string,
   cycleStart: string,
   cycleEnd: string,
+  periodDays: number,
+  now = new Date(),
 ): Promise<boolean> {
   const { data, error } = await supabase
     .from('user_email_summaries')
-    .select('period_start, period_end, status')
+    .select('period_start, period_end, status, sent_at')
     .eq('user_id', userId)
     .eq('email_type', emailType)
-    .in('status', ['sent', 'dry_run', 'pending'])
-    .gte('period_end', cycleStart)
-    .lte('period_start', cycleEnd);
+    .in('status', ['sent', 'pending']);
 
   if (error) {
     throw new Error(`isCampaignCycleDuplicate(${userId}): ${error.message}`);
   }
-  return (data ?? []).length > 0;
+  const minimumSpacingMs = periodDays * 86_400_000;
+  const nowMs = now.getTime();
+
+  return (data ?? []).some(record => {
+    if (record.status === 'pending') return true;
+
+    const sameCycle = record.period_end >= cycleStart && record.period_start <= cycleEnd;
+    if (sameCycle) return true;
+
+    // Legacy successful rows may not have sent_at. Their period_end is a
+    // conservative lower bound for the previous send time, so they do not
+    // become a permanent block while still protecting the spacing boundary.
+    const sentAtMs = Date.parse(record.sent_at ?? `${record.period_end}T23:59:59.999Z`);
+    if (!Number.isFinite(sentAtMs)) return true;
+
+    return nowMs - sentAtMs < minimumSpacingMs;
+  });
 }
 
 export async function recordSummary(

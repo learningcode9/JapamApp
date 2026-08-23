@@ -27,25 +27,40 @@ function fakeSupabase(rows: { period_end: string }[]): SupabaseClient {
   return { from: () => chain } as unknown as SupabaseClient;
 }
 
-function fakeCycleSupabase(rows: { period_start: string; period_end: string; status: string }[]): SupabaseClient {
+function fakeCycleSupabase(rows: {
+  period_start: string;
+  period_end: string;
+  status: string;
+  sent_at?: string | null;
+}[]): SupabaseClient {
   let filtered = rows;
   const chain = {
     select: () => chain,
     eq: () => chain,
-    in: (_column: string, values: string[]) => {
+    in: async (_column: string, values: string[]) => {
       filtered = filtered.filter(row => values.includes(row.status));
-      return chain;
+      return {
+        data: filtered,
+        error: null,
+      };
     },
-    gte: (column: string, value: string) => {
-      if (column === 'period_end') filtered = filtered.filter(row => row.period_end >= value);
-      return chain;
-    },
-    lte: async (column: string, value: string) => ({
-      data: column === 'period_start' ? filtered.filter(row => row.period_start <= value) : filtered,
-      error: null,
-    }),
   };
   return { from: () => chain } as unknown as SupabaseClient;
+}
+
+function cycleDuplicate(
+  supabase: SupabaseClient,
+  now = new Date('2026-08-22T12:00:00.000Z'),
+) {
+  return isCampaignCycleDuplicate(
+    supabase,
+    'u1',
+    '15day_inspiration',
+    '2026-08-20',
+    '2026-09-03',
+    15,
+    now,
+  );
 }
 
 /**
@@ -123,37 +138,56 @@ describe('isDuplicateSummary (15-day cadence enforcement)', () => {
 });
 
 describe('isCampaignCycleDuplicate (recurring fixed-cycle enforcement)', () => {
-  const cycleStart = '2026-08-09';
-  const cycleEnd = '2026-08-23';
-
   it('allows the first cycle when there is no history', async () => {
-    await expect(isCampaignCycleDuplicate(
-      fakeCycleSupabase([]),
-      'u1',
-      '15day_inspiration',
-      cycleStart,
-      cycleEnd,
-    )).resolves.toBe(false);
+    await expect(cycleDuplicate(fakeCycleSupabase([]))).resolves.toBe(false);
   });
 
   it.each(['sent', 'pending'])('blocks a %s record in the same cycle', async status => {
-    await expect(isCampaignCycleDuplicate(
-      fakeCycleSupabase([{ period_start: cycleStart, period_end: cycleEnd, status }]),
-      'u1',
-      '15day_inspiration',
-      cycleStart,
-      cycleEnd,
-    )).resolves.toBe(true);
+    await expect(cycleDuplicate(fakeCycleSupabase([
+      { period_start: '2026-08-20', period_end: '2026-09-03', status },
+    ]))).resolves.toBe(true);
   });
 
   it('does not let an older cycle block the current cycle', async () => {
-    await expect(isCampaignCycleDuplicate(
-      fakeCycleSupabase([{ period_start: '2026-07-25', period_end: '2026-08-08', status: 'sent' }]),
-      'u1',
-      '15day_inspiration',
-      cycleStart,
-      cycleEnd,
-    )).resolves.toBe(false);
+    await expect(cycleDuplicate(fakeCycleSupabase([
+      {
+        period_start: '2026-07-01',
+        period_end: '2026-07-15',
+        status: 'sent',
+      },
+    ]))).resolves.toBe(false);
+  });
+
+  it('blocks a send at 14 days 23 hours after the previous successful send', async () => {
+    await expect(cycleDuplicate(fakeCycleSupabase([
+      {
+        period_start: '2026-07-01',
+        period_end: '2026-07-15',
+        status: 'sent',
+        sent_at: '2026-08-07T12:00:00.000Z',
+      },
+    ]), new Date('2026-08-22T11:00:00.000Z'))).resolves.toBe(true);
+  });
+
+  it('allows a send exactly 15 full days after the previous successful send', async () => {
+    await expect(cycleDuplicate(fakeCycleSupabase([
+      {
+        period_start: '2026-07-01',
+        period_end: '2026-07-15',
+        status: 'sent',
+        sent_at: '2026-08-07T12:00:00.000Z',
+      },
+    ]))).resolves.toBe(false);
+  });
+
+  it('ignores dry-run rows because dry-run creates no campaign history', async () => {
+    await expect(cycleDuplicate(fakeCycleSupabase([
+      {
+        period_start: '2026-08-20',
+        period_end: '2026-09-03',
+        status: 'dry_run',
+      },
+    ]))).resolves.toBe(false);
   });
 });
 

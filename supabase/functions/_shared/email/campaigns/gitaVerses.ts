@@ -63,7 +63,6 @@ export const GITA_VERSES: readonly GitaVerse[] = [
   { chapter: 18, verse: 66, rendering: 'Set down every burden and take refuge in the highest; do not fear.' },
 ];
 
-const GITA_CYCLE_STEP = 5; // Coprime with 48, so the first 48 cycles form a permutation.
 const DAY_MS = 86_400_000;
 const EPOCH_MS = Date.UTC(1970, 0, 1);
 
@@ -80,12 +79,30 @@ function stableHash(value: string): number {
   return hash >>> 0;
 }
 
+function nextPermutationState(state: number): number {
+  return (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+}
+
+/** Builds a deterministic, user-specific permutation of the full verse pool. */
+function getUserVersePermutation(userId: string): number[] {
+  const permutation = Array.from({ length: GITA_VERSES.length }, (_, index) => index);
+  let state = stableHash(`gita-rotation:${userId}`);
+
+  for (let index = permutation.length - 1; index > 0; index -= 1) {
+    state = nextPermutationState(state);
+    const swapIndex = state % (index + 1);
+    [permutation[index], permutation[swapIndex]] = [permutation[swapIndex], permutation[index]];
+  }
+
+  return permutation;
+}
+
 /** Selects one verse deterministically for a user and fixed campaign cycle. */
 export function selectGitaVerse(userId: string, cycleStart: string, periodDays = 15): GitaVerse {
   const cycleDay = Math.floor((Date.parse(`${cycleStart}T00:00:00.000Z`) - EPOCH_MS) / DAY_MS);
   const cycleNumber = Math.floor(cycleDay / periodDays);
-  const baseIndex = stableHash(userId) % GITA_VERSES.length;
-  const index = positiveModulo(baseIndex + cycleNumber * GITA_CYCLE_STEP, GITA_VERSES.length);
+  const permutation = getUserVersePermutation(userId);
+  const index = permutation[positiveModulo(cycleNumber, GITA_VERSES.length)];
   return GITA_VERSES[index];
 }
 

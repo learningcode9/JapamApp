@@ -40,9 +40,9 @@ describe('Bhagavad Gita campaign rotation', () => {
     );
   });
 
-  it('does not repeat before the full quote pool is used', () => {
+  it('uses all 48 verses once, then restarts at the first verse on cycle 49', () => {
     const first = getCampaignCycleDates(15, NOW);
-    const references = Array.from({ length: GITA_VERSES.length }, (_, offset) => {
+    const references = Array.from({ length: GITA_VERSES.length + 1 }, (_, offset) => {
       const cycleDate = new Date(`${first.cycleStart}T00:00:00.000Z`);
       cycleDate.setUTCDate(cycleDate.getUTCDate() + offset * 15);
       const cycle = getCampaignCycleDates(15, cycleDate);
@@ -50,6 +50,7 @@ describe('Bhagavad Gita campaign rotation', () => {
       return `${verse.chapter}:${verse.verse}`;
     });
 
-    expect(new Set(references).size).toBe(GITA_VERSES.length);
+    expect(new Set(references.slice(0, 48)).size).toBe(48);
+    expect(references[48]).toBe(references[0]);
   });
 });

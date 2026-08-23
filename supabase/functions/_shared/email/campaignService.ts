@@ -85,13 +85,20 @@ export class CampaignEmailService {
   }
 
   /** Read-only advisory check; claimSummary remains the race-safe authority. */
-  protected async isDuplicate(userId: string, cycleStart: string, cycleEnd: string): Promise<boolean> {
+  protected async isDuplicate(
+    userId: string,
+    cycleStart: string,
+    cycleEnd: string,
+    now: Date,
+  ): Promise<boolean> {
     return dataAccess.isCampaignCycleDuplicate(
       this.supabase,
       userId,
       this.campaign.id,
       cycleStart,
       cycleEnd,
+      this.campaign.periodDays,
+      now,
     );
   }
 
@@ -146,7 +153,7 @@ export class CampaignEmailService {
         };
       }
 
-      if (await this.isDuplicate(user.id, cycleStart, cycleEnd)) {
+      if (await this.isDuplicate(user.id, cycleStart, cycleEnd, now)) {
         return {
           userId: user.id,
           email: user.email,
