@@ -142,7 +142,7 @@ Whatever your path, may these next fifteen days bring a little more stillness th
 }
 
 function buildCountHtml(ctx: CampaignContext): string {
-  const { stats, config } = ctx;
+  const { stats, lifetimeTotalCount, config } = ctx;
   const content = `
   <tr><td style="padding:32px 32px 4px;">
     <p style="margin:0;font-size:17px;color:${config.colors.textPrimary};">
@@ -160,6 +160,10 @@ function buildCountHtml(ctx: CampaignContext): string {
       <tr style="background:${config.colors.background};">
         <td style="padding:14px 20px;font-size:14px;color:${config.colors.textPrimary};">📊 Japam count in the last 15 days</td>
         <td align="right" style="padding:14px 20px;font-size:18px;font-weight:700;color:${config.colors.primary};">${stats.recentCount.toLocaleString()}</td>
+      </tr>
+      <tr>
+        <td style="padding:14px 20px;font-size:14px;color:${config.colors.textPrimary};">📈 Lifetime Japam count</td>
+        <td align="right" style="padding:14px 20px;font-size:18px;font-weight:700;color:${config.colors.primary};">${lifetimeTotalCount.toLocaleString()}</td>
       </tr>
       <tr>
         <td style="padding:14px 20px;font-size:14px;color:${config.colors.textPrimary};">🧘 Sessions in the last 15 days</td>
@@ -208,7 +212,7 @@ function buildCountHtml(ctx: CampaignContext): string {
 }
 
 function buildCountText(ctx: CampaignContext): string {
-  const { stats, config } = ctx;
+  const { stats, lifetimeTotalCount, config } = ctx;
   const unsubscribeText = config.unsubscribeUrl ? `\nUnsubscribe: ${config.unsubscribeUrl}` : '';
 
   return `${COUNT_SUBJECT}
@@ -218,6 +222,7 @@ Hello, ${stats.userName}!
 Over the last fifteen days, you've made space for your Japam practice. Even one recent practice is meaningful — a quiet practice can build steadily over time.
 
   Japam count in the last 15 days: ${stats.recentCount.toLocaleString()}
+  Lifetime Japam count:             ${lifetimeTotalCount.toLocaleString()}
   Sessions in the last 15 days:     ${stats.totalSessions.toLocaleString()}
   Days practiced:                   ${stats.daysPracticed.toLocaleString()}
 
