@@ -99,17 +99,20 @@ file ever reads `process.env` directly.
 | `EMAIL_COLOR_PRIMARY` / `_PRIMARY_DARK` / `_ACCENT` / `_BACKGROUND` / `_CARD` / `_TEXT` / `_TEXT_MUTED` | Calm/Headspace-style sage+cream palette | Brand colors |
 | `EMAIL_SOCIAL_LINKS` | `''` | Comma-separated `Label\|https://url` pairs, rendered in the footer |
 | `PERIOD_DAYS` | `15` | Existing var; default period for campaigns that don't set their own |
-| `EMAIL_ALLOWLIST` | `''` (no restriction) | Comma-separated addresses. When set, **every** campaign only sends to these — for controlled testing against real production data |
-| `EMAIL_CONTROLLED_RECIPIENT` | `''` | Must match the single approved address in `EMAIL_ALLOWLIST` for a real wrapper send |
+| `EMAIL_SEND_MODE` | unset (real sends blocked) | Exactly `controlled` or `production`; missing/invalid values fail closed |
+| `EMAIL_PRODUCTION_CONFIRMATION` | unset | Production mode requires exactly `SEND_TO_ALL_ELIGIBLE_USERS` |
+| `EMAIL_ALLOWLIST` | unset (no restriction in authorized production mode) | Comma-separated valid addresses. In controlled mode it must contain exactly one address; in production mode it may narrow delivery |
+| `EMAIL_CONTROLLED_RECIPIENT` | `''` | In controlled mode, must match the single approved address and its fixed source fingerprint |
 | `EMAIL_CAMPAIGN_EXCLUDED_EMAILS` | `''` (no exclusions) | Comma-separated, case-insensitive exact email matches excluded from campaign sends; useful for internal/test accounts |
 
 The deployment wrapper additionally requires `RESEND_API_KEY`,
 `SUPABASE_SERVICE_ROLE_KEY`, and a Supabase URL for real execution. Missing
 `EMAIL_CAMPAIGN_EXCLUDED_EMAILS` safely means no explicit exclusions. A real
-send must have `EMAIL_CONTROLLED_RECIPIENT` and `EMAIL_ALLOWLIST` set to the
-same approved controlled recipient; the wrapper also checks a fixed
-controlled-recipient fingerprint. Dry-runs may omit this gate and remain
-provider-free.
+real send must pass the shared mode authorization: controlled mode requires
+the single approved recipient plus its fixed controlled-recipient fingerprint;
+production mode requires the exact `EMAIL_PRODUCTION_CONFIRMATION` value and
+may optionally use a valid allowlist to narrow delivery. Dry-runs may omit this
+gate and remain provider-free.
 
 ## Unsubscribe & allowlist
 
@@ -132,10 +135,15 @@ then apply the campaign-specific checks.
   unsubscribe page exists yet** — until one does, rows are written by
   operators/service-role only. Building that page is the next step before
   any real send.
-- **Allowlist:** `EMAIL_ALLOWLIST` (comma-separated addresses) is parsed via
-  `config.ts`'s `parseAllowlist()` and applied as a second filter by both
-  shared candidate loaders. Unset (the default) means no restriction —
-  identical to behavior before this existed.
+- **Real-send authorization:** `config.ts` exposes one shared fail-closed
+  guard used by both the Edge Function and CLI. Missing/invalid mode,
+  malformed allowlists, a missing production confirmation, or a controlled
+  recipient/fingerprint mismatch blocks every real send before a provider or
+  campaign claim is created.
+- **Allowlist:** `EMAIL_ALLOWLIST` (comma-separated valid addresses) is parsed
+  via `config.ts`'s `parseAllowlist()` and applied as a second filter by both
+  shared candidate loaders. In authorized production mode, unset means no
+  restriction; in controlled mode it must contain exactly one address.
 - **Explicit exclusions:** `EMAIL_CAMPAIGN_EXCLUDED_EMAILS` is parsed as
   comma-separated, trimmed, lowercased exact email addresses. Matching users
   receive a deterministic `skipped_excluded` result. There is no hardcoded

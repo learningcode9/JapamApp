@@ -26,6 +26,7 @@ function makeDeps(results: unknown[] = [{ userId: 'u1', email: 'user@example.com
     EMAIL_FROM_ADDRESS: 'Japam App <noreply@example.com>',
     EMAIL_UNSUBSCRIBE_URL: 'https://example.com/unsubscribe',
     EMAIL_UNSUBSCRIBE_SECRET: 'unsubscribe-test-only',
+    EMAIL_SEND_MODE: 'controlled',
     EMAIL_ALLOWLIST: 'learningcode9@gmail.com',
     EMAIL_CONTROLLED_RECIPIENT: 'learningcode9@gmail.com',
   };
@@ -97,6 +98,30 @@ describe('send-campaign-email wrapper', () => {
     expect(fixture.serviceRun).toHaveBeenCalledWith({ dryRun: true });
   });
 
+  it('keeps dry-run provider calls and writes at zero when real-send mode is missing', async () => {
+    const fixture = makeDeps();
+    delete fixture.env.EMAIL_SEND_MODE;
+    const response = await handleCampaignRequest(request({ dry_run: true }), fixture.deps);
+    const body = await responseJson(response);
+
+    expect(response.status).toBe(200);
+    expect(body.provider_calls).toBe(0);
+    expect(body.campaign_history_writes).toBe(0);
+    expect(fixture.providerCreations).toBe(0);
+    expect(fixture.remoteWrites).toBe(0);
+  });
+
+  it('reports the effective mode and real-send authorization from validate_only', async () => {
+    const fixture = makeDeps();
+    const body = await responseJson(
+      await handleCampaignRequest(request({ validate_only: true }), fixture.deps),
+    );
+
+    expect(body.effective_mode).toBe('controlled');
+    expect(body.real_send_authorized).toBe(true);
+    expect(body.allowlist_recipient_count).toBe(1);
+  });
+
   it('rejects malformed input instead of silently treating it as a dry-run', async () => {
     const fixture = makeDeps();
     const response = await handleCampaignRequest(
@@ -148,6 +173,62 @@ describe('send-campaign-email wrapper', () => {
     expect(response.status).toBe(409);
     expect(fixture.providerCreations).toBe(0);
     expect(fixture.serviceRun).not.toHaveBeenCalled();
+  });
+
+  it('supports a confirmed production mode with an unset allowlist', async () => {
+    const fixture = makeDeps([{ userId: 'u1', email: 'user@example.com', status: 'sent' }]);
+    fixture.env.EMAIL_SEND_MODE = 'production';
+    fixture.env.EMAIL_PRODUCTION_CONFIRMATION = 'SEND_TO_ALL_ELIGIBLE_USERS';
+    delete fixture.env.EMAIL_ALLOWLIST;
+    delete fixture.env.EMAIL_CONTROLLED_RECIPIENT;
+
+    const response = await handleCampaignRequest(request({ dry_run: false }), fixture.deps);
+
+    expect(response.status).toBe(200);
+    expect(fixture.providerCreations).toBe(1);
+  });
+
+  it('supports a confirmed production mode narrowed by a valid allowlist', async () => {
+    const fixture = makeDeps([{ userId: 'u1', email: 'user@example.com', status: 'sent' }]);
+    fixture.env.EMAIL_SEND_MODE = 'production';
+    fixture.env.EMAIL_PRODUCTION_CONFIRMATION = 'SEND_TO_ALL_ELIGIBLE_USERS';
+    fixture.env.EMAIL_ALLOWLIST = 'user@example.com';
+
+    const response = await handleCampaignRequest(request({ dry_run: false }), fixture.deps);
+
+    expect(response.status).toBe(200);
+    expect(fixture.providerCreations).toBe(1);
+  });
+
+  it('blocks production mode without the exact confirmation', async () => {
+    const fixture = makeDeps();
+    fixture.env.EMAIL_SEND_MODE = 'production';
+    delete fixture.env.EMAIL_PRODUCTION_CONFIRMATION;
+    delete fixture.env.EMAIL_ALLOWLIST;
+
+    const response = await handleCampaignRequest(request({ dry_run: false }), fixture.deps);
+    const body = await responseJson(response);
+
+    expect(response.status).toBe(409);
+    expect(body.reason).toMatch(/EMAIL_PRODUCTION_CONFIRMATION/);
+    expect(fixture.providerCreations).toBe(0);
+  });
+
+  it('blocks missing/invalid mode and malformed allowlists before provider creation', async () => {
+    const missingMode = makeDeps();
+    delete missingMode.env.EMAIL_SEND_MODE;
+    const missingResponse = await handleCampaignRequest(request({ dry_run: false }), missingMode.deps);
+    expect(missingResponse.status).toBe(409);
+    expect(missingMode.providerCreations).toBe(0);
+
+    const malformedAllowlist = makeDeps();
+    malformedAllowlist.env.EMAIL_ALLOWLIST = 'not-an-email';
+    const malformedResponse = await handleCampaignRequest(
+      request({ dry_run: false }),
+      malformedAllowlist.deps,
+    );
+    expect(malformedResponse.status).toBe(409);
+    expect(malformedAllowlist.providerCreations).toBe(0);
   });
 
   it('passes EMAIL_CAMPAIGN_EXCLUDED_EMAILS into the shared campaign configuration', async () => {
