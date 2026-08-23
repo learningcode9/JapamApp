@@ -4,6 +4,7 @@
 // one field here, not touching every campaign or template file.
 
 import { getEnv } from './env.ts';
+import { getCampaignEmailProviderKind } from './emailProvider.ts';
 
 export interface BrandColors {
   primary: string;
@@ -164,24 +165,42 @@ export function loadEmailConfig(): EmailConfig {
  */
 export function validateProductionEnv(): string[] {
   const problems: string[] = [];
+  let provider: 'resend' | 'gmail' = 'resend';
 
-  if (!getEnv('RESEND_API_KEY')) {
+  try {
+    provider = getCampaignEmailProviderKind();
+  } catch (error) {
+    problems.push(error instanceof Error ? error.message : 'EMAIL_PROVIDER is invalid.');
+  }
+
+  if (provider === 'gmail') {
+    for (const name of [
+      'GMAIL_CLIENT_ID',
+      'GMAIL_CLIENT_SECRET',
+      'GMAIL_REFRESH_TOKEN',
+      'GMAIL_SENDER_EMAIL',
+    ]) {
+      if (!getEnv(name)) problems.push(`${name} is not set — required for Gmail sending.`);
+    }
+  } else if (!getEnv('RESEND_API_KEY')) {
     problems.push('RESEND_API_KEY is not set — required for real sending.');
   }
 
-  const fromAddress = getEnv('EMAIL_FROM_ADDRESS');
-  if (!fromAddress) {
-    problems.push(
-      'EMAIL_FROM_ADDRESS is not set — sending would silently fall back to the built-in ' +
-        'default (noreply@japamapp.com), which is not a real, DNS-verified domain ' +
-        '(confirmed NXDOMAIN). Set it explicitly to a domain you have verified with your ' +
-        'email provider — see docs/CAMPAIGN_EMAIL_ARCHITECTURE.md, "DNS requirements".',
-    );
-  } else if (fromAddress.includes('japamapp.com')) {
-    problems.push(
-      'EMAIL_FROM_ADDRESS still references japamapp.com, which is not a registered domain. ' +
-        'Use a real, DNS-verified sending domain.',
-    );
+  if (provider === 'resend') {
+    const fromAddress = getEnv('EMAIL_FROM_ADDRESS');
+    if (!fromAddress) {
+      problems.push(
+        'EMAIL_FROM_ADDRESS is not set — sending would silently fall back to the built-in ' +
+          'default (noreply@japamapp.com), which is not a real, DNS-verified domain ' +
+          '(confirmed NXDOMAIN). Set it explicitly to a domain you have verified with your ' +
+          'email provider — see docs/CAMPAIGN_EMAIL_ARCHITECTURE.md, "DNS requirements".',
+      );
+    } else if (fromAddress.includes('japamapp.com')) {
+      problems.push(
+        'EMAIL_FROM_ADDRESS still references japamapp.com, which is not a registered domain. ' +
+          'Use a real, DNS-verified sending domain.',
+      );
+    }
   }
 
   if (!getEnv('EMAIL_UNSUBSCRIBE_URL')) {

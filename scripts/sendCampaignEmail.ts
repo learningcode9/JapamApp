@@ -14,7 +14,7 @@
  */
 
 import { createCampaignService } from '../supabase/functions/_shared/email/campaignServiceFactory';
-import { createEmailProvider } from '../supabase/functions/_shared/email/emailProvider';
+import { createCampaignEmailProvider } from '../supabase/functions/_shared/email/emailProvider';
 import { getCampaign } from '../supabase/functions/_shared/email/campaigns/registry';
 import {
   assertCampaignUnsubscribeReady,
@@ -42,7 +42,7 @@ async function main(): Promise<void> {
   }
 
   const campaign = getCampaign(campaignId);
-  const emailProvider = dryRun ? null : createEmailProvider();
+  const emailProvider = dryRun ? null : createCampaignEmailProvider();
   const service = createCampaignService(campaign, emailProvider);
 
   const results = await service.run({ dryRun });

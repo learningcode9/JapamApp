@@ -73,6 +73,19 @@ describe('validateProductionEnv / assertProductionReady', () => {
     expect(() => assertProductionReady()).not.toThrow();
   });
 
+  it('accepts Gmail provider credentials without requiring Resend configuration', () => {
+    setValidEnv();
+    process.env.EMAIL_PROVIDER = 'gmail';
+    delete process.env.RESEND_API_KEY;
+    delete process.env.EMAIL_FROM_ADDRESS;
+    process.env.GMAIL_CLIENT_ID = 'client-id-test';
+    process.env.GMAIL_CLIENT_SECRET = 'client-secret-test';
+    process.env.GMAIL_REFRESH_TOKEN = 'refresh-token-test';
+    process.env.GMAIL_SENDER_EMAIL = 'mantrajapamapp@gmail.com';
+
+    expect(validateProductionEnv()).toEqual([]);
+  });
+
   it('flags a missing RESEND_API_KEY', () => {
     setValidEnv();
     delete process.env.RESEND_API_KEY;

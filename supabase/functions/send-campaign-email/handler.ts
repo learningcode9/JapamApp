@@ -6,7 +6,7 @@ export interface CampaignHandlerDependencies {
   assertCampaignUnsubscribeReady(): void;
   loadEmailConfig(): unknown;
   createSupabaseClient(url: string, serviceRoleKey: string): unknown;
-  createEmailProvider(apiKey: string): unknown;
+  createEmailProvider(): unknown;
   createCampaignService(
     campaign: unknown,
     supabase: unknown,
@@ -160,7 +160,7 @@ export async function handleCampaignRequest(
     }
 
     const supabase = deps.createSupabaseClient(supabaseUrl, serviceRoleKey);
-    const provider = dryRun ? null : deps.createEmailProvider(deps.getEnv('RESEND_API_KEY') ?? '');
+    const provider = dryRun ? null : deps.createEmailProvider();
     const service = deps.createCampaignService(
       campaign,
       supabase,
