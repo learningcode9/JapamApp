@@ -198,11 +198,10 @@ export interface LifetimeStats {
 }
 
 /**
- * Full-history (all-time) stats for a user — used for the "lifetime total"
- * stat shown in inspirational campaigns, and to gate brand-new users out of
- * a campaign whose copy assumes an established practice (see
- * campaignService.ts's "too new" eligibility check). Combines what used to
- * be two separate full-table-scan queries (a sum and a min) into one.
+ * Full-history (all-time) stats for a user — used for the lifetime stats shown
+ * in inspirational campaigns. The campaign's activity eligibility is evaluated
+ * separately from these totals. Combines what used to be two separate
+ * full-table-scan queries (a sum and a min) into one.
  */
 export async function getLifetimeStats(
   supabase: SupabaseClient,
@@ -240,7 +239,7 @@ export async function isDuplicateSummary(
   // SUMMARY_EMAIL_SETUP.md docs suggest as a valid scheduling option), every
   // active user would receive a new email every day instead of every N days.
   //
-  // Instead, look at the most recent sent/dry_run record for this user+type
+  // Instead, look at the most recent sent/pending record for this user+type
   // and treat it as a duplicate if its period still overlaps with (or ends
   // after) the start of the period being computed now — i.e. fewer than
   // `periodDays` have elapsed since the last send.
@@ -249,7 +248,7 @@ export async function isDuplicateSummary(
     .select('period_end')
     .eq('user_id', userId)
     .eq('email_type', emailType)
-    .in('status', ['sent', 'dry_run', 'pending'])
+    .in('status', ['sent', 'pending'])
     .order('period_start', { ascending: false })
     .limit(1);
 
@@ -259,6 +258,81 @@ export async function isDuplicateSummary(
   if (!data?.length) return false;
 
   return data[0].period_end >= periodStart;
+}
+
+/**
+ * Checks the recurring campaign's fixed cycle and enforces a full-period gap
+ * from the previous successful send. A pending row blocks its own cycle and
+ * remains a conservative block for 15 full days after its claim timestamp;
+ * after that safe window it must not permanently disable future cycles. Dry-run
+ * rows are deliberately ignored: this campaign never writes them, and they
+ * must never block a real send. The unique (user_id, email_type, period_start)
+ * constraint remains the atomic claim boundary for all new rows.
+ */
+export async function isCampaignCycleDuplicate(
+  supabase: SupabaseClient,
+  userId: string,
+  emailType: string,
+  cycleStart: string,
+  cycleEnd: string,
+  periodDays: number,
+  now = new Date(),
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('user_email_summaries')
+    .select('period_start, period_end, status, sent_at, created_at')
+    .eq('user_id', userId)
+    .eq('email_type', emailType)
+    .in('status', ['sent', 'pending']);
+
+  if (error) {
+    throw new Error(`isCampaignCycleDuplicate(${userId}): ${error.message}`);
+  }
+  const minimumSpacingMs = periodDays * 86_400_000;
+  const nowMs = now.getTime();
+
+  return (data ?? []).some(record => {
+    const sameCycle = record.period_end >= cycleStart && record.period_start <= cycleEnd;
+    if (sameCycle) return true;
+
+    const attemptAt = record.status === 'pending'
+      ? record.created_at ?? `${record.period_end}T23:59:59.999Z`
+      : record.sent_at ?? `${record.period_end}T23:59:59.999Z`;
+    const attemptAtMs = Date.parse(attemptAt);
+    if (!Number.isFinite(attemptAtMs)) return true;
+
+    return nowMs - attemptAtMs < minimumSpacingMs;
+  });
+}
+
+/**
+ * Returns the zero-based quote ordinal for the user's next successful send.
+ * Only sent rows count. If the current cycle already has a sent row, return
+ * that row's ordinal so re-rendering the completed cycle remains stable.
+ */
+export async function getCampaignSendOrdinal(
+  supabase: SupabaseClient,
+  userId: string,
+  emailType: string,
+  cycleStart: string,
+  cycleEnd: string,
+): Promise<number> {
+  const { data, error } = await supabase
+    .from('user_email_summaries')
+    .select('period_start, period_end')
+    .eq('user_id', userId)
+    .eq('email_type', emailType)
+    .in('status', ['sent']);
+
+  if (error) {
+    throw new Error(`getCampaignSendOrdinal(${userId}): ${error.message}`);
+  }
+
+  const sentRecords = data ?? [];
+  const currentCycleHasSent = sentRecords.some(
+    record => record.period_end >= cycleStart && record.period_start <= cycleEnd,
+  );
+  return Math.max(0, sentRecords.length - (currentCycleHasSent ? 1 : 0));
 }
 
 export async function recordSummary(

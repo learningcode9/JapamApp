@@ -4,8 +4,9 @@ import type { EmailProvider } from './emailProvider.ts';
 import type { AuthUser, JapamHistoryRow, EmailSummaryRecord, SummaryRunResult } from './types.ts';
 import type { CampaignDefinition } from './campaigns/types.ts';
 import type { EmailConfig } from './config.ts';
-import { calculateSummaryStats, getPeriodDates } from './calculator.ts';
+import { calculateSummaryStats, getCampaignCycleDates, getPeriodDates } from './calculator.ts';
 import { buildUnsubscribeUrl } from './unsubscribeToken.ts';
+import { selectGitaVerseForOrdinal } from './campaigns/gitaVerses.ts';
 import * as dataAccess from './dataAccess.ts';
 
 export interface CampaignRunOptions {
@@ -37,9 +38,10 @@ export class CampaignEmailService {
   async run(options: CampaignRunOptions): Promise<SummaryRunResult[]> {
     const { dryRun, now = new Date() } = options;
     const { periodStart, periodEnd } = getPeriodDates(this.campaign.periodDays, now);
+    const { cycleStart, cycleEnd } = getCampaignCycleDates(this.campaign.periodDays, now);
 
     console.log(
-      `[Campaign:${this.campaign.id}] period=${periodStart}→${periodEnd} dryRun=${dryRun}`,
+      `[Campaign:${this.campaign.id}] activity=${periodStart}→${periodEnd} cycle=${cycleStart}→${cycleEnd} dryRun=${dryRun}`,
     );
 
     const users = await this.getActiveUsers(periodStart, periodEnd);
@@ -47,7 +49,7 @@ export class CampaignEmailService {
 
     const results: SummaryRunResult[] = [];
     for (const user of users) {
-      const result = await this.processUser(user, periodStart, periodEnd, dryRun, now);
+      const result = await this.processUser(user, periodStart, periodEnd, cycleStart, cycleEnd, dryRun, now);
       results.push(result);
       const extra = result.reason ? ` — ${result.reason}` : result.messageId ? ` (${result.messageId})` : '';
       console.log(`[Campaign:${this.campaign.id}] ${user.email}: ${result.status}${extra}`);
@@ -82,9 +84,30 @@ export class CampaignEmailService {
     return dataAccess.getLifetimeStats(this.supabase, userId);
   }
 
+  protected async getCampaignSendOrdinal(
+    userId: string,
+    cycleStart: string,
+    cycleEnd: string,
+  ): Promise<number> {
+    return dataAccess.getCampaignSendOrdinal(this.supabase, userId, this.campaign.id, cycleStart, cycleEnd);
+  }
+
   /** Read-only advisory check; claimSummary remains the race-safe authority. */
-  protected async isDuplicate(userId: string, periodStart: string): Promise<boolean> {
-    return dataAccess.isDuplicateSummary(this.supabase, userId, this.campaign.id, periodStart);
+  protected async isDuplicate(
+    userId: string,
+    cycleStart: string,
+    cycleEnd: string,
+    now: Date,
+  ): Promise<boolean> {
+    return dataAccess.isCampaignCycleDuplicate(
+      this.supabase,
+      userId,
+      this.campaign.id,
+      cycleStart,
+      cycleEnd,
+      this.campaign.periodDays,
+      now,
+    );
   }
 
   protected async claimSummary(record: Omit<EmailSummaryRecord, 'id' | 'created_at'>): Promise<boolean> {
@@ -99,8 +122,10 @@ export class CampaignEmailService {
 
   private async processUser(
     user: AuthUser,
-    periodStart: string,
-    periodEnd: string,
+    activityPeriodStart: string,
+    activityPeriodEnd: string,
+    cycleStart: string,
+    cycleEnd: string,
     dryRun: boolean,
     now: Date,
   ): Promise<SummaryRunResult> {
@@ -136,7 +161,7 @@ export class CampaignEmailService {
         };
       }
 
-      if (await this.isDuplicate(user.id, periodStart)) {
+      if (await this.isDuplicate(user.id, cycleStart, cycleEnd, now)) {
         return {
           userId: user.id,
           email: user.email,
@@ -145,8 +170,14 @@ export class CampaignEmailService {
         };
       }
 
-      const rows = await this.getHistoryForUser(user.id, periodStart, periodEnd);
-      const stats = calculateSummaryStats(user.id, user.email, rows, periodStart, periodEnd);
+      const rows = await this.getHistoryForUser(user.id, activityPeriodStart, activityPeriodEnd);
+      const stats = calculateSummaryStats(
+        user.id,
+        user.email,
+        rows,
+        activityPeriodStart,
+        activityPeriodEnd,
+      );
 
       if (!stats) {
         return {
@@ -158,6 +189,7 @@ export class CampaignEmailService {
       }
 
       const { lifetimeTotalMalas, lifetimeTotalCount } = await this.getLifetimeStats(user.id);
+      const sendOrdinal = await this.getCampaignSendOrdinal(user.id, cycleStart, cycleEnd);
 
       if (dryRun) {
         const campaignConfig =
@@ -172,7 +204,8 @@ export class CampaignEmailService {
                 ),
               }
             : this.config;
-        const ctx = { stats, lifetimeTotalMalas, lifetimeTotalCount, config: campaignConfig };
+        const gitaVerse = selectGitaVerseForOrdinal(user.id, sendOrdinal);
+        const ctx = { stats, lifetimeTotalMalas, lifetimeTotalCount, gitaVerse, config: campaignConfig };
         const html = this.campaign.buildHtml(ctx);
         const text = this.campaign.buildText(ctx);
         const subject = this.campaign.getSubject?.(ctx) ?? this.campaign.subject;
@@ -203,13 +236,14 @@ export class CampaignEmailService {
           now.getTime(),
         ),
       };
-      const ctx = { stats, lifetimeTotalMalas, lifetimeTotalCount, config: campaignConfig };
+      const gitaVerse = selectGitaVerseForOrdinal(user.id, sendOrdinal);
+      const ctx = { stats, lifetimeTotalMalas, lifetimeTotalCount, gitaVerse, config: campaignConfig };
 
       const pendingRecord: Omit<EmailSummaryRecord, 'id' | 'created_at'> = {
         user_id: user.id,
         email_type: emailType,
-        period_start: periodStart,
-        period_end: periodEnd,
+        period_start: cycleStart,
+        period_end: cycleEnd,
         sent_at: null,
         status: 'pending',
         provider_message_id: null,
@@ -238,15 +272,15 @@ export class CampaignEmailService {
         subject,
         html,
         text,
-        idempotencyKey: `${emailType}/${user.id}/${periodStart}`,
+        idempotencyKey: `${emailType}/${user.id}/${cycleStart}`,
       });
       providerAccepted = true;
 
       await this.recordSummary({
         user_id: user.id,
         email_type: emailType,
-        period_start: periodStart,
-        period_end: periodEnd,
+        period_start: cycleStart,
+        period_end: cycleEnd,
         sent_at: new Date().toISOString(),
         status: 'sent',
         provider_message_id: messageId,
@@ -261,8 +295,8 @@ export class CampaignEmailService {
         await this.recordSummary({
           user_id: user.id,
           email_type: emailType,
-          period_start: periodStart,
-          period_end: periodEnd,
+          period_start: cycleStart,
+          period_end: cycleEnd,
           sent_at: null,
           status: providerAccepted || !safeToRetry ? 'pending' : 'failed',
           provider_message_id: null,

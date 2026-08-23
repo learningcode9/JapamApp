@@ -5,6 +5,7 @@
 
 import type { SummaryStats } from '../types.ts';
 import type { EmailConfig } from '../config.ts';
+import type { GitaVerse } from './gitaVerses.ts';
 
 export interface CampaignContext {
   stats: SummaryStats;
@@ -12,6 +13,8 @@ export interface CampaignContext {
   lifetimeTotalMalas: number;
   /** All-time individual Japam count for this user. */
   lifetimeTotalCount: number;
+  /** Deterministic devotional verse selected for this user's campaign cycle. */
+  gitaVerse?: GitaVerse;
   config: EmailConfig;
 }
 

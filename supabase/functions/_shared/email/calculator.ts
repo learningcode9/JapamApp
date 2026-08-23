@@ -22,6 +22,35 @@ export function getPeriodDates(
   };
 }
 
+/**
+ * Returns a stable, non-overlapping UTC cycle for recurring campaigns.
+ *
+ * Activity remains a rolling window (getPeriodDates); campaign history uses
+ * this fixed key so a daily scheduler can send at most once per 15-day cycle.
+ */
+export function getCampaignCycleDates(
+  periodDays = 15,
+  now = new Date(),
+): { cycleStart: string; cycleEnd: string; cycleNumber: number } {
+  if (!Number.isInteger(periodDays) || periodDays <= 0) {
+    throw new Error('periodDays must be a positive integer');
+  }
+
+  const day = new Date(now);
+  day.setUTCHours(0, 0, 0, 0);
+  const epoch = Date.UTC(1970, 0, 1);
+  const dayNumber = Math.floor((day.getTime() - epoch) / 86_400_000);
+  const cycleNumber = Math.floor(dayNumber / periodDays);
+  const cycleStartDate = new Date(epoch + cycleNumber * periodDays * 86_400_000);
+  const cycleEndDate = new Date(cycleStartDate.getTime() + (periodDays - 1) * 86_400_000);
+
+  return {
+    cycleStart: cycleStartDate.toISOString().slice(0, 10),
+    cycleEnd: cycleEndDate.toISOString().slice(0, 10),
+    cycleNumber,
+  };
+}
+
 // ─── Streak calculation ────────────────────────────────────────────────────────
 
 /**

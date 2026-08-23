@@ -1,6 +1,7 @@
 import {
   calculateSummaryStats,
   calculateLongestStreak,
+  getCampaignCycleDates,
   getPeriodDates,
 } from '../email/calculator';
 import type { JapamHistoryRow } from '../email/types';
@@ -9,6 +10,25 @@ import type { JapamHistoryRow } from '../email/types';
 
 const P_START = '2026-06-16';
 const P_END   = '2026-06-30';
+
+describe('getCampaignCycleDates', () => {
+  it('returns one stable fixed cycle for every run within 15 days', () => {
+    const first = getCampaignCycleDates(15, new Date('2026-08-22T00:00:00.000Z'));
+    const last = getCampaignCycleDates(15, new Date(`${first.cycleEnd}T23:59:59.000Z`));
+
+    expect(last).toEqual(first);
+  });
+
+  it('advances to a new cycle after 15 days', () => {
+    const current = getCampaignCycleDates(15, new Date('2026-08-22T12:00:00.000Z'));
+    const nextDate = new Date(`${current.cycleEnd}T00:00:00.000Z`);
+    nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+    const next = getCampaignCycleDates(15, nextDate);
+
+    expect(next.cycleStart).not.toBe(current.cycleStart);
+    expect(next.cycleNumber).toBe(current.cycleNumber + 1);
+  });
+});
 
 function row(overrides: Partial<JapamHistoryRow> = {}): JapamHistoryRow {
   return {

@@ -5,6 +5,8 @@ import type { JapamHistoryRow, AuthUser, EmailSummaryRecord } from '../email/typ
 import type { CampaignDefinition, CampaignContext } from '../email/campaigns/types';
 import { loadEmailConfig } from '../email/config';
 import { verifyUnsubscribeToken } from '../email/unsubscribeToken';
+import { getCampaignCycleDates } from '../email/calculator';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -99,11 +101,22 @@ class TestService extends CampaignEmailService {
     return { lifetimeTotalMalas: this.fakeLifetimeTotal, lifetimeTotalCount: this.fakeLifetimeTotal * 108, firstActivityAt: LONG_ESTABLISHED_USER_ISO };
   }
 
-  protected override async isDuplicate(): Promise<boolean> {
+  protected override async getCampaignSendOrdinal(): Promise<number> {
+    return 0;
+  }
+
+  protected override async isDuplicate(
+    _userId: string,
+    _cycleStart: string,
+    _cycleEnd: string,
+    _now: Date,
+  ): Promise<boolean> {
     return this.fakeDuplicate;
   }
 
-  protected override async claimSummary(): Promise<boolean> {
+  protected override async claimSummary(
+    _record: Omit<EmailSummaryRecord, 'id' | 'created_at'>,
+  ): Promise<boolean> {
     if (this.fakeClaimResults.length > 0) return this.fakeClaimResults.shift()!;
     return !this.fakeDuplicate;
   }
@@ -112,6 +125,75 @@ class TestService extends CampaignEmailService {
     record: Omit<EmailSummaryRecord, 'id' | 'created_at'>,
   ): Promise<void> {
     this.recordedSummaries.push(record);
+  }
+}
+
+class RecurringCycleService extends TestService {
+  private readonly claimedCycles = new Set<string>();
+
+  protected override async isDuplicate(
+    _userId: string,
+    cycleStart: string,
+    _cycleEnd: string,
+    _now: Date,
+  ): Promise<boolean> {
+    return this.claimedCycles.has(cycleStart);
+  }
+
+  protected override async claimSummary(
+    record: Omit<EmailSummaryRecord, 'id' | 'created_at'>,
+  ): Promise<boolean> {
+    if (this.claimedCycles.has(record.period_start)) return false;
+    this.claimedCycles.add(record.period_start);
+    return true;
+  }
+
+  protected override async getHistoryForUser(
+    _userId: string,
+    _periodStart: string,
+    periodEnd: string,
+  ): Promise<JapamHistoryRow[]> {
+    return [makeRow({ created_at: `${periodEnd}T12:00:00.000Z` })];
+  }
+}
+
+function fakeCampaignHistorySupabase(history: {
+  period_start: string;
+  period_end: string;
+  status: string;
+  sent_at?: string | null;
+}[]): SupabaseClient {
+  const chain = {
+    select: () => chain,
+    eq: () => chain,
+    in: async () => ({ data: history, error: null }),
+  };
+  return { from: () => chain } as unknown as SupabaseClient;
+}
+
+class CampaignSpacingService extends CampaignEmailService {
+  constructor(supabase: SupabaseClient, provider: EmailProvider) {
+    super(FAKE_CAMPAIGN, supabase, provider, loadEmailConfig());
+  }
+
+  protected override async getActiveUsers(): Promise<AuthUser[]> {
+    return [USER];
+  }
+
+  protected override async getHistoryForUser(): Promise<JapamHistoryRow[]> {
+    return [makeRow()];
+  }
+
+  protected override async getLifetimeStats(): Promise<{ lifetimeTotalMalas: number; lifetimeTotalCount: number; firstActivityAt: string | null }> {
+    return { lifetimeTotalMalas: 42, lifetimeTotalCount: 4_536, firstActivityAt: LONG_ESTABLISHED_USER_ISO };
+  }
+
+  protected override async claimSummary(): Promise<boolean> {
+    return true;
+  }
+
+  protected override async recordSummary(): Promise<void> {
+    // The boundary test only exercises eligibility and provider admission.
   }
 }
 
@@ -246,6 +328,88 @@ describe('CampaignEmailService duplicate prevention', () => {
       expect(first[0].status).toBe('sent');
       expect(second[0].status).toBe('skipped_duplicate');
       expect(provider.sendEmail).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('allows the next fixed 15-day cycle while blocking the current cycle', async () => {
+    await withUnsubscribeEnv(async () => {
+      const provider: EmailProvider = {
+        sendEmail: jest
+          .fn()
+          .mockResolvedValueOnce({ messageId: 'cycle-1' })
+          .mockResolvedValueOnce({ messageId: 'cycle-2' }),
+      };
+      const service = new RecurringCycleService([USER], [makeRow()], false, 42, provider);
+      const first = await service.run({ dryRun: false, now: NOW });
+      const sameCycle = await service.run({ dryRun: false, now: NOW });
+      const firstCycleEnd = service.recordedSummaries[0].period_end;
+      const nextCycleDate = new Date(`${firstCycleEnd}T00:00:00.000Z`);
+      nextCycleDate.setUTCDate(nextCycleDate.getUTCDate() + 1);
+      const next = await service.run({ dryRun: false, now: nextCycleDate });
+
+      expect(first[0].status).toBe('sent');
+      expect(sameCycle[0].status).toBe('skipped_duplicate');
+      expect(next[0].status).toBe('sent');
+      expect(provider.sendEmail).toHaveBeenCalledTimes(2);
+      expect(service.recordedSummaries[0].period_start).not.toBe(
+        service.recordedSummaries[1].period_start,
+      );
+    });
+  });
+
+  it('skips an unsubscribed user in every cycle', async () => {
+    const provider: EmailProvider = { sendEmail: jest.fn() };
+    const service = new RecurringCycleService(
+      [{ ...USER, isUnsubscribed: true }],
+      [makeRow()],
+      false,
+      42,
+      provider,
+    );
+    const first = await service.run({ dryRun: false, now: NOW });
+    const cycleEnd = new Date(`${getCampaignCycleDates(15, NOW).cycleEnd}T00:00:00.000Z`);
+    cycleEnd.setUTCDate(cycleEnd.getUTCDate() + 1);
+    const second = await service.run({ dryRun: false, now: cycleEnd });
+
+    expect(first[0].status).toBe('skipped_unsubscribed');
+    expect(second[0].status).toBe('skipped_unsubscribed');
+    expect(provider.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('blocks 14 days 23 hours after a send and allows exactly 15 full days with activity', async () => {
+    await withUnsubscribeEnv(async () => {
+      const previousSend = {
+        period_start: '2026-07-01',
+        period_end: '2026-07-15',
+        status: 'sent',
+        sent_at: '2026-08-07T12:00:00.000Z',
+      };
+      const blockedProvider: EmailProvider = { sendEmail: jest.fn() };
+      const blockedService = new CampaignSpacingService(
+        fakeCampaignHistorySupabase([previousSend]),
+        blockedProvider,
+      );
+      const blocked = await blockedService.run({
+        dryRun: false,
+        now: new Date('2026-08-22T11:00:00.000Z'),
+      });
+
+      const eligibleProvider: EmailProvider = {
+        sendEmail: jest.fn().mockResolvedValue({ messageId: 'exact-boundary' }),
+      };
+      const eligibleService = new CampaignSpacingService(
+        fakeCampaignHistorySupabase([previousSend]),
+        eligibleProvider,
+      );
+      const eligible = await eligibleService.run({
+        dryRun: false,
+        now: new Date('2026-08-22T12:00:00.000Z'),
+      });
+
+      expect(blocked[0].status).toBe('skipped_duplicate');
+      expect(blockedProvider.sendEmail).not.toHaveBeenCalled();
+      expect(eligible[0].status).toBe('sent');
+      expect(eligibleProvider.sendEmail).toHaveBeenCalledTimes(1);
     });
   });
 });
