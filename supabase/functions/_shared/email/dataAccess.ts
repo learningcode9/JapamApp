@@ -6,7 +6,7 @@
 
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import type { AuthUser, JapamHistoryRow, EmailSummaryRecord } from './types.ts';
-import { parseAllowlist, parseExcludedEmails } from './config.ts';
+import { isAlwaysExcludedCampaignEmail, parseAllowlist, parseExcludedEmails } from './config.ts';
 import { getEnv } from './env.ts';
 
 const SIMPLE_EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -117,6 +117,7 @@ export async function getActiveUsersInPeriod(
   for await (const user of listAllAuthUsers(supabase)) {
     if (!isValidEmail(user.email) || !activeIds.has(user.id)) continue;
     if (unsubscribedIds.has(user.id)) continue;
+    if (isAlwaysExcludedCampaignEmail(user.email)) continue;
     if (allowlist !== null && !allowlist.has(user.email!.trim().toLowerCase())) continue;
 
     users.push({
@@ -155,7 +156,7 @@ export async function getCampaignCandidates(supabase: SupabaseClient): Promise<A
           (user.user_metadata?.full_name as string | undefined) ??
           (user.user_metadata?.name as string | undefined),
         isUnsubscribed: unsubscribedIds.has(user.id),
-        isExcluded: excludedEmails.has(email.toLowerCase()),
+        isExcluded: excludedEmails.has(email.toLowerCase()) || isAlwaysExcludedCampaignEmail(email),
       });
   }
   return users.filter(user =>

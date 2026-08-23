@@ -3,6 +3,7 @@ import {
   getRealSendAuthorization,
   parseAllowlist,
   parseExcludedEmails,
+  isAlwaysExcludedCampaignEmail,
   validateProductionEnv,
   assertProductionReady,
 } from '../email/config';
@@ -161,6 +162,15 @@ describe('parseExcludedEmails', () => {
     expect(result.has('reviewer@example.com')).toBe(true);
     expect(result.has('reviewer+other@example.com')).toBe(false);
     expect(result.has('other@example.com')).toBe(false);
+  });
+});
+
+describe('permanent campaign domain exclusion', () => {
+  it('matches only the exact cloudtestlabaccounts.com domain', () => {
+    expect(isAlwaysExcludedCampaignEmail('tester@cloudtestlabaccounts.com')).toBe(true);
+    expect(isAlwaysExcludedCampaignEmail('tester@CLOUDTESTLABACCOUNTS.COM')).toBe(true);
+    expect(isAlwaysExcludedCampaignEmail('tester@cloudtestlabaccounts.com.example')).toBe(false);
+    expect(isAlwaysExcludedCampaignEmail('tester@example.com')).toBe(false);
   });
 });
 

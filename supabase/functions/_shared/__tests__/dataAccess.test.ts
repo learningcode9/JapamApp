@@ -433,6 +433,30 @@ describe('getCampaignCandidates (campaign decision inputs)', () => {
     expect(result.map(user => user.id)).toEqual(['u1']);
   });
 
+  it('marks the exact cloudtestlabaccounts.com domain as excluded, case-insensitively', async () => {
+    delete process.env.EMAIL_ALLOWLIST;
+    delete process.env.EMAIL_CAMPAIGN_EXCLUDED_EMAILS;
+    const supabase = fakeSupabaseForActiveUsers({
+      activityUserIds: [],
+      unsubscribedUserIds: [],
+      authUsers: [
+        { id: 'u1', email: 'reviewer@cloudtestlabaccounts.com' },
+        { id: 'u2', email: 'reviewer@CLOUDTESTLABACCOUNTS.COM' },
+        { id: 'u3', email: 'reviewer@cloudtestlabaccounts.com.example' },
+        { id: 'u4', email: 'normal@example.com' },
+      ],
+    });
+
+    const result = await getCampaignCandidates(supabase);
+
+    expect(result).toEqual([
+      expect.objectContaining({ id: 'u1', isExcluded: true }),
+      expect.objectContaining({ id: 'u2', isExcluded: true }),
+      expect.objectContaining({ id: 'u3', isExcluded: false }),
+      expect.objectContaining({ id: 'u4', isExcluded: false }),
+    ]);
+  });
+
   it('loads users beyond the first 1,000 page without duplicating overlapping users', async () => {
     delete process.env.EMAIL_ALLOWLIST;
     delete process.env.EMAIL_CAMPAIGN_EXCLUDED_EMAILS;

@@ -215,6 +215,26 @@ describe('CampaignEmailService dry-run mode', () => {
 
     expect(service.recordedSummaries).toHaveLength(0);
   });
+
+  it('reports a permanent cloudtestlabaccounts.com exclusion without provider calls or writes', async () => {
+    const provider: EmailProvider = { sendEmail: jest.fn() };
+    const service = new TestService(
+      [{ ...USER, email: 'reviewer@cloudtestlabaccounts.com', isExcluded: true }],
+      [makeRow()],
+      false,
+      42,
+      provider,
+    );
+
+    const results = await service.run({ dryRun: true });
+
+    expect(results[0]).toMatchObject({
+      status: 'skipped_excluded',
+      reason: 'explicitly excluded campaign recipient',
+    });
+    expect(provider.sendEmail).not.toHaveBeenCalled();
+    expect(service.recordedSummaries).toHaveLength(0);
+  });
 });
 
 // ─── No activity ──────────────────────────────────────────────────────────────
