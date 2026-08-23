@@ -51,6 +51,10 @@ export interface SummaryStats {
   totalSessions: number;
   /** Total mala rounds across all sessions. */
   totalMalas: number;
+  /** Mala rounds completed during the campaign's recent period. */
+  recentMalas: number;
+  /** Individual Japam count recorded during the campaign's recent period. */
+  recentCount: number;
   /** Count of distinct dates with at least one session. */
   daysPracticed: number;
   /** Longest run of consecutive active days within the period. */

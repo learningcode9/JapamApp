@@ -18,10 +18,10 @@ export interface CampaignDefinition {
   id: string;
   /** How often (in days) this campaign's sending window repeats. */
   periodDays: number;
-  /** Email subject line. Kept as a plain string (not a function of ctx) so every
-   *  campaign's dedup/subject is predictable and greppable; personalize the
-   *  greeting inside the body instead. */
+  /** Default email subject line used when the campaign has no contextual subject. */
   subject: string;
+  /** Optional subject selection based on the already-computed campaign context. */
+  getSubject?(ctx: CampaignContext): string;
   buildHtml(ctx: CampaignContext): string;
   buildText(ctx: CampaignContext): string;
 }

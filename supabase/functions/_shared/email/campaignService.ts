@@ -175,9 +175,10 @@ export class CampaignEmailService {
         const ctx = { stats, lifetimeTotalMalas, config: campaignConfig };
         const html = this.campaign.buildHtml(ctx);
         const text = this.campaign.buildText(ctx);
+        const subject = this.campaign.getSubject?.(ctx) ?? this.campaign.subject;
 
         console.log(`[Campaign:${emailType}] DRY RUN would send to:`, user.email);
-        console.log(`[Campaign:${emailType}] subject:`, this.campaign.subject);
+        console.log(`[Campaign:${emailType}] subject:`, subject);
         console.log(`[Campaign:${emailType}] stats:`, JSON.stringify(stats));
         console.log(`[Campaign:${emailType}] rendered bytes:`, html.length + text.length);
         return { userId: user.id, email: user.email, status: 'dry_run' };
@@ -229,11 +230,12 @@ export class CampaignEmailService {
 
       const html = this.campaign.buildHtml(ctx);
       const text = this.campaign.buildText(ctx);
+      const subject = this.campaign.getSubject?.(ctx) ?? this.campaign.subject;
 
       const { messageId } = await this.emailProvider.sendEmail({
         to: user.email,
         from: this.config.fromAddress,
-        subject: this.campaign.subject,
+        subject,
         html,
         text,
         idempotencyKey: `${emailType}/${user.id}/${periodStart}`,

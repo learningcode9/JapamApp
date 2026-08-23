@@ -89,6 +89,8 @@ describe('calculateSummaryStats', () => {
     );
     expect(stats).not.toBeNull();
     expect(stats?.totalMalas).toBe(0);
+    expect(stats?.recentMalas).toBe(0);
+    expect(stats?.recentCount).toBe(50);
   });
 
   it('calculates totalMalas correctly', () => {
@@ -97,6 +99,8 @@ describe('calculateSummaryStats', () => {
       row({ malas: 3, created_at: '2026-06-21T08:00:00Z', completion_id: 'c2' }),
     ];
     expect(calculateSummaryStats('u1', 'a@b.com', rows, P_START, P_END)!.totalMalas).toBe(5);
+    expect(calculateSummaryStats('u1', 'a@b.com', rows, P_START, P_END)!.recentMalas).toBe(5);
+    expect(calculateSummaryStats('u1', 'a@b.com', rows, P_START, P_END)!.recentCount).toBe(216);
   });
 
   it('calculates totalSessions correctly (one row = one session)', () => {

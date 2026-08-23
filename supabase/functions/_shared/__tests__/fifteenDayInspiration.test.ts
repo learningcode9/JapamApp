@@ -12,6 +12,8 @@ function makeStats(overrides: Partial<SummaryStats> = {}): SummaryStats {
     periodEnd: '2026-06-30',
     totalSessions: 12,
     totalMalas: 30,
+    recentMalas: 30,
+    recentCount: 3240,
     daysPracticed: 10,
     longestStreak: 5,
     averageMalasPerActiveDay: 3,
@@ -34,6 +36,21 @@ describe('fifteenDayInspirationCampaign metadata', () => {
   it('has a stable id used for dedup and a 15-day period', () => {
     expect(fifteenDayInspirationCampaign.id).toBe('15day_inspiration');
     expect(fifteenDayInspirationCampaign.periodDays).toBe(15);
+  });
+
+  it('keeps the existing Mala subject when recent Mala activity is present', () => {
+    expect(fifteenDayInspirationCampaign.getSubject?.(makeContext())).toBe(
+      '🪷 Every Mala Brings You Closer to Inner Peace',
+    );
+  });
+
+  it('uses the Count-friendly subject for recent Count-only activity', () => {
+    const ctx = makeContext({
+      stats: makeStats({ recentMalas: 0, recentCount: 1, totalMalas: 0 }),
+    });
+    expect(fifteenDayInspirationCampaign.getSubject?.(ctx)).toBe(
+      'Your Japam Practice Is Building Quietly',
+    );
   });
 });
 
@@ -85,6 +102,8 @@ describe('fifteenDayInspirationCampaign.buildHtml', () => {
       stats: makeStats({
         totalSessions: 0,
         totalMalas: 0,
+        recentMalas: 0,
+        recentCount: 0,
         daysPracticed: 0,
         averageMalasPerActiveDay: 0,
         longestStreak: 0,
@@ -95,6 +114,36 @@ describe('fifteenDayInspirationCampaign.buildHtml', () => {
     const html = fifteenDayInspirationCampaign.buildHtml(ctx);
     expect(html).toContain('0');
     expect(html).toContain('a quiet stretch');
+  });
+
+  it('renders Count-friendly stats for recent Count-only activity', () => {
+    const ctx = makeContext({
+      stats: makeStats({
+        totalSessions: 1,
+        totalMalas: 0,
+        recentMalas: 0,
+        recentCount: 7,
+        daysPracticed: 1,
+        averageMalasPerActiveDay: 0,
+        longestStreak: 1,
+        bestDay: { date: '2026-06-25', sessions: 1, malas: 0 },
+      }),
+      lifetimeTotalMalas: 0,
+    });
+    const html = fifteenDayInspirationCampaign.buildHtml(ctx);
+    expect(html).toContain('Your Japam Practice Is Building Quietly');
+    expect(html).toContain('Japam count in the last 15 days');
+    expect(html).toContain('>7</td>');
+  });
+
+  it('does not use Mala-specific activity wording for Count-only activity', () => {
+    const ctx = makeContext({
+      stats: makeStats({ recentMalas: 0, recentCount: 1, totalMalas: 0 }),
+      lifetimeTotalMalas: 0,
+    });
+    const rendered = `${fifteenDayInspirationCampaign.buildHtml(ctx)}\n${fifteenDayInspirationCampaign.buildText(ctx)}`;
+    expect(rendered).not.toMatch(/mala/i);
+    expect(rendered).toContain('Even one recent practice is meaningful');
   });
 
   it('HTML-escapes a user-controlled display name instead of injecting it raw', () => {
