@@ -4,7 +4,12 @@ import type { EmailProvider } from './emailProvider.ts';
 import type { AuthUser, JapamHistoryRow, EmailSummaryRecord, SummaryRunResult } from './types.ts';
 import type { CampaignDefinition } from './campaigns/types.ts';
 import type { EmailConfig } from './config.ts';
-import { calculateSummaryStats, getCampaignCycleDates, getPeriodDates } from './calculator.ts';
+import {
+  calculateSummaryStats,
+  getCampaignCycleDates,
+  getPeriodDates,
+  isAtLeastFullDaysOld,
+} from './calculator.ts';
 import { buildUnsubscribeUrl } from './unsubscribeToken.ts';
 import { selectGitaVerseForOrdinal } from './campaigns/gitaVerses.ts';
 import * as dataAccess from './dataAccess.ts';
@@ -158,6 +163,19 @@ export class CampaignEmailService {
           email: user.email,
           status: 'skipped_unsubscribed',
           reason: 'unsubscribed/suppressed',
+        };
+      }
+
+      const minimumAccountAgeDays = this.campaign.minimumAccountAgeDays;
+      if (
+        minimumAccountAgeDays !== undefined &&
+        !isAtLeastFullDaysOld(user.createdAt, now, minimumAccountAgeDays)
+      ) {
+        return {
+          userId: user.id,
+          email: user.email,
+          status: 'skipped_account_too_new',
+          reason: `account must be at least ${minimumAccountAgeDays} full days old`,
         };
       }
 

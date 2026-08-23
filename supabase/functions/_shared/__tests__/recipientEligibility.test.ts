@@ -118,7 +118,7 @@ describe('15-day rolling activity eligibility', () => {
     expect((await service.run({ dryRun: true }))[0].status).toBe('dry_run');
   });
 
-  it('allows a new account with recent activity', async () => {
+  it('skips an account younger than 15 full days even with recent activity', async () => {
     const service = new EligibilityService(
       [{ id: 'new', email: 'new@example.test', createdAt: '2026-08-21T12:00:00.000Z' }],
       { new: [historyRow('new', 1, 108)] },
@@ -126,7 +126,10 @@ describe('15-day rolling activity eligibility', () => {
       null,
     );
 
-    expect((await service.run({ dryRun: true }))[0].status).toBe('dry_run');
+    expect((await service.run({ dryRun: true }))[0]).toMatchObject({
+      status: 'skipped_account_too_new',
+      reason: 'account must be at least 15 full days old',
+    });
   });
 
   it('skips activity that is only outside the rolling 15-day window', async () => {
@@ -177,7 +180,7 @@ describe('15-day recipient safety decisions', () => {
 
     expect(byId.get('mala15')?.status).toBe('dry_run');
     expect(byId.get('count15')?.status).toBe('dry_run');
-    expect(byId.get('new10')?.status).toBe('skipped_no_activity');
+    expect(byId.get('new10')?.status).toBe('skipped_account_too_new');
     expect(byId.get('old20')?.status).toBe('dry_run');
     expect(byId.get('zero15')).toMatchObject({
       status: 'skipped_no_activity',

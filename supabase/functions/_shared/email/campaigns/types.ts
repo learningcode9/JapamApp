@@ -23,6 +23,8 @@ export interface CampaignDefinition {
   id: string;
   /** How often (in days) this campaign's sending window repeats. */
   periodDays: number;
+  /** Minimum full account age before a candidate may enter this campaign. */
+  minimumAccountAgeDays?: number;
   /** Default email subject line used when the campaign has no contextual subject. */
   subject: string;
   /** Optional subject selection based on the already-computed campaign context. */
