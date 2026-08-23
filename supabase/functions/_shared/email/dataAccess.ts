@@ -262,10 +262,11 @@ export async function isDuplicateSummary(
 
 /**
  * Checks the recurring campaign's fixed cycle and enforces a full-period gap
- * from the previous successful send. Pending rows remain a permanent automatic
- * block because they may represent an ambiguous provider outcome. Dry-run rows
- * are deliberately ignored: this campaign never writes them, and they must
- * never block a real send. The unique (user_id, email_type, period_start)
+ * from the previous successful send. A pending row blocks its own cycle and
+ * remains a conservative block for 15 full days after its claim timestamp;
+ * after that safe window it must not permanently disable future cycles. Dry-run
+ * rows are deliberately ignored: this campaign never writes them, and they
+ * must never block a real send. The unique (user_id, email_type, period_start)
  * constraint remains the atomic claim boundary for all new rows.
  */
 export async function isCampaignCycleDuplicate(
@@ -279,7 +280,7 @@ export async function isCampaignCycleDuplicate(
 ): Promise<boolean> {
   const { data, error } = await supabase
     .from('user_email_summaries')
-    .select('period_start, period_end, status, sent_at')
+    .select('period_start, period_end, status, sent_at, created_at')
     .eq('user_id', userId)
     .eq('email_type', emailType)
     .in('status', ['sent', 'pending']);
@@ -291,18 +292,16 @@ export async function isCampaignCycleDuplicate(
   const nowMs = now.getTime();
 
   return (data ?? []).some(record => {
-    if (record.status === 'pending') return true;
-
     const sameCycle = record.period_end >= cycleStart && record.period_start <= cycleEnd;
     if (sameCycle) return true;
 
-    // Legacy successful rows may not have sent_at. Their period_end is a
-    // conservative lower bound for the previous send time, so they do not
-    // become a permanent block while still protecting the spacing boundary.
-    const sentAtMs = Date.parse(record.sent_at ?? `${record.period_end}T23:59:59.999Z`);
-    if (!Number.isFinite(sentAtMs)) return true;
+    const attemptAt = record.status === 'pending'
+      ? record.created_at ?? `${record.period_end}T23:59:59.999Z`
+      : record.sent_at ?? `${record.period_end}T23:59:59.999Z`;
+    const attemptAtMs = Date.parse(attemptAt);
+    if (!Number.isFinite(attemptAtMs)) return true;
 
-    return nowMs - sentAtMs < minimumSpacingMs;
+    return nowMs - attemptAtMs < minimumSpacingMs;
   });
 }
 

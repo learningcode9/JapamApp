@@ -33,6 +33,7 @@ function fakeCycleSupabase(rows: {
   period_end: string;
   status: string;
   sent_at?: string | null;
+  created_at?: string | null;
 }[]): SupabaseClient {
   let filtered = rows;
   const chain = {
@@ -161,6 +162,38 @@ describe('isCampaignCycleDuplicate (recurring fixed-cycle enforcement)', () => {
     await expect(cycleDuplicate(fakeCycleSupabase([
       { period_start: '2026-08-20', period_end: '2026-09-03', status },
     ]))).resolves.toBe(true);
+  });
+
+  it('blocks an old pending claim less than 15 days after its claim timestamp', async () => {
+    await expect(cycleDuplicate(fakeCycleSupabase([
+      {
+        period_start: '2026-07-01',
+        period_end: '2026-07-15',
+        status: 'pending',
+        created_at: '2026-08-07T12:00:00.000Z',
+      },
+    ]), new Date('2026-08-22T11:00:00.000Z'))).resolves.toBe(true);
+  });
+
+  it('allows an old pending claim after the safe 15-day interval', async () => {
+    await expect(cycleDuplicate(fakeCycleSupabase([
+      {
+        period_start: '2026-07-01',
+        period_end: '2026-07-15',
+        status: 'pending',
+        created_at: '2026-08-07T12:00:00.000Z',
+      },
+    ]))).resolves.toBe(false);
+  });
+
+  it('does not permanently disable a later cycle after a stale pending claim', async () => {
+    await expect(cycleDuplicate(fakeCycleSupabase([
+      {
+        period_start: '2026-01-01',
+        period_end: '2026-01-15',
+        status: 'pending',
+      },
+    ]), new Date('2026-08-22T12:00:00.000Z'))).resolves.toBe(false);
   });
 
   it('does not let an older cycle block the current cycle', async () => {
