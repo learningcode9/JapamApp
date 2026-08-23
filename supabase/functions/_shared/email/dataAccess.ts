@@ -198,11 +198,10 @@ export interface LifetimeStats {
 }
 
 /**
- * Full-history (all-time) stats for a user — used for the "lifetime total"
- * stat shown in inspirational campaigns, and to gate brand-new users out of
- * a campaign whose copy assumes an established practice (see
- * campaignService.ts's "too new" eligibility check). Combines what used to
- * be two separate full-table-scan queries (a sum and a min) into one.
+ * Full-history (all-time) stats for a user — used for the lifetime stats shown
+ * in inspirational campaigns. The campaign's activity eligibility is evaluated
+ * separately from these totals. Combines what used to be two separate
+ * full-table-scan queries (a sum and a min) into one.
  */
 export async function getLifetimeStats(
   supabase: SupabaseClient,
@@ -259,6 +258,35 @@ export async function isDuplicateSummary(
   if (!data?.length) return false;
 
   return data[0].period_end >= periodStart;
+}
+
+/**
+ * Checks the recurring campaign's fixed cycle without letting older cycles
+ * become a permanent block. The overlap predicate also recognizes legacy
+ * rows written before fixed cycle keys were introduced, while the unique
+ * (user_id, email_type, period_start) constraint remains the atomic claim
+ * boundary for all new rows.
+ */
+export async function isCampaignCycleDuplicate(
+  supabase: SupabaseClient,
+  userId: string,
+  emailType: string,
+  cycleStart: string,
+  cycleEnd: string,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('user_email_summaries')
+    .select('period_start, period_end, status')
+    .eq('user_id', userId)
+    .eq('email_type', emailType)
+    .in('status', ['sent', 'dry_run', 'pending'])
+    .gte('period_end', cycleStart)
+    .lte('period_start', cycleEnd);
+
+  if (error) {
+    throw new Error(`isCampaignCycleDuplicate(${userId}): ${error.message}`);
+  }
+  return (data ?? []).length > 0;
 }
 
 export async function recordSummary(

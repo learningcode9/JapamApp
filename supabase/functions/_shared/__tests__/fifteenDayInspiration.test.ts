@@ -2,6 +2,7 @@ import { fifteenDayInspirationCampaign } from '../email/campaigns/fifteenDayInsp
 import { loadEmailConfig } from '../email/config';
 import type { SummaryStats } from '../email/types';
 import type { CampaignContext } from '../email/campaigns/types';
+import type { GitaVerse } from '../email/campaigns/gitaVerses';
 
 function makeStats(overrides: Partial<SummaryStats> = {}): SummaryStats {
   return {
@@ -81,6 +82,29 @@ describe('fifteenDayInspirationCampaign.buildHtml', () => {
   it('includes the Bhagavad Gita verse, clearly attributed', () => {
     const html = fifteenDayInspirationCampaign.buildHtml(makeContext());
     expect(html).toContain('Bhagavad Gita');
+  });
+
+  it('uses the selected verse in both Mala and Count-only variants', () => {
+    const verse: GitaVerse = {
+      chapter: 6,
+      verse: 26,
+      rendering: 'Whenever attention wanders, return it gently to the practice.',
+    };
+    const malaContext = makeContext({ gitaVerse: verse });
+    const countContext = makeContext({
+      gitaVerse: verse,
+      stats: makeStats({ recentMalas: 0, recentCount: 7, totalMalas: 0 }),
+    });
+
+    for (const rendered of [
+      fifteenDayInspirationCampaign.buildHtml(malaContext),
+      fifteenDayInspirationCampaign.buildText(malaContext),
+      fifteenDayInspirationCampaign.buildHtml(countContext),
+      fifteenDayInspirationCampaign.buildText(countContext),
+    ]) {
+      expect(rendered).toContain(verse.rendering);
+      expect(rendered).toContain('Chapter 6, Verse 26');
+    }
   });
 
   it('does not reference any specific deity by name', () => {

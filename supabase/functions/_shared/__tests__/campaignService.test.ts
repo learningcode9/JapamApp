@@ -5,6 +5,7 @@ import type { JapamHistoryRow, AuthUser, EmailSummaryRecord } from '../email/typ
 import type { CampaignDefinition, CampaignContext } from '../email/campaigns/types';
 import { loadEmailConfig } from '../email/config';
 import { verifyUnsubscribeToken } from '../email/unsubscribeToken';
+import { getCampaignCycleDates } from '../email/calculator';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -99,11 +100,17 @@ class TestService extends CampaignEmailService {
     return { lifetimeTotalMalas: this.fakeLifetimeTotal, lifetimeTotalCount: this.fakeLifetimeTotal * 108, firstActivityAt: LONG_ESTABLISHED_USER_ISO };
   }
 
-  protected override async isDuplicate(): Promise<boolean> {
+  protected override async isDuplicate(
+    _userId: string,
+    _cycleStart: string,
+    _cycleEnd: string,
+  ): Promise<boolean> {
     return this.fakeDuplicate;
   }
 
-  protected override async claimSummary(): Promise<boolean> {
+  protected override async claimSummary(
+    _record: Omit<EmailSummaryRecord, 'id' | 'created_at'>,
+  ): Promise<boolean> {
     if (this.fakeClaimResults.length > 0) return this.fakeClaimResults.shift()!;
     return !this.fakeDuplicate;
   }
@@ -112,6 +119,34 @@ class TestService extends CampaignEmailService {
     record: Omit<EmailSummaryRecord, 'id' | 'created_at'>,
   ): Promise<void> {
     this.recordedSummaries.push(record);
+  }
+}
+
+class RecurringCycleService extends TestService {
+  private readonly claimedCycles = new Set<string>();
+
+  protected override async isDuplicate(
+    _userId: string,
+    cycleStart: string,
+    _cycleEnd: string,
+  ): Promise<boolean> {
+    return this.claimedCycles.has(cycleStart);
+  }
+
+  protected override async claimSummary(
+    record: Omit<EmailSummaryRecord, 'id' | 'created_at'>,
+  ): Promise<boolean> {
+    if (this.claimedCycles.has(record.period_start)) return false;
+    this.claimedCycles.add(record.period_start);
+    return true;
+  }
+
+  protected override async getHistoryForUser(
+    _userId: string,
+    _periodStart: string,
+    periodEnd: string,
+  ): Promise<JapamHistoryRow[]> {
+    return [makeRow({ created_at: `${periodEnd}T12:00:00.000Z` })];
   }
 }
 
@@ -247,6 +282,51 @@ describe('CampaignEmailService duplicate prevention', () => {
       expect(second[0].status).toBe('skipped_duplicate');
       expect(provider.sendEmail).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it('allows the next fixed 15-day cycle while blocking the current cycle', async () => {
+    await withUnsubscribeEnv(async () => {
+      const provider: EmailProvider = {
+        sendEmail: jest
+          .fn()
+          .mockResolvedValueOnce({ messageId: 'cycle-1' })
+          .mockResolvedValueOnce({ messageId: 'cycle-2' }),
+      };
+      const service = new RecurringCycleService([USER], [makeRow()], false, 42, provider);
+      const first = await service.run({ dryRun: false, now: NOW });
+      const sameCycle = await service.run({ dryRun: false, now: NOW });
+      const firstCycleEnd = service.recordedSummaries[0].period_end;
+      const nextCycleDate = new Date(`${firstCycleEnd}T00:00:00.000Z`);
+      nextCycleDate.setUTCDate(nextCycleDate.getUTCDate() + 1);
+      const next = await service.run({ dryRun: false, now: nextCycleDate });
+
+      expect(first[0].status).toBe('sent');
+      expect(sameCycle[0].status).toBe('skipped_duplicate');
+      expect(next[0].status).toBe('sent');
+      expect(provider.sendEmail).toHaveBeenCalledTimes(2);
+      expect(service.recordedSummaries[0].period_start).not.toBe(
+        service.recordedSummaries[1].period_start,
+      );
+    });
+  });
+
+  it('skips an unsubscribed user in every cycle', async () => {
+    const provider: EmailProvider = { sendEmail: jest.fn() };
+    const service = new RecurringCycleService(
+      [{ ...USER, isUnsubscribed: true }],
+      [makeRow()],
+      false,
+      42,
+      provider,
+    );
+    const first = await service.run({ dryRun: false, now: NOW });
+    const cycleEnd = new Date(`${getCampaignCycleDates(15, NOW).cycleEnd}T00:00:00.000Z`);
+    cycleEnd.setUTCDate(cycleEnd.getUTCDate() + 1);
+    const second = await service.run({ dryRun: false, now: cycleEnd });
+
+    expect(first[0].status).toBe('skipped_unsubscribed');
+    expect(second[0].status).toBe('skipped_unsubscribed');
+    expect(provider.sendEmail).not.toHaveBeenCalled();
   });
 });
 

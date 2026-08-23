@@ -9,6 +9,7 @@
 
 import type { CampaignDefinition, CampaignContext } from './types.ts';
 import { renderCampaignEmail, escapeHtml } from '../baseTemplate.ts';
+import { DEFAULT_GITA_VERSE } from './gitaVerses.ts';
 
 function fmtDate(dateStr: string): string {
   const [y, m, d] = dateStr.split('-').map(Number);
@@ -22,8 +23,13 @@ function isCountOnly(ctx: CampaignContext): boolean {
   return ctx.stats.recentMalas === 0 && ctx.stats.recentCount > 0;
 }
 
+function getGitaVerse(ctx: CampaignContext) {
+  return ctx.gitaVerse ?? DEFAULT_GITA_VERSE;
+}
+
 function buildMalaHtml(ctx: CampaignContext): string {
   const { stats, lifetimeTotalMalas, lifetimeTotalCount, config } = ctx;
+  const gitaVerse = getGitaVerse(ctx);
 
   const bestDayLine = stats.bestDay
     ? `${fmtDate(stats.bestDay.date)} — ${stats.bestDay.malas} mala${stats.bestDay.malas !== 1 ? 's' : ''}`
@@ -86,10 +92,10 @@ function buildMalaHtml(ctx: CampaignContext): string {
     <div style="background:${config.colors.background};border-left:4px solid ${config.colors.accent};
                 padding:20px 22px;border-radius:0 12px 12px 0;">
       <p style="margin:0 0 10px;color:${config.colors.textPrimary};font-style:italic;line-height:1.8;font-size:15px;">
-        "You have the right to perform your duty, but never to the fruits of your actions."
+        "${escapeHtml(gitaVerse.rendering)}"
       </p>
       <p style="margin:0;color:${config.colors.textMuted};font-size:12px;letter-spacing:0.03em;">
-        — Bhagavad Gita, Chapter 2, Verse 47
+        — Bhagavad Gita, Chapter ${gitaVerse.chapter}, Verse ${gitaVerse.verse}
       </p>
     </div>
   </td></tr>
@@ -113,6 +119,7 @@ function buildMalaHtml(ctx: CampaignContext): string {
 
 function buildMalaText(ctx: CampaignContext): string {
   const { stats, lifetimeTotalMalas, lifetimeTotalCount, config } = ctx;
+  const gitaVerse = getGitaVerse(ctx);
 
   const bestDayLine = stats.bestDay
     ? `${fmtDate(stats.bestDay.date)} (${stats.bestDay.malas} malas)`
@@ -133,8 +140,8 @@ Over the last fifteen days, you've continued showing up for your Japam practice.
   Lifetime malas:            ${lifetimeTotalMalas.toLocaleString()}
   Lifetime Japam count:       ${lifetimeTotalCount.toLocaleString()}
 
-"You have the right to perform your duty, but never to the fruits of your actions."
-— Bhagavad Gita, Chapter 2, Verse 47
+"${gitaVerse.rendering}"
+— Bhagavad Gita, Chapter ${gitaVerse.chapter}, Verse ${gitaVerse.verse}
 
 Whatever your path, may these next fifteen days bring a little more stillness than the last.
 
@@ -143,6 +150,7 @@ Whatever your path, may these next fifteen days bring a little more stillness th
 
 function buildCountHtml(ctx: CampaignContext): string {
   const { stats, lifetimeTotalCount, config } = ctx;
+  const gitaVerse = getGitaVerse(ctx);
   const content = `
   <tr><td style="padding:32px 32px 4px;">
     <p style="margin:0;font-size:17px;color:${config.colors.textPrimary};">
@@ -186,10 +194,10 @@ function buildCountHtml(ctx: CampaignContext): string {
     <div style="background:${config.colors.background};border-left:4px solid ${config.colors.accent};
                 padding:20px 22px;border-radius:0 12px 12px 0;">
       <p style="margin:0 0 10px;color:${config.colors.textPrimary};font-style:italic;line-height:1.8;font-size:15px;">
-        "You have the right to perform your duty, but never to the fruits of your actions."
+        "${escapeHtml(gitaVerse.rendering)}"
       </p>
       <p style="margin:0;color:${config.colors.textMuted};font-size:12px;letter-spacing:0.03em;">
-        — Bhagavad Gita, Chapter 2, Verse 47
+        — Bhagavad Gita, Chapter ${gitaVerse.chapter}, Verse ${gitaVerse.verse}
       </p>
     </div>
   </td></tr>
@@ -213,6 +221,7 @@ function buildCountHtml(ctx: CampaignContext): string {
 
 function buildCountText(ctx: CampaignContext): string {
   const { stats, lifetimeTotalCount, config } = ctx;
+  const gitaVerse = getGitaVerse(ctx);
   const unsubscribeText = config.unsubscribeUrl ? `\nUnsubscribe: ${config.unsubscribeUrl}` : '';
 
   return `${COUNT_SUBJECT}
@@ -228,8 +237,8 @@ Over the last fifteen days, you've made space for your Japam practice. Even one 
 
 Every return to the practice matters, and consistency grows one moment at a time.
 
-"You have the right to perform your duty, but never to the fruits of your actions."
-— Bhagavad Gita, Chapter 2, Verse 47
+"${gitaVerse.rendering}"
+— Bhagavad Gita, Chapter ${gitaVerse.chapter}, Verse ${gitaVerse.verse}
 
 Whatever your path, may these next fifteen days bring a little more stillness than the last.
 

@@ -5,6 +5,7 @@ import {
   getCampaignCandidates,
   markUserUnsubscribed,
   claimSummary,
+  isCampaignCycleDuplicate,
   isValidEmail,
 } from '../email/dataAccess';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -22,6 +23,27 @@ function fakeSupabase(rows: { period_end: string }[]): SupabaseClient {
     in: () => chain,
     order: () => chain,
     limit: async () => ({ data: rows, error: null }),
+  };
+  return { from: () => chain } as unknown as SupabaseClient;
+}
+
+function fakeCycleSupabase(rows: { period_start: string; period_end: string; status: string }[]): SupabaseClient {
+  let filtered = rows;
+  const chain = {
+    select: () => chain,
+    eq: () => chain,
+    in: (_column: string, values: string[]) => {
+      filtered = filtered.filter(row => values.includes(row.status));
+      return chain;
+    },
+    gte: (column: string, value: string) => {
+      if (column === 'period_end') filtered = filtered.filter(row => row.period_end >= value);
+      return chain;
+    },
+    lte: async (column: string, value: string) => ({
+      data: column === 'period_start' ? filtered.filter(row => row.period_start <= value) : filtered,
+      error: null,
+    }),
   };
   return { from: () => chain } as unknown as SupabaseClient;
 }
@@ -97,6 +119,41 @@ describe('isDuplicateSummary (15-day cadence enforcement)', () => {
     // A new period starting the day after prior period_end is a legitimate next send.
     const result = await isDuplicateSummary(supabase, 'u1', '15day_inspiration', '2026-06-21');
     expect(result).toBe(false);
+  });
+});
+
+describe('isCampaignCycleDuplicate (recurring fixed-cycle enforcement)', () => {
+  const cycleStart = '2026-08-09';
+  const cycleEnd = '2026-08-23';
+
+  it('allows the first cycle when there is no history', async () => {
+    await expect(isCampaignCycleDuplicate(
+      fakeCycleSupabase([]),
+      'u1',
+      '15day_inspiration',
+      cycleStart,
+      cycleEnd,
+    )).resolves.toBe(false);
+  });
+
+  it.each(['sent', 'pending'])('blocks a %s record in the same cycle', async status => {
+    await expect(isCampaignCycleDuplicate(
+      fakeCycleSupabase([{ period_start: cycleStart, period_end: cycleEnd, status }]),
+      'u1',
+      '15day_inspiration',
+      cycleStart,
+      cycleEnd,
+    )).resolves.toBe(true);
+  });
+
+  it('does not let an older cycle block the current cycle', async () => {
+    await expect(isCampaignCycleDuplicate(
+      fakeCycleSupabase([{ period_start: '2026-07-25', period_end: '2026-08-08', status: 'sent' }]),
+      'u1',
+      '15day_inspiration',
+      cycleStart,
+      cycleEnd,
+    )).resolves.toBe(false);
   });
 });
 
