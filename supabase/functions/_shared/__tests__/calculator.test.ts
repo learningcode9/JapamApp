@@ -3,6 +3,7 @@ import {
   calculateLongestStreak,
   getCampaignCycleDates,
   getPeriodDates,
+  isAtLeastFullDaysOld,
 } from '../email/calculator';
 import type { JapamHistoryRow } from '../email/types';
 
@@ -236,5 +237,26 @@ describe('getPeriodDates', () => {
     const { periodStart, periodEnd } = getPeriodDates(30);
     const diff = (new Date(periodEnd).getTime() - new Date(periodStart).getTime()) / 86_400_000;
     expect(diff).toBe(29);
+  });
+});
+
+describe('isAtLeastFullDaysOld', () => {
+  const NOW = new Date('2026-08-22T12:00:00.000Z');
+
+  it('rejects an account that is 14 days 23 hours old', () => {
+    expect(isAtLeastFullDaysOld('2026-08-07T13:00:00.000Z', NOW, 15)).toBe(false);
+  });
+
+  it('accepts an account that is exactly 15 full days old', () => {
+    expect(isAtLeastFullDaysOld('2026-08-07T12:00:00.000Z', NOW, 15)).toBe(true);
+  });
+
+  it('accepts an account older than 15 full days', () => {
+    expect(isAtLeastFullDaysOld('2026-08-01T12:00:00.000Z', NOW, 15)).toBe(true);
+  });
+
+  it('fails closed for missing or invalid created_at values', () => {
+    expect(isAtLeastFullDaysOld(undefined, NOW, 15)).toBe(false);
+    expect(isAtLeastFullDaysOld('not-a-date', NOW, 15)).toBe(false);
   });
 });

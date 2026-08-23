@@ -51,6 +51,20 @@ export function getCampaignCycleDates(
   };
 }
 
+/** Returns whether an account has reached the minimum number of full elapsed days. */
+export function isAtLeastFullDaysOld(
+  createdAt: string | undefined,
+  now: Date,
+  minimumDays: number,
+): boolean {
+  if (!createdAt || !Number.isInteger(minimumDays) || minimumDays < 0) return false;
+
+  const createdAtMs = Date.parse(createdAt);
+  if (!Number.isFinite(createdAtMs)) return false;
+
+  return now.getTime() - createdAtMs >= minimumDays * 86_400_000;
+}
+
 // ─── Streak calculation ────────────────────────────────────────────────────────
 
 /**

@@ -256,6 +256,7 @@ function buildText(ctx: CampaignContext): string {
 export const fifteenDayInspirationCampaign: CampaignDefinition = {
   id: '15day_inspiration',
   periodDays: 15,
+  minimumAccountAgeDays: 15,
   subject: MALA_SUBJECT,
   getSubject: ctx => (isCountOnly(ctx) ? COUNT_SUBJECT : MALA_SUBJECT),
   buildHtml,

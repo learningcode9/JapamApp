@@ -34,6 +34,7 @@ const USER: AuthUser = {
 const FAKE_CAMPAIGN: CampaignDefinition = {
   id: 'test_campaign',
   periodDays: 15,
+  minimumAccountAgeDays: 15,
   subject: 'Test Subject',
   buildHtml: (ctx: CampaignContext) => `<html>${ctx.stats.userName}:${ctx.lifetimeTotalMalas}</html>`,
   buildText: (ctx: CampaignContext) => `${ctx.stats.userName}:${ctx.lifetimeTotalMalas}`,
@@ -177,7 +178,7 @@ class CampaignSpacingService extends CampaignEmailService {
   }
 
   protected override async getActiveUsers(): Promise<AuthUser[]> {
-    return [USER];
+    return [{ ...USER, createdAt: LONG_ESTABLISHED_USER_ISO }];
   }
 
   protected override async getHistoryForUser(): Promise<JapamHistoryRow[]> {
@@ -277,9 +278,41 @@ describe('CampaignEmailService rolling activity eligibility', () => {
     expect(results[0].status).toBe('dry_run');
   });
 
-  it('allows a new user with recent activity', async () => {
+  it('allows an exactly 15-day-old user with recent activity', async () => {
     const service = new TestService(
-      [{ ...USER, createdAt: '2026-08-21T12:00:00.000Z' }],
+      [{ ...USER, createdAt: EXACTLY_15_DAYS_OLD }],
+      [makeRow()],
+      false,
+      42,
+      null,
+    );
+    const results = await service.run({ dryRun: true });
+
+    expect(results[0].status).toBe('dry_run');
+  });
+
+  it('skips an account that is 14 days 23 hours old before claim or provider', async () => {
+    const provider: EmailProvider = { sendEmail: jest.fn() };
+    const service = new TestService(
+      [{ ...USER, createdAt: '2026-08-07T13:00:00.000Z' }],
+      [makeRow()],
+      false,
+      42,
+      provider,
+    );
+    const results = await service.run({ dryRun: false });
+
+    expect(results[0]).toMatchObject({
+      status: 'skipped_account_too_new',
+      reason: 'account must be at least 15 full days old',
+    });
+    expect(provider.sendEmail).not.toHaveBeenCalled();
+    expect(service.recordedSummaries).toHaveLength(0);
+  });
+
+  it('allows an account older than 15 full days with recent activity', async () => {
+    const service = new TestService(
+      [{ ...USER, createdAt: LONG_ESTABLISHED_USER_ISO }],
       [makeRow()],
       false,
       42,

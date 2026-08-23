@@ -249,6 +249,7 @@ describe('send-campaign-email wrapper', () => {
       'skipped_duplicate',
       'skipped_unsubscribed',
       'skipped_invalid_email',
+      'skipped_account_too_new',
     ];
     const fixture = makeDeps(statuses.map((status, index) => ({
       userId: `u${index}`,
@@ -263,6 +264,7 @@ describe('send-campaign-email wrapper', () => {
       skipped_duplicate: 1,
       skipped_unsubscribed: 1,
       skipped_invalid_email: 1,
+      skipped_account_too_new: 1,
     });
   });
 
