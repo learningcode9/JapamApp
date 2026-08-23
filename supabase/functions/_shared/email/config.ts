@@ -45,6 +45,33 @@ export interface EmailConfig {
   excludedEmails: Set<string>;
 }
 
+export type EmailSendMode = 'controlled' | 'production';
+
+export interface RealSendAuthorization {
+  mode: EmailSendMode | null;
+  authorized: boolean;
+  allowlist: Set<string> | null;
+  reason?: string;
+}
+
+type EnvReader = (name: string) => string | undefined;
+
+// Fixed safety boundary for the controlled first-send path. The address is
+// supplied through configuration; only its SHA-256 is kept in source so the
+// recipient is never embedded in the deployable function text.
+const CONTROLLED_RECIPIENT_SHA256 =
+  '0ebf70c1c2fb2da6f7e64346d2b5f8c3312c396dc87d73cdc2151bf450665f8f';
+const PRODUCTION_CONFIRMATION = 'SEND_TO_ALL_ELIGIBLE_USERS';
+const EMAIL_ADDRESS_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function isValidEmailAddress(value: string): boolean {
+  return value.length <= 254 && EMAIL_ADDRESS_PATTERN.test(value);
+}
+
+function getSendMode(raw: string | undefined): EmailSendMode | null {
+  return raw === 'controlled' || raw === 'production' ? raw : null;
+}
+
 // Calm/Headspace-inspired palette: soft sage + warm cream, not the older
 // brown/deity-styled palette used by the existing stats-digest template.
 const DEFAULT_COLORS: BrandColors = {
@@ -99,7 +126,118 @@ export function parseAllowlist(raw: string | undefined): Set<string> | null {
     );
   }
 
+  const invalidAddress = addresses.find(address => !isValidEmailAddress(address));
+  if (invalidAddress) {
+    throw new Error(
+      `EMAIL_ALLOWLIST contains an invalid email address ("${invalidAddress}"). ` +
+        'Refusing to send until every allowlist entry is a valid address.',
+    );
+  }
+
   return new Set(addresses);
+}
+
+/**
+ * Shared fail-closed authorization for every non-dry-run campaign entry point.
+ * The returned allowlist is also consumed by dataAccess.ts, so production mode
+ * can intentionally narrow delivery without changing candidate eligibility.
+ */
+export async function getRealSendAuthorization(
+  readEnv: EnvReader = getEnv,
+): Promise<RealSendAuthorization> {
+  const mode = getSendMode(readEnv('EMAIL_SEND_MODE'));
+  const rawAllowlist = readEnv('EMAIL_ALLOWLIST');
+  let allowlist: Set<string> | null = null;
+
+  if (rawAllowlist !== undefined && !rawAllowlist.trim()) {
+    return {
+      mode,
+      authorized: false,
+      allowlist: null,
+      reason: 'EMAIL_ALLOWLIST is set but empty. Unset it explicitly or provide valid addresses.',
+    };
+  }
+
+  try {
+    allowlist = parseAllowlist(rawAllowlist);
+  } catch (error) {
+    return {
+      mode,
+      authorized: false,
+      allowlist: null,
+      reason: error instanceof Error ? error.message : 'EMAIL_ALLOWLIST is invalid.',
+    };
+  }
+
+  if (!mode) {
+    return {
+      mode: null,
+      authorized: false,
+      allowlist,
+      reason: 'EMAIL_SEND_MODE must be exactly "controlled" or "production".',
+    };
+  }
+
+  if (mode === 'production') {
+    if (readEnv('EMAIL_PRODUCTION_CONFIRMATION') !== PRODUCTION_CONFIRMATION) {
+      return {
+        mode,
+        authorized: false,
+        allowlist,
+        reason: 'EMAIL_PRODUCTION_CONFIRMATION is not the exact production confirmation.',
+      };
+    }
+    return { mode, authorized: true, allowlist };
+  }
+
+  const controlledRecipient = readEnv('EMAIL_CONTROLLED_RECIPIENT')?.trim().toLowerCase();
+  const controlledEntries = rawAllowlist
+    ?.split(',')
+    .map(value => value.trim().toLowerCase())
+    .filter(Boolean);
+  if (
+    !controlledRecipient ||
+    !isValidEmailAddress(controlledRecipient) ||
+    !allowlist ||
+    controlledEntries?.length !== 1 ||
+    !allowlist.has(controlledRecipient)
+  ) {
+    return {
+      mode,
+      authorized: false,
+      allowlist,
+      reason: 'Controlled mode requires EMAIL_ALLOWLIST to contain exactly EMAIL_CONTROLLED_RECIPIENT.',
+    };
+  }
+
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(controlledRecipient),
+  );
+  const hash = Array.from(
+    new Uint8Array(digest),
+    byte => byte.toString(16).padStart(2, '0'),
+  ).join('');
+  if (hash !== CONTROLLED_RECIPIENT_SHA256) {
+    return {
+      mode,
+      authorized: false,
+      allowlist,
+      reason: 'EMAIL_CONTROLLED_RECIPIENT does not match the hard-coded controlled-recipient authorization.',
+    };
+  }
+
+  return { mode, authorized: true, allowlist };
+}
+
+/** CLI-facing throwing form of the same shared guard used by the Edge Function. */
+export async function assertRealSendAuthorized(readEnv: EnvReader = getEnv): Promise<void> {
+  const authorization = await getRealSendAuthorization(readEnv);
+  if (!authorization.authorized) {
+    throw new Error(
+      `Refusing to send real emails — ${authorization.reason ?? 'real-send authorization failed.'}`,
+    );
+  }
 }
 
 /**

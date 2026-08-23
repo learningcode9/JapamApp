@@ -1,3 +1,5 @@
+import { getRealSendAuthorization } from '../_shared/email/config.ts';
+
 export interface CampaignHandlerDependencies {
   getEnv(name: string): string | undefined;
   isOperatorAuthorization(request: Request): boolean;
@@ -22,36 +24,11 @@ type RequestBody = {
   force_resend?: unknown;
 };
 
-// Fixed safety boundary for the controlled first-send path. The address is
-// supplied through configuration; only its SHA-256 is kept in source so the
-// recipient is never embedded in the deployable function text.
-const CONTROLLED_RECIPIENT_SHA256 =
-  '0ebf70c1c2fb2da6f7e64346d2b5f8c3312c396dc87d73cdc2151bf450665f8f';
-
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { 'content-type': 'application/json; charset=utf-8' },
   });
-}
-
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
-}
-
-async function hasExactControlledAllowlist(getEnv: CampaignHandlerDependencies['getEnv']): Promise<boolean> {
-  const raw = getEnv('EMAIL_ALLOWLIST');
-  const configuredRecipient = getEnv('EMAIL_CONTROLLED_RECIPIENT')?.trim().toLowerCase();
-  if (!raw || !configuredRecipient) return false;
-
-  const recipients = raw
-    .split(',')
-    .map(value => value.trim().toLowerCase())
-    .filter(Boolean);
-
-  if (recipients.length !== 1 || recipients[0] !== configuredRecipient) return false;
-  return (await sha256Hex(configuredRecipient)) === CONTROLLED_RECIPIENT_SHA256;
 }
 
 function resultCounts(results: unknown[]): Record<string, number> {
@@ -117,37 +94,41 @@ export async function handleCampaignRequest(
   try {
     const campaign = deps.getCampaign(campaignId);
     const productionProblems = deps.validateProductionEnv();
-    const allowlistExact = await hasExactControlledAllowlist(deps.getEnv);
+    const authorization = await getRealSendAuthorization(deps.getEnv);
 
     if (validateOnly) {
       return json({
-        ok: productionProblems.length === 0 && (dryRun || allowlistExact),
+        ok: productionProblems.length === 0 && authorization.authorized,
         function: 'send-campaign-email',
         campaign_id: campaign.id,
         dry_run: dryRun,
         validation_only: true,
         production_ready: productionProblems.length === 0,
-        allowlist_exact: allowlistExact,
-        allowlist_recipient_count: allowlistExact ? 1 : 0,
+        effective_mode: authorization.mode,
+        real_send_authorized: authorization.authorized,
+        allowlist_configured: authorization.allowlist !== null,
+        allowlist_recipient_count: authorization.allowlist?.size ?? 0,
         missing: productionProblems.map(problem => problem.split(' — ')[0]),
-        controlled_send_guard:
-          dryRun || allowlistExact
-            ? 'pass'
-            : 'EMAIL_ALLOWLIST must contain exactly one controlled recipient',
+        real_send_blocker: authorization.authorized ? null : authorization.reason,
       });
     }
 
     if (!dryRun) {
+      if (!authorization.authorized) {
+        return json(
+          {
+            ok: false,
+            error: 'Real-send authorization failed.',
+            effective_mode: authorization.mode,
+            reason: authorization.reason,
+          },
+          409,
+        );
+      }
       if (productionProblems.length > 0) {
         return json(
           { ok: false, error: 'Production configuration is incomplete.', missing: productionProblems.map(problem => problem.split(' — ')[0]) },
           503,
-        );
-      }
-      if (!allowlistExact) {
-        return json(
-          { ok: false, error: 'EMAIL_ALLOWLIST must contain exactly one controlled recipient.' },
-          409,
         );
       }
       deps.assertCampaignUnsubscribeReady();

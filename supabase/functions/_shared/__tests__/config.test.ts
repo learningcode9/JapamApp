@@ -1,4 +1,6 @@
 import {
+  assertRealSendAuthorized,
+  getRealSendAuthorization,
   parseAllowlist,
   parseExcludedEmails,
   validateProductionEnv,
@@ -159,5 +161,102 @@ describe('parseExcludedEmails', () => {
     expect(result.has('reviewer@example.com')).toBe(true);
     expect(result.has('reviewer+other@example.com')).toBe(false);
     expect(result.has('other@example.com')).toBe(false);
+  });
+});
+
+describe('shared real-send authorization', () => {
+  function env(values: Record<string, string | undefined>) {
+    return (name: string) => values[name];
+  }
+
+  const base = {
+    EMAIL_ALLOWLIST: 'learningcode9@gmail.com',
+    EMAIL_CONTROLLED_RECIPIENT: 'learningcode9@gmail.com',
+  };
+
+  it('authorizes the existing controlled mode only for the hashed recipient', async () => {
+    const result = await getRealSendAuthorization(env({ ...base, EMAIL_SEND_MODE: 'controlled' }));
+
+    expect(result).toMatchObject({ mode: 'controlled', authorized: true });
+    expect(result.allowlist).toEqual(new Set(['learningcode9@gmail.com']));
+  });
+
+  it('authorizes production mode only with the exact confirmation', async () => {
+    const result = await getRealSendAuthorization(env({
+      EMAIL_SEND_MODE: 'production',
+      EMAIL_PRODUCTION_CONFIRMATION: 'SEND_TO_ALL_ELIGIBLE_USERS',
+    }));
+
+    expect(result).toMatchObject({ mode: 'production', authorized: true, allowlist: null });
+  });
+
+  it('allows production mode to narrow delivery with a valid allowlist', async () => {
+    const result = await getRealSendAuthorization(env({
+      EMAIL_SEND_MODE: 'production',
+      EMAIL_PRODUCTION_CONFIRMATION: 'SEND_TO_ALL_ELIGIBLE_USERS',
+      EMAIL_ALLOWLIST: 'Narrow@Example.com',
+    }));
+
+    expect(result.authorized).toBe(true);
+    expect(result.allowlist).toEqual(new Set(['narrow@example.com']));
+  });
+
+  it('fails closed for a missing or invalid send mode', async () => {
+    await expect(getRealSendAuthorization(env(base))).resolves.toMatchObject({
+      mode: null,
+      authorized: false,
+    });
+    await expect(getRealSendAuthorization(env({ ...base, EMAIL_SEND_MODE: 'all' }))).resolves.toMatchObject({
+      mode: null,
+      authorized: false,
+    });
+  });
+
+  it('fails closed when production confirmation is missing or not exact', async () => {
+    const values = { EMAIL_SEND_MODE: 'production' };
+    await expect(getRealSendAuthorization(env(values))).resolves.toMatchObject({
+      mode: 'production',
+      authorized: false,
+    });
+    await expect(getRealSendAuthorization(env({
+      ...values,
+      EMAIL_PRODUCTION_CONFIRMATION: 'SEND_TO_ALL_ELIGIBLE_USERS ',
+    }))).resolves.toMatchObject({ authorized: false });
+  });
+
+  it('fails closed for malformed or invalid allowlist entries', async () => {
+    await expect(getRealSendAuthorization(env({
+      EMAIL_SEND_MODE: 'production',
+      EMAIL_PRODUCTION_CONFIRMATION: 'SEND_TO_ALL_ELIGIBLE_USERS',
+      EMAIL_ALLOWLIST: 'not-an-email',
+    }))).resolves.toMatchObject({ authorized: false });
+    await expect(getRealSendAuthorization(env({
+      EMAIL_SEND_MODE: 'production',
+      EMAIL_PRODUCTION_CONFIRMATION: 'SEND_TO_ALL_ELIGIBLE_USERS',
+      EMAIL_ALLOWLIST: ',',
+    }))).resolves.toMatchObject({ authorized: false });
+    await expect(getRealSendAuthorization(env({
+      EMAIL_SEND_MODE: 'production',
+      EMAIL_PRODUCTION_CONFIRMATION: 'SEND_TO_ALL_ELIGIBLE_USERS',
+      EMAIL_ALLOWLIST: '   ',
+    }))).resolves.toMatchObject({ authorized: false });
+  });
+
+  it('does not treat duplicate controlled entries as exactly one recipient', async () => {
+    await expect(getRealSendAuthorization(env({
+      ...base,
+      EMAIL_SEND_MODE: 'controlled',
+      EMAIL_ALLOWLIST: 'learningcode9@gmail.com,learningcode9@gmail.com',
+    }))).resolves.toMatchObject({ authorized: false });
+  });
+
+  it('uses the same fail-closed guard for CLI real sends', async () => {
+    await expect(assertRealSendAuthorized(env({
+      EMAIL_SEND_MODE: 'production',
+    }))).rejects.toThrow(/EMAIL_PRODUCTION_CONFIRMATION/);
+    await expect(assertRealSendAuthorized(env({
+      EMAIL_SEND_MODE: 'production',
+      EMAIL_PRODUCTION_CONFIRMATION: 'SEND_TO_ALL_ELIGIBLE_USERS',
+    }))).resolves.toBeUndefined();
   });
 });

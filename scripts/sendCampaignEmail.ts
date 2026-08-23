@@ -18,14 +18,22 @@ import { createCampaignEmailProvider } from '../supabase/functions/_shared/email
 import { getCampaign } from '../supabase/functions/_shared/email/campaigns/registry';
 import {
   assertCampaignUnsubscribeReady,
+  assertRealSendAuthorized,
   assertProductionReady,
 } from '../supabase/functions/_shared/email/config';
+import { getEnv } from '../supabase/functions/_shared/email/env';
 
 try {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   require('dotenv').config({ path: '.env.local' });
 } catch {
   // dotenv is optional; ignore if not installed
+}
+
+export async function ensureCliRealSendAuthorized(
+  readEnv: (name: string) => string | undefined = getEnv,
+): Promise<void> {
+  return assertRealSendAuthorized(readEnv);
 }
 
 async function main(): Promise<void> {
@@ -37,6 +45,7 @@ async function main(): Promise<void> {
   console.log(`  dryRun      = ${dryRun}`);
 
   if (!dryRun) {
+    await ensureCliRealSendAuthorized();
     assertProductionReady();
     assertCampaignUnsubscribeReady();
   }
@@ -59,7 +68,9 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
-main().catch(err => {
-  console.error('[sendCampaignEmail] Fatal:', err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+if (!process.env.JEST_WORKER_ID) {
+  main().catch(err => {
+    console.error('[sendCampaignEmail] Fatal:', err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
+}

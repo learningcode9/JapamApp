@@ -47,8 +47,16 @@ class SyntheticService extends CampaignEmailService {
     return false;
   }
 
-  protected override async getLifetimeStats(): Promise<{ lifetimeTotalMalas: number; firstActivityAt: string }> {
-    return { lifetimeTotalMalas: 12, firstActivityAt: '2026-07-01T12:00:00.000Z' };
+  protected override async getLifetimeStats(): Promise<{
+    lifetimeTotalMalas: number;
+    lifetimeTotalCount: number;
+    firstActivityAt: string;
+  }> {
+    return {
+      lifetimeTotalMalas: 12,
+      lifetimeTotalCount: 12 * 108,
+      firstActivityAt: '2026-07-01T12:00:00.000Z',
+    };
   }
 
   protected override async recordSummary(
