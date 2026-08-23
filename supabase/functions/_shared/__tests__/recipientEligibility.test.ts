@@ -76,6 +76,10 @@ class EligibilityService extends CampaignEmailService {
     };
   }
 
+  protected override async getCampaignSendOrdinal(): Promise<number> {
+    return 0;
+  }
+
   protected override async isDuplicate(userId: string): Promise<boolean> {
     return this.duplicateIds.has(userId);
   }

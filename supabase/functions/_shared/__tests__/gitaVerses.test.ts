@@ -1,8 +1,6 @@
-import { getCampaignCycleDates } from '../email/calculator';
-import { GITA_VERSES, selectGitaVerse } from '../email/campaigns/gitaVerses';
+import { GITA_VERSES, selectGitaVerseForOrdinal } from '../email/campaigns/gitaVerses';
 
 const USER_ID = 'user-for-verse-rotation';
-const NOW = new Date('2026-08-22T12:00:00.000Z');
 
 describe('Bhagavad Gita campaign rotation', () => {
   it('contains 48 unique, in-range references with meaningful renderings', () => {
@@ -21,32 +19,23 @@ describe('Bhagavad Gita campaign rotation', () => {
   });
 
   it('is deterministic for the same user and cycle', () => {
-    const cycle = getCampaignCycleDates(15, NOW);
-    expect(selectGitaVerse(USER_ID, cycle.cycleStart)).toEqual(
-      selectGitaVerse(USER_ID, cycle.cycleStart),
+    expect(selectGitaVerseForOrdinal(USER_ID, 7)).toEqual(
+      selectGitaVerseForOrdinal(USER_ID, 7),
     );
   });
 
-  it('selects a different verse in the next cycle', () => {
-    const first = getCampaignCycleDates(15, NOW);
-    const nextDate = new Date(`${first.cycleEnd}T00:00:00.000Z`);
-    nextDate.setUTCDate(nextDate.getUTCDate() + 1);
-    const next = getCampaignCycleDates(15, nextDate);
-    const firstReference = selectGitaVerse(USER_ID, first.cycleStart);
-    const nextReference = selectGitaVerse(USER_ID, next.cycleStart);
+  it('advances only when the successful-send ordinal advances', () => {
+    const firstReference = selectGitaVerseForOrdinal(USER_ID, 0);
+    const secondReference = selectGitaVerseForOrdinal(USER_ID, 1);
 
     expect(`${firstReference.chapter}:${firstReference.verse}`).not.toBe(
-      `${nextReference.chapter}:${nextReference.verse}`,
+      `${secondReference.chapter}:${secondReference.verse}`,
     );
   });
 
-  it('uses all 48 verses once, then restarts at the first verse on cycle 49', () => {
-    const first = getCampaignCycleDates(15, NOW);
-    const references = Array.from({ length: GITA_VERSES.length + 1 }, (_, offset) => {
-      const cycleDate = new Date(`${first.cycleStart}T00:00:00.000Z`);
-      cycleDate.setUTCDate(cycleDate.getUTCDate() + offset * 15);
-      const cycle = getCampaignCycleDates(15, cycleDate);
-      const verse = selectGitaVerse(USER_ID, cycle.cycleStart);
+  it('uses all 48 verses once, then restarts at the first verse on send 49', () => {
+    const references = Array.from({ length: GITA_VERSES.length + 1 }, (_, sendOrdinal) => {
+      const verse = selectGitaVerseForOrdinal(USER_ID, sendOrdinal);
       return `${verse.chapter}:${verse.verse}`;
     });
 

@@ -306,6 +306,36 @@ export async function isCampaignCycleDuplicate(
   });
 }
 
+/**
+ * Returns the zero-based quote ordinal for the user's next successful send.
+ * Only sent rows count. If the current cycle already has a sent row, return
+ * that row's ordinal so re-rendering the completed cycle remains stable.
+ */
+export async function getCampaignSendOrdinal(
+  supabase: SupabaseClient,
+  userId: string,
+  emailType: string,
+  cycleStart: string,
+  cycleEnd: string,
+): Promise<number> {
+  const { data, error } = await supabase
+    .from('user_email_summaries')
+    .select('period_start, period_end')
+    .eq('user_id', userId)
+    .eq('email_type', emailType)
+    .in('status', ['sent']);
+
+  if (error) {
+    throw new Error(`getCampaignSendOrdinal(${userId}): ${error.message}`);
+  }
+
+  const sentRecords = data ?? [];
+  const currentCycleHasSent = sentRecords.some(
+    record => record.period_end >= cycleStart && record.period_start <= cycleEnd,
+  );
+  return Math.max(0, sentRecords.length - (currentCycleHasSent ? 1 : 0));
+}
+
 export async function recordSummary(
   supabase: SupabaseClient,
   record: Omit<EmailSummaryRecord, 'id' | 'created_at'>,

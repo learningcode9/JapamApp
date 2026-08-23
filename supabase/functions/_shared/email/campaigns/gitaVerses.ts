@@ -63,9 +63,6 @@ export const GITA_VERSES: readonly GitaVerse[] = [
   { chapter: 18, verse: 66, rendering: 'Set down every burden and take refuge in the highest; do not fear.' },
 ];
 
-const DAY_MS = 86_400_000;
-const EPOCH_MS = Date.UTC(1970, 0, 1);
-
 function positiveModulo(value: number, modulus: number): number {
   return ((value % modulus) + modulus) % modulus;
 }
@@ -97,12 +94,14 @@ function getUserVersePermutation(userId: string): number[] {
   return permutation;
 }
 
-/** Selects one verse deterministically for a user and fixed campaign cycle. */
-export function selectGitaVerse(userId: string, cycleStart: string, periodDays = 15): GitaVerse {
-  const cycleDay = Math.floor((Date.parse(`${cycleStart}T00:00:00.000Z`) - EPOCH_MS) / DAY_MS);
-  const cycleNumber = Math.floor(cycleDay / periodDays);
+/** Selects one verse for a zero-based count of the user's successful sends. */
+export function selectGitaVerseForOrdinal(userId: string, sendOrdinal: number): GitaVerse {
+  if (!Number.isInteger(sendOrdinal) || sendOrdinal < 0) {
+    throw new Error('sendOrdinal must be a non-negative integer');
+  }
+
   const permutation = getUserVersePermutation(userId);
-  const index = permutation[positiveModulo(cycleNumber, GITA_VERSES.length)];
+  const index = permutation[positiveModulo(sendOrdinal, GITA_VERSES.length)];
   return GITA_VERSES[index];
 }
 

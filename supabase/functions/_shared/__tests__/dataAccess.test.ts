@@ -6,6 +6,7 @@ import {
   markUserUnsubscribed,
   claimSummary,
   isCampaignCycleDuplicate,
+  getCampaignSendOrdinal,
   isValidEmail,
 } from '../email/dataAccess';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -60,6 +61,20 @@ function cycleDuplicate(
     '2026-09-03',
     15,
     now,
+  );
+}
+
+function campaignSendOrdinal(
+  supabase: SupabaseClient,
+  cycleStart: string,
+  cycleEnd: string,
+) {
+  return getCampaignSendOrdinal(
+    supabase,
+    'u1',
+    '15day_inspiration',
+    cycleStart,
+    cycleEnd,
   );
 }
 
@@ -188,6 +203,27 @@ describe('isCampaignCycleDuplicate (recurring fixed-cycle enforcement)', () => {
         status: 'dry_run',
       },
     ]))).resolves.toBe(false);
+  });
+
+  it('counts only successful sends and does not advance for skipped/inactive cycles', async () => {
+    const history = fakeCycleSupabase([
+      { period_start: '2026-01-01', period_end: '2026-01-15', status: 'sent' },
+      { period_start: '2026-02-15', period_end: '2026-03-01', status: 'failed' },
+      { period_start: '2026-03-15', period_end: '2026-03-29', status: 'pending' },
+      { period_start: '2026-05-01', period_end: '2026-05-15', status: 'dry_run' },
+      { period_start: '2026-06-01', period_end: '2026-06-15', status: 'sent' },
+    ]);
+
+    await expect(campaignSendOrdinal(history, '2026-07-01', '2026-07-15')).resolves.toBe(2);
+  });
+
+  it('returns the same ordinal when rendering the already-sent current cycle again', async () => {
+    const history = fakeCycleSupabase([
+      { period_start: '2026-01-01', period_end: '2026-01-15', status: 'sent' },
+      { period_start: '2026-08-20', period_end: '2026-09-03', status: 'sent' },
+    ]);
+
+    await expect(campaignSendOrdinal(history, '2026-08-20', '2026-09-03')).resolves.toBe(1);
   });
 });
 

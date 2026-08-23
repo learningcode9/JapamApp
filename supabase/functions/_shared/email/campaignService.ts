@@ -6,7 +6,7 @@ import type { CampaignDefinition } from './campaigns/types.ts';
 import type { EmailConfig } from './config.ts';
 import { calculateSummaryStats, getCampaignCycleDates, getPeriodDates } from './calculator.ts';
 import { buildUnsubscribeUrl } from './unsubscribeToken.ts';
-import { selectGitaVerse } from './campaigns/gitaVerses.ts';
+import { selectGitaVerseForOrdinal } from './campaigns/gitaVerses.ts';
 import * as dataAccess from './dataAccess.ts';
 
 export interface CampaignRunOptions {
@@ -82,6 +82,14 @@ export class CampaignEmailService {
 
   protected async getLifetimeStats(userId: string): Promise<dataAccess.LifetimeStats> {
     return dataAccess.getLifetimeStats(this.supabase, userId);
+  }
+
+  protected async getCampaignSendOrdinal(
+    userId: string,
+    cycleStart: string,
+    cycleEnd: string,
+  ): Promise<number> {
+    return dataAccess.getCampaignSendOrdinal(this.supabase, userId, this.campaign.id, cycleStart, cycleEnd);
   }
 
   /** Read-only advisory check; claimSummary remains the race-safe authority. */
@@ -181,6 +189,7 @@ export class CampaignEmailService {
       }
 
       const { lifetimeTotalMalas, lifetimeTotalCount } = await this.getLifetimeStats(user.id);
+      const sendOrdinal = await this.getCampaignSendOrdinal(user.id, cycleStart, cycleEnd);
 
       if (dryRun) {
         const campaignConfig =
@@ -195,7 +204,7 @@ export class CampaignEmailService {
                 ),
               }
             : this.config;
-        const gitaVerse = selectGitaVerse(user.id, cycleStart, this.campaign.periodDays);
+        const gitaVerse = selectGitaVerseForOrdinal(user.id, sendOrdinal);
         const ctx = { stats, lifetimeTotalMalas, lifetimeTotalCount, gitaVerse, config: campaignConfig };
         const html = this.campaign.buildHtml(ctx);
         const text = this.campaign.buildText(ctx);
@@ -227,7 +236,7 @@ export class CampaignEmailService {
           now.getTime(),
         ),
       };
-      const gitaVerse = selectGitaVerse(user.id, cycleStart, this.campaign.periodDays);
+      const gitaVerse = selectGitaVerseForOrdinal(user.id, sendOrdinal);
       const ctx = { stats, lifetimeTotalMalas, lifetimeTotalCount, gitaVerse, config: campaignConfig };
 
       const pendingRecord: Omit<EmailSummaryRecord, 'id' | 'created_at'> = {

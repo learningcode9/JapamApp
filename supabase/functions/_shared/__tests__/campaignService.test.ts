@@ -101,6 +101,10 @@ class TestService extends CampaignEmailService {
     return { lifetimeTotalMalas: this.fakeLifetimeTotal, lifetimeTotalCount: this.fakeLifetimeTotal * 108, firstActivityAt: LONG_ESTABLISHED_USER_ISO };
   }
 
+  protected override async getCampaignSendOrdinal(): Promise<number> {
+    return 0;
+  }
+
   protected override async isDuplicate(
     _userId: string,
     _cycleStart: string,

@@ -59,6 +59,10 @@ class SyntheticService extends CampaignEmailService {
     };
   }
 
+  protected override async getCampaignSendOrdinal(): Promise<number> {
+    return 0;
+  }
+
   protected override async recordSummary(
     _record: Omit<EmailSummaryRecord, 'id' | 'created_at'>,
   ): Promise<void> {
