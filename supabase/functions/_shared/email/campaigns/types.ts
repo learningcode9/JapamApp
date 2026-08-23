@@ -10,6 +10,8 @@ export interface CampaignContext {
   stats: SummaryStats;
   /** All-time total malas for this user, independent of the campaign's period window. */
   lifetimeTotalMalas: number;
+  /** All-time individual Japam count for this user. */
+  lifetimeTotalCount: number;
   config: EmailConfig;
 }
 

@@ -192,6 +192,7 @@ export async function getHistoryForUser(
 
 export interface LifetimeStats {
   lifetimeTotalMalas: number;
+  lifetimeTotalCount: number;
   /** ISO timestamp of the user's earliest japam_history row, or null if they have none. */
   firstActivityAt: string | null;
 }
@@ -209,7 +210,7 @@ export async function getLifetimeStats(
 ): Promise<LifetimeStats> {
   const { data, error } = await supabase
     .from('japam_history')
-    .select('malas, created_at')
+    .select('malas, count, created_at')
     .eq('user_id', userId)
     .order('created_at', { ascending: true });
 
@@ -220,6 +221,7 @@ export async function getLifetimeStats(
   const rows = data ?? [];
   return {
     lifetimeTotalMalas: rows.reduce((sum, row) => sum + (Number(row.malas) || 0), 0),
+    lifetimeTotalCount: rows.reduce((sum, row) => sum + (Number(row.count) || 0), 0),
     firstActivityAt: rows.length > 0 ? (rows[0].created_at as string) : null,
   };
 }

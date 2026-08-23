@@ -23,7 +23,7 @@ function isCountOnly(ctx: CampaignContext): boolean {
 }
 
 function buildMalaHtml(ctx: CampaignContext): string {
-  const { stats, lifetimeTotalMalas, config } = ctx;
+  const { stats, lifetimeTotalMalas, lifetimeTotalCount, config } = ctx;
 
   const bestDayLine = stats.bestDay
     ? `${fmtDate(stats.bestDay.date)} — ${stats.bestDay.malas} mala${stats.bestDay.malas !== 1 ? 's' : ''}`
@@ -58,12 +58,20 @@ function buildMalaHtml(ctx: CampaignContext): string {
         <td align="right" style="padding:14px 20px;font-size:18px;font-weight:700;color:${config.colors.primary};">${stats.averageMalasPerActiveDay.toFixed(1)}</td>
       </tr>
       <tr style="background:${config.colors.background};">
+        <td style="padding:14px 20px;font-size:14px;color:${config.colors.textPrimary};">📊 Japam count in the last 15 days</td>
+        <td align="right" style="padding:14px 20px;font-size:18px;font-weight:700;color:${config.colors.primary};">${stats.recentCount.toLocaleString()}</td>
+      </tr>
+      <tr style="background:${config.colors.background};">
         <td style="padding:14px 20px;font-size:14px;color:${config.colors.textPrimary};">✨ Best practice day</td>
         <td align="right" style="padding:14px 20px;font-size:15px;font-weight:600;color:${config.colors.primary};">${bestDayLine}</td>
       </tr>
       <tr>
         <td style="padding:14px 20px;font-size:14px;color:${config.colors.textPrimary};">📿 Lifetime malas</td>
         <td align="right" style="padding:14px 20px;font-size:18px;font-weight:700;color:${config.colors.primary};">${lifetimeTotalMalas.toLocaleString()}</td>
+      </tr>
+      <tr style="background:${config.colors.background};">
+        <td style="padding:14px 20px;font-size:14px;color:${config.colors.textPrimary};">📈 Lifetime Japam count</td>
+        <td align="right" style="padding:14px 20px;font-size:18px;font-weight:700;color:${config.colors.primary};">${lifetimeTotalCount.toLocaleString()}</td>
       </tr>
     </table>
   </td></tr>
@@ -104,7 +112,7 @@ function buildMalaHtml(ctx: CampaignContext): string {
 }
 
 function buildMalaText(ctx: CampaignContext): string {
-  const { stats, lifetimeTotalMalas, config } = ctx;
+  const { stats, lifetimeTotalMalas, lifetimeTotalCount, config } = ctx;
 
   const bestDayLine = stats.bestDay
     ? `${fmtDate(stats.bestDay.date)} (${stats.bestDay.malas} malas)`
@@ -120,8 +128,10 @@ Over the last fifteen days, you've continued showing up for your Japam practice.
 
   Malas in the last 15 days: ${stats.totalMalas.toLocaleString()}
   Daily average:             ${stats.averageMalasPerActiveDay.toFixed(1)}
+  Japam count in the last 15 days: ${stats.recentCount.toLocaleString()}
   Best practice day:         ${bestDayLine}
   Lifetime malas:            ${lifetimeTotalMalas.toLocaleString()}
+  Lifetime Japam count:       ${lifetimeTotalCount.toLocaleString()}
 
 "You have the right to perform your duty, but never to the fruits of your actions."
 — Bhagavad Gita, Chapter 2, Verse 47

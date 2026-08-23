@@ -157,7 +157,7 @@ export class CampaignEmailService {
         };
       }
 
-      const { lifetimeTotalMalas } = await this.getLifetimeStats(user.id);
+      const { lifetimeTotalMalas, lifetimeTotalCount } = await this.getLifetimeStats(user.id);
 
       if (dryRun) {
         const campaignConfig =
@@ -172,7 +172,7 @@ export class CampaignEmailService {
                 ),
               }
             : this.config;
-        const ctx = { stats, lifetimeTotalMalas, config: campaignConfig };
+        const ctx = { stats, lifetimeTotalMalas, lifetimeTotalCount, config: campaignConfig };
         const html = this.campaign.buildHtml(ctx);
         const text = this.campaign.buildText(ctx);
         const subject = this.campaign.getSubject?.(ctx) ?? this.campaign.subject;
@@ -203,7 +203,7 @@ export class CampaignEmailService {
           now.getTime(),
         ),
       };
-      const ctx = { stats, lifetimeTotalMalas, config: campaignConfig };
+      const ctx = { stats, lifetimeTotalMalas, lifetimeTotalCount, config: campaignConfig };
 
       const pendingRecord: Omit<EmailSummaryRecord, 'id' | 'created_at'> = {
         user_id: user.id,

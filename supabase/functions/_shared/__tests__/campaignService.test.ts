@@ -95,8 +95,8 @@ class TestService extends CampaignEmailService {
     });
   }
 
-  protected override async getLifetimeStats(): Promise<{ lifetimeTotalMalas: number; firstActivityAt: string | null }> {
-    return { lifetimeTotalMalas: this.fakeLifetimeTotal, firstActivityAt: LONG_ESTABLISHED_USER_ISO };
+  protected override async getLifetimeStats(): Promise<{ lifetimeTotalMalas: number; lifetimeTotalCount: number; firstActivityAt: string | null }> {
+    return { lifetimeTotalMalas: this.fakeLifetimeTotal, lifetimeTotalCount: this.fakeLifetimeTotal * 108, firstActivityAt: LONG_ESTABLISHED_USER_ISO };
   }
 
   protected override async isDuplicate(): Promise<boolean> {

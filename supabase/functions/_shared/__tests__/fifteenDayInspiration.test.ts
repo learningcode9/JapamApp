@@ -27,6 +27,7 @@ function makeContext(overrides: Partial<CampaignContext> = {}): CampaignContext 
   return {
     stats: makeStats(),
     lifetimeTotalMalas: 500,
+    lifetimeTotalCount: 54000,
     config: { ...loadEmailConfig(), ctaUrl: 'https://mantra-japam.vercel.app' },
     ...overrides,
   };
@@ -65,6 +66,10 @@ describe('fifteenDayInspirationCampaign.buildHtml', () => {
     expect(html).toContain('Devotee');
     expect(html).toContain('30'); // totalMalas
     expect(html).toContain('500'); // lifetimeTotalMalas
+    expect(html).toContain('Japam count in the last 15 days');
+    expect(html).toContain('3,240'); // recentCount
+    expect(html).toContain('Lifetime Japam count');
+    expect(html).toContain('54,000'); // lifetimeTotalCount
   });
 
   it('omits the CTA button even when ctaUrl is set', () => {
