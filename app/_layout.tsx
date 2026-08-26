@@ -6,15 +6,17 @@ import { Asset } from 'expo-asset';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
-import { AppState, Platform, View } from 'react-native';
+import { AppState, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import 'react-native-reanimated';
 import { PaperProvider } from 'react-native-paper';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { ZEN_BACKGROUND } from '@/constants/assets';
 import { repairLegacyStoredUserId } from '@/lib/anonymousAuth';
 import { TimerProvider } from '../contexts/timer-context';
 import { CurrentJapamProvider } from '../contexts/current-japam-context';
 import LegacyHistoryBackfillRunner from '../components/LegacyHistoryBackfillRunner';
+import { openAndroidPlayStoreListing, subscribeToAndroidUpdateChecks } from '../lib/androidUpdate';
 import { startAuthLifecycle } from '../lib/authLifecycle';
 
 export const unstable_settings = {
@@ -23,7 +25,14 @@ export const unstable_settings = {
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+  const insets = useSafeAreaInsets();
   const [authReady, setAuthReady] = useState(false);
+  const [showAndroidUpdateBanner, setShowAndroidUpdateBanner] = useState(false);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return undefined;
+    return subscribeToAndroidUpdateChecks(setShowAndroidUpdateBanner);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -218,9 +227,69 @@ export default function RootLayout() {
               </Stack>
             </CurrentJapamProvider>
           </TimerProvider> : null}
+          {showAndroidUpdateBanner && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Update Available"
+              style={({ pressed }) => [
+                styles.androidUpdateBanner,
+                { top: Math.max(12, insets.top + 8) },
+                pressed && styles.androidUpdateBannerPressed,
+              ]}
+              onPress={() => void openAndroidPlayStoreListing()}
+            >
+              <View style={styles.androidUpdateCopy}>
+                <Text style={styles.androidUpdateTitle}>Update Available</Text>
+                <Text style={styles.androidUpdateSubtitle}>Get the latest version from Google Play.</Text>
+              </View>
+              <Text style={styles.androidUpdateAction}>Update</Text>
+            </Pressable>
+          )}
           <StatusBar style="auto" />
         </ThemeProvider>
       </PaperProvider>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  androidUpdateBanner: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    zIndex: 1000,
+    elevation: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    borderWidth: 1,
+    borderColor: 'rgba(15,143,135,0.18)',
+  },
+  androidUpdateBannerPressed: {
+    opacity: 0.72,
+  },
+  androidUpdateCopy: {
+    flex: 1,
+  },
+  androidUpdateTitle: {
+    color: '#063B3B',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  androidUpdateSubtitle: {
+    color: '#517579',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  androidUpdateAction: {
+    color: '#0F766E',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+});
