@@ -1,12 +1,13 @@
 import { AppState, Linking } from 'react-native';
-import * as Application from 'expo-application';
+import { supabase } from '../supabase';
 import {
   ANDROID_PLAY_STORE_URL,
   ANDROID_TARGET_VERSION_CODE,
-  fetchLatestAndroidUpdateConfig,
+  fetchLatestAndroidVersionCode,
   getAndroidUpdateAvailability,
   getInstalledAndroidVersionCode,
   openAndroidPlayStoreListing,
+  resolveAndroidUpdateBannerConfig,
   shouldShowAndroidUpdateBanner,
   shouldShowAndroidUpdateFromConfig,
   subscribeToAndroidUpdateChecks,
@@ -21,114 +22,114 @@ jest.mock('expo-constants', () => ({
   androidManifest: { versionCode: 40 },
 }));
 
+jest.mock('../supabase', () => ({
+  supabase: { rpc: jest.fn() },
+}));
+
 jest.mock('react-native', () => ({
   AppState: { addEventListener: jest.fn() },
   Linking: { openURL: jest.fn(() => Promise.resolve()) },
   Platform: { OS: 'android' },
 }));
 
-const config = {
-  latestVersionCode: 42,
-  minimumSupportedVersionCode: null,
-  playStoreUrl: ANDROID_PLAY_STORE_URL,
-  message: 'Get the latest version from Google Play.',
-  forceUpdate: false,
-} as const;
-
-const response = (body: unknown, ok = true) =>
-  ({ ok, json: jest.fn().mockResolvedValue(body) }) as unknown as Response;
-
+const config = { latestVersionCode: 42 } as const;
 const flushAsync = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 describe('Android update availability', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    process.env.EXPO_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
-    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY = 'public-key';
     (AppState.addEventListener as jest.Mock).mockImplementation(() => ({ remove: jest.fn() }));
   });
 
-  it('uses expo-application nativeBuildVersion and keeps the manifest fallback', () => {
-    expect(Application.nativeBuildVersion).toBe('41');
+  it('reads the RPC latest version and returns the production value', async () => {
+    (supabase.rpc as jest.Mock).mockResolvedValue({ data: '42', error: null });
+
+    await expect(fetchLatestAndroidVersionCode()).resolves.toBe(42);
+    expect(supabase.rpc).toHaveBeenCalledWith('get_android_latest_version_code');
+  });
+
+  it('prefers expo-application and keeps the expo-constants fallback', () => {
     expect(getInstalledAndroidVersionCode()).toBe(41);
     expect(getInstalledAndroidVersionCode(null, 40)).toBe(40);
   });
 
-  it.each([1, 19, 20, 30, 40, 41, '41'])('keeps the legacy popup for versionCode %s', (versionCode) => {
-    expect(shouldShowAndroidUpdateBanner({ installedVersionCode: versionCode })).toBe(true);
-  });
-
-  it.each([ANDROID_TARGET_VERSION_CODE, 43, '42'])('keeps the legacy popup hidden for versionCode %s', (versionCode) => {
-    expect(shouldShowAndroidUpdateBanner({ installedVersionCode: versionCode })).toBe(false);
-  });
-
-  it('shows the permanent banner when installed version is below the server version', () => {
+  it('shows for installed version 41 when the RPC returns 42', async () => {
+    await expect(getAndroidUpdateAvailability({
+      installedVersionCode: 41,
+      fetchLatestVersionCode: async () => 42,
+    })).resolves.toEqual(config);
     expect(shouldShowAndroidUpdateFromConfig({ config, installedVersionCode: 41 })).toBe(true);
   });
 
-  it('hides the permanent banner when installed version equals or exceeds the server version', () => {
-    expect(shouldShowAndroidUpdateFromConfig({ config, installedVersionCode: 42 })).toBe(false);
-    expect(shouldShowAndroidUpdateFromConfig({ config, installedVersionCode: 43 })).toBe(false);
+  it.each([42, 43])('hides for installed version %s when the RPC returns 42', async (installedVersionCode) => {
+    await expect(getAndroidUpdateAvailability({
+      installedVersionCode,
+      fetchLatestVersionCode: async () => 42,
+    })).resolves.toBeNull();
+    expect(shouldShowAndroidUpdateFromConfig({ config, installedVersionCode })).toBe(false);
   });
 
-  it('hides on iOS and web without fetching remote config', async () => {
-    const fetchConfig = jest.fn().mockResolvedValue(config);
-    expect(shouldShowAndroidUpdateFromConfig({ config, platformOS: 'ios', installedVersionCode: 1 })).toBe(false);
-    expect(await getAndroidUpdateAvailability({ platformOS: 'web', fetchConfig })).toBeNull();
-    expect(fetchConfig).not.toHaveBeenCalled();
+  it('shows when the RPC later returns 43 while installed version is 42', async () => {
+    await expect(getAndroidUpdateAvailability({
+      installedVersionCode: 42,
+      fetchLatestVersionCode: async () => 43,
+    })).resolves.toEqual({ latestVersionCode: 43 });
   });
 
-  it('fetches the public config contract and validates the Play Store URL', async () => {
-    const fetchImpl = jest.fn().mockResolvedValue(response([{
-      latest_version_code: '43',
-      minimum_supported_version_code: 19,
-      play_store_url: ANDROID_PLAY_STORE_URL,
-      message: 'A calmer, newer Japam experience is ready.',
-      force_update: false,
-    }]));
+  it('fails safely for RPC errors, null results, and malformed values', async () => {
+    (supabase.rpc as jest.Mock).mockRejectedValue(new Error('offline'));
+    await expect(fetchLatestAndroidVersionCode()).resolves.toBeNull();
 
-    await expect(fetchLatestAndroidUpdateConfig(fetchImpl)).resolves.toEqual({
-      latestVersionCode: 43,
-      minimumSupportedVersionCode: 19,
-      playStoreUrl: ANDROID_PLAY_STORE_URL,
-      message: 'A calmer, newer Japam experience is ready.',
-      forceUpdate: false,
+    (supabase.rpc as jest.Mock).mockResolvedValue({ data: null, error: new Error('rpc failed') });
+    await expect(fetchLatestAndroidVersionCode()).resolves.toBeNull();
+
+    await expect(getAndroidUpdateAvailability({
+      installedVersionCode: 41,
+      fetchLatestVersionCode: async () => null,
+    })).resolves.toBeNull();
+    await expect(getAndroidUpdateAvailability({
+      installedVersionCode: 41,
+      fetchLatestVersionCode: async () => 'not-a-version' as unknown as number,
+    })).resolves.toBeNull();
+  });
+
+  it('keeps the legacy <42 fallback available when the permanent RPC path fails', () => {
+    expect(shouldShowAndroidUpdateBanner({ installedVersionCode: 41 })).toBe(true);
+    expect(shouldShowAndroidUpdateBanner({ installedVersionCode: 42 })).toBe(false);
+    expect(resolveAndroidUpdateBannerConfig({ permanentConfig: null, legacyAvailable: true })).toEqual({
+      latestVersionCode: ANDROID_TARGET_VERSION_CODE,
     });
-    expect(fetchImpl).toHaveBeenCalledWith(
-      expect.stringContaining('/rest/v1/android_app_update_config?select='),
-      expect.objectContaining({
-        headers: expect.objectContaining({ apikey: 'public-key' }),
-      }),
-    );
   });
 
-  it('fails safely for network errors, non-OK responses, and malformed config', async () => {
-    await expect(fetchLatestAndroidUpdateConfig(jest.fn().mockRejectedValue(new Error('offline')))).resolves.toBeNull();
-    await expect(fetchLatestAndroidUpdateConfig(jest.fn().mockResolvedValue(response({}, false)))).resolves.toBeNull();
-    await expect(fetchLatestAndroidUpdateConfig(jest.fn().mockResolvedValue(response([{ latest_version_code: 'nope' }])))).resolves.toBeNull();
-    await expect(fetchLatestAndroidUpdateConfig(jest.fn().mockResolvedValue(response([{ latest_version_code: 43, play_store_url: 'https://example.com' }])))).resolves.toBeNull();
-    await expect(fetchLatestAndroidUpdateConfig(jest.fn().mockResolvedValue(response([{ latest_version_code: 43, minimum_supported_version_code: 'nope' }])))).resolves.toBeNull();
+  it('uses the permanent result when both paths report availability, so only one UI is rendered', () => {
+    expect(resolveAndroidUpdateBannerConfig({ permanentConfig: { latestVersionCode: 43 }, legacyAvailable: true }))
+      .toEqual({ latestVersionCode: 43 });
+    expect(resolveAndroidUpdateBannerConfig({ permanentConfig: null, legacyAvailable: false })).toBeNull();
   });
 
-  it('does not crash or show a banner when config is unavailable', async () => {
-    const fetchConfig = jest.fn().mockResolvedValue(null);
-    await expect(getAndroidUpdateAvailability({ installedVersionCode: 41, fetchConfig })).resolves.toBeNull();
+  it('hides on iOS and web without invoking the RPC', async () => {
+    const fetchLatestVersionCode = jest.fn(async () => 43);
+    expect(shouldShowAndroidUpdateFromConfig({ config, platformOS: 'ios', installedVersionCode: 41 })).toBe(false);
+    await expect(getAndroidUpdateAvailability({ platformOS: 'web', fetchLatestVersionCode })).resolves.toBeNull();
+    expect(fetchLatestVersionCode).not.toHaveBeenCalled();
   });
 
-  it('checks at startup and again when active without repeating the same banner state', async () => {
+  it('refreshes in the foreground and deduplicates unchanged banner state', async () => {
     const listeners: ((state: string) => void)[] = [];
     const remove = jest.fn();
     (AppState.addEventListener as jest.Mock).mockImplementation((_event, listener) => {
       listeners.push(listener);
       return { remove };
     });
-    const check = jest.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const check = jest.fn().mockResolvedValueOnce({ latestVersionCode: 42 })
+      .mockResolvedValueOnce({ latestVersionCode: 42 })
+      .mockResolvedValueOnce({ latestVersionCode: 43 });
     const onAvailabilityChange = jest.fn();
+    const unsubscribe = subscribeToAndroidUpdateConfigChecks(onAvailabilityChange, check);
 
-    const unsubscribe = subscribeToAndroidUpdateChecks(onAvailabilityChange, check);
     await flushAsync();
     expect(check).toHaveBeenCalledTimes(1);
-    expect(onAvailabilityChange).toHaveBeenLastCalledWith(false);
+    expect(onAvailabilityChange).toHaveBeenCalledTimes(1);
 
     listeners[0]('active');
     await flushAsync();
@@ -138,21 +139,18 @@ describe('Android update availability', () => {
     listeners[0]('active');
     await flushAsync();
     expect(check).toHaveBeenCalledTimes(3);
-    expect(onAvailabilityChange).toHaveBeenLastCalledWith(true);
+    expect(onAvailabilityChange).toHaveBeenLastCalledWith({ latestVersionCode: 43 });
     expect(onAvailabilityChange).toHaveBeenCalledTimes(2);
 
     unsubscribe();
     expect(remove).toHaveBeenCalledTimes(1);
   });
 
-  it('supports the reusable config subscription', async () => {
+  it('keeps the legacy subscriber wired and safe on RPC failure', async () => {
     const onAvailabilityChange = jest.fn();
-    const unsubscribe = subscribeToAndroidUpdateConfigChecks(
-      onAvailabilityChange,
-      jest.fn().mockResolvedValue(config),
-    );
+    const unsubscribe = subscribeToAndroidUpdateChecks(onAvailabilityChange, async () => true);
     await flushAsync();
-    expect(onAvailabilityChange).toHaveBeenCalledWith(config);
+    expect(onAvailabilityChange).toHaveBeenCalledWith(true);
     unsubscribe();
   });
 

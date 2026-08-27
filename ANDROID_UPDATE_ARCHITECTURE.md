@@ -1,70 +1,52 @@
 # Android update architecture
 
-Status: implemented locally for the next native Android build. No Supabase
-migration, production data change, Play Console action, AAB build/upload, or
-OTA publish is included in this change.
+Status: corrected locally for preview validation. No Supabase schema/data
+change, deployment, OTA publish, Play Console action, device test, or AAB
+upload is included.
 
-## Selected design
+## Existing production contract
 
-The app performs a best-effort read of a public Supabase REST resource named
-`android_app_update_config`. The app sends only the publishable/anonymous key
-and reads these public fields:
+The app uses the existing public read-only RPC:
 
 ```text
-latest_version_code
-minimum_supported_version_code
-play_store_url
-message
-force_update
+get_android_latest_version_code() -> integer
 ```
 
-The client validates the response and accepts only the Japam Google Play
-listing URL. Missing credentials, a missing table, an offline request, a
-non-OK response, or malformed values result in no banner and no startup delay.
-The client does not write to Supabase. A future production table should allow
-public `SELECT` only; updates must remain an admin-controlled operation.
+The RPC reads the protected singleton table
+`android_app_update_config`, whose production fields are only:
 
-`expo-application` supplies `Application.nativeBuildVersion`, which is the
-native Android versionCode exposed at runtime. The old
-`Constants.androidManifest.versionCode` read remains as a compatibility
-fallback for older OTA-compatible binaries. The hard-coded `<42` helper is
-still exported as `shouldShowLegacyAndroidUpdateBanner` and is not removed.
+```text
+singleton boolean primary key
+latest_version_code integer not null
+```
 
-## UX and lifecycle
+The client does not query the table directly and does not require additional
+server fields. The Play Store URL and update message remain client-side
+constants.
 
-The reusable `AndroidUpdateBanner` is rendered from the root layout only on
-Android. It is a calm, non-modal card with `Update Available` and an
-`Update on Google Play` button. It never blocks normal use. Checks happen at
-startup and when the app becomes active; in-flight checks are deduplicated and
-the same availability state is not published repeatedly.
+## Runtime behavior
 
-The server-controlled path and the legacy `<42` path should coexist during
-migration. Existing installed versions can continue receiving the legacy
-behavior through OTA-compatible JavaScript. The next native Play build embeds
-the direct native version source and server-backed updater. After adoption is
-high enough, remove the legacy helper and its fallback in a separate cleanup
-release.
+The permanent updater reads `Application.nativeBuildVersion` through a guarded
+dynamic require. If the native module is absent, it falls back to
+`Constants.androidManifest?.versionCode`. Invalid or missing values fail
+closed without affecting startup.
 
-## Google Play In-App Updates audit
+The root layout runs both paths during migration. The permanent RPC-backed
+result takes priority. If it is unavailable, the legacy `<42` rule remains
+reachable as a fallback. A single resolved banner config is rendered, so the
+two paths cannot create duplicate update UI. VersionCode `42` is hidden when
+the server RPC returns `42`; a later RPC value such as `43` shows the banner
+for installed version `42`.
 
-Google Play In-App Updates would require the native Play Core app-update
-dependency (`com.google.android.play:app-update`) plus a React Native/Expo
-native bridge. That bridge would require a custom native build and a new AAB;
-it is not present in the current project. Flexible updates download in the
-background and let the user continue using the app; immediate updates use a
-full-screen flow and require the user to update before continuing.
+Already-installed old binaries retain the legacy JavaScript they already have
+unless they receive a later OTA. The guarded module load prevents an OTA from
+assuming that `expo-application` exists in an older native binary.
 
-For this release, the direct Play Store listing is safer: it adds no native
-Play Core dependency, avoids an additional native bridge and update-state
-machine, and matches the requested calm non-blocking UX. Revisit flexible
-In-App Updates only after the server-backed banner has shipped and the app
-has a tested custom native build path.
+## Native dependency
 
-## Next release prerequisite
+`expo-application` remains a direct dependency for the next native build, but
+the runtime import is defensive for OTA compatibility. A new native AAB is
+still recommended before relying on `nativeBuildVersion` as the primary source.
 
-Before the next Play Store release, review and apply a production-safe
-`android_app_update_config` table/RLS change, seed its Android row with the
-currently live versionCode (`42`) and the exact Play URL, validate it in a
-non-production Supabase project, then include this code and the direct
-`expo-application` dependency in the next native AAB. Do not remove the
-legacy `<42` path in that release.
+Google Play In-App Updates remains deferred. The direct Play Store listing is
+the lower-risk, non-blocking UX for this release.

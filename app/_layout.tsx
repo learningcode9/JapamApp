@@ -19,6 +19,8 @@ import LegacyHistoryBackfillRunner from '../components/LegacyHistoryBackfillRunn
 import AndroidUpdateBanner from '../components/AndroidUpdateBanner';
 import {
   openAndroidPlayStoreListing,
+  resolveAndroidUpdateBannerConfig,
+  subscribeToAndroidUpdateChecks,
   subscribeToAndroidUpdateConfigChecks,
   type AndroidUpdateConfig,
 } from '../lib/androidUpdate';
@@ -33,10 +35,16 @@ export default function RootLayout() {
   const insets = useSafeAreaInsets();
   const [authReady, setAuthReady] = useState(false);
   const [androidUpdateConfig, setAndroidUpdateConfig] = useState<AndroidUpdateConfig | null>(null);
+  const [legacyAndroidUpdateAvailable, setLegacyAndroidUpdateAvailable] = useState(false);
 
   useEffect(() => {
     if (Platform.OS !== 'android') return undefined;
-    return subscribeToAndroidUpdateConfigChecks(setAndroidUpdateConfig);
+    const unsubscribePermanent = subscribeToAndroidUpdateConfigChecks(setAndroidUpdateConfig);
+    const unsubscribeLegacy = subscribeToAndroidUpdateChecks(setLegacyAndroidUpdateAvailable);
+    return () => {
+      unsubscribePermanent();
+      unsubscribeLegacy();
+    };
   }, []);
 
   useEffect(() => {
@@ -216,6 +224,11 @@ export default function RootLayout() {
     };
   }, []);
 
+  const updateBannerConfig = resolveAndroidUpdateBannerConfig({
+    permanentConfig: androidUpdateConfig,
+    legacyAvailable: legacyAndroidUpdateAvailable,
+  });
+
   return (
     <View style={{ flex: 1, backgroundColor: '#edf7f4' }}>
       <PaperProvider>
@@ -232,9 +245,8 @@ export default function RootLayout() {
               </Stack>
             </CurrentJapamProvider>
           </TimerProvider> : null}
-          {androidUpdateConfig && (
+          {updateBannerConfig && (
             <AndroidUpdateBanner
-              config={androidUpdateConfig}
               topInset={insets.top}
               onUpdate={() => void openAndroidPlayStoreListing()}
             />

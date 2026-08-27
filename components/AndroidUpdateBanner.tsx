@@ -1,18 +1,19 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import type { AndroidUpdateConfig } from '../lib/androidUpdate';
+import {
+  ANDROID_UPDATE_MESSAGE,
+} from '../lib/androidUpdate';
 
 type AndroidUpdateBannerProps = {
-  config: AndroidUpdateConfig;
   topInset: number;
   onUpdate: () => void;
 };
 
-export default function AndroidUpdateBanner({ config, topInset, onUpdate }: AndroidUpdateBannerProps) {
+export default function AndroidUpdateBanner({ topInset, onUpdate }: AndroidUpdateBannerProps) {
   return (
     <View style={[styles.banner, { top: Math.max(12, topInset + 8) }]}>
       <View style={styles.copy}>
         <Text style={styles.title}>Update Available</Text>
-        <Text style={styles.subtitle}>{config.message}</Text>
+        <Text style={styles.subtitle}>{ANDROID_UPDATE_MESSAGE}</Text>
       </View>
       <Pressable
         accessibilityRole="button"
