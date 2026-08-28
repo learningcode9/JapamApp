@@ -51,7 +51,11 @@ export default function RootLayout() {
     let mounted = true;
     const lifecycle = startAuthLifecycle();
     void lifecycle.ready.then((auth) => {
-      if (auth.kind === 'AUTHENTICATED') return repairLegacyStoredUserId();
+      if (auth.kind === 'AUTHENTICATED') {
+        void repairLegacyStoredUserId().catch((error) => {
+          console.log('[AUTH] Legacy user ID repair failed:', error);
+        });
+      }
     }).finally(() => {
       if (mounted) setAuthReady(true);
     });
@@ -197,17 +201,26 @@ export default function RootLayout() {
     if (!Updates.isEnabled) return;
 
     let mounted = true;
+    let updateCheckInFlight: Promise<void> | null = null;
 
-    const checkForNativeUpdate = async () => {
-      try {
-        const update = await Updates.checkForUpdateAsync();
-        if (!mounted || !update.isAvailable) return;
+    const checkForNativeUpdate = (): Promise<void> => {
+      if (updateCheckInFlight) return updateCheckInFlight;
 
-        await Updates.fetchUpdateAsync();
-        await Updates.reloadAsync();
-      } catch (error) {
-        console.log('Update check error:', error);
-      }
+      updateCheckInFlight = (async () => {
+        try {
+          const update = await Updates.checkForUpdateAsync();
+          if (!mounted || !update.isAvailable) return;
+
+          await Updates.fetchUpdateAsync();
+          await Updates.reloadAsync();
+        } catch (error) {
+          console.log('Update check error:', error);
+        }
+      })().finally(() => {
+        updateCheckInFlight = null;
+      });
+
+      return updateCheckInFlight;
     };
 
     void checkForNativeUpdate();
