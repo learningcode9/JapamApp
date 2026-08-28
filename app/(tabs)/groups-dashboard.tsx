@@ -67,6 +67,9 @@ const NAME_CELL_FLEX = isTablet ? 1.3 : isNarrowPhone ? 0.95 : 1.0;
 // don't need to sum to anything in particular; raising this proportionally narrows Name's share
 // a little, which Name has the headroom for (short member names in practice).
 const STAT_CELL_FLEX = isNarrowPhone ? 0.78 : isTablet ? 1.05 : 0.9;
+const TABLE_MIN_WIDTH = 440;
+const NAME_CELL_MIN_WIDTH = 120;
+const STAT_CELL_MIN_WIDTH = 72;
 
 // Local-day boundary, matching the same "viewer's local calendar day" definition used
 // throughout the rest of this app (see lib/historyStore.ts's toLocalDayKey/todayStatsFor) —
@@ -751,59 +754,65 @@ export default function GroupsDashboardScreen() {
           <Text style={styles.emptyText}>No members found for this group.</Text>
         ) : (
           <>
-            <View style={styles.tableCard}>
-              <View style={[styles.tableRow, styles.tableHeader]}>
-                <Text
-                  style={[styles.tableHeaderCell, styles.tableHeaderText, styles.nameCell]}
-                  maxFontSizeMultiplier={1.4}
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.75}
-                >
-                  Name
-                </Text>
-                <View style={[styles.tableHeaderCell, styles.todayMalasCell]}>
-                  <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Today</Text>
-                  <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Malas</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.tableHorizontalContent}
+            >
+              <View style={styles.tableCard}>
+                <View style={[styles.tableRow, styles.tableHeader]}>
+                  <Text
+                    style={[styles.tableHeaderCell, styles.tableHeaderText, styles.nameCell]}
+                    maxFontSizeMultiplier={1.4}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.75}
+                  >
+                    Name
+                  </Text>
+                  <View style={[styles.tableHeaderCell, styles.todayMalasCell]}>
+                    <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Today</Text>
+                    <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Malas</Text>
+                  </View>
+                  <View style={[styles.tableHeaderCell, styles.todayCountCell]}>
+                    <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Today</Text>
+                    <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Count</Text>
+                  </View>
+                  <View style={[styles.tableHeaderCell, styles.lifetimeMalasCell]}>
+                    <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Total</Text>
+                    <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Malas</Text>
+                  </View>
+                  <View style={[styles.tableHeaderCell, styles.lifetimeCountCell]}>
+                    <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Total</Text>
+                    <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Count</Text>
+                  </View>
                 </View>
-                <View style={[styles.tableHeaderCell, styles.todayCountCell]}>
-                  <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Today</Text>
-                  <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Count</Text>
-                </View>
-                <View style={[styles.tableHeaderCell, styles.lifetimeMalasCell]}>
-                  <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Total</Text>
-                  <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Malas</Text>
-                </View>
-                <View style={[styles.tableHeaderCell, styles.lifetimeCountCell]}>
-                  <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Total</Text>
-                  <Text style={styles.tableHeaderText} maxFontSizeMultiplier={1.4} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>Count</Text>
-                </View>
-              </View>
 
-              {sortDashboardRows(rows).map((row, index) => (
-                <View
-                  key={row.userId}
-                  style={[styles.tableRow, index % 2 === 1 && styles.altTableRow]}
-                >
-                  <Text style={[styles.tableCell, styles.nameCell, styles.memberName]} numberOfLines={1}>
-                    {row.role === 'admin' ? <Text style={styles.adminStar}>★ </Text> : null}
-                    {row.userName || 'Unknown'}
-                  </Text>
-                  <Text style={[styles.tableCell, styles.todayMalasCell, styles.statValue]}>
-                    {row.todayMalas}
-                  </Text>
-                  <Text style={[styles.tableCell, styles.todayCountCell, styles.statValue]}>
-                    {row.todayCount}
-                  </Text>
-                  <Text style={[styles.tableCell, styles.lifetimeMalasCell, styles.statValue]}>
-                    {row.totalMalas}
-                  </Text>
-                  <Text style={[styles.tableCell, styles.lifetimeCountCell, styles.statValue]}>
-                    {row.totalCount}
-                  </Text>
-                </View>
-              ))}
-            </View>
+                {sortDashboardRows(rows).map((row, index) => (
+                  <View
+                    key={row.userId}
+                    style={[styles.tableRow, index % 2 === 1 && styles.altTableRow]}
+                  >
+                    <Text style={[styles.tableCell, styles.nameCell, styles.memberName]} numberOfLines={1}>
+                      {row.role === 'admin' ? <Text style={styles.adminStar}>★ </Text> : null}
+                      {row.userName || 'Unknown'}
+                    </Text>
+                    <Text style={[styles.tableCell, styles.todayMalasCell, styles.statValue]}>
+                      {row.todayMalas}
+                    </Text>
+                    <Text style={[styles.tableCell, styles.todayCountCell, styles.statValue]}>
+                      {row.todayCount}
+                    </Text>
+                    <Text style={[styles.tableCell, styles.lifetimeMalasCell, styles.statValue]}>
+                      {row.totalMalas}
+                    </Text>
+                    <Text style={[styles.tableCell, styles.lifetimeCountCell, styles.statValue]}>
+                      {row.totalCount}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </ScrollView>
             <Pressable
               style={styles.leaveGroupButton}
               onPress={openLeaveModal}
@@ -971,12 +980,15 @@ const styles = StyleSheet.create({
   errorText: { color: '#b91c1c', fontSize: 14, textAlign: 'center', marginTop: 24 },
   emptyText: { color: '#365f61', fontSize: 15, lineHeight: 22, textAlign: 'center', marginTop: 24 },
   tableCard: {
+    width: '100%',
+    minWidth: TABLE_MIN_WIDTH,
     backgroundColor: '#fff',
     borderRadius: 16,
     borderWidth: 1,
     borderColor: 'rgba(15,118,110,0.16)',
     overflow: 'hidden',
   },
+  tableHorizontalContent: { minWidth: '100%' },
   boundaryFallback: {
     flex: 1,
     alignItems: 'center',
@@ -1050,11 +1062,11 @@ const styles = StyleSheet.create({
     letterSpacing: 0.1,
     textAlign: 'center',
   },
-  nameCell: { flex: NAME_CELL_FLEX, textAlign: 'left' },
-  todayMalasCell: { flex: STAT_CELL_FLEX, alignItems: 'center' },
-  todayCountCell: { flex: STAT_CELL_FLEX, alignItems: 'center' },
-  lifetimeMalasCell: { flex: STAT_CELL_FLEX, alignItems: 'center' },
-  lifetimeCountCell: { flex: STAT_CELL_FLEX, alignItems: 'center' },
+  nameCell: { flex: NAME_CELL_FLEX, minWidth: NAME_CELL_MIN_WIDTH, flexShrink: 1, textAlign: 'left' },
+  todayMalasCell: { flex: STAT_CELL_FLEX, minWidth: STAT_CELL_MIN_WIDTH, flexShrink: 0, alignItems: 'center' },
+  todayCountCell: { flex: STAT_CELL_FLEX, minWidth: STAT_CELL_MIN_WIDTH, flexShrink: 0, alignItems: 'center' },
+  lifetimeMalasCell: { flex: STAT_CELL_FLEX, minWidth: STAT_CELL_MIN_WIDTH, flexShrink: 0, alignItems: 'center' },
+  lifetimeCountCell: { flex: STAT_CELL_FLEX, minWidth: STAT_CELL_MIN_WIDTH, flexShrink: 0, alignItems: 'center' },
   memberName: { fontSize: NAME_FONT_SIZE, fontWeight: '700', color: '#12383c' },
   adminStar: { color: '#c08a1e', fontSize: 15, fontWeight: '700' },
   statValue: { fontSize: VALUE_FONT_SIZE, fontWeight: '900', color: TEAL, textAlign: 'center' },
