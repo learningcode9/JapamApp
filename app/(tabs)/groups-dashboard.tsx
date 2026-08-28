@@ -61,6 +61,9 @@ const NAME_CELL_FLEX = isTablet ? 1.3 : isNarrowPhone ? 0.95 : 1.0;
 // don't need to sum to anything in particular; raising this proportionally narrows Name's share
 // a little, which Name has the headroom for (short member names in practice).
 const STAT_CELL_FLEX = isNarrowPhone ? 0.78 : isTablet ? 1.05 : 0.9;
+const TABLE_MIN_WIDTH = 440;
+const NAME_CELL_MIN_WIDTH = 120;
+const STAT_CELL_MIN_WIDTH = 72;
 
 // Local-day boundary, matching the same "viewer's local calendar day" definition used
 // throughout the rest of this app (see lib/historyStore.ts's toLocalDayKey/todayStatsFor) —
@@ -575,6 +578,11 @@ export default function GroupsDashboardScreen() {
           <Text style={styles.emptyText}>No members found for this group.</Text>
         ) : (
           <>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.tableHorizontalContent}
+            >
             <View style={styles.tableCard}>
               <View style={[styles.tableRow, styles.tableHeader]}>
                 <Text
@@ -628,6 +636,7 @@ export default function GroupsDashboardScreen() {
                 </View>
               ))}
             </View>
+            </ScrollView>
             <Pressable
               style={styles.leaveGroupButton}
               onPress={openLeaveModal}
@@ -792,12 +801,15 @@ const styles = StyleSheet.create({
   errorText: { color: '#b91c1c', fontSize: 14, textAlign: 'center', marginTop: 24 },
   emptyText: { color: '#365f61', fontSize: 15, lineHeight: 22, textAlign: 'center', marginTop: 24 },
   tableCard: {
+    width: '100%',
+    minWidth: TABLE_MIN_WIDTH,
     backgroundColor: '#fff',
     borderRadius: 16,
     borderWidth: 1,
     borderColor: 'rgba(15,118,110,0.16)',
     overflow: 'hidden',
   },
+  tableHorizontalContent: { minWidth: '100%' },
   tableRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -842,11 +854,11 @@ const styles = StyleSheet.create({
     letterSpacing: 0.1,
     textAlign: 'center',
   },
-  nameCell: { flex: NAME_CELL_FLEX, textAlign: 'left' },
-  todayMalasCell: { flex: STAT_CELL_FLEX, alignItems: 'center' },
-  todayCountCell: { flex: STAT_CELL_FLEX, alignItems: 'center' },
-  lifetimeMalasCell: { flex: STAT_CELL_FLEX, alignItems: 'center' },
-  lifetimeCountCell: { flex: STAT_CELL_FLEX, alignItems: 'center' },
+  nameCell: { flex: NAME_CELL_FLEX, minWidth: NAME_CELL_MIN_WIDTH, flexShrink: 1, textAlign: 'left' },
+  todayMalasCell: { flex: STAT_CELL_FLEX, minWidth: STAT_CELL_MIN_WIDTH, flexShrink: 0, alignItems: 'center' },
+  todayCountCell: { flex: STAT_CELL_FLEX, minWidth: STAT_CELL_MIN_WIDTH, flexShrink: 0, alignItems: 'center' },
+  lifetimeMalasCell: { flex: STAT_CELL_FLEX, minWidth: STAT_CELL_MIN_WIDTH, flexShrink: 0, alignItems: 'center' },
+  lifetimeCountCell: { flex: STAT_CELL_FLEX, minWidth: STAT_CELL_MIN_WIDTH, flexShrink: 0, alignItems: 'center' },
   memberName: { fontSize: NAME_FONT_SIZE, fontWeight: '700', color: '#12383c' },
   adminStar: { color: '#c08a1e', fontSize: 15, fontWeight: '700' },
   statValue: { fontSize: VALUE_FONT_SIZE, fontWeight: '900', color: TEAL, textAlign: 'center' },
