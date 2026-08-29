@@ -1,0 +1,26 @@
+name: Temporary full Jest validation
+
+on:
+  push:
+    branches:
+      - test/full-jest-stable-history-user-name
+
+permissions:
+  contents: read
+
+jobs:
+  full-jest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run full Jest suite
+        run: npm test -- --runInBand
