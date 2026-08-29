@@ -58,9 +58,20 @@ async function persistAuthenticatedIdentity(session: Session): Promise<void> {
   if (!isAuthenticatedSession(session)) return;
   sessionExpired = false;
   const metadata = session.user.user_metadata as { full_name?: string; name?: string } | undefined;
-  const userName = metadata?.full_name || metadata?.name;
+  const metadataUserName = metadata?.full_name || metadata?.name;
+
+  // Auth refresh reconciles credentials; it must not silently rename an already-known identity.
+  // Native Google sign-in may intentionally cache a shorter display name (for example givenName),
+  // while Supabase metadata contains a full name. Overwriting the cache on TOKEN_REFRESHED caused
+  // consecutive history completions for the same user_id to snapshot different user_name values.
+  const cachedIdentity = await AsyncStorage.multiGet([USER_ID_KEY, USER_NAME_KEY]);
+  const cachedUserId = cachedIdentity[0]?.[1] || null;
+  const cachedUserName = cachedIdentity[1]?.[1] || null;
+  const sameUser = cachedUserId === session.user.id;
+  const shouldWriteMetadataName = !sameUser || !cachedUserName?.trim();
+
   const entries: [string, string][] = [[USER_ID_KEY, session.user.id]];
-  if (userName) entries.push([USER_NAME_KEY, userName]);
+  if (metadataUserName && shouldWriteMetadataName) entries.push([USER_NAME_KEY, metadataUserName]);
   if (session.user.email) entries.push([USER_EMAIL_KEY, session.user.email]);
   await AsyncStorage.multiSet(entries);
   await AsyncStorage.removeItem(IS_ANONYMOUS_KEY);
