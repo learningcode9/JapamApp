@@ -1,0 +1,25 @@
+name: Temporary base full Jest proof
+
+on:
+  push:
+    branches:
+      - test/full-jest-base-history-name-proof
+
+permissions:
+  contents: read
+
+jobs:
+  full-jest-base:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm ci
+      - name: Run full Jest suite
+        run: npm test -- --runInBand
