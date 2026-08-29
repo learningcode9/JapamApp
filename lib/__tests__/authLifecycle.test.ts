@@ -57,6 +57,8 @@ const session = (expiresAt = Math.floor(Date.now() / 1000) + 3600) => ({
 const flush = async () => {
   await Promise.resolve();
   await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
 };
 
 beforeEach(async () => {
@@ -167,6 +169,51 @@ describe('React Native Supabase auth lifecycle', () => {
     expect(await AsyncStorage.getItem('userId')).toBe('user-123');
     expect(await AsyncStorage.getItem('userName')).toBe('Test User');
     expect(await AsyncStorage.getItem('userEmail')).toBe('user@example.com');
+    lifecycle.stop();
+  });
+
+  it('preserves the existing display name for the same user on TOKEN_REFRESHED', async () => {
+    const lifecycle = startAuthLifecycle();
+    await lifecycle.ready;
+    await AsyncStorage.multiSet([
+      ['userId', 'user-123'],
+      ['userName', 'Sarada'],
+      ['userEmail', 'old@example.com'],
+    ]);
+
+    const refreshedSession = session();
+    refreshedSession.user.user_metadata = { full_name: 'Sarada Kudaravalli' };
+    refreshedSession.user.email = 'new@example.com';
+
+    authStateCallback?.('TOKEN_REFRESHED', refreshedSession);
+    await flush();
+
+    expect(await AsyncStorage.getItem('userId')).toBe('user-123');
+    expect(await AsyncStorage.getItem('userName')).toBe('Sarada');
+    expect(await AsyncStorage.getItem('userEmail')).toBe('new@example.com');
+    lifecycle.stop();
+  });
+
+  it('uses the new account name when the authenticated user changes', async () => {
+    const lifecycle = startAuthLifecycle();
+    await lifecycle.ready;
+    await AsyncStorage.multiSet([
+      ['userId', 'old-user'],
+      ['userName', 'Old User'],
+      ['userEmail', 'old@example.com'],
+    ]);
+
+    const nextSession = session();
+    nextSession.user.id = 'user-456';
+    nextSession.user.email = 'next@example.com';
+    nextSession.user.user_metadata = { full_name: 'Next User' };
+
+    authStateCallback?.('SIGNED_IN', nextSession);
+    await flush();
+
+    expect(await AsyncStorage.getItem('userId')).toBe('user-456');
+    expect(await AsyncStorage.getItem('userName')).toBe('Next User');
+    expect(await AsyncStorage.getItem('userEmail')).toBe('next@example.com');
     lifecycle.stop();
   });
 });
