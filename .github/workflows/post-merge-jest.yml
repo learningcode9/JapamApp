@@ -1,0 +1,21 @@
+name: Post-merge Jest Validation
+
+on:
+  push:
+    branches:
+      - validation/post-merge-name-stability-bca486e
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm ci
+      - name: Run full Jest suite
+        run: npm test -- --runInBand
